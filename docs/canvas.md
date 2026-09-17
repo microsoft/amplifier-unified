@@ -171,3 +171,26 @@ No embedding restrictions are bypassed or proxied. See the
 A browser artifact saves its URL, not its server process, browser profile,
 navigation history, login, or website content. A launched app must still be
 running when reopened.
+
+## Babylon.js 3D scenes
+
+Publish `canvas.show` with `kind: "babylon"` and an HTML document in `content`
+(or a workspace `path`). Babylon.js 9.26.0 is bundled locally and available as
+`BABYLON` before authored scripts run. No CDN script tag or install is needed.
+The agent receives this capability and authoring guidance on each turn.
+
+Create a canvas, `BABYLON.Engine`, `Scene`, camera and lights, then call
+`engine.runRenderLoop(() => scene.render())` and resize the engine when the
+window changes size. `BABYLON.Engine.IsSupported` is a boolean getter for a
+WebGL availability check. Use procedural meshes or embedded assets; the isolated
+preview cannot fetch external resources, load CDN decoders or use WebGPU.
+
+The scene follows normal artifact persistence and tab behavior. Download exports
+a standalone HTML file with Babylon included; Copy copies the authored source.
+The library is not stored in chat history or sent to the model. Reopening starts
+the authored scene again; JavaScript memory and camera positions are transient.
+
+Use labeled HTML controls for agent interaction through `canvas.interact`.
+The agent can inspect document text, controls and runtime errors, but does not
+automatically perceive the rendered 3D pixels or scene graph. GPU/WebGL support
+is required. Unity build tooling and specialized Unity hosting are not included.

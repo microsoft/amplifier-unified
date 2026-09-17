@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 MAX_TEXT = 1_000_000
 MAX_IMAGE = 5_000_000
 MAX_SURFACE = 100_000
-KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui', 'browser']
+KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui', 'browser', 'babylon']
 EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
     '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
     '.jsonl':'jsonl', '.ndjson':'jsonl', **{x:'image' for x in ['.png','.jpg','.jpeg','.webp','.gif']},
@@ -194,13 +194,13 @@ def canvas_command(state, action, args, origin):
             _error('This canvas has been replaced. Read the current canvas first.')
         if action == 'canvas.view':
             canvas.setdefault('view', {}).update(copy.deepcopy(args['patch']))
-            if 'source' in args['patch'] and canvas.get('kind') == 'html':
+            if 'source' in args['patch'] and canvas.get('kind') in {'html','babylon'}:
                 canvas.pop('document', None)
                 canvas.pop('interaction', None)
             if 'engine' in args['patch']:
                 canvas.setdefault('renderReports', {})['preview'] = {'status':'pending','message':'Updating graph layout'}
         elif action == 'canvas.snapshot':
-            if canvas.get('kind') != 'html':
+            if canvas.get('kind') not in {'html','babylon'}:
                 _error('Only HTML previews report document controls.')
             canvas['document'] = copy.deepcopy(args['document'])
         elif action == 'canvas.interact':

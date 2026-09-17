@@ -56,7 +56,8 @@ class SessionStore:
         # Regenerate system instructions from the bundle on resume.
         if not preserve_system and not (metadata or {}).get("preserve_system"):
             rows = [m for m in rows if m.get("role") not in {"system", "developer"}]
-        saved_metadata = _metadata(copy.deepcopy(metadata or {}))
+        from ..naming import read
+        saved_metadata = _metadata({**copy.deepcopy(metadata or {}),**read(directory)})
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
         payload = {"version": 1, "messages": rows, "metadata": saved_metadata}
         # One atomic file is authoritative: transcript/metadata exports cannot create
@@ -72,7 +73,8 @@ class SessionStore:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != 1 or not isinstance(payload.get("messages"), list) or not isinstance(payload.get("metadata"), dict):
             raise ValueError("Unsupported or corrupted session checkpoint")
-        return payload["messages"], payload["metadata"]
+        from ..naming import read
+        return payload["messages"], {**payload["metadata"],**read(path.parent)}
 
     def import_cli(self, session_id, workspace=None):
         """Copy one selected legacy transcript. Never execute or mutate source records."""

@@ -1,0 +1,96 @@
+"""Adapt Foundation's naming hook to completed loop-live user generations.
+
+The community hook owns prompting, context sampling, routing, parsing and retry
+policy. This adapter supplies lifecycle scheduling and app-owned metadata I/O.
+"""
+import asyncio
+import importlib
+import logging
+from pathlib import Path
+
+from ..naming import read
+
+log=logging.getLogger(__name__)
+
+
+class LiveSessionNaming:
+    def __init__(self,coordinator,home,publish,completed_inputs=()):
+        self.coordinator=coordinator
+        self.directory=Path(home)/'sessions'/coordinator.session_id
+        self.publish=publish
+        self.completed=set(read(self.directory).get('naming_completed_inputs',completed_inputs))
+        self.delivered=set()
+        self.pending=None
+        self.turn_id=None
+        self.hook=None
+        self.last_attempt=len(self.completed)
+        rows=coordinator.config.get('hooks',[])
+        row=next((r for r in rows if r.get('module')=='hooks-session-naming' and r.get('enabled',True)),None)
+        if not row:return
+        try:
+            module=importlib.import_module('amplifier_module_hooks_session_naming')
+            config=row.get('config') or {}
+            keys=('initial_trigger_turn','update_interval_turns','max_name_length','max_description_length','max_retries','model_role')
+            settings=module.SessionNamingConfig(**{k:config[k] for k in keys if k in config})
+            if settings.initial_trigger_turn<1 or settings.update_interval_turns<1:raise ValueError('Invalid naming intervals')
+            adapter=self
+            class AppNamingHook(module.SessionNamingHook):
+                def _get_session_dir(self,session_id):return adapter.directory
+                def _load_metadata(self,session_dir):
+                    from .storage import SessionStore
+                    saved=SessionStore(Path(home)/'sessions').load(coordinator.session_id)
+                    return {**(saved[1] if saved else {}),**read(session_dir)}
+                def _save_metadata(self,session_dir,metadata):
+                    # Accepted results are persisted by the app event handler, which
+                    # also protects manual names if a result arrives after a rename.
+                    pass
+            self.hook=AppNamingHook(coordinator,settings)
+            async def result(event,data):
+                from amplifier_core import HookResult
+                if data.get('session_id')==coordinator.session_id:
+                    self.publish({'type':'session.naming','name':data.get('name'),'description':data.get('description')})
+                return HookResult()
+            coordinator.hooks.register('session-naming:set',result,name='unified-session-naming')
+            coordinator.register_cleanup(self.close)
+        except (ImportError,AttributeError,TypeError,ValueError):
+            log.warning('Configured session naming is unavailable; the conversation can continue.',exc_info=True)
+
+    def observe(self,event):
+        if not self.hook:return
+        if event.get('type')=='input.delivered' and event.get('source','user')=='user':
+            if event.get('input_id'):self.delivered.add(event['input_id'])
+        if event.get('type')!='generation.finished':return
+        fresh=set(event.get('input_ids') or ()) & self.delivered - self.completed
+        if not fresh:return
+        self.turn_id=next((i for i in reversed(event.get('input_ids') or []) if i in fresh),None)
+        self.completed.update(fresh)
+        self.publish({'type':'session.naming.progress','completedInputs':sorted(self.completed)})
+        self.schedule()
+
+    def schedule(self):
+        if self.pending and not self.pending.done():return
+        count=len(self.completed)
+        if count<=self.last_attempt:return
+        metadata=self.hook._load_metadata(self.directory)
+        named=bool(metadata.get('name'))
+        config=self.hook.config
+        initial=not named and count>=config.initial_trigger_turn and self.hook._defer_counts.get(self.coordinator.session_id,0)<config.max_retries
+        update=named and count>=config.update_interval_turns and count//config.update_interval_turns>self.last_attempt//config.update_interval_turns
+        if not (initial or update):return
+        self.last_attempt=count
+        turn_id=self.turn_id
+        async def generate():
+            from ..execution_events import CALL_PURPOSE
+            token=CALL_PURPOSE.set({'label':'Session naming','turnId':turn_id})
+            try:
+                await self.hook._generate_name(self.coordinator.session_id,self.directory,is_update=named)
+            except Exception:
+                log.warning('Session naming failed; keeping the existing title.',exc_info=True)
+            finally:CALL_PURPOSE.reset(token)
+        self.pending=asyncio.create_task(generate())
+        self.pending.add_done_callback(lambda _:self.schedule())
+
+    async def close(self):
+        if self.pending and not self.pending.done():
+            try:await asyncio.wait_for(self.pending,15)
+            except (asyncio.TimeoutError,asyncio.CancelledError):pass

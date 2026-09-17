@@ -7,7 +7,11 @@ export default defineConfig({
  base:'/',
  plugins:[{name:'bundle-shareable-skin',closeBundle(){
   copyFileSync(source,destination);
+  const vendor=fileURLToPath(new URL('../amplifier_web/static/vendor',import.meta.url));mkdirSync(vendor,{recursive:true});
+  copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/babylon.js',import.meta.url)),`${vendor}/babylon.js`);
   const licenses=fileURLToPath(new URL('../amplifier_web/static/licenses',import.meta.url));mkdirSync(licenses,{recursive:true});
+  copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/license.md',import.meta.url)),`${licenses}/babylonjs.txt`);
+  copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/NOTICE.md',import.meta.url)),`${licenses}/babylonjs-notice.txt`);
   for(const name of ['mermaid','dompurify','highlight.js'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
  }}],
  build:{outDir:'../amplifier_web/static',emptyOutDir:true},

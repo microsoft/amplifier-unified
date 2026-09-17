@@ -39,6 +39,7 @@ class Worker:
         self.shutdown = asyncio.Event()
         self.telemetry = None
         self.controls = None
+        self.naming = None
 
     async def ask(self, prompt, options):
         identity = str(uuid.uuid4())
@@ -69,6 +70,7 @@ class Worker:
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
+        if self.naming:self.naming.observe(event)
         if self.telemetry:
             self.telemetry.lifecycle(event)
         loop = self.session.coordinator.get("orchestrator") if self.session else None
@@ -201,6 +203,9 @@ class Worker:
             # spawning, provider routing, approvals, or execution ownership.
             self.session.coordinator.register_capability("live.host", ObservedHost())
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
+            from amplifier_web.host.naming import LiveSessionNaming
+            completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
+            self.naming=LiveSessionNaming(self.session.coordinator,Path(os.environ.get('AMPLIFIER_WEB_HOME',Path.home()/'.amplifier-unified')),publish,completed)
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
             report["tools"] = list(self.session.coordinator.get("tools"))

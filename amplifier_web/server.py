@@ -114,14 +114,23 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         response.headers['Content-Type']=row['mime']
         response.headers['Content-Disposition']=('inline' if row['mime'].startswith('image/') else 'attachment')+"; filename*=UTF-8''"+quote(row['name'])
         return response
+    from .canvas_documents import canvas_source
+    async def canvas_download(request):
+        from .state_storage import resource
+        identity=request.match_info['identity']
+        row=next((r for r in service.state.get('canvasArtifacts',[]) if r['id']==identity),None)
+        if not row:raise AppError('Canvas artifact unavailable',404)
+        canvas={**row,**resource(service.db,row['body']['$resource'])}
+        return web.Response(text=canvas_source(canvas),content_type='text/html',headers={'Content-Disposition':'attachment; filename="canvas-3d.html"'})
+    app.router.add_get('/api/canvas/{identity}/download',canvas_download)
     async def canvas_document(request):
         canvas = service.state.get('canvas', {})
-        if canvas.get('id') != request.match_info['identity'] or canvas.get('kind') != 'html':
+        if canvas.get('id') != request.match_info['identity'] or canvas.get('kind') not in {'html','babylon'}:
             raise AppError('Canvas document no longer available', 404)
         # Only bounded display reports cross the frame boundary, never app actions.
         identity = json.dumps(canvas['id'])
         bootstrap = '<!doctype html><script data-canvas-bridge>' + (Path(__file__).parent / 'canvas_bridge.js').read_text().replace('__CANVAS_ID__', identity) + '</script>'
-        return web.Response(text=bootstrap+canvas.get('content',''), content_type='text/html', headers={
+        return web.Response(text=bootstrap+canvas_source(canvas), content_type='text/html', headers={
             'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             'Permissions-Policy':'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()'})
     app.router.add_get('/api/canvas/{identity}/document', canvas_document)

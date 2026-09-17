@@ -25,6 +25,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind in {'session.naming','session.naming.progress'}:
+        return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",

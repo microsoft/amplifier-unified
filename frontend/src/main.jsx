@@ -46,6 +46,7 @@ function App(){
      catch(error){status='error';message='Could not copy: '+error.message}
      await request('/api/actions',{method:'POST',body:{action:'message.copyResult',args:{requestId:effect.requestId,status,message}}});
     }
+    if(effect.type==='download.url'){const link=document.createElement('a');link.href=effect.url;link.download=effect.filename;link.click()}
     if(effect.type==='browser.open')window.open(effect.url,'_blank','noopener,noreferrer');
     if(effect.type==='clipboard.write'){
      try{await navigator.clipboard.writeText(effect.content);await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'ready',message:'Source copied'}}})}

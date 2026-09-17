@@ -9,6 +9,7 @@ import time
 import uuid
 import weakref
 
+CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
 
 
@@ -93,10 +94,12 @@ class ExecutionEvents:
         @wraps(original)
         async def complete(request, **kwargs):
             parent,turn = self.parent(sid)
+            purpose=CALL_PURPOSE.get()
+            if purpose:parent,turn=None,purpose.get('turnId',turn)
             info = provider.get_info()
             defaults = getattr(info,"defaults",{}) or {}
             row = {"id":"llm:"+str(uuid.uuid4()),"parentId":parent,"turnId":turn,"sessionId":sid,
-                   "rootSessionId":self.root_id,"kind":"llm","phase":"running","label":"Model call",
+                   "rootSessionId":self.root_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
                    "provider":str(getattr(info,"id",type(provider).__name__))[:160],
                    "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
                    "startedAt":time.time()}

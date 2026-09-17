@@ -49,7 +49,7 @@ try{
  await page.getByRole('button',{name:'Review the plan',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().canvas.events.at(-1)?.name==='review');
  await action('canvas.close',{});
- await page.getByRole('button',{name:'Expand navigation',exact:true}).hover();
+ await page.getByRole('button',{name:'Pin navigation open',exact:true}).hover();
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
  await page.locator('#nav-workspace').waitFor();
  await page.getByRole('searchbox',{name:'Filter conversations'}).fill('Settings*');
@@ -60,7 +60,7 @@ try{
  await page.getByRole('button',{name:'Rename workspace',exact:true}).click();
  await page.locator('#nav-workspace-name').fill('My project');await page.getByRole('button',{name:'Save name',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().workspaces.some(w=>w.name==='My project'));
- await page.getByRole('button',{name:'Collapse navigation',exact:true}).click();
+ await page.getByRole('button',{name:'Unpin navigation',exact:true}).click();
  await page.mouse.move(1000,30);
 
  await page.setViewportSize({width:390,height:844});

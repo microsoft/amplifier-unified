@@ -58,7 +58,7 @@ function CodePreview({text}){
 export function CanvasViewer({canvas,act}){
  const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image'].includes(canvas.kind);
  const parsed=useMemo(()=>{if(!['json','jsonl'].includes(canvas.kind))return{};try{return{value:canvas.kind==='json'?JSON.parse(source):source.split('\n').filter(l=>l.trim()).map(l=>JSON.parse(l))}}catch(e){return{error:e.message}}},[canvas.kind,source]);
- useEffect(()=>{if(!['html','image','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
+ useEffect(()=>{if(!['html','babylon','image','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
  const reports=Object.values(canvas.renderReports||{}),error=reports.find(r=>r.status==='error'),pending=reports.some(r=>r.status==='pending');
  return <div className="a-canvas-viewer">
   <div className="a-canvas-toolbar">
@@ -68,9 +68,9 @@ export function CanvasViewer({canvas,act}){
    <button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>
   </div>
   <div className="a-canvas-preview">
-   {view.source?<CodePreview text={source}/>:canvas.kind==='html'?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain">{source}</pre>}
+   {view.source?<CodePreview text={source}/>:['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain">{source}</pre>}
   </div>
-  <div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (canvas.kind==='html'?'Isolated HTML preview':'Ready')}</span></div>
+  <div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div>
  </div>;
 }
 function StructuredData({value,canvas,act}){

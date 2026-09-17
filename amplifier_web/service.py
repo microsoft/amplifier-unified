@@ -30,7 +30,7 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
-    "canvas.show": ("Save a durable artifact in this chat and open a new canvas tab (browser kind takes an http/https url): sandboxed interactive HTML, Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, or A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
+    "canvas.show": ("Save a durable artifact in this chat and open a new canvas tab (browser kind takes an http/https url): sandboxed interactive HTML, Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, Babylon.js 3D HTML (kind babylon, global BABYLON preloaded), or A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser","babylon"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
     "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"reload":{"type":"number","minimum":0},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","error"]},"message":string(2000)},["id","part","status"])),
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
@@ -206,6 +206,10 @@ class AppService:
         initialize(self.state)
         from .canvas_library import recover_legacy
         recover_legacy(self.state,self.db,self.data_dir)
+        from .naming import automatic,persist
+        for session in self.state['sessions']:
+            session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
+            persist(self.data_dir,session)
         self._save()
 
     def default_theme(self):
@@ -259,7 +263,7 @@ class AppService:
         workspace = str(Path(args.get("workspace") or self.state["settings"]["workspace"]).expanduser().resolve())
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
-        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "bundle": args.get("bundle") or self.state["settings"]["bundle"], "workspace": workspace, "status": "idle", "createdAt": time.time(), "messages": [], "workers": [], "approvals": []}
+        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or self.state["settings"]["bundle"], "workspace": workspace, "status": "idle", "createdAt": time.time(), "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -329,7 +333,10 @@ class AppService:
                         raise AppError('This canvas has been replaced.')
                     content = canvas.get('url') if canvas.get('kind')=='browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
                     extension = {'markdown':'md','html':'html','mermaid':'mmd','dot':'dot','json':'json','jsonl':'jsonl','a2ui':'json'}.get(canvas.get('kind'), 'txt')
-                    effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
+                    if action=='canvas.download' and canvas.get('kind')=='babylon':
+                        effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download','filename':'canvas-3d.html'})
+                    else:
+                        effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
                         'content':content,'filename':'canvas.'+extension,'mime':'text/plain','canvasId':args['id']})
                 elif action=='canvas.show':
                     sid=args.get('sessionId',self.state.get('selectedSessionId'))
@@ -359,7 +366,10 @@ class AppService:
             elif action == "session.rename":
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
-                self._session(args["id"])["title"] = args["title"].strip()
+                session=self._session(args['id'])
+                session.update(title=args['title'].strip(),titleSource='manual')
+                from .naming import persist
+                persist(self.data_dir,session)
             elif action == "session.delete":
                 session = self._session(args["id"])
                 if self.runtime:
@@ -454,7 +464,7 @@ class AppService:
                 input_id = command_id or str(uuid.uuid4())
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
                 session["draftAttachments"]=[row for row in session.get("draftAttachments",[]) if row["id"] not in requested]
-                if session["title"] == "New conversation":
+                if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
                 session["status"] = "working"
@@ -567,6 +577,9 @@ class AppService:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
+            if action in {'session.create','session.fork','message.edit'}:
+                from .naming import persist
+                persist(self.data_dir,session)
             if action in {'session.fork','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
@@ -638,7 +651,21 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
-            if kind == "execution.event":
+            if kind == 'session.naming':
+                from .naming import automatic,persist
+                name=payload.get('name');description=payload.get('description')
+                if automatic(session) and isinstance(name,str) and name.strip():
+                    session.update(title=name.strip()[:200],titleSource='generated')
+                if isinstance(description,str) and description.strip():session['description']=description.strip()[:1000]
+                persist(self.data_dir,session)
+            elif kind == 'session.naming.progress':
+                from .naming import read
+                from .host.storage import SessionStore
+                directory=SessionStore(self.data_dir/'sessions').directory(session.get('runtimeSessionId') or session['id'])
+                directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+                data=read(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
+                SessionStore._atomic(directory/'naming.json',json.dumps(data))
+            elif kind == "execution.event":
                 ingest_execution(session,payload)
             elif kind == "runtime.status":
                 session["status"] = payload.get("status", "idle")
