@@ -201,3 +201,23 @@ async def test_attention_read_persists_and_errors_route_to_their_page(tmp_path):
     attention=restored.get_state()['attention']
     assert attention['sections']['setup']==attention['pages']['providers']==1
     await restored.close()
+
+
+async def test_successful_session_start_clears_persisted_error_and_attention(service):
+    sid=service.get_state()['selectedSessionId']
+    await service.on_runtime_event('runtime.error',{'sessionId':sid,'error':'ValueError: contextTokens must be a positive integer'})
+    assert service.get_state()['attention']['unread']==1
+    await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'ready','phase':'ready'})
+    assert 'error' not in service.get_state()['sessions'][0]
+    assert service.get_state()['attention']['unread']==0
+    await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'idle'})
+    assert 'error' not in service.get_state()['sessions'][0]
+
+
+@pytest.mark.parametrize('status',['starting','idle','stopping','stopped'])
+async def test_non_ready_status_does_not_hide_unresolved_runtime_failure(service,status):
+    sid=service.get_state()['selectedSessionId']
+    await service.on_runtime_event('runtime.error',{'sessionId':sid,'error':'Provider authentication failed'})
+    await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':status})
+    assert service.get_state()['sessions'][0]['error']=='Provider authentication failed'
+    assert service.get_state()['attention']['unread']==1

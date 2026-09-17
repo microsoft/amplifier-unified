@@ -499,6 +499,11 @@ class AppService:
                 ingest_execution(session,payload)
             elif kind == "runtime.status":
                 session["status"] = payload.get("status", "idle")
+                # A successfully initialized session supersedes its old startup
+                # failure. Idle/stopped alone do not prove recovery (providers
+                # may report an error immediately before becoming idle).
+                if session["status"] == "ready":
+                    session.pop("error", None)
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
                 if session["status"] in {"idle", "stopped"}:
