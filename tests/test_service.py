@@ -163,3 +163,12 @@ async def test_voice_acceptance_is_durable_and_never_replays(tmp_path):
     with pytest.raises(AppError, match='different contents'):
         await restored.voice_delegate('Different operation', 'voice:once', sid)
     await restored.close()
+
+
+async def test_settings_navigation_and_filters_are_agent_visible(service):
+    patch = {"settingsSection": "capabilities", "settingsExpanded": ["loaded-modules"], "settingsFilters": {"loaded-modules": "tool-*"}}
+    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": patch}}, service.get_state()["selectedSessionId"])
+    view = service.get_state()["view"]
+    assert all(view[key] == value for key, value in patch.items())
+    await service.dispatch("view.update", {"patch": {"settingsExpanded": []}})
+    assert service.get_state()["view"]["settingsFilters"]["loaded-modules"] == "tool-*"

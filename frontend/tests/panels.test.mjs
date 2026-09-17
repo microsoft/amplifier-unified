@@ -28,20 +28,20 @@ test('expanded execution renders nested public summaries and genuine partial usa
 });
 
 test('advanced registries expose scoped source controls through the shared registry',()=>{
- const state={view:{registryDraft:{open:true,tab:'sources'}},registry:{sources:[{kind:'module',name:'tool-custom',source:'/workspace/tool',scope:'project'}]}};
+ const state={view:{settingsExpanded:['registries'],registryDraft:{open:true,tab:'sources'}},registry:{sources:[{kind:'module',name:'tool-custom',source:'/workspace/tool',scope:'project'}]}};
  const html=renderToStaticMarkup(React.createElement(RegistrySettings,{state,act}));
  assert.match(html,/tool-custom/);assert.match(html,/data-action="sources.save"/);assert.match(html,/data-action="sources.remove"/);
 });
 test('recovery requires a matching preview and explicit reset text',()=>{
- const state={view:{maintenanceDraft:{openSections:['reset'],resetParts:['runtime'],resetConfirmation:''}},maintenance:{resetPreview:{parts:['runtime'],paths:['/private/runtime']}}};
+ const state={view:{settingsExpanded:['reset'],maintenanceDraft:{openSections:['reset'],resetParts:['runtime'],resetConfirmation:''}},maintenance:{resetPreview:{parts:['runtime'],paths:['/private/runtime']}}};
  const html=renderToStaticMarkup(React.createElement(MaintenanceSettings,{state,act}));
  assert.match(html,/Type RESET/);assert.match(html,/disabled=""[^>]*data-action="maintenance.reset"[^>]*>Apply selected reset/);
- const changed={...state,view:{maintenanceDraft:{...state.view.maintenanceDraft,resetParts:['settings']}}};
+ const changed={...state,view:{...state.view,maintenanceDraft:{...state.view.maintenanceDraft,resetParts:['settings']}}};
  assert.doesNotMatch(renderToStaticMarkup(React.createElement(MaintenanceSettings,{state:changed,act})),/Apply selected reset/);
 });
 
 test('module behavior validation opt-in and real results are visible through shared controls',()=>{
- const state={view:{registryDraft:{open:true,tab:'modules',id:'tool-fixture',behavioral:true,behaviorResultsExpanded:true}},registry:{validation:{id:'tool-fixture',passed:true,checks:[],behavioral:{passed:false,exitCode:1,tests:[{name:'tool response contract',status:'failed'},{name:'optional streaming',status:'skipped'}]}}}};
+ const state={view:{settingsExpanded:['registries'],registryDraft:{open:true,tab:'modules',id:'tool-fixture',behavioral:true,behaviorResultsExpanded:true}},registry:{validation:{id:'tool-fixture',passed:true,checks:[],behavioral:{passed:false,exitCode:1,tests:[{name:'tool response contract',status:'failed'},{name:'optional streaming',status:'skipped'}]}}}};
  const html=renderToStaticMarkup(React.createElement(RegistrySettings,{state,act}));
  assert.match(html,/Also run module behavior tests/);assert.match(html,/data-action="modules.validate"/);assert.match(html,/Behavior tests need attention/);assert.match(html,/tool response contract/);assert.match(html,/skipped/);
 });
@@ -73,7 +73,7 @@ test('no pending updates still distinguishes failed checks from current sources'
 test('provider model results and metadata choices are visible even after other management actions finish',()=>{
  const state={view:{providerEditor:{id:'openai',module:'provider-openai',model:'gpt-6-astra',config:'{"reasoning_effort":"high"}'}},management:{phase:'ready',operation:'notifications.get'},setup:{modelCatalogs:{openai:[{id:'gpt-6-astra',display_name:'Astra'}]},metadata:{'provider-openai':{info:{config_fields:[{id:'reasoning_effort',display_name:'Reasoning effort',field_type:'choice',choices:['low','high'],requires_model:true},{id:'enabled',field_type:'boolean'}]}}},operations:{'providers.models:openai':{phase:'ready'}}}};
  const html=renderToStaticMarkup(React.createElement(ProviderSettings,{state,act}));
- assert.match(html,/Found 1 models/);assert.match(html,/Available models/);
+ assert.match(html,/Found 1 models/);assert.doesNotMatch(html,/Available models/);assert.match(html,/<select id="provider-model"/);
  assert.match(html,/<select id="provider-option-reasoning_effort"/);
  assert.match(html,/<option value="high" selected="">high/);
  assert.match(html,/<select id="provider-option-enabled"/);

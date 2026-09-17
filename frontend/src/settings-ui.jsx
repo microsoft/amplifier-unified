@@ -1,14 +1,19 @@
-import React,{useRef,useState} from 'react';
-import {CheckCircle2,Info,XCircle,LoaderCircle,ChevronRight,Upload,FolderOpen,ArrowUp,ArrowDown,GripVertical,X} from 'lucide-react';
+import React,{useRef,useState,useEffect} from 'react';
+import {CheckCircle2,Info,XCircle,LoaderCircle,ChevronRight,Upload,FolderOpen,ArrowUp,ArrowDown,GripVertical,X,ArrowLeft} from 'lucide-react';
 export function ResultNotice({phase,message,detail}){
  if(!message)return null;
  const working=['working','queued','pending','checking','staging','validating','activating'].includes(phase),failed=['error','failed'].includes(phase),Icon=working?LoaderCircle:failed?XCircle:phase==='neutral'?Info:CheckCircle2;
  return <div className={`a-check-result ${working||phase==='neutral'?'pending':failed?'error':'success'}`} role={failed?'alert':'status'} aria-live="polite"><Icon aria-hidden="true" className={working?'a-progress-spinner':undefined}/><div><strong>{message}</strong>{detail&&<small>{detail}</small>}</div></div>;
 }
 export function SettingsGroup({id,title,summary,state,act,children}){
- const expanded=state.view?.settingsExpanded||[],open=expanded.includes(id);
- return <section className="a-settings-group"><button type="button" className="a-settings-group-title" aria-expanded={open} aria-controls={'settings-group-'+id} data-action="view.update" onClick={()=>act('view.update',{patch:{settingsExpanded:open?expanded.filter(key=>key!==id):[...expanded,id]}})}><span><strong>{title}</strong>{summary&&<small>{summary}</small>}</span><ChevronRight aria-hidden="true" className={open?'open':''}/></button>{open&&<div id={'settings-group-'+id} className="a-settings-group-body">{children}</div>}</section>;
+ const pages={setup:['loaded-modules','providers','routing','defaults','conversation'],capabilities:['add-bundles','app-bundles','loaded-modules','registries','share-bundle'],maintenance:['updates','history','permissions','notifications','automation','repair','reset']};
+ const page=state.view?.settingsExpanded?.find(key=>!state.view?.settingsSection||pages[state.view.settingsSection]?.includes(key)),open=page===id,heading=useRef();
+ useEffect(()=>{if(open){heading.current?.focus({preventScroll:true});heading.current?.closest('.a-dialog')?.scrollTo(0,0)}},[open]);
+ if(page&&!open)return null;
+ const navigate=()=>act('view.update',{patch:{settingsExpanded:open?[]:[id]}});
+ return open?<section className="a-settings-page" key={id}><button type="button" className="a-link a-settings-back" data-action="view.update" onClick={navigate}><ArrowLeft/>Back to {({setup:'Setup',capabilities:'Capabilities',maintenance:'Maintenance'})[state.view?.settingsSection||'setup']}</button><h3 ref={heading} tabIndex={-1}>{title}</h3><div id={'settings-group-'+id} className="a-settings-page-body">{children}</div></section>:<section className="a-settings-group"><button type="button" className="a-settings-group-title" data-action="view.update" onClick={navigate}><span><strong>{title}</strong>{summary&&<small>{summary}</small>}</span><ChevronRight aria-hidden="true"/></button></section>;
 }
+
 export function FileDrop({id,accept,disabled,action,onFile,label='Choose file',hint}){
  const input=useRef(),[over,setOver]=useState(false),[filename,setFilename]=useState(''),[error,setError]=useState('');
  async function receive(file){if(!file||disabled)return;setError('');setFilename(file.name);try{await onFile(file)}catch(error){setError(error.message)}}

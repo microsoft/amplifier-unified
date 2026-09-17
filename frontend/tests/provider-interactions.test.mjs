@@ -52,3 +52,20 @@ test('provider test results remain clear when another action overwrites global m
  assert.equal(root.root.findByProps({role:'alert'}).props.className,'a-check-result error');
  await renderAct(async()=>root.unmount());
 });
+
+test('one model control switches between the catalog and a custom ID without losing the selected value',async()=>{
+ const calls=[],dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const state={view:{providerEditor:{id:'openai',module:'provider-openai',model:'catalog-model'}},setup:{modelCatalogs:{openai:[{id:'catalog-model',display_name:'Catalog model'}]}}};
+ let root;
+ await renderAct(async()=>{root=create(React.createElement(ProviderSettings,{state,act:dispatch}))});
+ const control=()=>root.root.findByProps({id:'provider-model'});
+ assert.equal(control().type,'select');
+ await renderAct(async()=>control().props.onChange({target:{value:':custom:'}}));
+ assert.equal(control().type,'input');assert.equal(control().props.value,'catalog-model');
+ await renderAct(async()=>control().props.onChange({target:{value:'my-model-id'}}));
+ const back=root.root.findAll(node=>node.type==='button'&&node.children.includes('Choose from discovered models'))[0];
+ await renderAct(async()=>back.props.onClick());
+ assert.equal(control().type,'select');assert.equal(control().props.value,'my-model-id');
+ assert.equal(root.root.findAllByProps({id:'provider-model'}).length,1);
+ await renderAct(async()=>root.unmount());
+});
