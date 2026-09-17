@@ -105,7 +105,10 @@ class Worker:
                 return HookResult()
             if self.telemetry:
                 self.telemetry.hook(identity, event, data)
-            if event.startswith("llm:"):
+            from amplifier_web.execution_events import CALL_PURPOSE
+            if CALL_PURPOSE.get() or event.startswith("llm:"):
+                # Naming calls retain their measured usage, but do not own the
+                # conversation's busy indicator or a delegated worker's state.
                 return HookResult()
             phase = "model"
             retry = {}

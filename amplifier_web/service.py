@@ -668,6 +668,11 @@ class AppService:
             elif kind == "execution.event":
                 ingest_execution(session,payload)
             elif kind == "runtime.status":
+                # Provider requests/retries describe current work; only lifecycle
+                # events or accepted input can start work. Late/background notices
+                # must not lock a finished conversation's fork/edit controls.
+                if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
+                    return
                 session["status"] = payload.get("status", "idle")
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers

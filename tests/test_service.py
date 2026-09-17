@@ -232,3 +232,20 @@ async def test_send_does_not_clear_newer_or_other_session_draft(service):
     await service.dispatch('view.update', {'patch': {'draft': 'Other conversation text'}})
     await service.dispatch('conversation.send', {'sessionId': original, 'text': 'Other conversation text'})
     assert service.state['view']['draft'] == 'Other conversation text'
+
+
+async def test_background_activity_cannot_restart_finished_conversation(service):
+    from amplifier_web.runtime import normalize_event
+    session=service._session();sid=session['id']
+    for status in ['idle','stopped','interrupted','error','ready']:
+        session['status']=status
+        session['activity']={'phase':status,'label':'Existing state','activeTools':[]}
+        await service.on_runtime_event(*normalize_event({'type':'runtime.activity','phase':'retrying','detail':'Retry 3 of 3'},sid))
+        assert session['status']==status and session['activity']['label']=='Existing state'
+    await service.on_runtime_event(*normalize_event({'type':'input.delivered','input_id':'new'},sid))
+    assert session['status']=='working'
+    await service.on_runtime_event(*normalize_event({'type':'runtime.activity','phase':'retrying','detail':'Retry 2 of 3'},sid))
+    assert session['activity']['phase']=='retrying'
+    await service.on_runtime_event(*normalize_event({'type':'session.idle'},sid))
+    await service.on_runtime_event(*normalize_event({'type':'runtime.activity','phase':'model'},sid))
+    assert session['status']=='idle'

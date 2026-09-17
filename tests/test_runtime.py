@@ -54,6 +54,7 @@ class NormalizationTests(unittest.TestCase):
             'reasoning':'private', 'request':{'secret':'private'}}, 'parent')
         self.assertEqual(kind, 'runtime.status')
         self.assertEqual(payload['status'], 'working')
+        self.assertTrue(payload['activityOnly'])
         self.assertEqual(payload['phase'], 'waiting-workers')
         self.assertEqual(payload['activeWorkers'], 5)
         self.assertNotIn('reasoning', payload)
@@ -111,6 +112,23 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload['callId'],'tool-1')
             self.assertEqual(payload['retryMax'],5)
             self.assertNotIn('private',json.dumps(payload))
+
+    async def test_naming_provider_hooks_keep_telemetry_without_busy_notices(self):
+        from amplifier_web.execution_events import CALL_PURPOSE
+        worker=Worker();worker.runtime=SimpleNamespace(session_id='parent');worker.telemetry=Mock()
+        callbacks={};capabilities={}
+        coordinator=SimpleNamespace(session_id='parent',get_capability=capabilities.get,
+            get=lambda _: {},register_capability=lambda key,value:capabilities.update({key:value}),
+            hooks=SimpleNamespace(register=lambda event,fn,**kw:callbacks.update({event:fn})))
+        with patch.dict(sys.modules, {'amplifier_core':SimpleNamespace(HookResult=lambda:None)}):
+            worker.install_activity(coordinator)
+        token=CALL_PURPOSE.set({'label':'Session naming','turnId':'finished'})
+        try:
+            with patch('amplifier_web.runtime_worker.publish') as publish:
+                await callbacks['provider:retry']('provider:retry',{'attempt':2,'max_retries':3})
+                publish.assert_not_called()
+                worker.telemetry.hook.assert_called_once()
+        finally:CALL_PURPOSE.reset(token)
 
 
 class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
