@@ -214,6 +214,7 @@ class Management:
             result=await manager.perform(action,{**args,'workspace':workspace},**kwargs)
             values={}
             if 'bundles' in result:values['bundles']=result['bundles']
+            if 'registeredBundles' in result:values['registeredBundles']=result['registeredBundles']
             if 'discovery' in result:values['bundleDiscovery']=result['discovery']
             if values:await self.publish(**values)
             if action in {'bundles.add','bundles.toggle','bundles.remove','bundles.move'}:await self.invalidate_configuration()

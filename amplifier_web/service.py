@@ -38,6 +38,7 @@ ACTION_DEFINITIONS = {
     "worker.stop": ("Stop one worker lane", schema({"id": string(100)})),
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
+    "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition", schema({"ids":{"type":"array","items":string(300),"maxItems":500}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
@@ -188,7 +189,11 @@ class AppService:
         return "/* Converge uses the app's bundled default styling. */"
 
     def get_state(self):
-        return copy.deepcopy(self.state)
+        from .attention import snapshot
+        result = copy.deepcopy(self.state)
+        result["attention"] = snapshot(self.state)
+        result.pop("attentionRead", None)
+        return result
 
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
@@ -359,6 +364,14 @@ class AppService:
                 approval["status"] = decision
                 if self.runtime:
                     pending.append((self.runtime.approval, (session["id"], args["id"], decision)))
+            elif action == "attention.read":
+                from .attention import snapshot
+                current = {item['id']:item for item in snapshot(self.state)['items']}
+                if any(identity not in current for identity in args['ids']):
+                    raise AppError('Attention items changed; refresh before marking them read.')
+                receipts = self.state.setdefault('attentionRead', {})
+                for identity in args['ids']:receipts[identity] = current[identity]['fingerprint']
+                self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker"}

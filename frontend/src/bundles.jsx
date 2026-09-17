@@ -1,3 +1,4 @@
+import {AttentionBadge} from './attention';
 import {useListFilter} from './list-filter.jsx';
 import {SettingsGroup,ReorderRow,ResultNotice} from './settings-ui';
 import {providerConfig} from './setup-data';
@@ -10,7 +11,7 @@ const pretty=value=>JSON.stringify(value,null,2);
 const sourceDefaults={source:'',selectedUri:'',alias:'',role:'behavior',exportName:'my-amplifier',exportDescription:''};
 export function SettingsNavigation({state,act}){
  const selected=state.view?.settingsSection||'setup';
- return <nav className="a-settings-nav" aria-label="Settings sections">{[['setup','Setup',Settings],['capabilities','Capabilities',SlidersHorizontal],['maintenance','Maintenance',Wrench]].map(([key,label,Icon])=><button key={key} className={selected===key?'selected':''} aria-current={selected===key?'page':undefined} data-action="view.update" onClick={()=>act('view.update',{patch:{settingsSection:key,settingsExpanded:[]}})}><Icon/>{label}</button>)}</nav>;
+ return <nav className="a-settings-nav" aria-label="Settings sections">{[['setup','Setup',Settings],['capabilities','Capabilities',SlidersHorizontal],['maintenance','Maintenance',Wrench]].map(([key,label,Icon])=><button key={key} aria-label={label} className={selected===key?'selected':''} aria-current={selected===key?'page':undefined} data-action="view.update" onClick={()=>act('view.update',{patch:{settingsSection:key,settingsExpanded:[]}})}><Icon/>{label}<AttentionBadge state={state} section={key}/></button>)}</nav>;
 }
 function useSharedDraft(shared,defaults,key,act){
  const [draft,setDraft]=useState({...defaults,...shared});

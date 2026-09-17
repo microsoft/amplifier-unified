@@ -172,3 +172,32 @@ async def test_settings_navigation_and_filters_are_agent_visible(service):
     assert all(view[key] == value for key, value in patch.items())
     await service.dispatch("view.update", {"patch": {"settingsExpanded": []}})
     assert service.get_state()["view"]["settingsFilters"]["loaded-modules"] == "tool-*"
+
+
+async def test_attention_acknowledgement_is_shared_and_changed_items_reappear(service):
+    row={'id':'repo','label':'Community bundle','status':'update','current':'old','latest':'new'}
+    service.state['updates']={'items':[row]}
+    initial=service.get_state()['attention']
+    assert initial['unread']==1
+    assert initial['sections']['maintenance']==initial['pages']['updates']==1
+    await service.app_bridge('dispatch',{'action':'attention.read','args':{'ids':['source:repo']}},service.get_state()['selectedSessionId'])
+    assert service.get_state()['attention']['unread']==0
+    assert service.get_state()['updates']['items'][0]['status']=='update'
+    service.state['updates']['items'][0]['latest']='newer'
+    assert service.get_state()['attention']['unread']==1
+    service.state['updates']['items'][0]['status']='current'
+    assert service.get_state()['attention']['items']==[]
+    with pytest.raises(AppError):await service.dispatch('attention.read',{'ids':['not-real']})
+
+
+async def test_attention_read_persists_and_errors_route_to_their_page(tmp_path):
+    app=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    app.state['actionStatus']={'providers.test':{'phase':'error','error':'Connection timed out','commandId':'one'}}
+    await app.dispatch('attention.read',{'ids':['action:providers.test']})
+    await app.close()
+    restored=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    assert restored.get_state()['attention']['unread']==0
+    restored.state['actionStatus']['providers.test']['commandId']='two'
+    attention=restored.get_state()['attention']
+    assert attention['sections']['setup']==attention['pages']['providers']==1
+    await restored.close()

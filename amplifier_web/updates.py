@@ -38,6 +38,24 @@ def safe_label(url):
     return (parsed.hostname or 'Git source') + '/' + parsed.path.strip('/').removesuffix('.git')
 
 
+def group_sources(items):
+    """Collapse identical cached checkouts for display; installation keeps every path."""
+    groups={}
+    for item in items:
+        row={k:v for k,v in item.items() if k not in {'path','url','eligible'}}
+        if row.get('kind')!='bundle / module':
+            groups[row['id']]=row
+            continue
+        key=tuple(row.get(k) for k in ('label','ref','current','latest','status'))
+        if key in groups:
+            groups[key]['cacheCopies']+=row.get('cacheCopies',1)
+        else:
+            row['id']='source:'+hashlib.sha256(json.dumps(key).encode()).hexdigest()[:20]
+            row['cacheCopies']=row.get('cacheCopies',1)
+            groups[key]=row
+    return list(groups.values())
+
+
 def pinned(ref):
     return bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', ref) or re.match(r'^(refs/tags/|v?\d+\.)', ref))
 
@@ -99,6 +117,8 @@ class UpdateManager:
             state.update(application=application,appAvailable=False)
             state['items']=[application if row.get('id')=='application' else row for row in state['items']]
             state['available']=sum(row.get('status')=='update' for row in state['items'])
+        state['items']=group_sources(state['items'])
+        state['available']=sum(row.get('status')=='update' for row in state['items'])
         state.setdefault('lastCheck', None)
         state['release'] = active_release(self.home).get('current')
         state['canRollback'] = 'previous' in active_release(self.home)
@@ -184,13 +204,13 @@ class UpdateManager:
                 await asyncio.gather(*(check_row(row) for row in rows))
                 self.inventory = rows
                 write_private(self.directory/'inventory.json',json.dumps(rows))
-                public = [{k:v for k,v in row.items() if k not in {'path','url','eligible'}} for row in rows]
+                public = group_sources(rows)
                 from .app_updates import check as check_application
                 application=await check_application()
                 app_available=application.get('status')=='update'
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
                     items=public+self.protected_items()+[application],application=application,appAvailable=app_available,
-                    available=sum(r['status']=='update' for r in rows)+int(app_available),
+                    available=sum(r['status']=='update' for r in public)+int(app_available),
                     lastCheck=time.time(), detail='Check complete. Pins and failed checks are listed separately.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')

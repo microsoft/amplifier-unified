@@ -128,3 +128,16 @@ async def test_drag_reorder_moves_atomically_and_persists_composition_order(tmp_
     assert manager.store.read(tmp_path)['bundle']['app']==['foundation:b','foundation:c','foundation:a']
     result=await manager.perform('bundles.move',{**args,'id':a['id'],'beforeId':b['id']})
     assert [row['name'] for row in result['bundles']]==['a','b','c']
+
+
+async def test_registered_root_picker_merges_effective_aliases_and_root_registry(tmp_path,monkeypatch):
+    import json
+    monkeypatch.setenv('AMPLIFIER_UNIFIED_IMPORT_HOME',str(tmp_path/'legacy'))
+    manager=BundleManager(tmp_path)
+    manager.store.update(tmp_path,'global',lambda _: {'bundle':{'added':{'my-root':'foundation:custom'}},'sources':{'bundles':{'override-root':'foundation:override'}}})
+    directory=tmp_path/'foundation';directory.mkdir(exist_ok=True)
+    (directory/'registry.json').write_text(json.dumps({'bundles':{'registered-root':{'is_root':True},'behavior-only':{'is_root':False}}}))
+    result=await manager.perform('bundles.list',{'workspace':str(tmp_path)})
+    names={row['name'] for row in result['registeredBundles']}
+    assert {'anchors','foundation','my-root','override-root','registered-root'}<=names
+    assert 'behavior-only' not in names

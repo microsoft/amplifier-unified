@@ -154,3 +154,27 @@ async def test_staging_preserves_symlinks_without_copying_external_workspace(app
     await manager.install()
     assert app.state['updates']['phase']=='installed'
     assert (outside/'private.txt').read_text()=='outside staging ownership'
+
+
+def test_identical_cache_copies_group_without_losing_refs_or_versions():
+    from amplifier_web.updates import group_sources
+    first={'id':'a','label':'github.com/owner/computer-use','ref':'main','kind':'bundle / module','current':'old','latest':'new','status':'update','path':'private/cache','url':'https://private','eligible':True}
+    rows=group_sources([first,{**first,'id':'b','path':'other/cache'},{**first,'id':'c','ref':'dev'},{**first,'id':'d','current':'different'}])
+    assert len(rows)==3
+    assert rows[0]['cacheCopies']==2
+    assert not {'url','path','eligible'} & rows[0].keys()
+    assert group_sources(rows)==rows
+
+
+async def test_grouped_display_still_installs_every_cached_copy(app,repo):
+    import shutil
+    manager,root=await prepare(app,repo)
+    second=root.parent/'second';shutil.copytree(root,second)
+    manager.inventory.append({**manager.inventory[0],'id':'second','path':'cache/second'})
+    async def validate(stage,release):
+        for name in ('repository','second'):
+            assert git(stage/'foundation/cache'/name,'rev-parse','HEAD')==repo[2]
+    manager.validate=validate
+    await manager.install()
+    assert app.state['updates']['phase']=='installed'
+    assert git(foundation_home(app.data_dir)/'cache/second','rev-parse','HEAD')==repo[2]

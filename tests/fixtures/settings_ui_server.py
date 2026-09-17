@@ -7,6 +7,7 @@ from amplifier_web.server import create_app
 from amplifier_web.host.config import write_private
 from amplifier_web.setup import SetupManager
 from amplifier_web.bundles import BundleManager
+from amplifier_web.updates import group_sources
 import yaml
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
@@ -31,12 +32,13 @@ BundleManager.discover=discover
 async def main(home):
  os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'
  workspace=home/'workspace';workspace.mkdir();(workspace/'project').mkdir();(workspace/'project'/'bundle.yaml').write_text('bundle:\n  name: fixture\n')
- write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'}}))
+ write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'},'bundle':{'added':{'fixture-root':'foundation:test'}}}))
  matrix={'name':'balanced','roles':{role:{'description':role.title(),'candidates':[{'provider':'one','model':'fixture-model'},{'provider':'two','model':'fallback-model'}]} for role in ['general','fast']}}
  write_private(home/'config/routing/balanced.yaml',yaml.safe_dump(matrix))
  app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
  service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
- service.state['updates']['items']=[{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(87)]
+ service.state['updates']['items']=group_sources([{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(86)]+[{'id':'copy-'+str(i),'label':'github.com/example/amplifier-bundle-computer-use','kind':'bundle / module','ref':'main','current':'123456789','latest':'abcdefghi','status':'update'} for i in range(2)])
+ service.state['updates']['available']=1
  return app
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-settings-ui-') as tmp:

@@ -348,3 +348,42 @@
 #amp-one .a-settings-page-body>.a-updates{margin:0;padding:0;border:0}
 #amp-one .a-settings-page-body>.a-updates>h3{display:none}
 #amp-one .a-settings-page-body{min-width:0;overflow-wrap:anywhere}
+
+/* Compact source inventory and shared attention markers. */
+#amp-one .a-source-list>li{display:block;padding:9px 0}
+#amp-one .a-source-line{display:flex;align-items:center;gap:8px;min-width:0;font-size:11px}
+#amp-one .a-source-line>svg{width:14px;height:14px;flex-shrink:0}
+#amp-one .a-source-line>strong{font-weight:550;flex:1;min-width:70px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px}
+#amp-one .a-source-line>code{white-space:nowrap;font-size:10px}
+#amp-one .a-source-ref{max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-source-status{color:var(--a-muted)}
+#amp-one .a-source-warning{color:var(--a-danger)}
+#amp-one .a-source-list .a-check-result{margin:8px 0 0;padding:8px}
+#amp-one .a-check-inline{display:flex;align-items:center;gap:6px}
+#amp-one .a-check-inline>svg{width:14px;height:14px}
+#amp-one .a-attention-badge{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--a-accent);color:var(--a-surface);font-size:10px;line-height:1}
+#amp-one .a-icon:has(>.a-attention-badge){position:relative}
+#amp-one .a-icon>.a-attention-badge{position:absolute;top:0;right:-3px}
+#amp-one .a-settings-group-title>span:first-child{flex:1}
+#amp-one .a-attention-review{margin:0 0 18px;padding:10px 0;border-bottom:1px solid var(--a-line);font-size:12px}
+#amp-one .a-attention-review .a-settings-row{margin:0}
+#amp-one .a-unread-dot{width:5px;height:5px;flex-shrink:0;border-radius:50%;background:var(--a-accent)}
+/* Direct section actions need separation, including after folder pickers. */
+#amp-one .a-settings-page-body>button,#amp-one .a-settings-page-body>.a-settings-section>button,#amp-one .a-maintenance-content>button{margin-top:14px;margin-right:8px}
+#amp-one .a-location-picker>.a-inline-form,#amp-one .a-bundle-picker>select{margin-bottom:12px}
+#amp-one .a-location-picker>.a-primary{margin-top:14px}
+/* Override saved earlier skins as well as the built-in modal rules. */
+#amp-one .a-overlay.a-settings-overlay{position:fixed;inset:0;margin:0;border-radius:0}
+@media(min-width:601px){
+ #amp-one .a-overlay.a-settings-overlay{padding:16px;align-items:center;background:#1c254a40;backdrop-filter:blur(6px)}
+ #amp-one .a-overlay.a-settings-overlay>.a-dialog.wide{width:min(860px,100%);height:auto;max-height:calc(100dvh - 32px);border:1px solid var(--a-line);border-radius:20px;padding:24px;box-shadow:0 20px 70px #182f6020}
+}
+@media(max-width:600px){
+ #amp-one .a-overlay.a-settings-overlay{padding:0;align-items:stretch;background:var(--a-surface);backdrop-filter:none}
+ #amp-one .a-overlay.a-settings-overlay>.a-dialog.wide{width:100%;height:100dvh;max-height:100dvh;max-width:none;margin:0;border:0;border-radius:0;padding:16px;box-shadow:none}
+ #amp-one .a-source-line{gap:5px;font-size:10px}
+ #amp-one .a-source-line>code{font-size:10px}
+ #amp-one .a-source-ref{max-width:46px}
+}
+
+#amp-one .a-dialog .a-update-options>label:has(>input[type=checkbox]){margin:0}

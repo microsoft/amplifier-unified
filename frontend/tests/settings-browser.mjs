@@ -43,9 +43,23 @@ try{
  await page.getByRole('button',{name:'Save active profile',exact:true}).click();
  await page.getByText('Routing profile saved and selected.').waitFor();
  assert.equal((await state()).setup.matrix.roles.general.candidates[0].model,'edited-model');
- await page.evaluate(()=>window.amplifier.dispatch('theme.apply',{name:'Existing skin',css:'#amp-one .a-dialog label{display:block;flex-direction:column} #amp-one .a-dialog{max-height:90dvh;border-radius:24px;padding:26px} #amp-one .a-dialog.wide{width:min(860px,100%)}'}));
+ await page.evaluate(()=>window.amplifier.dispatch('theme.apply',{name:'Existing skin',css:'#amp-one .a-overlay{padding:24px;border-radius:22px} @media(max-width:760px){#amp-one .a-settings-overlay .a-dialog.wide{width:100%;height:100dvh;border-radius:0}} #amp-one .a-dialog label{display:block;flex-direction:column} #amp-one .a-dialog{max-height:90dvh;border-radius:24px;padding:26px} #amp-one .a-dialog.wide{width:min(860px,100%)}'}));
  await page.getByRole('button',{name:'Maintenance',exact:true}).click();
- await page.getByRole('button',{name:'Updates App, bundles and module updates'}).click();
+ assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),'1');
+ assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').innerText(),'1');
+ await page.getByRole('button',{name:/Updates.*updates available/}).click();
+ await page.locator('#available-updates-list li').first().waitFor();
+ assert.equal(await page.locator('#available-updates-list li').count(),1);
+ assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
+ assert.equal(await page.locator('#available-updates-list .a-check-result').count(),0);
+ await page.getByRole('button',{name:'Mark reviewed',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().attention.unread===0);
+ assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').count(),0);
+ assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').count(),0);
+ assert.equal(await page.locator('#available-updates-list li').count(),1);
+ await page.setViewportSize({width:680,height:844});
+ const floating=await page.locator('.a-dialog').boundingBox();assert.ok(floating.x>0&&floating.y>0);assert.ok(floating.width<680);
+
  const aligned=await page.locator('.a-update-options label').first().evaluate(label=>{const input=label.querySelector('input'),a=input.getBoundingClientRect(),b=label.getBoundingClientRect();return {direction:getComputedStyle(label).flexDirection,width:a.width,delta:Math.abs(a.top+a.height/2-b.top-b.height/2)}});
  assert.equal(aligned.direction,'row');assert.equal(aligned.width,18);assert.ok(aligned.delta<3);
  await page.setViewportSize({width:390,height:844});
@@ -55,8 +69,14 @@ try{
 
  await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();
  await page.locator('#filter-update-sources').fill('*42*');
- assert.equal(await page.locator('.a-update-list li').count(),1);
- assert.match(await page.locator('.a-update-list li').innerText(),/fixture-source-42/);
+ assert.equal(await page.locator('#update-sources-list li').count(),1);
+ assert.match(await page.locator('#update-sources-list li').innerText(),/fixture-source-42/);
+
+ await page.getByRole('button',{name:'Back to Maintenance',exact:true}).click();
+ await page.getByRole('button',{name:'File access',exact:true}).click();
+ const spacing=await page.locator('#denied-folders').evaluate(el=>{const picker=el.closest('.a-path-field'),button=[...picker.parentElement.querySelectorAll('button')].find(b=>b.textContent==='Save permissions');return button.getBoundingClientRect().top-picker.getBoundingClientRect().bottom});
+ assert.ok(spacing>=12);
+ assert.equal(await page.getByText(/Provider keys live in the app/).count(),0);
  await page.getByRole('button',{name:'Capabilities',exact:true}).click();
  await page.getByRole('button',{name:'Loaded session modules',exact:false}).click();
  await page.locator('#filter-loaded-modules').fill('tool-*');
@@ -93,8 +113,17 @@ try{
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'new-session'}}));
- await page.getByRole('button',{name:'Browse',exact:true}).click();
- await page.getByRole('button',{name:'project',exact:true}).click();
+ await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
+ assert.equal(await page.locator('#setup-bundle').inputValue(),'fixture-root');
+ await page.locator('.a-path-field').filter({has:page.locator('#setup-workspace')}).getByRole('button',{name:'Browse',exact:true}).click();
+ const workspace=(await state()).settings.workspace;
+ await page.locator('#setup-workspace-browse-path').fill(workspace+'/missing');
+ await page.getByRole('button',{name:'Go',exact:true}).click();
+ await page.getByText('This folder does not exist. Enter a different location.',{exact:true}).first().waitFor();
+ await page.locator('#setup-workspace-browse-path').fill(workspace+'/project');
+ await page.locator('#setup-workspace-browse-path').press('Enter');
+ await page.waitForFunction(path=>window.amplifier.getState().locationListing.path===path,workspace+'/project');
+
  await page.getByRole('button',{name:'Use this folder',exact:true}).click();
  assert.match(await page.locator('#setup-workspace').inputValue(),/\/workspace\/project$/);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -103,5 +132,5 @@ try{
  await page.locator('.a-file-drop').dispatchEvent('drop',{dataTransfer:data});
  await page.waitForFunction(()=>window.amplifier.getState().view.themeDraft?.includes('--a-accent: purple'));
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
-}finally{await browser.close();fixture.kill('SIGTERM')}
+ console.log(JSON.stringify({attentionTrail:true,reviewClearsBadges:true,compactGroupedUpdates:true,narrowerModalBreakpoint:true,typedFolderPath:true,registeredBundlePicker:true,actionSpacing:true,focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
+}catch(error){await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'});console.error(JSON.stringify({pageErrors:errors,locationListing:(await state()).locationListing,locationPicker:(await state()).view.locationPicker}));throw error}finally{await browser.close();fixture.kill('SIGTERM')}

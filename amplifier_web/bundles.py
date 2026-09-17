@@ -252,7 +252,14 @@ class BundleManager:
         async with self.lock:
             settings = self.store.read(workspace, scope)
             if action == "bundles.list":
-                return {"bundles": self.public_entries(settings)}
+                from .host.config import load_config
+                config = load_config(workspace, home=self.home)
+                path = config.registry_home / 'registry.json'
+                registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
+                names = {name for name,row in registry.items() if isinstance(row,dict) and row.get('is_root')}
+                names.update(config.registrations)
+                disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
+                return {"bundles": self.public_entries(settings), "registeredBundles":[{"name":name,"value":name} for name in sorted(names-disabled)]}
             def mutate(current):
                 entries = self.entries(current)
                 excluded = set(current.get("web_bundles", {}).get("excluded", []))
