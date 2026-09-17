@@ -100,9 +100,13 @@ class RuntimeControls:
         self.selection_cleared = False
         self.max_output_tokens = None
         self.logins = {}
+        from .provider_catalog import ProviderCatalog
+        self.model_catalog=ProviderCatalog()
+        self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
 
     async def close(self):
+        await self.model_catalog.close()
         tasks = [row["task"] for row in self.logins.values() if not row["task"].done()]
         for task in tasks:
             task.cancel()
@@ -374,7 +378,10 @@ class RuntimeControls:
                 schema = schema() if callable(schema) else {"fields":getattr(info,"config_fields",[])}
                 if inspect.isawaitable(schema):
                     schema = await schema
-                rows.append({"id":name,"info":public_config(info),"configSchema":public_config(schema),
+                from .provider_catalog import fingerprint
+                mounted=next((row for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
+                catalog_key=fingerprint([name,mounted or getattr(provider,'config',{}),public_config(info)])
+                rows.append({"id":name,"catalogKey":catalog_key,"info":public_config(info),"configSchema":public_config(schema),
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})
@@ -385,8 +392,9 @@ class RuntimeControls:
             info=selected.get_info() if selected is not None else None
             if inspect.isawaitable(info):info=await info
             defaults=(info.get('defaults',{}) if isinstance(info,dict) else getattr(info,'defaults',{})) or {}
-            effective={'instance':name,'model':defaults.get('model') or defaults.get('default_model'),'effort':(self.selection or {}).get('effort') or defaults.get('reasoning_effort')}
-            return {"providers":rows,'selection':self.selection,'effective':effective,'pinned':bool(self.selection)}
+            selected_config=next((row.get('config',{}) for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
+            effective={'instance':name,'model':defaults.get('model') or defaults.get('default_model'),'effort':(self.selection or {}).get('effort') or defaults.get('reasoning_effort') or selected_config.get('reasoning_effort')}
+            return {"catalogRevision":self.catalog_revision,"providers":rows,'selection':self.selection,'effective':effective,'pinned':bool(self.selection)}
         name = args.get("provider") or args.get("instance")
         provider = providers.get(name)
         if provider is None:
@@ -394,13 +402,18 @@ class RuntimeControls:
         if operation in {"configuration.providerModels", "configuration.providerTest"}:
             method = getattr(provider,"list_models",None)
             if not callable(method):
+                if operation=='configuration.providerModels':return {'provider':name,'models':[],'supported':False}
                 raise ValueError("This provider does not expose a model-list API for connection testing")
-            result = method()
-            if inspect.isawaitable(result):
-                result = await asyncio.wait_for(result,120)
+            async def load():
+                result=method()
+                if inspect.isawaitable(result):result=await asyncio.wait_for(result,120)
+                return public_config(result)
+            from .provider_catalog import fingerprint
+            key=(name,id(provider),fingerprint(getattr(provider,'config',{})))
+            result=await load() if operation=='configuration.providerTest' else await self.model_catalog.get(key,load,refresh=args.get('refresh',False))
             if operation == "configuration.providerTest":
                 return {"provider":name,"reachable":True,"modelCount":len(result),"method":"provider.list_models"}
-            return {"provider":name,"models":public_config(result)}
+            return {"provider":name,"models":result,'supported':True}
         method = getattr(provider,"login",None)
         if not callable(method):
             raise ValueError("This provider does not expose an interactive login API; configure its credential fields instead")

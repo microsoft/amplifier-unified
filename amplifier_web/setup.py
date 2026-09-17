@@ -78,7 +78,9 @@ def validate_matrix(value):
     return copy.deepcopy(value)
 
 class SetupManager:
-    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None):
+    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None,catalog=None):
+        from .provider_catalog import ProviderCatalog
+        self.catalog=catalog or ProviderCatalog()
         self.home=Path(home); self.store=store or SettingsStore(home)
         self.runtime_operation=runtime_operation
         self.progress=progress; self.auth_command=auth_command; self.probe_command=probe_command; self.logins={}
@@ -106,6 +108,32 @@ class SetupManager:
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
                 'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
         return rows
+
+    def catalog_key(self,args,workspace):
+        from .host.config import expand_environment
+        from .provider_catalog import fingerprint
+        config=self.config(workspace)
+        row=next((row for row in config.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
+        module=args.get('module') or (row or {}).get('module')
+        raw=(row or {}).get('config',{})
+        credential=environment_credential(module,raw)
+        environment={name:os.environ.get(name) for name in (*PROVIDER_ENV.get(module,()),credential.get('envVar')) if name}
+        environment.update({name:os.environ.get(name) for name in re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)',json.dumps(raw))})
+        # Include credential-file contents by digest, never in browser-visible data.
+        files={}
+        for name,value in raw.items():
+            if ('token' in name or 'credential' in name) and isinstance(value,str) and Path(value).expanduser().is_file():
+                path=Path(value).expanduser()
+                files[name]=fingerprint(path.read_bytes()) if path.stat().st_size<1_000_000 else str(path.stat().st_mtime_ns)
+        return fingerprint([str(Path(workspace).resolve()),row,module,raw,environment,files,getattr(config,'module_sources',{}).get(module)])
+
+    async def cached_probe(self,action,args,workspace):
+        key=(action,self.catalog_key(args,workspace))
+        result=await self.catalog.get(key,lambda:self.probe(action,args,workspace),refresh=args.get('refresh',False))
+        if key[1]!=self.catalog_key(args,workspace):
+            self.catalog.entries.pop(key,None)
+            raise ValueError('Provider configuration changed during discovery. The new configuration is being refreshed.')
+        return result
 
     async def probe(self,action,args,workspace):
         from .host.config import expand_environment
@@ -138,7 +166,7 @@ class SetupManager:
             if process.returncode:raise ValueError('The provider check could not finish. Please retry.')
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
             response={'providerMetadata':metadata}
-            if action=='providers.models':response.update(models=result['models'],modelsProviderId=args['id'])
+            if action=='providers.models':response.update(models=result.get('models',[]),modelsProviderId=args['id'],modelsSupported=result.get('modelsSupported',True))
             if action=='providers.test':response['test']={**result['test'],'providerId':args['id']}
             return response
         finally:
@@ -254,7 +282,7 @@ class SetupManager:
             return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
         if action in {'providers.schema','providers.models','providers.test'}:
-            return await self.probe(action,args,workspace)
+            return await (self.probe(action,args,workspace) if action=='providers.test' else self.cached_probe(action,args,workspace))
         if action=='providers.move':
             current=self.config(workspace)
             rows=current.providers

@@ -531,3 +531,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 @media(max-width:900px){#amp-one .a-nav-slot{--nav-width:240px}#amp-one .a-nav-slot.is-pinned{flex-basis:52px;width:52px}#amp-one .a-nav-slot.is-pinned .a-nav-rail{box-shadow:8px 10px 30px #18244125}}
 @media(max-width:700px){#amp-one .a-nav-slot{flex-basis:44px;width:44px;min-width:44px}#amp-one .a-nav-slot.is-pinned{flex-basis:44px;width:44px}#amp-one .a-nav-rail{width:44px;padding:4px;border-radius:12px}#amp-one .a-nav-main{padding:8px}#amp-one .a-canvas-panel{position:absolute;inset:0;z-index:20;width:auto!important;max-width:none;flex:none;border-radius:14px 14px 0 0}#amp-one .a-canvas-resize{display:none}#amp-one .a-nav-slot.is-expanded .a-nav-rail{max-width:calc(100vw - 70px)}}
 @media(prefers-reduced-motion:reduce){#amp-one .a-nav-rail{transition:none}}
+#amp-one .a-model-select{min-width:0;flex:1}
+#amp-one .a-model-select input,#amp-one .a-model-select select{width:100%;min-width:0}
+#amp-one .a-model-select small{margin-top:5px;white-space:normal}
+#amp-one.a-chat-shell .a-model-trigger small{font-size:10px;opacity:.85;max-width:300px}

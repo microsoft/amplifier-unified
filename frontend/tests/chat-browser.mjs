@@ -15,12 +15,13 @@ try{
  const initial=await page.locator('.a-composer').boundingBox();assert.ok(initial.y>250&&initial.y<650);
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  await page.locator('#chat-provider').waitFor();
- await page.locator('#chat-model').fill('fixture-vision');
+ await page.locator('#chat-model').selectOption('fixture-vision');
  await page.locator('#chat-effort').fill('3');
  await page.getByRole('button',{name:'Pin model',exact:true}).click();
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.pinned));
  await page.getByRole('button',{name:'Close model settings'}).click();
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision/);
+ assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/high reasoning/);
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'pixel.png',mimeType:'image/png',buffer:png});
  await page.locator('.a-composer .a-attachment').waitFor();
  assert.equal(await page.locator('.a-composer .a-attachment img').count(),1);

@@ -57,8 +57,10 @@ async def query(request):
         schema=public(await invoke('get_config_schema')) if callable(getattr(provider,'get_config_schema',None)) else {'fields':info.get('config_fields',[])}
         result={'info':info,'configSchema':schema}
         if request['action']!='providers.schema':
-            if not callable(getattr(provider,'list_models',None)):raise ValueError('Provider does not expose model discovery')
-            result['models']=public(await invoke('list_models'))
+            supported=callable(getattr(provider,'list_models',None))
+            result['modelsSupported']=supported
+            if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')
+            result['models']=public(await invoke('list_models')) if supported else []
             if request['action']=='providers.test':
                 result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
         return result

@@ -72,6 +72,8 @@ function App(){
  useEffect(()=>{const v=state?.view;if(!v)return;if(v.sessionSetup)setSetup(v.sessionSetup);if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.themeDraft!==undefined)setThemeDraft(v.themeDraft);if(v.themeDraftName!==undefined)setThemeName(v.themeDraftName);if(v.themePreview!==undefined)setPreview(v.themePreview);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.sessionSetup,state?.view?.workerDraft,state?.view?.themeDraft,state?.view?.themeDraftName,state?.view?.themePreview,state?.view?.agentAction,state?.view?.agentArgs]);
  const session=state?.sessions?.find(s=>s.id===state.selectedSessionId),view=state?.view||{},mode=view.mode||'chat',panel=view.panel,activity=sessionStatus(session),working=activity.busy,messages=session?.messages||[];
  const live=liveActivity(session,activityClock),execution=executionData(session);
+ const catalogWorkspace=useRef(null);
+ useEffect(()=>{const workspace=session?.workspace||state?.settings?.workspace;if(!workspace||catalogWorkspace.current===workspace)return;catalogWorkspace.current=workspace;if(state.setup?.providersWorkspace!==workspace||!state.setup?.providersLoadedAt)act('providers.list',session?{sessionId:session.id}:{})},[session?.workspace,state?.settings?.workspace]);
  const anchoredTurns=new Set(messages.map(message=>messageTurnId(message,execution.turns)).filter(Boolean));
  useEffect(()=>{if(!live)return;const timer=setInterval(()=>setActivityClock(Date.now()),1000);return()=>clearInterval(timer)},[!!live,session?.id]);
  useLayoutEffect(()=>{resizeComposer(composerRef.current)},[draft,state?.selectedSessionId]);

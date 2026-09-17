@@ -17,12 +17,12 @@ test('opening settings loads saved configuration and keeps subsequent edits duri
  assert.equal(calls.find(c=>c.name==='providers.list').args.sessionId,'s');
  state={...state,setup:{providersLoadedAt:Date.now()/1000+1,providersWorkspace:'/work',providers:[{id:'openai',module:'provider-openai',config:{default_model:'saved-model',reasoning_effort:'high'},credential:{envVar:'CUSTOM_KEY',available:true}}]}};
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findByProps({id:'provider-model'}).props.value,'saved-model');
+ assert.equal(root.root.findAll(node=>['input','select'].includes(node.type)&&node.props.id==='provider-model')[0].props.value,'saved-model');
  assert.equal(root.root.findByProps({id:'provider-key-env'}).props.value,'CUSTOM_KEY');
- await renderAct(async()=>root.root.findByProps({id:'provider-model'}).props.onChange({target:{value:'my-edited-model'}}));
+ await renderAct(async()=>root.root.findAll(node=>['input','select'].includes(node.type)&&node.props.id==='provider-model')[0].props.onChange({target:{value:'my-edited-model'}}));
  state={...state,setup:{...state.setup,providersLoadedAt:Date.now()/1000+2}};
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findByProps({id:'provider-model'}).props.value,'my-edited-model');
+ assert.equal(root.root.findAll(node=>['input','select'].includes(node.type)&&node.props.id==='provider-model')[0].props.value,'my-edited-model');
  await renderAct(async()=>root.unmount());
 });
 
@@ -53,19 +53,16 @@ test('provider test results remain clear when another action overwrites global m
  await renderAct(async()=>root.unmount());
 });
 
-test('one model control switches between the catalog and a custom ID without losing the selected value',async()=>{
- const calls=[],dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true}};
- const state={view:{providerEditor:{id:'openai',module:'provider-openai',model:'catalog-model'}},setup:{modelCatalogs:{openai:[{id:'catalog-model',display_name:'Catalog model'}]}}};
- let root;
- await renderAct(async()=>{root=create(React.createElement(ProviderSettings,{state,act:dispatch}))});
- const control=()=>root.root.findByProps({id:'provider-model'});
- assert.equal(control().type,'select');
- await renderAct(async()=>control().props.onChange({target:{value:':custom:'}}));
- assert.equal(control().type,'input');assert.equal(control().props.value,'catalog-model');
- await renderAct(async()=>control().props.onChange({target:{value:'my-model-id'}}));
- const back=root.root.findAll(node=>node.type==='button'&&node.children.includes('Choose from discovered models'))[0];
- await renderAct(async()=>back.props.onClick());
- assert.equal(control().type,'select');assert.equal(control().props.value,'my-model-id');
- assert.equal(root.root.findAllByProps({id:'provider-model'}).length,1);
+test('model selector uses provider catalog and falls back only when no list exists',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ let root;const props={id:'choice',label:'Model',value:'saved-model',state:{view:{}},act:async()=>{},onChange:()=>{}};
+ await renderAct(async()=>{root=create(React.createElement(ModelSelect,{...props,entry:{phase:'ready',models:[{id:'catalog-model'}]}}))});
+ assert.equal(root.root.findAllByType('select').length,1);
+ assert.equal(root.root.findAllByType('input').length,0);
+ assert.equal(root.root.findByType('select').props.value,'saved-model');
+ await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'working',models:[]}})));
+ assert.equal(root.root.findByType('select').props.disabled,true);
+ await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'ready',supported:false,models:[]}})));
+ assert.equal(root.root.findAllByType('select').length,0);assert.equal(root.root.findByType('input').props.value,'saved-model');
  await renderAct(async()=>root.unmount());
 });

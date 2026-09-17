@@ -57,7 +57,7 @@ ACTION_DEFINITIONS = {
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
-    "providers.models": ("Browse models available from a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
+    "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"id":string(200),"sessionId":string(200),"refresh":{"type":"boolean"}},["id"])),
     "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
     "providers.loginStatus": ("Check provider sign-in progress",schema({"id":string(200)},["id"])),
     "providers.loginCancel": ("Cancel provider sign-in",schema({"id":string(200)},["id"])),
@@ -732,5 +732,7 @@ class AppService:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.management:
+            await self.management.provider_catalog.close()
         self._save()
         self.db.close()

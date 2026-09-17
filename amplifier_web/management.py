@@ -18,6 +18,9 @@ class Management:
         from .notifications import Notifications
         self.notifications=Notifications(service.data_dir)
         service.state["notificationSettings"]=self.notifications.public()
+        from .provider_catalog import ProviderCatalog
+        self.provider_catalog=ProviderCatalog()
+        self.catalog_limit=asyncio.Semaphore(3)
         self.setup_manager=None
         self.pending_config_tasks={}
         for session in service.state.get('sessions',[]):
@@ -26,6 +29,81 @@ class Management:
                 task=asyncio.create_task(self.apply_queued(session['id']))
                 self.pending_config_tasks[session['id']]=task
                 service.tasks.add(task);task.add_done_callback(service.tasks.discard)
+
+    def background(self,operation):
+        task=asyncio.create_task(operation)
+        self.service.tasks.add(task)
+        task.add_done_callback(self.service.tasks.discard)
+
+    async def warm_providers(self,manager,workspace):
+        rows=manager.provider_rows(workspace)
+        async with self.service.lock:
+            setup=self.service.state.setdefault('setup',{})
+            if setup.get('providersWorkspace')!=workspace:return
+            valid={row['id'] for row in rows if row.get('enabled',True)}
+            if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
+            for field in ('modelCatalogs','providerCatalogs'):
+                setup[field]={key:value for key,value in setup.get(field,{}).items() if key in valid}
+            self.service._publish()
+        async def load(row):
+            identity=row['id'];args={'id':identity};key=manager.catalog_key(args,workspace)
+            cache_key=('providers.models',key)
+            async with self.service.lock:
+                setup=self.service.state.setdefault('setup',{})
+                if setup.get('providersWorkspace')!=workspace:return
+                # Never serve the previous configuration while its replacement loads.
+                if cache_key not in self.provider_catalog.entries:
+                    setup.setdefault('modelCatalogs',{}).pop(identity,None)
+                    setup.setdefault('providerCatalogs',{})[identity]={'phase':'working','models':[]}
+                    self.service._publish()
+            async with self.catalog_limit:
+                try:
+                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace})
+                    entry={'phase':'ready','models':result.get('models',[]),'supported':result.get('modelsSupported',True),'metadata':result.get('providerMetadata'),'loadedAt':time.time()}
+                except Exception as exc:
+                    entry={'phase':'error','models':[],'error':str(exc)[:500]}
+            # An old request must never overwrite a newer config or workspace.
+            if manager.catalog_key(args,workspace)!=key:return
+            async with self.service.lock:
+                setup=self.service.state.setdefault('setup',{})
+                if setup.get('providersWorkspace')!=workspace:return
+                setup.setdefault('providerCatalogs',{})[identity]=entry
+                setup.setdefault('modelCatalogs',{})[identity]=entry['models']
+                if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
+                self.service._publish()
+        await asyncio.gather(*(load(row) for row in rows if row.get('enabled',True)))
+
+    async def warm_runtime_models(self,session_id,providers,revision=None):
+        async with self.service.lock:
+            control=self.service.state.setdefault('runtimeControl',{}).setdefault(session_id,{})
+            current_revision=control.get('configuration.providers',{}).get('catalogRevision')
+            if revision and current_revision and current_revision!=revision:return
+            if revision and control.get('modelCatalogRevision')!=revision:
+                control.update(modelCatalogRevision=revision,modelCatalogs={})
+            valid={row['id'] for row in providers}
+            control['modelCatalogs']={key:value for key,value in control.get('modelCatalogs',{}).items() if key in valid}
+            self.service._publish()
+        async def load(row):
+            identity=row['id']
+            async with self.service.lock:
+                control=self.service.state.setdefault('runtimeControl',{}).setdefault(session_id,{})
+                if revision and control.get('modelCatalogRevision')!=revision:return
+                if control.get('modelCatalogs',{}).get(identity,{}).get('phase') in {'working','ready','error'}:return
+                control.setdefault('modelCatalogs',{})[identity]={'phase':'working','models':[]}
+                self.service._publish()
+            try:
+                async with self.catalog_limit:
+                    loader=lambda:self.service.runtime.control(session_id,'configuration.providerModels',{'instance':identity})
+                    result=await self.provider_catalog.get(('mounted',row['catalogKey']),loader) if row.get('catalogKey') else await loader()
+                entry={'phase':'ready','models':result.get('models',[]),'supported':result.get('supported',True)}
+            except Exception:
+                entry={'phase':'error','models':[],'error':'Could not load models from this mounted provider. Retry to check the connection.'}
+            async with self.service.lock:
+                control=self.service.state.setdefault('runtimeControl',{}).setdefault(session_id,{})
+                if revision and control.get('modelCatalogRevision')!=revision:return
+                control.setdefault('modelCatalogs',{})[identity]=entry
+                self.service._publish()
+        await asyncio.gather(*(load(row) for row in providers))
 
     async def publish(self,**values):
         async with self.service.lock:
@@ -134,6 +212,9 @@ class Management:
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def invalidate_configuration(self):
+        from .setup import SetupManager
+        workspace=self.service.state.get('setup',{}).get('providersWorkspace')
+        if workspace:self.background(self.warm_providers(SetupManager(self.service.data_dir,catalog=self.provider_catalog),workspace))
         async with self.service.lock:
             for session in self.service.state['sessions']:
                 session['configurationPending']=True
@@ -180,24 +261,34 @@ class Management:
                     self.service.state.setdefault('setup',{}).update(values)
                     self.service._publish()
             if self.setup_manager is None:
-                self.setup_manager=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress)
+                self.setup_manager=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress,catalog=self.provider_catalog)
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test'} else self.setup_manager
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test'} else self.setup_manager
+            probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
+                if action in {'providers.models','providers.schema'} and setup.get('providersWorkspace') not in {None,session['workspace']}:return
                 if command_id and action.startswith('providers.'):
                     key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
                     if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
                 if action=='providers.list' and setup.get('providersWorkspace')!=result.get('providersWorkspace'):
-                    setup.update(modelCatalogs={},models=[],modelsProviderId=None)
+                    setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
                 setup.update(result)
                 if result.get('providerMetadata'):
                     setup.setdefault('metadata',{})[result['providerMetadata']['module']]=result['providerMetadata']
-                if 'models' in result:setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
+                if 'models' in result:
+                    setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
+                    setup.setdefault('providerCatalogs',{})[result['modelsProviderId']]={'phase':'ready','models':result['models'],'supported':result.get('modelsSupported',True),'metadata':result.get('providerMetadata')}
                 self.service._publish()
+            if action in {'providers.list','providers.save','providers.remove','providers.move','providers.loginStatus'}:
+                async with self.service.lock:
+                    self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time())
+                    self.service._publish()
+                self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.remove','providers.move','routing.save','routing.use'}:await self.invalidate_configuration()
         elif action.startswith(('bundle.','bundles.')):
             from .bundles import BundleManager
@@ -275,12 +366,18 @@ class Management:
             try:
                 await self.ensure_runtime(session)
                 result=await self.service.runtime.control(session['id'],args['operation'],args.get('args',{}))
+                if args['operation']=='configuration.providerModels' and args.get('args',{}).get('refresh'):
+                    provider_id=args['args'].get('instance') or args['args'].get('provider')
+                    rows=self.service.state.get('runtimeControl',{}).get(session['id'],{}).get('configuration.providers',{}).get('providers',[])
+                    row=next((row for row in rows if row['id']==provider_id),{})
+                    if row.get('catalogKey'):self.provider_catalog.entries[('mounted',row['catalogKey'])]=(copy.deepcopy(result),None)
                 if result.get('requiresRestart'):
                     await self.service.runtime.stop(session['id'])
                     await self.service.runtime.start(session,self.service.on_runtime_event)
                     inspected=await self.service.runtime.control(session['id'],'configuration.inspect',{})
                     result['configuration']=inspected
                 refreshed={}
+                if result.get('requiresRestart'):refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
                 refresh={'mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
                 if refresh:refreshed[refresh]=await self.service.runtime.control(session['id'],refresh,{})
                 async with self.service.lock:
@@ -290,7 +387,12 @@ class Management:
                         configuration=result.get('configuration',result)
                         self.service.state.setdefault('sessionConfiguration',{})[session['id']]=configuration
                         self.service._session(session['id'])['configuration']=configuration
+                    if args['operation']=='configuration.providerModels':
+                        identity=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
+                        self.service.state['runtimeControl'][session['id']].setdefault('modelCatalogs',{})[identity]={'phase':'ready','models':result.get('models',[]),'supported':result.get('supported',True)}
                     self.service._publish()
+                provider_info=result if args['operation']=='configuration.providers' else refreshed.get('configuration.providers')
+                if provider_info is not None:self.background(self.warm_runtime_models(session['id'],provider_info.get('providers',[]),provider_info.get('catalogRevision')))
             finally:
                 if mutating:
                     async with self.service.lock:

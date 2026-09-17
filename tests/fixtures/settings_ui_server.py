@@ -22,7 +22,7 @@ class Runtime:
 async def probe(self,action,args,workspace):
  await asyncio.sleep(.25)
  result={'providerMetadata':{'module':args.get('module','provider-openai'),'info':{'config_fields':[{'id':'reasoning_effort','display_name':'Reasoning effort','choices':['low','high'],'field_type':'choice'}]},'configSchema':{}}}
- if action=='providers.models':result.update(models=[{'id':'fixture-model'}],modelsProviderId=args['id'])
+ if action=='providers.models':result.update(models=[{'id':'fixture-model'},{'id':'fixture-alternative'}],modelsProviderId=args['id'])
  if action=='providers.test':result['test']={'reachable':True,'modelCount':1,'providerId':args['id'],'method':'provider.list_models'}
  return result
 SetupManager.probe=probe

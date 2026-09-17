@@ -7,7 +7,7 @@ from test_service import Runtime
 
 async def test_headless_json_is_same_runtime_with_target_session(aiohttp_server,tmp_path,capsys):
     runtime=Runtime()
-    app=await create_app(tmp_path,workspace=tmp_path,runtime=runtime,voice=False,background_updates=False)
+    app=await create_app(tmp_path, preload_providers=False,workspace=tmp_path,runtime=runtime,voice=False,background_updates=False)
     server=await aiohttp_server(app)
     args=Namespace(port=server.port,data_dir=str(tmp_path),workspace=str(tmp_path),resume=None,command='run',prompt='One shot',bundle='anchors',provider=None,model=None,max_tokens=None,timeout=5,output_format='json')
     assert await run(args)==0

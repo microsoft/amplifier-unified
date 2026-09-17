@@ -36,7 +36,7 @@ async def boundaries(request, handler):
     return response
 
 
-async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True):
+async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True, preload_providers=True):
     app = web.Application(middlewares=[boundaries], client_max_size=13_000_000)
     service = AppService(Path(data_dir), runtime=runtime, workspace=workspace)
     import os
@@ -50,6 +50,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app["runtime"] = runtime
     from .management import Management
     service.management = Management(service)
+    if preload_providers:
+        service.management.background(service.management.command("providers.list",{}))
     from .updates import UpdateManager
     service.update_manager = UpdateManager(service)
     if background_updates:

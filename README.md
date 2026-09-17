@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.4.0
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.4.1
 amplifier-unified
 ```
 
@@ -119,3 +119,13 @@ folders and their conversations. The right canvas has an adjustable width and
 previews workspace files or declarative agent UI. See [canvas actions and the
 supported A2UI subset](docs/canvas.md). Canvas button events are visible to the
 agent; they do not automatically start a new turn.
+
+
+Provider metadata and model catalogs load in the background at startup. Catalogs
+are shared by the composer, provider settings, and routing selectors and cached
+for the backend process. Provider configuration, credential/environment, and
+source changes invalidate only the affected saved entries. Mounted sessions use
+their actual provider configuration and reuse unchanged entries across remounts.
+Refresh models retries just the selected provider. A provider-supplied list is
+shown as a selector; manual model IDs are offered only when no list is available.
+Saved model IDs remain visible even if absent from the current list.

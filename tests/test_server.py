@@ -8,7 +8,7 @@ from test_service import Runtime
 
 
 async def test_api_rejects_cross_origin_and_serves_state(aiohttp_client, tmp_path):
-    client = await aiohttp_client(await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False))
+    client = await aiohttp_client(await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False))
     response = await client.get("/api/health")
     assert response.status == 200
     bad = await client.post("/api/actions", headers={"Origin": "https://untrusted.example"}, json={"action": "session.create", "args": {}})
@@ -22,7 +22,7 @@ async def test_api_rejects_cross_origin_and_serves_state(aiohttp_client, tmp_pat
 
 
 async def test_frontend_has_real_stylesheet_asset(aiohttp_client, tmp_path):
-    client = await aiohttp_client(await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False))
+    client = await aiohttp_client(await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False))
     response = await client.get("/")
     assert response.status == 200
     html = await response.text()
@@ -36,7 +36,7 @@ async def test_frontend_has_real_stylesheet_asset(aiohttp_client, tmp_path):
 
 
 async def test_open_event_stream_does_not_delay_host_shutdown(aiohttp_client, tmp_path):
-    app = await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False)
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
     client = await aiohttp_client(app)
     response = await client.get("/api/events")
     assert await response.content.readline() == b"event: state\n"
