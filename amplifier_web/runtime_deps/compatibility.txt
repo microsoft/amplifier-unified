@@ -1,0 +1,4 @@
+# Attractor's loop-agent at 8626a21 requires the old package path via @main.
+# Upstream main no longer contains that directory. Pin its dependency to the
+# matching bundle revision; do not mutate the user's configured bundle/cache.
+amplifier-unified-llm-client @ git+https://github.com/microsoft/amplifier-bundle-attractor@8626a21c63a3bb88957e8e9f656abbc91e4d4a6b#subdirectory=modules/unified-llm-client

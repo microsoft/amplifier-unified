@@ -1,0 +1,13 @@
+{
+  "LOCAL-CHANGES.md": "ab49bbea055125c609c003b98fddf7b0d11d61e98f8fecf6fccd53c01e774cca",
+  "PROVENANCE.md": "f05777d28a83ec5f58c4702ca52f9df7ddd7db1ac897491790be95adf5f35ce5",
+  "README.md": "e81e6713527b63a4dd59c4b59b4d3c66bbe3f8a341dc1c0169277365d30afb54",
+  "amplifier_module_loop_live/__init__.py": "8b2c563c5ec7fa8588e67871f15c09666a544070efa76ae531d6fd2948e07650",
+  "amplifier_module_loop_live/host.py": "90be26ba217954899f3488e394e25fd60874c31571c2f366f2323593e057c154",
+  "amplifier_module_loop_live/instructions.py": "7f8af1935eb09e57857690c22069cc50631abf60ecc6058fdf25bfa14049fb8e",
+  "amplifier_module_loop_live/job_store.py": "7eda5a88e8989f25a83621fc873cc7f7da5af7f4e3863c70556acc92325278e3",
+  "amplifier_module_loop_live/orchestrator.py": "de045abca634eb700f1678521b16a03a1635ef6f6d6d13904c54034054108a79",
+  "amplifier_module_loop_live/runtime.py": "eea0aabdd6f883a8c573a81a5ad3fb6539894c598ca150bbdaad054db56637a2",
+  "amplifier_module_loop_live/scope.py": "69a997b6cd88244e4fcd37da33530494259d05221b280439ae89961881d76083",
+  "pyproject.toml": "7bf19b462e1e5df90ee81992392ead78a6a85394d674a6d88fa9c718d3f5999a"
+}

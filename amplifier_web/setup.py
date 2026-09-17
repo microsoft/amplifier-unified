@@ -1,0 +1,278 @@
+"""Scoped provider and routing configuration owned by Amplifier Unified."""
+from __future__ import annotations
+import copy
+import asyncio
+import json
+import signal
+import uuid
+from urllib.parse import urlsplit,urlunsplit
+import os
+from pathlib import Path
+import re
+import shlex
+import yaml
+from .preferences import SettingsStore
+from .host.config import load_config, write_private
+from .bundles import SECRET_KEYS, validate_uri
+
+NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}')
+
+def safe_name(value):
+    if not isinstance(value,str) or not NAME.fullmatch(value) or '..' in value:
+        raise ValueError('Use a name containing letters, numbers, dots, dashes, or underscores.')
+    return value
+
+def redact(value):
+    if isinstance(value,dict):
+        return {k: ('[REDACTED]' if k.lower().replace('-','_') in SECRET_KEYS or k.lower().endswith(('_key','_token','_secret','_password')) else redact(v)) for k,v in value.items()}
+    if isinstance(value,list): return [redact(v) for v in value]
+    return value
+
+def public_source(value):
+    if isinstance(value,str) and value.startswith(('https://','http://','git+https://')):
+        parsed=urlsplit(value.removeprefix('git+'))
+        if parsed.username or parsed.password or parsed.query:
+            return ('git+' if value.startswith('git+') else '')+urlunsplit((parsed.scheme,parsed.hostname or '',parsed.path,'',parsed.fragment))
+    return value
+
+
+def validate_matrix(value):
+    if not isinstance(value,dict) or not isinstance(value.get('roles'),dict):
+        raise ValueError('The routing matrix must contain a roles mapping.')
+    for required in ('general','fast'):
+        if required not in value['roles']: raise ValueError('The routing matrix requires the '+required+' role.')
+    for role,row in value['roles'].items():
+        safe_name(role)
+        if not isinstance(row,dict) or not isinstance(row.get('description'),str) or not isinstance(row.get('candidates'),list) or not row['candidates']:
+            raise ValueError('Each role needs a description and at least one candidate.')
+        for candidate in row['candidates']:
+            if not isinstance(candidate,dict) or not isinstance(candidate.get('provider'),str) or not isinstance(candidate.get('model'),str):
+                raise ValueError('Every candidate needs a provider and model; base is only valid in overrides.')
+            if not candidate['provider'] or not candidate['model']: raise ValueError('Provider and model cannot be blank.')
+            if 'config' in candidate and not isinstance(candidate['config'],dict): raise ValueError('Candidate config must be a mapping.')
+    return copy.deepcopy(value)
+
+class SetupManager:
+    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None):
+        self.home=Path(home); self.store=store or SettingsStore(home)
+        self.runtime_operation=runtime_operation
+        self.progress=progress; self.auth_command=auth_command; self.logins={}
+
+    def config(self,workspace):
+        return load_config(workspace,home=self.home)
+
+    def provider_rows(self,workspace):
+        config=self.config(workspace)
+        rows=[]
+        for value in config.providers:
+            identity=value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-')
+            raw=value.get('config',{})
+            refs=[]
+            def scan(node):
+                if isinstance(node,dict):
+                    for key,item in node.items():
+                        if key.lower().replace('-','_') in SECRET_KEYS or key.lower().endswith(('_api_key','_token','_secret','_password')):
+                            refs.append(item)
+                        else: scan(item)
+            scan(raw)
+            configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
+            rows.append({'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
+                'credentialsConfigured':configured,'keySource':'environment' if any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
+        return rows
+
+    def _keys(self,updates):
+        path=self.home/'config/keys.env'
+        lines=path.read_text().splitlines() if path.exists() else []
+        names=set(updates)
+        lines=[line for line in lines if line.removeprefix('export ').split('=',1)[0].strip() not in names]
+        lines.extend(name+'='+shlex.quote(value) for name,value in updates.items())
+        write_private(path,'\n'.join(lines)+'\n')
+        # A long-running backend must see edited keys immediately. Child host
+        # generations inherit these values; no browser state includes them.
+        os.environ.update(updates)
+
+    def _provider_mutation(self,args,workspace,scope,remove=False):
+        identity=safe_name(args.get('id') or args.get('module','').removeprefix('provider-'))
+        effective=self.config(workspace)
+        existing=next((row for row in effective.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
+        def mutate(settings):
+            rows=settings.setdefault('config',{}).setdefault('providers',[])
+            index=next((i for i,row in enumerate(rows) if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
+            if remove:
+                if not existing: raise ValueError('Provider instance does not exist.')
+                row={'id':identity,'module':existing['module'],'enabled':False}
+            else:
+                module=safe_name(args.get('module') or (existing or {}).get('module',''))
+                if not module.startswith('provider-'): raise ValueError('Choose a provider module.')
+                config=copy.deepcopy(args.get('config',{}))
+                if not isinstance(config,dict): raise ValueError('Provider config must be a mapping.')
+                old=(existing or {}).get('config',{})
+                updates={}
+                def private(node,path=()):
+                    result={}
+                    for key,value in node.items():
+                        normalized=key.lower().replace('-','_')
+                        secret=normalized in SECRET_KEYS or normalized.endswith(('_api_key','_token','_secret','_password'))
+                        if secret and value in ('[REDACTED]','<redacted>'):
+                            original=old
+                            for part in (*path,key): original=original.get(part) if isinstance(original,dict) else None
+                            if original is not None: result[key]=original
+                        elif secret and value is not None and value!='' and not (isinstance(value,str) and re.fullmatch(r'\$\{[A-Za-z_][A-Za-z0-9_]*\}',value)):
+                            if not isinstance(value,str): raise ValueError('Credentials must be strings or environment references.')
+                            env='AMPLIFIER_'+re.sub('[^A-Za-z0-9]','_',identity+'_'+ '_'.join((*path,key))).upper()
+                            updates[env]=value; result[key]='${'+env+'}'
+                        elif isinstance(value,dict): result[key]=private(value,(*path,key))
+                        else: result[key]=value
+                    return result
+                if args.get('apiKey') is not None: config['github_token' if module=='provider-github-copilot' else 'api_key']=args['apiKey']
+                if module=='provider-openai-chatgpt':
+                    config['token_file_path']=str(self.home/'config'/('openai-chatgpt-'+identity+'-oauth.json'))
+                    config['login_on_mount']=False
+                row={'id':identity,'module':module,'config':private(config),'enabled':True}
+                source=args.get('source') or (existing or {}).get('source')
+                if source: row['source']=validate_uri(source)
+                if updates:self._keys(updates)
+            if index is None:rows.append(row)
+            else:rows[index]=row
+            settings.setdefault('overrides',{}).setdefault(identity,{})['enabled']=not remove
+        self.store.update(workspace,scope,mutate)
+        return {'providers':self.provider_rows(workspace),'takesEffect':'new_sessions','scope':scope}
+
+    def _routing_dirs(self,workspace):
+        # Same first-hit precedence as the mounted routing hook.
+        registry=getattr(self.config(workspace),'registry_home',self.home/'foundation')
+        dirs=[Path(workspace)/'.amplifier-unified/routing.local',Path(workspace)/'.amplifier-unified/routing',self.home/'config/routing',registry/'routing']
+        dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
+        return dirs
+
+    def routing(self,workspace):
+        active=self.config(workspace).settings.get('routing',{}).get('matrix','balanced')
+        rows=[]; seen=set(); roles=set()
+        for directory in self._routing_dirs(workspace):
+            for path in sorted(directory.glob('*.yaml')):
+                if path.is_symlink() or path.stat().st_size>256*1024:continue
+                name=path.stem
+                if name in seen:continue
+                try:
+                    value=yaml.safe_load(path.read_text());validate_matrix(value)
+                except (ValueError,yaml.YAMLError):continue
+                seen.add(name);roles.update(value['roles'])
+                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in self._routing_dirs(workspace)[:4] else 'bundle','active':active==name})
+        return {'matrices':rows,'active':active,'roles':sorted(roles)}
+
+    def matrix(self,workspace,name):
+        safe_name(name)
+        for directory in self._routing_dirs(workspace):
+            path=directory/(name+'.yaml')
+            if path.exists() and not path.is_symlink() and path.stat().st_size<=256*1024:
+                return {**validate_matrix(yaml.safe_load(path.read_text())),'name':name}
+        raise ValueError('The routing matrix does not exist.')
+
+    async def perform(self,action,args):
+        workspace=args.get('workspace') or str(Path.cwd());scope=args.get('scope','global')
+        self.store.path(workspace,scope) # Validate scope even on reads.
+        if action=='providers.list':return {'providers':self.provider_rows(workspace)}
+        if action=='providers.save':return self._provider_mutation(args,workspace,scope)
+        if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
+        if action=='providers.loginCancel':return await self.cancel_login(args['id'])
+        if action=='providers.loginStatus':return {'providerId':args['id'],'login':self.login_state(args['id'])}
+        if action=='providers.login':
+            row=next((row for row in self.config(workspace).providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args['id']),None)
+            if row and row['module']=='provider-openai-chatgpt':return await self.start_login(row,args,workspace,scope)
+        if action in {'providers.models','providers.test','providers.login'}:
+            if not self.runtime_operation:raise ValueError('Start a session to use the installed provider connection.')
+            operation={'providers.models':'configuration.providerModels','providers.test':'configuration.providerTest','providers.login':'configuration.providerLogin'}[action]
+            result = await self.runtime_operation(operation,{'provider':args['id'],'sessionId':args.get('sessionId')})
+            if action=='providers.test':return {'providerId':args['id'],'test':{**result,'providerId':args['id']}}
+            if action=='providers.login':return {'providerId':args['id'],'login':{**result,'providerId':args['id']}}
+            return {**result,'providerId':args['id'],'modelsProviderId':args['id']}
+        if action=='routing.list':return self.routing(workspace)
+        if action=='routing.show':return {'matrix':self.matrix(workspace,args['name'])}
+        if action in {'routing.save','routing.use'}:
+            name=safe_name(args['name'])
+            if action=='routing.save':
+                value=args['matrix']
+                if isinstance(value,str):value=yaml.safe_load(value)
+                value=validate_matrix(value);value['name']=name
+                if redact(value)!=value:raise ValueError('Routing matrices must not contain credentials; configure them on the provider.')
+                directory=self.home/'config/routing' if scope=='global' else Path(workspace)/'.amplifier-unified'/('routing.local' if scope=='local' else 'routing')
+                def save(settings):
+                    write_private(directory/(name+'.yaml'),yaml.safe_dump(value,sort_keys=False))
+                self.store.update(workspace,scope,save)
+            else:
+                self.matrix(workspace,name)
+                def activate(settings):settings.setdefault('routing',{})['matrix']=name
+                self.store.update(workspace,scope,activate)
+            return {**self.routing(workspace),'takesEffect':'new_sessions','scope':scope}
+        raise ValueError('Unknown setup operation.')
+
+    def login_state(self,identity):
+        row=self.logins.get(identity)
+        if not row:return {"providerId":identity,"status":"idle"}
+        return {key:value for key,value in row.items() if key not in {"task","process"}}
+
+    async def publish_login(self,identity):
+        result={"providerId":identity,"login":self.login_state(identity)}
+        if self.progress:await self.progress(result)
+        return result
+
+    async def start_login(self,provider,args,workspace,scope):
+        identity=args['id']; previous=self.logins.get(identity)
+        if previous and not previous['task'].done():return await self.publish_login(identity)
+        path=self.home/'config'/('openai-chatgpt-'+safe_name(identity)+'-oauth.json')
+        config={**provider.get('config',{}),'token_file_path':str(path),'login_on_mount':False}
+        self._provider_mutation({**args,'module':provider['module'],'config':config},workspace,scope)
+        row={'providerId':identity,'loginId':uuid.uuid4().hex,'status':'starting','instructions':[]}
+        self.logins[identity]=row
+        async def run():
+            process=None
+            try:
+                if self.auth_command:command=list(self.auth_command)
+                else:
+                    from .runtime import RuntimeManager
+                    command=RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_auth.py'))]
+                process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
+                row['process']=process
+                process.stdin.write((json.dumps({'module':provider['module'],'tokenFile':str(path)})+'\n').encode());await process.stdin.drain();process.stdin.close()
+                async with asyncio.timeout(900):
+                    while line:=await process.stdout.readline():
+                        try:event=json.loads(line)
+                        except (ValueError,UnicodeError):continue
+                        if event.get('status') not in {'waiting','completed','failed'}:continue
+                        row['status']=event['status']
+                        if event.get('instruction'):
+                            text=str(event['instruction'])[:2000]
+                            row['instructions']=(row['instructions']+[text])[-20:]
+                            for url in re.findall(r'https://[^\s<>]+',text):
+                                if urlsplit(url).hostname in {'auth.openai.com','chatgpt.com','platform.openai.com'}:row['url']=url
+                        if event.get('error'):row['error']=str(event['error'])[:300]
+                        await self.publish_login(identity)
+                    code=await process.wait()
+                    if code or row['status'] not in {'completed','failed'}:
+                        row.update(status='failed',error='The provider login ended before authentication completed.')
+            except asyncio.CancelledError:row['status']='cancelled';raise
+            except TimeoutError:row.update(status='expired',error='Device login expired. Start again.')
+            except Exception as exc:row.update(status='failed',error='Unable to run provider login ('+type(exc).__name__+').')
+            finally:
+                if process and process.returncode is None:
+                    try:os.killpg(process.pid,signal.SIGTERM)
+                    except ProcessLookupError:pass
+                    try:await asyncio.wait_for(process.wait(),3)
+                    except TimeoutError:
+                        try:os.killpg(process.pid,signal.SIGKILL)
+                        except ProcessLookupError:pass
+                        await process.wait()
+                await self.publish_login(identity)
+        row['task']=asyncio.create_task(run())
+        return await self.publish_login(identity)
+
+    async def cancel_login(self,identity):
+        row=self.logins.get(identity)
+        if row and not row['task'].done():
+            row['status']='cancelled'
+            row['task'].cancel()
+            await asyncio.gather(row['task'],return_exceptions=True)
+        return await self.publish_login(identity)
+
+    async def close(self):
+        await asyncio.gather(*(self.cancel_login(identity) for identity in list(self.logins)),return_exceptions=True)

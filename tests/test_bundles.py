@@ -1,0 +1,118 @@
+from pathlib import Path
+import pytest
+import yaml
+from amplifier_web.bundles import BundleManager, remote_source, document_metadata
+
+@pytest.mark.parametrize('uri', ['file:///tmp/bundle','https://user:secret@github.com/a/b','https://github.com/a/b?token=secret','git+https://github.com/a/b#subdirectory=../escape','git+https://github.com/a/b@--upload-pack=x'])
+def test_discovery_rejects_unsafe_sources(uri):
+    with pytest.raises(ValueError): remote_source(uri)
+
+@pytest.mark.asyncio
+async def test_registration_order_disable_remove_persist(tmp_path):
+    manager = BundleManager(tmp_path)
+    args = {'workspace':str(tmp_path)}
+    a = (await manager.perform('bundles.add', {**args,'uri':'foundation:a','name':'A'}))['bundles'][0]
+    b = (await manager.perform('bundles.add', {**args,'uri':'foundation:b','name':'B'}))['bundles'][1]
+    await manager.perform('bundles.move', {**args,'id':b['id'],'direction':'up'})
+    await manager.perform('bundles.toggle', {**args,'id':a['id'],'enabled':False})
+    assert manager.store.read(tmp_path)['bundle']['app'] == ['foundation:b']
+    rows = (await BundleManager(tmp_path).perform('bundles.list',args))['bundles']
+    assert [r['name'] for r in rows] == ['B','A']
+    await manager.perform('bundles.remove',{**args,'id':b['id']})
+    assert 'foundation:b' in manager.store.read(tmp_path)['web_bundles']['excluded']
+
+def fixture_export(manager):
+    return manager.export_document({'config':{'providers':[{'module':'provider-openai','config':{'api_key':'${OPENAI_API_KEY}'}}]}},root_bundle='anchors',name='portable',effective_plan={
+        'session':{'orchestrator':{'module':'loop-streaming','source':'git+https://github.com/microsoft/amplifier-module-loop-streaming@abc'}},
+        'providers':[{'module':'provider-openai','config':{'api_key':'[REDACTED]','max_tokens':123}}],
+        'tools':[{'module':'tool-keep'},{'module':'tool-disabled','enabled':False}],
+        'agents':{'worker':{'instruction':'Use @anchors:context/baseline.md','tools':[{'module':'tool-disabled','enabled':False}]}},
+    }, resources={'instruction':'Welcome @anchors:context/system.md','context':[
+        {'name':'anchors:context/system.md','text':'System instruction.'},
+        {'name':'anchors:context/baseline.md','text':'Agent baseline.'}], 'namespaces':[]})
+
+def test_flatten_removes_disabled_and_inlines_context_without_secrets(tmp_path):
+    result=fixture_export(BundleManager(tmp_path))
+    document=yaml.safe_load(result['content'].split('---',2)[1])
+    assert 'includes' not in document
+    assert [r['module'] for r in document['tools']] == ['tool-keep']
+    assert document['agents']['worker']['tools'] == []
+    assert 'Agent baseline.' in document['agents']['worker']['instruction']
+    assert 'System instruction.' in result['content']
+    assert '@anchors:' not in result['content']
+    assert document['providers'][0]['config']=={'api_key':'${OPENAI_API_KEY}','max_tokens':123}
+
+def test_missing_static_resource_blocks_export(tmp_path):
+    with pytest.raises(ValueError, match='Missing portable'):
+        BundleManager(tmp_path).export_document({},effective_plan={},resources={'instruction':'@x:missing.md'})
+
+@pytest.mark.asyncio
+async def test_saved_bundle_registered_and_roundtrips_foundation(tmp_path):
+    foundation=pytest.importorskip('amplifier_foundation.registry')
+    export=fixture_export(BundleManager(tmp_path))
+    path=tmp_path/export['filename']; path.write_text(export['content'])
+    loaded=await foundation.load_bundle(str(path))
+    plan=loaded.to_mount_plan()
+    assert [r['module'] for r in plan['tools']] == ['tool-keep']
+    assert plan['agents']['worker']['tools']==[]
+    assert 'Agent baseline.' in plan['agents']['worker']['instruction']
+    assert 'System instruction.' in loaded.instruction
+
+@pytest.mark.asyncio
+async def test_save_registers_markdown_and_does_not_read_unrelated_local_file(tmp_path):
+    manager=BundleManager(tmp_path)
+    result=await manager.perform('bundle.save',{'name':'new'},effective_config={'tools':[]},root_bundle='/private/unread',resources={'instruction':'Static'})
+    assert result['saved']['name']=='new'
+    assert Path(result['saved']['uri']).suffix=='.md'
+    assert manager.store.read(tmp_path)['bundle']['added']['new']==result['saved']['uri']
+
+def test_routing_export_embeds_effective_roles_without_private_directories(tmp_path):
+    roles={'general':{'description':'custom','candidates':[{'provider':'own','model':'custom'}]},'fast':{'description':'quick','candidates':[{'provider':'own','model':'small'}]}}
+    result=BundleManager(tmp_path).export_document({},effective_plan={'hooks':[{'module':'hooks-routing','config':{'default_matrix':'private','custom_routing_dirs':['/private/matrices']}}]},resources={'instruction':'Instructions','routingMatrix':{'roles':roles,'baseRoles':['general','fast','coding']}})
+    doc=yaml.safe_load(result['content'].split('---',2)[1]);config=doc['hooks'][0]['config']
+    assert config['default_matrix']=='balanced'
+    assert config['overrides']['general']==roles['general']
+    assert config['overrides']['coding']['candidates']==[]
+    assert '/private' not in result['content']
+
+@pytest.mark.asyncio
+async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_overrides(tmp_path,monkeypatch):
+    """Actual Foundation save/load + the same host composition used at startup."""
+    foundation=pytest.importorskip('amplifier_foundation.registry')
+    from types import SimpleNamespace
+    from amplifier_web.host.session import compose_configured_bundle,is_snapshot,module_source
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+    monkeypatch.setenv('SNAPSHOT_TEST_API_KEY','credential-for-this-host')
+    source='git+https://github.com/example/tool-filesystem@'+'a'*40
+    export=BundleManager(tmp_path).export_document({},root_bundle='anchors',effective_plan={
+        'providers':[{'module':'provider-test','id':'saved-provider','config':{'api_key':'${SNAPSHOT_TEST_API_KEY}','model':'saved-model'}}],
+        'tools':[{'module':'tool-filesystem','source':source,'config':{'setting':'saved'}},{'module':'tool-disabled','enabled':False}],
+        'agents':{'worker':{'instruction':'Keep literal ${PROMPT_EXAMPLE}.','tools':[{'module':'tool-disabled','enabled':False}]}},
+        'hooks':[],
+    },resources={'instruction':'Saved static instructions.'})
+    target=tmp_path/export['filename'];target.write_text(export['content'])
+    behavior=tmp_path/'behavior.yaml';behavior.write_text('bundle: {name: addon}\ntools:\n  - module: tool-disabled\n  - module: tool-extra\n')
+    registry=foundation.BundleRegistry(home=tmp_path/'registry')
+    settings={'bundle':{'app':[str(behavior)]},'routing':{'matrix':'host-matrix'},
+        'config':{'tools':[{'module':'tool-disabled'}],'providers':[{'module':'provider-test','id':'saved-provider','config':{'model':'host-model'}}]},
+        'overrides':{'tool-filesystem':{'source':'git+https://github.com/example/replacement','config':{'setting':'host-setting','allowed_write_paths':['/allowed'],'denied_write_paths':['/denied']}}}}
+    config=SimpleNamespace(settings=settings,app_bundles=[str(behavior)],providers=settings['config']['providers'],module_sources={'tool-filesystem':'git+https://github.com/example/replacement'},workspace=tmp_path,home=tmp_path,registry_home=tmp_path/'registry')
+    loaded=await registry.load(str(target))
+    assert loaded.version==SNAPSHOT_VERSION and is_snapshot(loaded)
+    loaded=await compose_configured_bundle(registry,loaded,config)
+    plan=loaded.to_mount_plan()
+    assert [row['module'] for row in plan['tools']]==['tool-filesystem']
+    assert plan['agents']['worker']['tools']==[]
+    assert plan['agents']['worker']['instruction']=='Keep literal ${PROMPT_EXAMPLE}.'
+    assert plan['providers'][0]['config']=={'api_key':'credential-for-this-host','model':'saved-model'}
+    assert plan['providers'][0]['instance_id']=='saved-provider'
+    assert plan.get('hooks',[])==[]
+    assert plan['tools'][0]['config']=={'setting':'saved','allowed_write_paths':['/allowed'],'denied_write_paths':['/denied']}
+    assert module_source(config,True,'tool-filesystem',plan['tools'][0]['source'])==source
+    assert module_source(config,False,'tool-filesystem',source)==config.module_sources['tool-filesystem']
+    # An ordinary root still composes the host's configured behavior normally.
+    ordinary=tmp_path/'ordinary.yaml';ordinary.write_text('bundle: {name: ordinary}\ntools: []\n')
+    normal=await registry.load(str(ordinary))
+    no_routing=SimpleNamespace(**{**vars(config),'settings':{'bundle':{'app':[str(behavior)]}},'providers':[]})
+    normal=await compose_configured_bundle(registry,normal,no_routing)
+    assert {row['module'] for row in normal.tools}=={'tool-disabled','tool-extra'}

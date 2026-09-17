@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {providerConfig,modelOptions,updateCandidate,updateRole} from '../src/setup-data.js';
+test('provider configuration accepts environment references but rejects literal credentials',()=>{
+ assert.deepEqual(providerConfig('{"api_key":"${OPENAI_API_KEY}","model":"custom"}'),{api_key:'${OPENAI_API_KEY}',model:'custom'});
+ assert.throws(()=>providerConfig('{"api_key":"real-secret"}'),/private API key/);
+ assert.throws(()=>providerConfig('[]'),/object/);
+});
+test('routing candidate updates preserve fallback configuration and other roles',()=>{
+ const original={name:'mine',roles:{coding:{description:'Code',candidates:[{provider:'openai',model:'one',config:{effort:'high'}},{provider:'other',model:'fallback'}]},fast:{candidates:[]}}};
+ const changed=updateCandidate(original,'coding',0,{model:'two'});
+ assert.equal(changed.roles.coding.candidates[0].model,'two');assert.equal(original.roles.coding.candidates[0].model,'one');
+ assert.equal(changed.roles.coding.candidates[0].config.effort,'high');assert.deepEqual(changed.roles.fast,original.roles.fast);
+ assert.equal(updateRole(changed,'new',{candidates:[]}).roles.coding.description,'Code');
+});
+test('provider model catalogs accept native records and string identifiers',()=>{
+ assert.deepEqual(modelOptions({models:['one',{id:'two',display_name:'Two'},{}]}),[{id:'one',name:'one'},{id:'two',name:'Two'}]);
+});
