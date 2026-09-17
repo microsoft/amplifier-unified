@@ -1,11 +1,15 @@
 import {defineConfig} from 'vite';
-import {copyFileSync} from 'node:fs';
+import {copyFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const source=fileURLToPath(new URL('./src/converge.css',import.meta.url));
 const destination=fileURLToPath(new URL('../amplifier_web/static/converge.amplifier.css',import.meta.url));
 export default defineConfig({
  base:'/',
- plugins:[{name:'bundle-shareable-skin',closeBundle(){copyFileSync(source,destination)}}],
+ plugins:[{name:'bundle-shareable-skin',closeBundle(){
+  copyFileSync(source,destination);
+  const licenses=fileURLToPath(new URL('../amplifier_web/static/licenses',import.meta.url));mkdirSync(licenses,{recursive:true});
+  for(const name of ['mermaid','dompurify','highlight.js'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
+ }}],
  build:{outDir:'../amplifier_web/static',emptyOutDir:true},
  server:{proxy:{'/api':'http://127.0.0.1:8765'}},
 });

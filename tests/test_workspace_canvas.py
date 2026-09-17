@@ -147,3 +147,43 @@ def test_a2ui_depth_limit_holds_regardless_of_component_order():
         child = identity
     with pytest.raises(AppError, match="20 levels"):
         validate_surface({"surfaceId":"deep", "root":child, "components":components})
+
+
+async def test_rich_canvas_detection_controls_and_stale_reports(service, tmp_path):
+    for name, content, kind in [('flow.mmd','graph LR; A-->B','mermaid'), ('graph.gv','digraph {a->b}','dot'), ('page.html','<button onclick="this.textContent=42">Test</button>','html'), ('data.json','{"a":1}','json')]:
+        (tmp_path/'workspace'/name).write_text(content)
+        await service.dispatch('canvas.show', {'kind':'auto','path':name}, origin='agent')
+        canvas = service.state['canvas']
+        assert canvas['kind'] == kind and canvas['content'] == content
+    identity = canvas['id']
+    await service.dispatch('canvas.view', {'id':identity,'patch':{'source':True,'zoom':2,'engine':'neato'}}, origin='agent')
+    await service.dispatch('canvas.report', {'id':identity,'part':'preview','status':'error','message':'Bad diagram'})
+    assert service.get_state()['canvas']['renderReports']['preview']['message'] == 'Bad diagram'
+    await service.dispatch('canvas.show', {'kind':'text','content':'Replacement'})
+    await service.dispatch('canvas.report', {'id':identity,'part':'preview','status':'ready'})
+    assert service.state['canvas']['renderReports'] == {}  # Late reports cannot affect the replacement.
+    assert service.state['canvas']['view'] == {}
+    with pytest.raises(AppError):
+        await service.dispatch('canvas.view', {'id':service.state['canvas']['id'],'patch':{'zoom':10}})
+
+
+async def test_canvas_exports_use_shared_device_actions(service):
+    await service.dispatch('canvas.show', {'kind':'html','content':'<h1>Hello</h1>'}, origin='agent')
+    identity = service.state['canvas']['id']
+    result = await service.dispatch('canvas.download', {'id':identity}, origin='agent')
+    assert result['effects'][0]['filename'] == 'canvas.html'
+    assert result['state']['deviceCommands'][-1]['type'] == 'download'
+    result = await service.dispatch('canvas.copy', {'id':identity})
+    assert result['effects'][0]['type'] == 'clipboard.write'
+
+
+async def test_html_standard_controls_are_visible_and_agent_operable(service):
+    await service.dispatch('canvas.show', {'kind':'html','content':'<button>Run</button>'})
+    identity = service.state['canvas']['id']
+    await service.dispatch('canvas.snapshot', {'id':identity,'document':{'text':'Run','controls':[{'id':'run','tag':'button','type':'button','label':'Run','value':'','disabled':False}]}})
+    await service.dispatch('canvas.interact', {'id':identity,'controlId':'run','event':'click'}, origin='agent')
+    assert service.get_state()['canvas']['interaction']['controlId'] == 'run'
+    with pytest.raises(AppError, match='enabled control'):
+        await service.dispatch('canvas.interact', {'id':identity,'controlId':'invented','event':'click'})
+    await service.dispatch('canvas.view', {'id':identity,'patch':{'source':True}})
+    assert 'document' not in service.state['canvas'] and 'interaction' not in service.state['canvas']

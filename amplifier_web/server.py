@@ -32,7 +32,7 @@ async def boundaries(request, handler):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store" if request.path.startswith("/api/") else "no-cache"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'"
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
 
@@ -106,6 +106,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         response.headers['Content-Type']=row['mime']
         response.headers['Content-Disposition']=('inline' if row['mime'].startswith('image/') else 'attachment')+"; filename*=UTF-8''"+quote(row['name'])
         return response
+    async def canvas_document(request):
+        canvas = service.state.get('canvas', {})
+        if canvas.get('id') != request.match_info['identity'] or canvas.get('kind') != 'html':
+            raise AppError('Canvas document no longer available', 404)
+        # Only bounded display reports cross the frame boundary, never app actions.
+        identity = json.dumps(canvas['id'])
+        bootstrap = '<!doctype html><script data-canvas-bridge>' + (Path(__file__).parent / 'canvas_bridge.js').read_text().replace('__CANVAS_ID__', identity) + '</script>'
+        return web.Response(text=bootstrap+canvas.get('content',''), content_type='text/html', headers={
+            'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+            'Permissions-Policy':'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()'})
+    app.router.add_get('/api/canvas/{identity}/document', canvas_document)
     app.router.add_get('/api/attachments/{identity}',attachment)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)

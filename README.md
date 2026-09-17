@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.4.1
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.0
 amplifier-unified
 ```
 
@@ -116,9 +116,11 @@ files.
 
 The left rail expands on hover or can stay pinned. It manages existing workspace
 folders and their conversations. The right canvas has an adjustable width and
-previews workspace files or declarative agent UI. See [canvas actions and the
-supported A2UI subset](docs/canvas.md). Canvas button events are visible to the
-agent; they do not automatically start a new turn.
+previews interactive HTML, Markdown, Mermaid, Graphviz, code, JSON/JSONL, images,
+and declarative agent UI. The agent receives explicit canvas guidance on every
+turn and can inspect render results and operate standard HTML controls. See
+[canvas actions, viewer controls and the A2UI subset](docs/canvas.md). User canvas
+interactions are visible to the agent; they do not automatically start a new turn.
 
 
 Provider metadata and model catalogs load in the background at startup. Catalogs

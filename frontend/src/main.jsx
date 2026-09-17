@@ -38,6 +38,10 @@ function App(){
    if(effect.createdAt&&Date.now()-new Date(typeof effect.createdAt==='number'&&effect.createdAt<1e12?effect.createdAt*1000:effect.createdAt).getTime()>60000)continue;
    Promise.resolve().then(async()=>{
     if(effect.type==='download')download(effect.filename||'amplifier-export.json',effect.content??effect.data,effect.mimeType||effect.mime||'application/json');
+    if(effect.type==='clipboard.write'){
+     try{await navigator.clipboard.writeText(effect.content);await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'ready',message:'Source copied'}}})}
+     catch(e){await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'error',message:'Clipboard unavailable: '+e.message}}});throw e}
+    }
     if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
     if(effect.type==='call.end')await voiceClient.current.end();
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);

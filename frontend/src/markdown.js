@@ -8,7 +8,7 @@ const components={
  img:({src,alt})=>React.createElement('a',{href:src,target:'_blank',rel:'noopener noreferrer'},alt?`Image: ${alt}`:'Open image'),
  table:({node,...props})=>React.createElement('div',{className:'a-table-scroll'},React.createElement('table',props)),
 };
-export const Markdown=memo(function Markdown({text,className=''}){
+export const Markdown=memo(function Markdown({text,className='',overrides={}}){
  return React.createElement('div',{className:`a-markdown ${className}`.trim()},
-  React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm],skipHtml:true,urlTransform:defaultUrlTransform,components},String(text||'')));
+  React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm],skipHtml:true,urlTransform:defaultUrlTransform,components:{...components,...overrides}},String(text||'')));
 });

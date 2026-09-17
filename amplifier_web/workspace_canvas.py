@@ -1,7 +1,7 @@
 """Workspace registrations and a bounded, declarative agent canvas.
 
 The canvas supports a snapshot subset of A2UI v0.8 adjacency-list components;
-see docs/canvas.md. It never runs supplied HTML, JavaScript, or network requests.
+see docs/canvas.md. Rich HTML is served separately inside an opaque-origin sandbox.
 """
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ import uuid
 MAX_TEXT = 1_000_000
 MAX_IMAGE = 5_000_000
 MAX_SURFACE = 100_000
+KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui']
+EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
+    '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
+    '.jsonl':'jsonl', '.ndjson':'jsonl', **{x:'image' for x in ['.png','.jpg','.jpeg','.webp','.gif']},
+    **{x:'code' for x in ['.py','.js','.jsx','.ts','.tsx','.css','.yaml','.yml','.toml','.sh','.sql','.xml','.svg']}}
 
 
 def _error(message):
@@ -34,6 +39,7 @@ def initialize(state):
     if state.get("selectedWorkspaceId") not in {w["id"] for w in state["workspaces"]}:
         state["selectedWorkspaceId"] = next((w["id"] for w in state["workspaces"] if w["path"] == state["settings"]["workspace"]), state["workspaces"][0]["id"] if state["workspaces"] else None)
     state.setdefault("canvas", {"open": False, "events": []})
+    state["canvas"].setdefault("id", uuid.uuid4().hex)
 
 
 def select_session_workspace(state, session):
@@ -179,6 +185,34 @@ def canvas_command(state, action, args, origin):
     if action == "canvas.close":
         state["canvas"]["open"] = False
         return
+    if action in {"canvas.view", "canvas.report", "canvas.snapshot", "canvas.interact"}:
+        canvas = state['canvas']
+        if args['id'] != canvas.get('id'):
+            if action in {'canvas.report', 'canvas.snapshot'}:
+                return  # A replaced preview may finish while its report is in flight.
+            _error('This canvas has been replaced. Read the current canvas first.')
+        if action == 'canvas.view':
+            canvas.setdefault('view', {}).update(copy.deepcopy(args['patch']))
+            if 'source' in args['patch'] and canvas.get('kind') == 'html':
+                canvas.pop('document', None)
+                canvas.pop('interaction', None)
+            if 'engine' in args['patch']:
+                canvas.setdefault('renderReports', {})['preview'] = {'status':'pending','message':'Updating graph layout'}
+        elif action == 'canvas.snapshot':
+            if canvas.get('kind') != 'html':
+                _error('Only HTML previews report document controls.')
+            canvas['document'] = copy.deepcopy(args['document'])
+        elif action == 'canvas.interact':
+            control = next((c for c in canvas.get('document', {}).get('controls', []) if c['id'] == args['controlId']), None)
+            if not canvas.get('open') or not control or control.get('disabled'):
+                _error('Read the current canvas document and choose an enabled control.')
+            canvas['interaction'] = {**copy.deepcopy(args), 'requestId':uuid.uuid4().hex}
+        else:
+            reports = canvas.setdefault('renderReports', {})
+            if len(reports) >= 100 and args['part'] not in reports:
+                _error('Too many canvas render reports.')
+            reports[args['part']] = {'status':args['status'], 'message':args.get('message',''), 'at':time.time()}
+        return
     if action == "canvas.event":
         canvas = state["canvas"]
         surface = canvas.get("surface", {})
@@ -194,7 +228,13 @@ def canvas_command(state, action, args, origin):
         canvas["events"] = canvas["events"][-100:]
         return
     kind = args["kind"]
-    canvas = {"open": True, "kind": kind, "title": args.get("title") or "Canvas", "events": [], "workspaceId": state["selectedWorkspaceId"]}
+    if kind not in KINDS:
+        _error('Unsupported canvas format.')
+    if kind == 'auto':
+        if not args.get('path'):
+            _error('Automatic format detection needs a workspace file path.')
+        kind = EXTENSIONS.get(Path(args['path']).suffix.lower(), 'text')
+    canvas = {"id": uuid.uuid4().hex, "view": {}, "renderReports": {},"open": True, "kind": kind, "title": args.get("title") or "Canvas", "events": [], "workspaceId": state["selectedWorkspaceId"]}
     if kind == "a2ui":
         if args.get("path") or args.get("content"):
             _error("Supply a surface for an A2UI canvas.")
@@ -235,4 +275,6 @@ def canvas_command(state, action, args, origin):
         if len(content.encode("utf-8")) > MAX_TEXT:
             _error("Canvas text must be 1 MB or smaller.")
         canvas["content"] = content
+    if kind in {'mermaid', 'dot'} and len(canvas.get('content', '')) > 50_000:
+        _error('Diagrams must be 50,000 characters or smaller.')
     state["canvas"] = canvas

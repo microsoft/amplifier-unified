@@ -30,7 +30,13 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
-    "canvas.show": ("Show text, markdown, code, an embedded image or workspace file, or a declarative A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["text","markdown","code","image","a2ui"]},"title":string(200),"content":string(7000000),"path":string(4000),"surface":{"type":"object"}},["kind"])),
+    "canvas.show": ("Display a visual artifact: sandboxed interactive HTML, Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, or A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui"]},"title":string(200),"content":string(7000000),"path":string(4000),"surface":{"type":"object"}},["kind"])),
+    "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
+    "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","error"]},"message":string(2000)},["id","part","status"])),
+    "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
+    "canvas.interact": ("Operate a standard HTML preview control from the current canvas.document snapshot. Never executes arbitrary JavaScript.", schema({"id":string(100),"controlId":string(100),"event":{"enum":["click","input"]},"value":string(4000)},["id","controlId","event"])),
+    "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
+    "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
@@ -292,7 +298,16 @@ class AppService:
                 workspace_command(self.state, action, args)
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
-                canvas_command(self.state, action, args, origin)
+                if action in {'canvas.copy', 'canvas.download'}:
+                    canvas = self.state['canvas']
+                    if args['id'] != canvas.get('id'):
+                        raise AppError('This canvas has been replaced.')
+                    content = canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
+                    extension = {'markdown':'md','html':'html','mermaid':'mmd','dot':'dot','json':'json','jsonl':'jsonl','a2ui':'json'}.get(canvas.get('kind'), 'txt')
+                    effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
+                        'content':content,'filename':'canvas.'+extension,'mime':'text/plain','canvasId':args['id']})
+                else:
+                    canvas_command(self.state, action, args, origin)
             elif action == "session.create":
                 session = self._new_session(args)
                 from .workspace_canvas import select_session_workspace
@@ -474,7 +489,7 @@ class AppService:
             self.state["events"] = self.state["events"][-200:]
             for effect in effects:
                 effect.update({"id": str(uuid.uuid4()), "createdAt": time.time(), "origin": origin})
-            self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download"]))
+            self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
             if command_id:
