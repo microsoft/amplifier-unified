@@ -41,17 +41,38 @@ async def test_provider_removal_tombstones_inherited_instance(manager,tmp_path):
     assert manager.store.read(tmp_path,'local')['overrides']['one']['enabled'] is False
 
 @pytest.mark.asyncio
-async def test_models_and_test_use_actual_runtime_provider_contract(manager,tmp_path):
-    calls=[]
-    async def runtime(op,args):
-        calls.append((op,args))
-        return {'models':[{'id':'provider-discovered-model'}]} if op.endswith('Models') else {'reachable':True,'modelCount':1}
+async def test_models_and_test_use_isolated_provider_without_starting_session(manager,tmp_path,monkeypatch):
+    import sys
+    monkeypatch.setenv('TEAM_CHECK_KEY','secret-fixture-value')
+    await manager.perform('providers.save',{'id':'one','module':'provider-openai','config':{'base_url':'https://example.test/v1'},'apiKeyEnv':'TEAM_CHECK_KEY','workspace':str(tmp_path)})
+    child=tmp_path/'probe.py'
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']['api_key']=='secret-fixture-value'; assert r['config']['base_url']=='https://example.test/v1'; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':'discovered'}],'test':{'reachable':True,'modelCount':1}}))")
+    manager.probe_command=[sys.executable,str(child)]
+    async def runtime(*args):raise AssertionError('Must not start a conversation')
     manager.runtime_operation=runtime
     result=await manager.perform('providers.models',{'id':'one','workspace':str(tmp_path),'sessionId':'s'})
-    assert result['models'][0]['id']=='provider-discovered-model'
+    assert result['models'][0]['id']=='discovered' and result['modelsProviderId']=='one'
+    assert 'secret-fixture-value' not in str(result)
     result=await manager.perform('providers.test',{'id':'one','workspace':str(tmp_path),'sessionId':'s'})
-    assert result['test']['reachable']
-    assert calls[0]==('configuration.providerModels',{'provider':'one','sessionId':'s'})
+    assert result['test']['reachable'] and result['test']['providerId']=='one'
+
+@pytest.mark.asyncio
+async def test_schema_does_not_need_configured_credentials(manager,tmp_path):
+    import sys
+    child=tmp_path/'probe.py'
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']=={}; print(json.dumps({'info':{},'configSchema':{'fields':[{'id':'effort','choices':['low','high']}]}}))")
+    manager.probe_command=[sys.executable,str(child)]
+    result=await manager.perform('providers.schema',{'module':'provider-openai','workspace':str(tmp_path)})
+    assert result['providerMetadata']['configSchema']['fields'][0]['choices']==['low','high']
+
+@pytest.mark.asyncio
+async def test_provider_probe_errors_are_visible(manager,tmp_path):
+    import sys
+    child=tmp_path/'probe.py';child.write_text("import json; print(json.dumps({'error':'Provider setup failed (AuthenticationError). Check the saved credentials and endpoint, then retry.'}))")
+    manager.probe_command=[sys.executable,str(child)]
+    with pytest.raises(ValueError,match='AuthenticationError'):
+        await manager.perform('providers.schema',{'module':'provider-openai','workspace':str(tmp_path)})
+
 
 MATRIX={'description':'Custom policy','roles':{'general':{'description':'General','candidates':[{'provider':'one','model':'gpt-*','config':{'reasoning_effort':'high'}}]},'fast':{'description':'Quick','candidates':[{'provider':'one','model':'small'}]}}}
 

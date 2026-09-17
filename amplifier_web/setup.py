@@ -5,6 +5,7 @@ import asyncio
 import json
 import signal
 import uuid
+import time
 from urllib.parse import urlsplit,urlunsplit
 import os
 from pathlib import Path
@@ -77,10 +78,10 @@ def validate_matrix(value):
     return copy.deepcopy(value)
 
 class SetupManager:
-    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None):
+    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None):
         self.home=Path(home); self.store=store or SettingsStore(home)
         self.runtime_operation=runtime_operation
-        self.progress=progress; self.auth_command=auth_command; self.logins={}
+        self.progress=progress; self.auth_command=auth_command; self.probe_command=probe_command; self.logins={}
 
     def config(self,workspace):
         return load_config(workspace,home=self.home)
@@ -105,6 +106,46 @@ class SetupManager:
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
                 'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
         return rows
+
+    async def probe(self,action,args,workspace):
+        from .host.config import expand_environment
+        from .runtime import RuntimeManager
+        configured=self.config(workspace)
+        row=next((row for row in configured.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
+        module=args.get('module') if action=='providers.schema' else (row or {}).get('module')
+        if not module:raise ValueError('Save this provider before discovering models or testing it.')
+        safe_name(module)
+        raw=(row or {}).get('config',{}) if row and row['module']==module else {}
+        # Metadata needs no credentials and must remain available when a key is
+        # missing. Discovery uses saved config, including custom endpoints.
+        config={} if action=='providers.schema' else expand_environment(raw)
+        if action!='providers.schema':
+            credential=environment_credential(module,raw)
+            field=credential['field']
+            if not config.get(field) and credential['available']:config[field]=os.environ[credential['envVar']]
+        command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
+        env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)}
+        if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
+        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env=env,cwd=workspace)
+        try:
+            try:
+                output,_=await asyncio.wait_for(process.communicate(json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),90)
+            except TimeoutError:
+                raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
+            try:result=json.loads(output)
+            except (ValueError,UnicodeError):raise ValueError('The provider check ended without a result. Retry after the runtime dependencies finish installing.') from None
+            if result.get('error'):raise ValueError(result['error'])
+            if process.returncode:raise ValueError('The provider check could not finish. Please retry.')
+            metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
+            response={'providerMetadata':metadata}
+            if action=='providers.models':response.update(models=result['models'],modelsProviderId=args['id'])
+            if action=='providers.test':response['test']={**result['test'],'providerId':args['id']}
+            return response
+        finally:
+            if process.returncode is None:
+                try:os.killpg(process.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+                await process.wait()
 
     def _keys(self,updates):
         path=self.home/'config/keys.env'
@@ -210,8 +251,10 @@ class SetupManager:
         self.store.path(workspace,scope) # Validate scope even on reads.
         if action=='providers.credentials':
             self.config(workspace) # Load app-owned keys as well as the launch environment.
-            return {'credentialCheck':environment_credential(args['module'],env_var=args.get('envVar'))}
-        if action=='providers.list':return {'providers':self.provider_rows(workspace)}
+            return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
+        if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
+        if action in {'providers.schema','providers.models','providers.test'}:
+            return await self.probe(action,args,workspace)
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
         if action=='providers.loginCancel':return await self.cancel_login(args['id'])
@@ -219,13 +262,10 @@ class SetupManager:
         if action=='providers.login':
             row=next((row for row in self.config(workspace).providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args['id']),None)
             if row and row['module']=='provider-openai-chatgpt':return await self.start_login(row,args,workspace,scope)
-        if action in {'providers.models','providers.test','providers.login'}:
-            if not self.runtime_operation:raise ValueError('Start a session to use the installed provider connection.')
-            operation={'providers.models':'configuration.providerModels','providers.test':'configuration.providerTest','providers.login':'configuration.providerLogin'}[action]
-            result = await self.runtime_operation(operation,{'provider':args['id'],'sessionId':args.get('sessionId')})
-            if action=='providers.test':return {'providerId':args['id'],'test':{**result,'providerId':args['id']}}
-            if action=='providers.login':return {'providerId':args['id'],'login':{**result,'providerId':args['id']}}
-            return {**result,'providerId':args['id'],'modelsProviderId':args['id']}
+        if action=='providers.login':
+            if not self.runtime_operation:raise ValueError('This provider does not expose a standalone sign-in flow.')
+            result=await self.runtime_operation('configuration.providerLogin',{'provider':args['id'],'sessionId':args.get('sessionId')})
+            return {'providerId':args['id'],'login':{**result,'providerId':args['id']}}
         if action=='routing.list':return self.routing(workspace)
         if action=='routing.show':return {'matrix':self.matrix(workspace,args['name'])}
         if action in {'routing.save','routing.use'}:

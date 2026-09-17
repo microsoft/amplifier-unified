@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import copy
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import time
@@ -31,8 +32,21 @@ class Management:
             self.service.state['deviceCommands']=self.service.state['deviceCommands'][-20:]
             self.service._publish()
 
+    async def provider_status(self,action,args,command_id,phase,error=None):
+        if not action.startswith('providers.'):return
+        key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
+        async with self.service.lock:
+            operations=self.service.state.setdefault('setup',{}).setdefault('operations',{})
+            previous=operations.get(key,{})
+            if phase not in {'queued','working'} and previous.get('commandId')!=command_id:return
+            operations[key]={'phase':phase,'error':error,'commandId':command_id,'envVar':args.get('envVar',''),'updatedAt':time.time()}
+            self.service._publish()
+
     async def command(self,action,args,command_id=None):
-        async with self.lock:
+        await self.provider_status(action,args,command_id,'queued')
+        independent=action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test'}
+        async with (nullcontext() if independent else self.lock):
+            await self.provider_status(action,args,command_id,'working')
             await self.publish(management={'phase':'working','operation':action,'error':None})
             guarded=None
             try:
@@ -43,15 +57,17 @@ class Management:
                             raise ValueError('Finish active work before saving this conversation bundle')
                         current['configurationBusy']=True;guarded=current['id']
                         self.service._publish()
-                await self.perform(action,args)
+                await self.perform(action,args,command_id=command_id)
                 await self.publish(management={'phase':'ready','operation':action,'error':None})
                 await self.complete(command_id,'ready')
+                await self.provider_status(action,args,command_id,'ready')
             except asyncio.CancelledError:raise
             except Exception as exc:
                 # Host-controlled validation text only; provider/transport errors
                 # are converted before reaching this boundary.
                 await self.publish(management={'phase':'error','operation':action,'error':str(exc)[:1000]})
                 await self.complete(command_id,'error',str(exc)[:1000])
+                await self.provider_status(action,args,command_id,'error',str(exc)[:1000])
             finally:
                 if guarded:
                     async with self.service.lock:
@@ -83,7 +99,7 @@ class Management:
         for session in list(self.service.state['sessions']):
             await self.service.refresh_configuration(session['id'])
 
-    async def perform(self,action,args):
+    async def perform(self,action,args,command_id=None):
         if action.startswith(('modules.','sources.')):
             from .registry import RegistryManager
             session=self.session(args) if self.service.state['sessions'] else {'workspace':self.service.default_workspace}
@@ -108,9 +124,19 @@ class Management:
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            result=await self.setup_manager.perform(action,{**args,'workspace':session['workspace']})
+            manager=SetupManager(self.service.data_dir) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test'} else self.setup_manager
+            result=await manager.perform(action,{**args,'workspace':session['workspace']})
             async with self.service.lock:
-                self.service.state.setdefault('setup',{}).update(result)
+                setup=self.service.state.setdefault('setup',{})
+                if command_id and action.startswith('providers.'):
+                    key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
+                    if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
+                if action=='providers.list' and setup.get('providersWorkspace')!=result.get('providersWorkspace'):
+                    setup.update(modelCatalogs={},models=[],modelsProviderId=None)
+                setup.update(result)
+                if result.get('providerMetadata'):
+                    setup.setdefault('metadata',{})[result['providerMetadata']['module']]=result['providerMetadata']
+                if 'models' in result:setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
                 self.service._publish()
             if action in {'providers.save','providers.remove','routing.save','routing.use'}:await self.invalidate_configuration()
         elif action.startswith(('bundle.','bundles.')):

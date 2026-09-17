@@ -55,3 +55,38 @@ async def test_transcript_file_import_keeps_tool_evidence_without_execution(app)
     assert saved[0]==rows and session['status']=='stopped'
     assert saved[1]['jobs_replayed'] is False
     assert [m['text'] for m in session['messages']]==['Inspect','Finished']
+
+async def test_provider_status_survives_unrelated_operations_and_does_not_block_quick_checks(app,monkeypatch):
+    import asyncio
+    from amplifier_web.setup import SetupManager
+    entered=asyncio.Event();finish=asyncio.Event()
+    async def perform(self,action,args):
+        if action=='providers.models':
+            entered.set();await finish.wait()
+            raise ValueError('Provider check timed out. Please retry.')
+        return {'credentialCheck':{'module':args['module'],'available':True}}
+    monkeypatch.setattr(SetupManager,'perform',perform)
+    models=asyncio.create_task(app.management.command('providers.models',{'id':'openai'},'models'))
+    await entered.wait()
+    await asyncio.wait_for(app.management.command('providers.credentials',{'module':'provider-openai'},'env'),1)
+    assert app.state['setup']['operations']['providers.models:openai']['phase']=='working'
+    assert app.state['setup']['operations']['providers.credentials:provider-openai']['phase']=='ready'
+    finish.set();await models
+    await app.management.command('notifications.get',{},'notifications')
+    assert app.state['management']['phase']=='ready'
+    assert app.state['setup']['operations']['providers.models:openai']['error']=='Provider check timed out. Please retry.'
+
+async def test_old_provider_results_do_not_replace_a_newer_check(app,monkeypatch):
+    import asyncio
+    from amplifier_web.setup import SetupManager
+    entered=asyncio.Event();finish=asyncio.Event()
+    async def perform(self,action,args):
+        if args['envVar']=='OLD_KEY':entered.set();await finish.wait()
+        return {'credentialCheck':{'module':args['module'],'envVar':args['envVar'],'available':True}}
+    monkeypatch.setattr(SetupManager,'perform',perform)
+    old=asyncio.create_task(app.management.command('providers.credentials',{'module':'provider-openai','envVar':'OLD_KEY'},'old'))
+    await entered.wait()
+    await app.management.command('providers.credentials',{'module':'provider-openai','envVar':'NEW_KEY'},'new')
+    finish.set();await old
+    assert app.state['setup']['credentialCheck']['envVar']=='NEW_KEY'
+    assert app.state['setup']['operations']['providers.credentials:provider-openai']['commandId']=='new'

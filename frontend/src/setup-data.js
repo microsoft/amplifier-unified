@@ -30,3 +30,16 @@ export function blankRouting(name='my-routing'){
 export function safeLoginUrl(value){
  try{const url=new URL(value);return url.protocol==='https:'?url.href:null}catch{return null}
 }
+
+export function providerFields(metadata,config={}){
+ const fields=metadata?.configSchema?.fields||metadata?.info?.config_fields||[];
+ return fields.filter(field=>field.id&&field.field_type!=='secret'&&!/api.?key|password|secret|(?:access|refresh|github|auth).?token/i.test(field.id)&&!['model','default_model'].includes(field.id)).filter(field=>{
+  if(field.requires_model&&!config.default_model&&!config.model)return false;
+  return Object.entries(field.show_when||{}).every(([key,expected])=>{
+   const actual=String(config[key]??'').toLowerCase(),value=String(expected).toLowerCase();
+   if(value.startsWith('matches:')){try{return new RegExp(String(expected).slice(8),'i').test(actual)}catch{return false}}
+   for(const[prefix,test] of [['not_contains:',v=>!actual.includes(v)],['contains:',v=>actual.includes(v)],['not_startswith:',v=>!actual.startsWith(v)],['startswith:',v=>actual.startsWith(v)]])if(value.startsWith(prefix))return test(value.slice(prefix.length));
+   return actual===value;
+  });
+ });
+}

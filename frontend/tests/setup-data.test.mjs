@@ -16,3 +16,11 @@ test('routing candidate updates preserve fallback configuration and other roles'
 test('provider model catalogs accept native records and string identifiers',()=>{
  assert.deepEqual(modelOptions({models:['one',{id:'two',display_name:'Two'},{}]}),[{id:'one',name:'one'},{id:'two',name:'Two'}]);
 });
+
+import {providerFields} from '../src/setup-data.js';
+test('provider options follow native visibility rules and exclude secret fields',()=>{
+ const metadata={info:{config_fields:[{id:'key',field_type:'secret',default:'private'},{id:'model'},{id:'reasoning_effort',field_type:'choice',requires_model:true,choices:['low','high']},{id:'long_context',field_type:'boolean',show_when:{default_model:'matches:^gpt-6'}}]}};
+ assert.deepEqual(providerFields(metadata,{}),[]);
+ assert.deepEqual(providerFields(metadata,{default_model:'gpt-5'}).map(f=>f.id),['reasoning_effort']);
+ assert.deepEqual(providerFields(metadata,{default_model:'GPT-6-astra'}).map(f=>f.id),['reasoning_effort','long_context']);
+});

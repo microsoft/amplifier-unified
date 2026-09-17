@@ -1,0 +1,44 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act as renderAct} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {ProviderSettings}=await server.ssrLoadModule('/src/setup.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test.after(()=>server.close());
+
+test('opening settings loads saved configuration and keeps subsequent edits during refresh',async()=>{
+ const calls=[],dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ let state={view:{providerEditor:{id:'openai',module:'provider-openai'}},setup:{}},root;
+ const render=()=>React.createElement(ProviderSettings,{state,session:{id:'s',workspace:'/work',status:'stopped'},act:dispatch});
+ await renderAct(async()=>{root=create(render())});
+ assert.equal(calls.filter(c=>c.name==='providers.list').length,1);
+ assert.equal(calls.find(c=>c.name==='providers.list').args.sessionId,'s');
+ state={...state,setup:{providersLoadedAt:Date.now()/1000+1,providersWorkspace:'/work',providers:[{id:'openai',module:'provider-openai',config:{default_model:'saved-model',reasoning_effort:'high'},credential:{envVar:'CUSTOM_KEY',available:true}}]}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByProps({id:'provider-model'}).props.value,'saved-model');
+ assert.equal(root.root.findByProps({id:'provider-key-env'}).props.value,'CUSTOM_KEY');
+ await renderAct(async()=>root.root.findByProps({id:'provider-model'}).props.onChange({target:{value:'my-edited-model'}}));
+ state={...state,setup:{...state.setup,providersLoadedAt:Date.now()/1000+2}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByProps({id:'provider-model'}).props.value,'my-edited-model');
+ await renderAct(async()=>root.unmount());
+});
+
+test('native choice edits persist in the save action; model checks have immediate progress',async()=>{
+ const calls=[];let resolveModels;
+ const dispatch=(name,args)=>{calls.push({name,args});return name==='providers.models'?new Promise(resolve=>{resolveModels=resolve}):Promise.resolve({accepted:true})};
+ const state={view:{providerEditor:{id:'openai',module:'provider-openai',model:'model',envVar:'OPENAI_API_KEY',credentialMode:'environment',config:'{}'}},setup:{providers:[{id:'openai',module:'provider-openai'}],metadata:{'provider-openai':{info:{config_fields:[{id:'reasoning_effort',choices:['low','high'],field_type:'choice'}]}}}}};
+ let root;
+ await renderAct(async()=>{root=create(React.createElement(ProviderSettings,{state,act:dispatch}))});
+ await renderAct(async()=>root.root.findByProps({id:'provider-option-reasoning_effort'}).props.onChange({target:{value:'high'}}));
+ const button=action=>root.root.findAll(node=>node.type==='button'&&node.props['data-action']===action)[0];
+ await renderAct(async()=>button('providers.save').props.onClick());
+ assert.equal(calls.find(c=>c.name==='providers.save').args.config.reasoning_effort,'high');
+ await renderAct(async()=>{button('providers.models').props.onClick()});
+ assert.equal(button('providers.models').props.disabled,true);
+ assert.match(JSON.stringify(root.toJSON()),/Discovering models/);
+ await renderAct(async()=>resolveModels({accepted:true}));
+ await renderAct(async()=>root.unmount());
+});
