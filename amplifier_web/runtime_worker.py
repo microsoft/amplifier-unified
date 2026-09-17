@@ -8,6 +8,11 @@ import sys
 import time
 import uuid
 
+try:
+    from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+except ImportError:  # Executed directly inside the isolated runtime.
+    from runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+
 # Reserve a dedicated protocol descriptor before module imports. CLI displays and
 # provider logs are routed to stderr, never mistaken for model/app events.
 _PROTOCOL = None
@@ -21,7 +26,7 @@ def configure_protocol():
 
 
 def publish(data):
-    _PROTOCOL.write(json.dumps(data, ensure_ascii=False, default=str) + "\n")
+    _PROTOCOL.write(encode_message(data).decode("utf-8"))
 
 
 class Worker:
@@ -286,7 +291,7 @@ class Worker:
             publish({"op": "reply", "id": identity, "error": f"{type(exc).__name__}: {exc}"})
 
     async def read(self):
-        reader = asyncio.StreamReader(limit=2_000_000)
+        reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
         protocol = asyncio.StreamReaderProtocol(reader)
         transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
         try:
@@ -300,6 +305,10 @@ class Worker:
                 task = asyncio.create_task(self.command(data))
                 self.tasks.add(task)
                 task.add_done_callback(self.tasks.discard)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            publish({'type':'runtime.error','error':f'Amplifier worker communication failed ({type(exc).__name__}). A message could not be read; work was not replayed.'})
         finally:
             transport.close()
             self.shutdown.set()

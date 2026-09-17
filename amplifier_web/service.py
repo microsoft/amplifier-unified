@@ -160,6 +160,7 @@ class AppService:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.commit()
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
@@ -216,6 +217,8 @@ class AppService:
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
     def _save(self):
+        from .state_storage import normalize_state
+        normalize_state(self.state, self.db)
         self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(self.state),))
         self.db.commit()
 
@@ -660,13 +663,24 @@ class AppService:
                 self.state['notificationError']='Notification delivery failed. Check notification settings.'
                 self._publish()
 
+    def state_resource(self, identity):
+        from .state_storage import resource
+        return resource(self.db, identity)
+
     async def app_bridge(self, operation, args, session_id):
         if operation in {"get_state", "state.get"}:
-            return self.get_state()
+            from .agent_state import read_state
+            return read_state(self.get_state(), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
-            return self.get_actions()
+            actions = self.get_actions()
+            prefix = args.get('prefix', '')
+            if not isinstance(prefix, str):
+                raise AppError('Action prefix must be text.')
+            return [item for item in actions if item['name'].startswith(prefix)]
         if operation in {"dispatch", "action.dispatch"}:
-            return await self.dispatch(args["action"], args.get("args", {}), origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
+            from .agent_state import read_state
+            result = await self.dispatch(args["action"], args.get("args", {}), origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
+            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(result['state'], {}, session_id=session_id, resolve=self.state_resource)}
         raise AppError("Unknown app bridge operation.")
 
     async def update_device(self, payload):

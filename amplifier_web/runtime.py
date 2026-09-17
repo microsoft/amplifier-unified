@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable
 
+from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+
 Emitter = Callable[[str, dict], Awaitable[None]]
 
 
@@ -128,7 +130,7 @@ class RuntimeManager:
             await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
                 "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
             proc = await asyncio.create_subprocess_exec(*self._command(), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=2_000_000,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt")
             row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
                    "pending": {}, "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
@@ -138,8 +140,13 @@ class RuntimeManager:
             row["reader"] = asyncio.create_task(self._read(sid, row))
             row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
             row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
-            await self._write(row, {"op": "start", "session": session})
+            # The worker restores normal history from its checkpoint. Sending the
+            # browser's execution logs, catalogs and attachment history is redundant.
+            config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
+            if session.get('forkContext'):
+                config['messages'] = session.get('messages', [])
             try:
+                await self._write(row, {"op": "start", "session": config})
                 await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
             except TimeoutError as exc:
                 await self.stop(sid)
@@ -167,7 +174,7 @@ class RuntimeManager:
             row["stderr"] = row["stderr"][-30:]
 
     async def _write(self, row, data):
-        row["process"].stdin.write((json.dumps(data, ensure_ascii=False) + "\n").encode())
+        row["process"].stdin.write(encode_message(data))
         await row["process"].stdin.drain()
 
     async def _bridge(self, sid, row, data):
@@ -179,9 +186,13 @@ class RuntimeManager:
         except Exception as exc:
             reply = {"op": "bridge.result", "id": data["id"], "error": str(exc)}
         if row["process"].returncode is None:
-            await self._write(row, reply)
+            try:
+                await self._write(row, reply)
+            except ValueError as exc:
+                await self._write(row, {"op":"bridge.result","id":data["id"],"error":str(exc)})
 
     async def _read(self, sid, row):
+        reported_error = None
         try:
             while line := await row["process"].stdout.readline():
                 try:
@@ -214,6 +225,7 @@ class RuntimeManager:
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.error":
                     error = data.get("error", "Amplifier runtime failed")
+                    reported_error = error
                     if not row["ready"].done():
                         row["ready"].set_exception(RuntimeError(error))
                     await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
@@ -226,7 +238,7 @@ class RuntimeManager:
                     if normalized:
                         await row["emit"](*normalized)
             code = await row["process"].wait()
-            if not row["closing"]:
+            if not row["closing"] and not reported_error:
                 error = f"Amplifier worker exited (code {code}). Work was not replayed."
                 await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 if not row["ready"].done():
@@ -234,8 +246,11 @@ class RuntimeManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            error = f'Amplifier worker communication failed ({type(exc).__name__}). Work was not replayed.'
+            if not row['closing']:
+                await row['emit']('runtime.error', {'sessionId':sid,'error':error})
             if not row["ready"].done():
-                row["ready"].set_exception(exc)
+                row["ready"].set_exception(RuntimeError(error))
         finally:
             for future in row["pending"].values():
                 if not future.done():

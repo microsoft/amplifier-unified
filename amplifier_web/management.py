@@ -385,7 +385,6 @@ class Management:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
                     if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
-                        self.service.state.setdefault('sessionConfiguration',{})[session['id']]=configuration
                         self.service._session(session['id'])['configuration']=configuration
                     if args['operation']=='configuration.providerModels':
                         identity=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')

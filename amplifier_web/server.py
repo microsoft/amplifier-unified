@@ -61,6 +61,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def state(request):
         return web.json_response(service.get_state())
 
+    async def state_detail(request):
+        from .agent_state import read_state
+        args={'path':request.query.get('path','')}
+        for key in ('offset','limit','revision'):
+            if key in request.query:
+                args[key]=int(request.query[key])
+        return web.json_response(read_state(service.get_state(),args,resolve=service.state_resource))
+
     async def actions(request):
         if request.method == "GET":
             return web.json_response(service.get_actions())
@@ -120,6 +128,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get('/api/attachments/{identity}',attachment)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
+    app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/actions", actions)
     app.router.add_post("/api/actions", actions)
     app.router.add_post("/api/view", view)

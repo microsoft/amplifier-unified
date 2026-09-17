@@ -26,7 +26,19 @@ instructions and asks delegated workers to coordinate use of the shared canvas.
 ```
 
 Call `app_control` with `operation:get_state` to see the canvas and
-`operation:list_actions` for current action schemas. `canvas.show` accepts:
+`operation:list_actions` with `args:{"prefix":"canvas."}` for canvas action schemas.
+The default state read is a bounded overview of the calling conversation and
+visible UI. Other conversations are listed by title/status, without their content.
+Use `get_state` with `args:{"path":"/canvas","offset":0,"limit":50}` to inspect
+one section. Large values have `$statePath` references; follow `nextOffset` for
+more entries or text. Optional `revision` detects changes between pages.
+
+Resolved configurations are stored once per session. Bulky dependency provenance
+is stored once in the app database and referenced by `$resource`; requesting its
+JSON Pointer path automatically loads a bounded page. The same read-only paging
+is available at `/api/state/detail?path=...`. Existing module editing still uses
+the canonical `sessions[i].configuration.plan`. Dispatch receipts use the compact
+state overview rather than repeating the entire app state. `canvas.show` accepts:
 
 | Kind | Preview |
 | --- | --- |

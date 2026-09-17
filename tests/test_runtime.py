@@ -183,3 +183,43 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+
+class LargeTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_worker_reader_roundtrips_large_bridge_sized_message(self):
+        from amplifier_web.runtime_protocol import MAX_MESSAGE_BYTES
+        script='''
+import asyncio
+from amplifier_web.runtime_worker import Worker,configure_protocol,publish
+class Probe(Worker):
+ async def command(self,data):
+  if data.get('op')=='echo':publish({'op':'reply','payload':data['payload']})
+  else:await super().command(data)
+configure_protocol()
+asyncio.run(Probe().run())
+'''
+        proc=await asyncio.create_subprocess_exec(sys.executable,'-c',script,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,limit=MAX_MESSAGE_BYTES)
+        try:
+            payload='x'*7_000_000
+            async def write():
+                proc.stdin.write((json.dumps({'op':'echo','payload':payload})+'\n').encode());await proc.stdin.drain()
+            send=asyncio.create_task(write())
+            response=json.loads(await asyncio.wait_for(proc.stdout.readline(),10))
+            await send
+            self.assertEqual(response['payload'],payload)
+            self.assertIsNone(proc.returncode)
+            proc.stdin.write(b'{"op":"stop"}\n');await proc.stdin.drain()
+            self.assertEqual(await asyncio.wait_for(proc.wait(),3),0)
+        finally:
+            if proc.returncode is None:proc.kill();await proc.wait()
+
+    async def test_reported_worker_failure_is_not_overwritten_by_exit_code(self):
+        fixture="import json;print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Specific protocol failure'}),flush=True)"
+        manager=RuntimeManager(command=[sys.executable,'-c',fixture]);events=[]
+        async def emit(kind,data):events.append((kind,data))
+        try:
+            await manager.start({'id':'probe'},emit)
+            await asyncio.wait_for(manager.workers['probe']['reader'],3)
+            errors=[data['error'] for kind,data in events if kind=='runtime.error']
+            self.assertEqual(errors,['Specific protocol failure'])
+        finally:await manager.close()
