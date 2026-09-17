@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.3.8
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.4.0
 amplifier-unified
 ```
 
@@ -94,3 +94,28 @@ Connection options (`--port`, `--workspace`, `--data-dir`) precede the subcomman
 See the [CLI parity audit](docs/CLI-PARITY.md) for implementation evidence and limits. Native notification replies, multi-device synchronization and STT/agent/TTS fallback remain follow-ups. Microphone/audio and real provider account login require a device/account trial. Custom root orchestrators incompatible with the live adapter produce an explicit error.
 
 The command is named `amplifier-unified` to coexist with the already installed `amplifier-web` application. Its conversation database lives in `~/.amplifier-unified`.
+
+
+### Conversation workspace
+
+The chat shell fits the viewport; conversation history, navigation, and canvas
+scroll independently. New chats center the composer. Voice calls, response
+notifications, attachments, and the main conversation's model preference live
+in the composer. Open the model control to choose a mounted provider/model and
+its advertised reasoning effort. Pinning applies to the main session; worker
+routing remains owned by the bundle. Returning to the bundle default preserves
+session token limits.
+
+Attach up to eight files (8 MB each) with the picker, drag and drop, or paste.
+Images become native multimodal content for vision-capable providers. Small text
+files are included as reference content with a total 100 KB inline limit; PDFs,
+binary files, and larger text files are available through their local paths to
+session tools. Attachments persist with conversation history in private app
+storage. Removing a draft attachment detaches it without deleting historical
+files.
+
+The left rail expands on hover or can stay pinned. It manages existing workspace
+folders and their conversations. The right canvas has an adjustable width and
+previews workspace files or declarative agent UI. See [canvas actions and the
+supported A2UI subset](docs/canvas.md). Canvas button events are visible to the
+agent; they do not automatically start a new turn.

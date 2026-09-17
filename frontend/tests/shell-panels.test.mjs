@@ -1,0 +1,69 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act as renderAct} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {WorkspaceRail,AgentCanvas,A2UISurface,reopenCanvas}=await server.ssrLoadModule('/src/shell-panels.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test.after(()=>server.close());
+const initial=()=>({view:{navExpanded:true},workspaces:[{id:'one',name:'One',path:'/one'},{id:'two',name:'Two',path:'/two'}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
+
+test('workspace rail scopes chats to registered workspace and honors fnmatch filters',async()=>{
+ const state=initial();state.view.navFilter='First*';let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true}),session:state.sessions[0]}))});
+ const rows=root.root.findAll(node=>node.props.className==='a-nav-chat-select');
+ assert.equal(rows.length,1);assert.equal(rows[0].props.title,'First plan');
+ await renderAct(async()=>root.unmount());
+});
+
+test('rail pin, workspace selection, chat selection and drafts all use shared actions',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Pin navigation open'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:true,navExpanded:true}}});
+ await renderAct(async()=>root.root.findByProps({id:'nav-workspace'}).props.onChange({target:{value:'two'}}));
+ assert.deepEqual(calls.at(-1),{name:'workspace.select',args:{id:'two'}});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Rename workspace'}).props.onClick());
+ assert.deepEqual(calls.at(-1).args.patch.workspaceDraft,{mode:'rename',id:'one',name:'One'});
+ await renderAct(async()=>root.root.findAll(node=>node.props.className==='a-nav-chat-select')[1].props.onClick());
+ assert.ok(calls.some(call=>call.name==='session.select'&&call.args.id==='b'));
+ await renderAct(async()=>root.unmount());
+});
+
+test('registration removal requires explicit confirm and preserves unrelated chat actions',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};state.view.workspaceDraft={mode:'remove',id:'two',name:'Two'};let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ assert.match(JSON.stringify(root.toJSON()),/files and chats will stay/);
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.deepEqual(calls[0],{name:'workspace.remove',args:{id:'two'}});
+ assert.equal(calls.some(call=>call.name==='session.delete'),false);
+ await renderAct(async()=>root.unmount());
+});
+
+test('A2UI button records exactly the declared action while text stays inert',async()=>{
+ const calls=[],surface={surfaceId:'plan',root:'root',components:[{id:'root',component:{Column:{children:{explicitList:['intro','button']}}}},{id:'intro',component:{Text:{text:{literalString:'<script>window.evil=true</script>'}}}},{id:'button',component:{Button:{child:'label',action:{name:'review'}}}},{id:'label',component:{Text:{text:{literalString:'Review plan'}}}}]};let root;
+ await renderAct(async()=>{root=create(React.createElement(A2UISurface,{surface,act:async(name,args)=>calls.push({name,args})}))});
+ assert.equal(root.root.findAllByType('script').length,0);
+ await renderAct(async()=>root.root.findByType('button').props.onClick());
+ assert.deepEqual(calls,[{name:'canvas.event',args:{surfaceId:'plan',componentId:'button',name:'review'}}]);
+ await renderAct(async()=>root.unmount());
+});
+
+test('canvas keyboard resize persists bounded width and closes through public action',async()=>{
+ const calls=[],state={view:{canvasWidth:440},canvas:{open:true,kind:'text',content:'Document',title:'Preview'}},act=async(name,args)=>calls.push({name,args});let root;
+ await renderAct(async()=>{root=create(React.createElement(AgentCanvas,{state,act}))});
+ await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'ArrowLeft',preventDefault(){}}));
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{canvasWidth:460}}});
+ await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'End',preventDefault(){}}));
+ assert.equal(calls.at(-1).args.patch.canvasWidth,900);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Close canvas panel'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'canvas.close',args:{}});
+ await renderAct(async()=>root.unmount());
+});
+
+test('reopening a file canvas reloads its path without mixing content or arbitrary state',async()=>{
+ let called;
+ await reopenCanvas({canvas:{kind:'markdown',path:'/one/plan.md',title:'Plan',content:'Old content',events:[{}]}},async(name,args)=>{called={name,args}});
+ assert.deepEqual(called,{name:'canvas.show',args:{kind:'markdown',path:'/one/plan.md',title:'Plan'}});
+});

@@ -104,6 +104,14 @@ async def run():
         await coordinator.get('orchestrator').root_provider.complete(ChatRequest(messages=[]))
         assert provider.request.max_output_tokens==321
         assert provider.request.model=='fixture-model'
+        await controls.perform('provider.reset')
+        assert controls.selection is None
+        assert coordinator.get('orchestrator').root_provider.selection == {'max_output_tokens':321}
+        await coordinator.get('orchestrator').root_provider.complete(ChatRequest(messages=[]))
+        assert provider.request.max_output_tokens == 321
+        assert json.loads(controls.state_path().read_text())['selection'] is None
+        summary = await controls.perform('configuration.providers')
+        assert summary['effective']['model'] == 'fixture-model' and summary['pinned'] is False
         assert (await controls.perform('configuration.providerTest',{'provider':'fixture-provider'}))['reachable']
         assert (await controls.perform('configuration.providerModels',{'provider':'fixture-provider'}))['models']==[{'id':'fixture-model'}]
         await controls.perform('goals.set',{'condition':'finish fixture','maxTurns':3})

@@ -24,7 +24,10 @@ export function TurnTimeline({data,turnId,state,act}){
  const summaryId=`turn:${turnId}`,open=expanded.has(summaryId);
  const toolCount=data.nodes.filter(node=>node.turnId===turnId&&node.kind==='tool').length;
  const workers=data.nodes.filter(node=>node.turnId===turnId&&node.kind==='worker').length;
- const label=(turnId==='observed-activity'?turn.label:null)||[toolCount?`${toolCount} ${toolCount===1?'tool call':'tool calls'}`:null,workers?`${workers} ${workers===1?'worker':'workers'}`:null].filter(Boolean).join(' · ')||'Execution details';
+ const detail=(turnId==='observed-activity'?turn.label:null)||[toolCount?`${toolCount} ${toolCount===1?'tool call':'tool calls'}`:null,workers?`${workers} ${workers===1?'worker':'workers'}`:null].filter(Boolean).join(' · ')||'Execution details';
 
- return <section className="a-execution-turn" data-part="execution" aria-label="Execution details"><button className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><Layers/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage}/><Status status={turn.status||turn.phase}/></button>{open&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} expanded={expanded} toggle={toggle} act={act}/>)}</div>}</section>;
+ const duration=turn.startedAt&&turn.endedAt?Math.max(1,Math.round(turn.endedAt-turn.startedAt)):null;
+ const elapsed=duration?(duration>=60?`${Math.floor(duration/60)}m ${duration%60}s`:`${duration}s`):null;
+ const label=liveStates.has(turn.status||turn.phase)?'Working…':elapsed?`Worked for ${elapsed}`:'Work details';
+ return <section className="a-execution-turn" data-part="execution" aria-label="Execution details"><button className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label" title={detail}>{label}</span><Usage value={turn.aggregateUsage||turn.usage}/><Status status={turn.status||turn.phase}/></button>{open&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} expanded={expanded} toggle={toggle} act={act}/>)}</div>}</section>;
 }

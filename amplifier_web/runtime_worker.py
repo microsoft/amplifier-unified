@@ -163,14 +163,19 @@ class Worker:
                 runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory)
+            from amplifier_web.attachments import encode
+            self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
             await self.controls.restore()
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
                 # ownership. Source operations must never be replayed.
-                messages = [{"role": row["role"], "content": row.get("text", "")}
-                    for row in config.get("messages", []) if row.get("role") in {"user", "assistant"} and row.get("text")]
+                from types import SimpleNamespace
+                messages = [{"role": row["role"], "content": encode(SimpleNamespace(
+                    text=row.get("text", ""), attachments=row["attachments"]))
+                    if row["role"] == "user" and row.get("attachments") else row.get("text", "")}
+                    for row in config.get("messages", []) if row.get("role") in {"user", "assistant"} and (row.get("text") or row.get("attachments"))]
                 if messages:
                     await self.session.coordinator.get("context").set_messages(messages)
                 report["fork_context_messages"] = len(messages)
@@ -265,7 +270,7 @@ class Worker:
                 raise RuntimeError("Session is not ready")
             elif op == "send":
                 from amplifier_module_loop_live.runtime import Input
-                input_id = await self.runtime.submit(Input("user", data["text"], id=data["input_id"]))
+                input_id = await self.runtime.submit(Input("user", data["text"], id=data["input_id"], attachments=tuple(data.get("attachments",[]))))
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 result = await self.controls.perform(data["operation"], data.get("arguments", {}))

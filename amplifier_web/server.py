@@ -37,7 +37,7 @@ async def boundaries(request, handler):
 
 
 async def create_app(data_dir, workspace=None, runtime=None, voice=True, background_updates=True):
-    app = web.Application(middlewares=[boundaries], client_max_size=2_000_000)
+    app = web.Application(middlewares=[boundaries], client_max_size=13_000_000)
     service = AppService(Path(data_dir), runtime=runtime, workspace=workspace)
     import os
     service.port = int(os.environ.get("AMPLIFIER_WEB_PORT","8941"))
@@ -95,6 +95,16 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             service.unsubscribe(queue)
         return response
 
+    async def attachment(request):
+        from .attachments import file_path
+        try:path,row=file_path(service.data_dir,request.match_info['identity'])
+        except (ValueError,FileNotFoundError):raise AppError('Attachment not found',404)
+        from urllib.parse import quote
+        response=web.FileResponse(path)
+        response.headers['Content-Type']=row['mime']
+        response.headers['Content-Disposition']=('inline' if row['mime'].startswith('image/') else 'attachment')+"; filename*=UTF-8''"+quote(row['name'])
+        return response
+    app.router.add_get('/api/attachments/{identity}',attachment)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/actions", actions)

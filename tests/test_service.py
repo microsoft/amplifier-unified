@@ -221,3 +221,14 @@ async def test_non_ready_status_does_not_hide_unresolved_runtime_failure(service
     await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':status})
     assert service.get_state()['sessions'][0]['error']=='Provider authentication failed'
     assert service.get_state()['attention']['unread']==1
+
+
+async def test_send_does_not_clear_newer_or_other_session_draft(service):
+    original = service.state['selectedSessionId']
+    await service.dispatch('view.update', {'patch': {'draft': 'Already typing another message'}})
+    await service.dispatch('conversation.send', {'sessionId': original, 'text': 'Previously submitted text'})
+    assert service.state['view']['draft'] == 'Already typing another message'
+    await service.dispatch('session.create', {})
+    await service.dispatch('view.update', {'patch': {'draft': 'Other conversation text'}})
+    await service.dispatch('conversation.send', {'sessionId': original, 'text': 'Other conversation text'})
+    assert service.state['view']['draft'] == 'Other conversation text'

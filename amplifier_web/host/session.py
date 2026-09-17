@@ -65,17 +65,34 @@ class SelectedProvider:
     def __init__(self, provider, selection):
         self.original, self.selection = provider, selection
     def __getattr__(self, name):
-        return getattr(self.original, name)
+        method = getattr(self.original, name)
+        if name == "stream" and callable(method):
+            # Keep feature detection honest: providers without stream still
+            # raise AttributeError, while streaming providers receive the same
+            # root-only overrides as complete().
+            def selected_stream(request, **kwargs):
+                request, kwargs = self._selected_request(request, kwargs)
+                return method(request, **kwargs)
+            return selected_stream
+        return method
     def get_info(self):
         info = self.original.get_info()
         return info.model_copy(update={"defaults": {**info.defaults, **{key:self.selection[key]
             for key in ("model", "max_output_tokens") if key in self.selection}}})
-    async def complete(self, request, **kwargs):
+    def _selected_request(self, request, kwargs):
         updates = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
+        # Community providers may read the model keyword rather than the
+        # portable request field. Supply both without changing worker defaults.
+        if "model" in self.selection:
+            kwargs["model"] = self.selection["model"]
         if self.selection.get("effort") is not None:
             updates["reasoning_effort"] = self.selection["effort"]
             kwargs["reasoning_effort"] = self.selection["effort"]
-        return await self.original.complete(request.model_copy(update=updates), **kwargs)
+        return request.model_copy(update=updates), kwargs
+
+    async def complete(self, request, **kwargs):
+        request, kwargs = self._selected_request(request, kwargs)
+        return await self.original.complete(request, **kwargs)
 
 
 _copilot_credential = None

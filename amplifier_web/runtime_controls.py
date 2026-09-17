@@ -97,6 +97,7 @@ class RuntimeControls:
         self.prepared = self.coordinator.get_capability("web.prepared")
         self.lock = asyncio.Lock()
         self.selection = None
+        self.selection_cleared = False
         self.max_output_tokens = None
         self.logins = {}
         self.coordinator.register_capability("web.controls.persist", self.persist)
@@ -139,7 +140,7 @@ class RuntimeControls:
         previous = json.loads(self.state_path().read_text()) if self.state_path().exists() else {}
         write_private(self.state_path(), json.dumps({"configurator":{"disabled":{key:row.get("disabled",[]) for key,row in snapshot.items()}},
             "goal":self.coordinator.session_state.get("goal"),"mode":self.coordinator.session_state.get("active_mode"),
-            "selection":self.selection or previous.get("selection"),"budget":budget},default=str))
+            "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget},default=str))
         write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(
             {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS},default=str))
 
@@ -304,14 +305,16 @@ class RuntimeControls:
                             raise ValueError(f"{key} must be a positive integer" + (" or -1 for unlimited" if key == "maxIterations" else ""))
                         if not hasattr(target, attr):
                             raise ValueError(f"The mounted module does not expose {key}")
+                if "maxOutputTokens" in args:
+                    from .host.session import SelectedProvider
+                    providers = self.coordinator.get("providers") or {}
+                    current = (getattr(loop,"root_provider",None) or loop._select_provider(providers)) if providers else None
+                    if current is None:
+                        raise ValueError("No provider is available for an output token limit")
                 for key, target, attr in (("maxIterations",loop,"max_iterations"),("contextTokens",context,"max_tokens")):
                     if key in args:
                         setattr(target, attr, args[key])
                 if "maxOutputTokens" in args:
-                    from .host.session import SelectedProvider
-                    current = getattr(loop,"root_provider",None) or loop._select_provider(self.coordinator.get("providers") or {})
-                    if current is None:
-                        raise ValueError("No provider is available for an output token limit")
                     selection = dict(current.selection) if isinstance(current,SelectedProvider) else {}
                     original = current.original if isinstance(current,SelectedProvider) else current
                     selection["max_output_tokens"] = args["maxOutputTokens"]
@@ -321,6 +324,25 @@ class RuntimeControls:
             return {"maxIterations":getattr(loop,"max_iterations",None), "contextTokens":getattr(context,"max_tokens",None),
                     "maxOutputTokens":self.max_output_tokens,
                     "scope":"current session", "contextNote":"The provider context window can further constrain the effective budget."}
+        if operation == "provider.reset":
+            self.require_idle()
+            from .host.session import SelectedProvider
+            loop = self.coordinator.get('orchestrator')
+            previous = getattr(loop, 'root_provider', None)
+            loop.root_provider = None
+            try:
+                providers = self.coordinator.get('providers') or {}
+                if self.max_output_tokens is not None and providers:
+                    automatic = loop._select_provider(providers)
+                    if automatic is not None:
+                        loop.root_provider = SelectedProvider(automatic, {'max_output_tokens': self.max_output_tokens})
+            except Exception:
+                loop.root_provider = previous
+                raise
+            self.selection=None
+            self.selection_cleared=True
+            self.persist()
+            return {'selection':None,'scope':'main session'}
         if operation == "provider.select":
             self.require_idle()
             from .host.session import SelectedProvider
@@ -332,6 +354,7 @@ class RuntimeControls:
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective)
             self.selection = selected
+            self.selection_cleared = False
             self.persist()
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":
@@ -355,7 +378,15 @@ class RuntimeControls:
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})
-            return {"providers":rows}
+            loop=self.coordinator.get('orchestrator')
+            selected=loop._select_provider(providers) if providers else None
+            original=getattr(selected,'original',selected)
+            name=next((key for key,value in providers.items() if value is original),None)
+            info=selected.get_info() if selected is not None else None
+            if inspect.isawaitable(info):info=await info
+            defaults=(info.get('defaults',{}) if isinstance(info,dict) else getattr(info,'defaults',{})) or {}
+            effective={'instance':name,'model':defaults.get('model') or defaults.get('default_model'),'effort':(self.selection or {}).get('effort') or defaults.get('reasoning_effort')}
+            return {"providers":rows,'selection':self.selection,'effective':effective,'pinned':bool(self.selection)}
         name = args.get("provider") or args.get("instance")
         provider = providers.get(name)
         if provider is None:

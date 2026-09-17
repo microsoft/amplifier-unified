@@ -260,7 +260,7 @@ class RuntimeManager:
 
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id)
+        return await self._request(session["id"], "send", text=text, input_id=input_id, attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
     async def approval(self, session_id, approval_id, decision):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)

@@ -61,3 +61,58 @@ async def test_legacy_automatic_budget_restores_without_overriding_module_defaul
     saved=json.loads(controls.state_path().read_text())
     assert saved['budget'].get('contextTokens')==module_default
     if module_default is None:assert 'contextTokens' not in saved['budget']
+
+
+@pytest.mark.asyncio
+async def test_unpin_preserves_output_budget_and_restores_automatic_provider(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.runtime_controls import RuntimeControls
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path))
+    class Copyable(SimpleNamespace):
+        def model_copy(self, update):
+            return Copyable(**{**vars(self), **update})
+    class Provider:
+        request = None
+        def __init__(self, model): self.model = model
+        def get_info(self): return Copyable(defaults={'model':self.model})
+        async def complete(self, request, **kwargs): self.request = request
+    default, pinned = Provider('default-model'), Provider('custom-default')
+    providers = {'default':default, 'other':pinned}
+    loop = SimpleNamespace(root_provider=None,max_iterations=10)
+    loop._select_provider = lambda mounted: loop.root_provider or next(iter(mounted.values()))
+    context = SimpleNamespace(max_tokens=None)
+    class Coordinator:
+        config={'session':{},'providers':[]}
+        session_state={}
+        def get(self,name): return {'orchestrator':loop,'context':context,'providers':providers}.get(name)
+        def get_capability(self,name): return None
+        def register_capability(self,*args): pass
+    coordinator = Coordinator()
+    controls = RuntimeControls(SimpleNamespace(session_id='selection-test',coordinator=coordinator),SimpleNamespace(generation=None,queued_inputs=0))
+    await controls.perform('provider.select',{'instance':'other','model':'pinned-model','effort':'high'})
+    await controls.perform('budget.set',{'maxOutputTokens':321})
+    assert (await controls.perform('configuration.providers'))['effective']['model']=='pinned-model'
+    await controls.perform('provider.reset')
+    result = await controls.perform('configuration.providers')
+    assert result['selection'] is None and not result['pinned']
+    assert result['effective']=={'instance':'default','model':'default-model','effort':None}
+    await loop.root_provider.complete(Copyable(model=None,max_output_tokens=None))
+    assert default.request.max_output_tokens==321
+    assert default.request.model is None  # Provider default, not the former pin.
+    saved=json.loads(controls.state_path().read_text())
+    assert saved['selection'] is None and saved['budget']['maxOutputTokens']==321
+    # Persisted unpin survives a restart; output budget continues to apply.
+    loop.root_provider=None
+    restored=RuntimeControls(SimpleNamespace(session_id='selection-test',coordinator=coordinator),SimpleNamespace(generation=None,queued_inputs=0))
+    await restored.restore()
+    assert not (await restored.perform('configuration.providers'))['pinned']
+    await loop.root_provider.complete(Copyable(model=None,max_output_tokens=None))
+    assert default.request.max_output_tokens==321
+    providers.clear()
+    assert (await restored.perform('configuration.providers'))['providers']==[]
+    await restored.perform('provider.reset')
+    assert loop.root_provider is None
+    with pytest.raises(ValueError,match='No provider'):
+        await restored.perform('budget.set',{'maxOutputTokens':432,'maxIterations':123})
+    assert loop.max_iterations == 10
