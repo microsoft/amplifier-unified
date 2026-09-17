@@ -144,7 +144,7 @@ chat. Background publications do not replace the user's active preview.
 Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
 only through the retained user messages. Editing forks before the original user
 message, so artifacts from that message and later turns remain in the original
-conversation. Tab changes do not preserve running JavaScript memory inside an
+conversation. Fork/edit boundaries also support mixed voice and typed chat. Spoken exchanges that never required a manager delegation are retained as explicitly labelled historical context; they do not replay work. Native transcript timestamps keep later speech and tool results out of earlier branches. Legacy transcripts without a reliable boundary can still be forked in full. Tab changes do not preserve running JavaScript memory inside an
 HTML preview; the authored document is the durable snapshot.
 
 On first upgrade, the previous active preview is retained. Accepted inline

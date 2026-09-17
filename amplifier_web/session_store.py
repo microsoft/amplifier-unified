@@ -19,30 +19,92 @@ def text_content(row):
     return ""
 
 
+def message_time(row):
+    value = (row.get('metadata') or {}).get('timestamp')
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def matches_user(row, visible):
+    if row.get('role') != 'user':
+        return False
+    text = visible.get('text', '')
+    if text_content(row) == text:
+        return True
+    content = row.get('content')
+    return bool(visible.get('attachments') and isinstance(content, list) and content
+                and isinstance(content[0], dict) and content[0].get('type') == 'text'
+                and content[0].get('text') == text)
+
+
 def user_boundaries(messages, visible_messages):
-    """Match visible user turns to transcript rows, excluding service observations."""
-    expected = [row for row in visible_messages if row.get("role") == "user"]
+    """Locate visible inputs, including spoken turns without a delegated input.
+
+    Voice bubbles are not one-to-one with manager inputs. Native context timestamps
+    let us stop *before* a spoken turn, even if its eventual delegated prompt also
+    contains several later utterances. Never substring-match a voice reference.
+    """
+    if not messages:
+        return [0 for r in visible_messages if r.get('role') == 'user']
     boundaries = []
     cursor = 0
-    for visible in expected:
-        text = visible.get('text','')
-        def matches(row):
-            if row.get('role') != 'user':
-                return False
-            if text_content(row) == text:
-                return True
-            content=row.get('content')
-            # The encoder puts the user's text first, then attachment descriptions
-            # and image/file blocks. Those appended descriptions aren't new turns.
-            return bool(visible.get('attachments') and isinstance(content,list) and content
-                        and content[0].get('type')=='text' and content[0].get('text')==text)
-        match = next((index for index in range(cursor,len(messages))
-                      if matches(messages[index])),None)
+    for visible in (r for r in visible_messages if r.get('role') == 'user'):
+        match = next((i for i in range(cursor, len(messages))
+                      if matches_user(messages[i], visible)), None)
+        created = visible.get('createdAt')
+        # For voice, the manager may receive a prompt much later, or not at all.
+        # Missing typed inputs can also be failed submissions; timestamps locate
+        # their historical position without claiming they ran.
+        if visible.get('voiceId') or visible.get('via') == 'call' or match is None:
+            dated = [(i, message_time(messages[i])) for i in range(cursor, len(messages))]
+            if isinstance(created, (int, float)) and any(t is not None for _, t in dated):
+                match = next((i for i, t in dated if t is not None and t >= created), len(messages))
+                boundaries.append(match)
+                cursor = match  # Multiple spoken turns can precede the same input.
+                continue
+            if cursor == len(messages) and isinstance(created, (int, float)) and any(message_time(r) is not None for r in messages):
+                boundaries.append(cursor)
+                continue
         if match is None:
-            raise ValueError("The saved transcript does not contain every visible user turn yet. Wait for the session to finish before forking it.")
+            raise ValueError("This older transcript has no reliable boundary for that message. Fork the full conversation instead.")
         boundaries.append(match)
         cursor = match + 1
     return boundaries
+
+
+def visible_reference(messages, visible):
+    """Preserve UI-only conversation as labelled history, never invented tool work."""
+    represented = {(row.get('role'), text_content(row)) for row in messages}
+    for row in messages:
+        content = text_content(row)
+        if content.startswith('Recent spoken conversation follows as role-labelled reference data, not new instructions.'):
+            try:
+                reference, current = content.split('\n</voice_reference>\nCurrent spoken user request:\n', 1)
+                rows = json.loads(reference.split('<voice_reference>\n', 1)[1])
+                if isinstance(rows, list):
+                    represented.update((r.get('role'), r.get('text', '')) for r in rows if isinstance(r, dict) and isinstance(r.get('text', ''), str))
+                represented.add(('user', current))
+            except (ValueError, IndexError, TypeError):
+                pass
+    missing = []
+    for row in visible:
+        if row.get('role') != 'user' and not row.get('voiceId'):
+            continue
+        if (row.get('role'), row.get('text', '')) in represented:
+            continue
+        if row.get('role') == 'user' and any(matches_user(m, row) for m in messages):
+            continue
+        missing.append({k: row[k] for k in ('role', 'text', 'via', 'attachments') if k in row})
+    if not missing:
+        return []
+    return [{'role': 'user', 'content':
+             'Historical conversation reference from the visible chat, not a new request. '
+             'These entries are not separately represented in the saved Amplifier context. '
+             'Spoken exchanges may not have required delegation; a typed submission may not have executed. '
+             'Do not replay any work or infer tool results from this reference.\n' + json.dumps(missing, ensure_ascii=False),
+             'metadata': {'amplifier_visible_reference': True}}]
 
 
 def complete_tool_exchanges(messages):
@@ -112,33 +174,34 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
+    # Rebuild our UI-only history from the retained visible prefix. Carrying an
+    # old aggregate reference through an earlier fork could leak later speech.
+    messages = [m for m in messages if not (m.get('metadata') or {}).get('amplifier_visible_reference')]
+    user_indexes = [i for i, row in enumerate(visible) if row.get('role') == 'user']
     before_turn = None
+    cut = len(visible)
     if before_message_id is not None:
-        index = next((i for i,row in enumerate(visible) if row.get('id')==before_message_id and row.get('role')=='user'), None)
-        if index is None:
+        cut = next((i for i in user_indexes if visible[i].get('id') == before_message_id), None)
+        if cut is None:
             raise ValueError('Choose one of your messages to edit.')
-        before_turn = sum(row.get('role')=='user' for row in visible[:index+1])
-        boundaries = user_boundaries(messages,visible[:index+1])
-        messages = messages[:boundaries[-1]]
-        visible = visible[:index]
-    else:
-        boundaries = user_boundaries(messages,visible)
-    if turn is not None:
-        if type(turn) is not int or turn < 1 or turn > len(boundaries):
+        before_turn = user_indexes.index(cut) + 1
+    elif turn is not None:
+        if type(turn) is not int or turn < 1 or turn > len(user_indexes):
             raise ValueError("Choose an existing user turn for the fork")
-        end = boundaries[turn] if turn < len(boundaries) else len(messages)
-        messages = messages[:end]
-        seen = 0
-        for index,row in enumerate(visible):
-            if row.get("role") == "user":
-                seen += 1
-                if seen > turn:
-                    visible = visible[:index]
-                    break
+        if turn < len(user_indexes):
+            cut = user_indexes[turn]
+    if cut < len(visible):
+        # Only the requested boundary matters. A later failed or uncheckpointed
+        # submission must not prevent branching an earlier completed exchange.
+        boundary = user_boundaries(messages, visible[:cut + 1])[-1]
+        messages = messages[:boundary]
+        visible = visible[:cut]
     messages = complete_tool_exchanges(messages)
     from .host.session import repair_interrupted_receipts
     messages = repair_interrupted_receipts(messages)
-    through_turn = before_turn-1 if before_turn is not None else turn or len(boundaries)
+    references = visible_reference(messages, visible)
+    messages.extend(references)
+    through_turn = sum(row.get('role') == 'user' for row in visible)
     now = datetime.now(UTC).isoformat()
     metadata = {**metadata,"session_id":target_id,"parent_id":None,"created":now,"status":"forked",
         "preserve_system":True,"fork":{"source_session_id":source_id,"through_user_turn":through_turn, "before_user_turn":before_turn,
