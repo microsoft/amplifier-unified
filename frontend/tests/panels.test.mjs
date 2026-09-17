@@ -9,7 +9,7 @@ const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
 const act=()=>{};
 test.after(()=>server.close());
 test('setup panels render redacted provider configuration and valid required routing roles',()=>{
- const state={view:{providerEditor:{module:'provider-openai',credentialMode:'private'}},setup:{providers:[{id:'openai',module:'provider-openai',config:{api_key:'[REDACTED]'},credentialsConfigured:true}],matrices:[]}};
+ const state={view:{providerEditor:{module:'provider-openai',credentialMode:'private'},routingEditor:{matrix:{roles:{general:{description:'General',candidates:[{provider:'openai',model:'model'}]},fast:{description:'Fast',candidates:[{provider:'openai',model:'model'}]}}}}},setup:{providers:[{id:'openai',module:'provider-openai',config:{api_key:'[REDACTED]'},credentialsConfigured:true}],matrices:[]}};
  const provider=renderToStaticMarkup(React.createElement(ProviderSettings,{state,session:{id:'s',status:'ready'},act}));
  assert.match(provider,/credentials ready/);assert.match(provider,/type="password"/);assert.match(provider,/data-action="providers.save"/);
  const routing=renderToStaticMarkup(React.createElement(RoutingSettings,{state,act}));
@@ -41,7 +41,7 @@ test('recovery requires a matching preview and explicit reset text',()=>{
 });
 
 test('module behavior validation opt-in and real results are visible through shared controls',()=>{
- const state={view:{registryDraft:{open:true,tab:'modules',behavioral:true,behaviorResultsExpanded:true}},registry:{validation:{id:'tool-fixture',passed:true,checks:[],behavioral:{passed:false,exitCode:1,tests:[{name:'tool response contract',status:'failed'},{name:'optional streaming',status:'skipped'}]}}}};
+ const state={view:{registryDraft:{open:true,tab:'modules',id:'tool-fixture',behavioral:true,behaviorResultsExpanded:true}},registry:{validation:{id:'tool-fixture',passed:true,checks:[],behavioral:{passed:false,exitCode:1,tests:[{name:'tool response contract',status:'failed'},{name:'optional streaming',status:'skipped'}]}}}};
  const html=renderToStaticMarkup(React.createElement(RegistrySettings,{state,act}));
  assert.match(html,/Also run module behavior tests/);assert.match(html,/data-action="modules.validate"/);assert.match(html,/Behavior tests need attention/);assert.match(html,/tool response contract/);assert.match(html,/skipped/);
 });

@@ -40,6 +40,8 @@ ACTION_DEFINITIONS = {
     "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
     "view.update": ("Change panels, modality, draft, appearance or layout", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
+    "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
+    "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
     "providers.schema": ("Read a provider module’s configuration fields and choices",schema({"module":string(200),"id":string(200),"sessionId":string(200)},["module"])),
     "providers.list": ("List provider connections and setup status",schema({"sessionId":string(200)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"scope":{"enum":["global","project","local"]}},["module","config"])),
@@ -52,17 +54,18 @@ ACTION_DEFINITIONS = {
     "routing.list": ("List model routing presets",schema()),
     "routing.show": ("Inspect a routing preset",schema({"name":string(200)})),
     "routing.use": ("Use a model routing preset",schema({"name":string(200),"scope":{"enum":["global","project","local"]}},["name"])),
-    "routing.save": ("Save a custom routing preset",schema({"name":string(200),"matrix":{"type":"object"},"scope":{"enum":["global","project","local"]}},["name","matrix"])),
+    "routing.save": ("Save a custom routing preset",schema({"activate":{"type":"boolean"},"name":string(200),"matrix":{"type":"object"},"scope":{"enum":["global","project","local"]}},["name","matrix"])),
     "bundle.discover": ("Browse bundles and behaviors in a Git repository", schema({"url":string(4000)})),
     "bundles.list": ("List app behaviors and standalone bundles",schema()),
     "bundles.add": ("Add a behavior or standalone bundle",schema({"uri":string(4000),"name":string(200),"role":{"enum":["behavior","standalone"]}},["uri","role"])),
     "bundles.toggle": ("Enable or disable an app behavior",schema({"id":string(200),"enabled":{"type":"boolean"}})),
     "bundles.remove": ("Remove a registered bundle",schema({"id":string(200)})),
-    "bundles.move": ("Reorder app behaviors",schema({"id":string(200),"direction":{"enum":["up","down"]}})),
+    "bundles.move": ("Reorder app behaviors",schema({"id":string(200),"direction":{"enum":["up","down"]},"beforeId":{"type":["string","null"]}},["id"])),
     "bundle.export": ("Export the conversation's customized bundle",schema({"sessionId":string(200),"name":string(200),"description":string(1000)},["sessionId"])),
     "bundle.save": ("Save and use the conversation's customized bundle",schema({"sessionId":string(200),"name":string(200),"description":string(1000)},["sessionId","name"])),
+    "configuration.cancel": ("Cancel queued mount-plan changes",schema({"id":string(200)})),
     "configuration.inspect": ("Inspect resolved modules and configuration",schema({"id":string(200)})),
-    "configuration.apply": ("Apply a customized module configuration when idle",schema({"id":string(200),"config":{"type":"object"}})),
+    "configuration.apply": ("Apply edits to the loaded session mount plan, optionally waiting for idle",schema({"id":string(200),"config":{"type":"object"},"whenIdle":{"type":"boolean"}},["id","config"])),
     "runtime.control": ("Manage runtime modes, goals, provider, budgets, skills and tools",schema({"sessionId":string(200),"operation":string(100),"args":{"type":"object"}},["sessionId","operation"])),
     "modules.list": ("List scoped module configuration",schema({"scope":{"enum":["global","project","local"]}},[])),
     "modules.save": ("Add or override a scoped module",schema({"section":{"enum":["tools","hooks","providers","orchestrator","context"]},"module":string(200),"id":string(200),"source":string(4000),"config":{"type":"object"},"enabled":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["section","module"])),
@@ -358,14 +361,14 @@ class AppService:
                     pending.append((self.runtime.approval, (session["id"], args["id"], decision)))
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "locationPicker"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
                     if key in patch and patch[key] not in options:
                         raise AppError("Invalid " + key)
                 self.state["view"].update(copy.deepcopy(patch))
-            elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.")):
+            elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
             elif action.startswith("updates."):

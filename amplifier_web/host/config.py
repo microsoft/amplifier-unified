@@ -160,7 +160,9 @@ class HostConfig:
 
     @property
     def providers(self):
-        return self.settings.get("config", {}).get("providers", [])
+        rows=self.settings.get("config", {}).get("providers", [])
+        order={identity:index for index,identity in enumerate(self.settings.get("provider_order",[]))}
+        return sorted(rows,key=lambda row:order.get(row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-"),len(order)))
 
     @property
     def module_sources(self):

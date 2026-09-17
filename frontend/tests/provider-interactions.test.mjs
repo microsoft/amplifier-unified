@@ -42,3 +42,13 @@ test('native choice edits persist in the save action; model checks have immediat
  await renderAct(async()=>resolveModels({accepted:true}));
  await renderAct(async()=>root.unmount());
 });
+
+test('provider test results remain clear when another action overwrites global management status',async()=>{
+ const {ResultNotice}=await server.ssrLoadModule('/src/settings-ui.jsx');
+ let root;
+ await renderAct(async()=>{root=create(React.createElement(ResultNotice,{phase:'ready',message:'Provider check passed',detail:'32 models returned'}))});
+ assert.equal(root.root.findByProps({role:'status'}).props.className,'a-check-result success');
+ await renderAct(async()=>root.update(React.createElement(ResultNotice,{phase:'error',message:'Provider authentication failed'})));
+ assert.equal(root.root.findByProps({role:'alert'}).props.className,'a-check-result error');
+ await renderAct(async()=>root.unmount());
+});

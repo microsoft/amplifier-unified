@@ -116,3 +116,15 @@ async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_
     no_routing=SimpleNamespace(**{**vars(config),'settings':{'bundle':{'app':[str(behavior)]}},'providers':[]})
     normal=await compose_configured_bundle(registry,normal,no_routing)
     assert {row['module'] for row in normal.tools}=={'tool-disabled','tool-extra'}
+
+@pytest.mark.asyncio
+async def test_drag_reorder_moves_atomically_and_persists_composition_order(tmp_path):
+    manager=BundleManager(tmp_path);args={'workspace':str(tmp_path)}
+    for name in ['a','b','c']:
+        result=await manager.perform('bundles.add',{**args,'uri':'foundation:'+name,'name':name})
+    a,b,c=result['bundles']
+    result=await manager.perform('bundles.move',{**args,'id':a['id'],'beforeId':None})
+    assert [row['name'] for row in result['bundles']]==['b','c','a']
+    assert manager.store.read(tmp_path)['bundle']['app']==['foundation:b','foundation:c','foundation:a']
+    result=await manager.perform('bundles.move',{**args,'id':a['id'],'beforeId':b['id']})
+    assert [row['name'] for row in result['bundles']]==['a','b','c']

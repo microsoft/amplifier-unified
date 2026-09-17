@@ -100,6 +100,14 @@ async def run():
         assert not (Path(home)/'sessions/controls-fixture/configuration.json').exists()
         applied=await controls.perform('configuration.apply',{'config':dict(plan,providers=[{'module':'provider-fixture'}])})
         assert applied['requiresRestart']
+        # A disabled provider is absent from the mounted coordinator but its
+        # private configuration must survive turning it back on in the editor.
+        stored=Path(home)/'sessions/controls-fixture/configuration.json'
+        stored.write_text(json.dumps(dict(plan,providers=[{'module':'provider-fixture'},{'module':'provider-disabled','enabled':False,'config':{'api_key':'fixture-private'}}])))
+        await controls.perform('configuration.apply',{'config':dict(plan,providers=[{'module':'provider-fixture'},{'module':'provider-disabled','enabled':True,'config':{'api_key':'[REDACTED]'}}])})
+        restored=json.loads(stored.read_text())
+        assert restored['providers'][1]['config']['api_key']=='fixture-private'
+        assert restored['providers'][1]['enabled'] is True
     await session.cleanup()
     assert not any(name.startswith(('amplifier_app_cli','amplifier_loop_live_cli')) for name in sys.modules)
     print(json.dumps({'approval_enforced':True,'public_configurator':True,'budget_applied':True,'cli_imports':False}))

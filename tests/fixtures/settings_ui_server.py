@@ -1,0 +1,38 @@
+"""Isolated settings UI fixture: synthetic providers and runtime, no account calls."""
+import asyncio,copy,os,sys,tempfile
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from aiohttp import web
+from amplifier_web.server import create_app
+from amplifier_web.host.config import write_private
+from amplifier_web.setup import SetupManager
+import yaml
+PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
+class Runtime:
+ def __init__(self):self.plan=copy.deepcopy(PLAN)
+ async def start(self,session,emit):await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
+ async def stop(self,*args):pass
+ async def close(self):pass
+ async def control(self,sid,operation,args):
+  if operation=='configuration.apply':self.plan=copy.deepcopy(args['config']);return {'requiresRestart':True}
+  if operation=='configuration.inspect':return {'plan':self.plan,'capabilities':{'configuration':True}}
+  return {}
+async def probe(self,action,args,workspace):
+ await asyncio.sleep(.25)
+ result={'providerMetadata':{'module':args.get('module','provider-openai'),'info':{'config_fields':[{'id':'reasoning_effort','display_name':'Reasoning effort','choices':['low','high'],'field_type':'choice'}]},'configSchema':{}}}
+ if action=='providers.models':result.update(models=[{'id':'fixture-model'}],modelsProviderId=args['id'])
+ if action=='providers.test':result['test']={'reachable':True,'modelCount':1,'providerId':args['id'],'method':'provider.list_models'}
+ return result
+SetupManager.probe=probe
+async def main(home):
+ os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'
+ workspace=home/'workspace';workspace.mkdir();(workspace/'project').mkdir();(workspace/'project'/'bundle.yaml').write_text('bundle:\n  name: fixture\n')
+ write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'}}))
+ matrix={'name':'balanced','roles':{role:{'description':role.title(),'candidates':[{'provider':'one','model':'fixture-model'},{'provider':'two','model':'fallback-model'}]} for role in ['general','fast']}}
+ write_private(home/'config/routing/balanced.yaml',yaml.safe_dump(matrix))
+ app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
+ service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
+ return app
+if __name__=='__main__':
+ with tempfile.TemporaryDirectory(prefix='amplifier-settings-ui-') as tmp:
+  web.run_app(main(Path(tmp)),host='127.0.0.1',port=8957,print=None)

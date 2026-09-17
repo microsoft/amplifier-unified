@@ -281,12 +281,18 @@ class BundleManager:
                     elif action == "bundles.toggle":
                         entries[index]["enabled"] = bool(args["enabled"])
                     elif action == "bundles.move":
-                        direction = args["direction"]
-                        if direction not in {"up", "down"}:
-                            raise ValueError("Choose up or down.")
-                        target = index + (-1 if direction == "up" else 1)
-                        if 0 <= target < len(entries):
-                            entries[index], entries[target] = entries[target], entries[index]
+                        if 'beforeId' in args:
+                            before=args['beforeId']
+                            if before is not None and not any(row['id']==before for row in entries):raise ValueError('Refresh the bundle list before reordering.')
+                            if before!=args['id']:
+                                row=entries.pop(index)
+                                target=next((i for i,item in enumerate(entries) if item['id']==before),len(entries))
+                                entries.insert(target,row)
+                        else:
+                            direction=args.get('direction')
+                            if direction not in {'up','down'}:raise ValueError('Choose up or down.')
+                            target=index+(-1 if direction=='up' else 1)
+                            if 0<=target<len(entries):entries[index],entries[target]=entries[target],entries[index]
                     else:
                         raise ValueError("Unknown bundle operation.")
                 self.save_entries(current, entries, excluded)

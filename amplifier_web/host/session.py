@@ -99,6 +99,8 @@ def apply_provider_environment(plan):
 def _apply_settings(bundle, config):
     settings = config.settings
     bundle.providers = merge(bundle.providers, config.providers)
+    order={identity:index for index,identity in enumerate(settings.get("provider_order",[]))}
+    bundle.providers.sort(key=lambda row:order.get(row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-"),len(order)))
     for kind in ("tools", "hooks"):
         values = merge(getattr(bundle, kind), settings.get("modules", {}).get(kind, []))
         values = merge(values, settings.get("config", {}).get(kind, []))

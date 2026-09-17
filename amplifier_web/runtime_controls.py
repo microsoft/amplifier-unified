@@ -25,7 +25,7 @@ def public_config(value):
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
         return {str(key): REDACTED if any(term in str(key).lower() for term in
-                    ("api_key", "secret", "password", "authorization", "cookie", "access_token", "refresh_token"))
+                    ("api_key", "secret", "password", "authorization", "cookie", "access_token", "refresh_token", "github_token", "copilot_agent_token"))
                 else public_config(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [public_config(item) for item in value]
@@ -210,10 +210,23 @@ class RuntimeControls:
             return await self.provider_control(operation,args)
         if operation == "configuration.apply":
             self.require_idle()
-            plan = restore_redactions(args.get("config"), self.coordinator.config)
+            previous=copy.deepcopy(self.coordinator.config)
+            stored=override_path(self.session.session_id)
+            if stored.exists():
+                saved=json.loads(stored.read_text())
+                for section in SECTIONS:
+                    current={identity(row) for row in previous.get(section,[])}
+                    previous.setdefault(section,[]).extend(row for row in saved.get(section,[]) if identity(row) not in current)
+            plan = restore_redactions(args.get("config"), previous)
             validate_plan(plan)
             plan = {key:value for key,value in plan.items() if key in PLAN_KEYS}
             write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
+            # A full mount-plan edit supersedes previous live module toggles.
+            if self.state_path().exists():
+                controls=json.loads(self.state_path().read_text())
+                disabled=controls.get('configurator',{}).get('disabled',{})
+                for section in SECTIONS:disabled.pop(section,None)
+                write_private(self.state_path(),json.dumps(controls))
             return {"requiresRestart": True, "configuration": public_config(plan)}
         if operation == "configuration.toggle":
             self.require_idle()

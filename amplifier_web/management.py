@@ -19,6 +19,13 @@ class Management:
         self.notifications=Notifications(service.data_dir)
         service.state["notificationSettings"]=self.notifications.public()
         self.setup_manager=None
+        self.pending_config_tasks={}
+        for session in service.state.get('sessions',[]):
+            if session.get('pendingConfiguration',{}).get('phase') in {'queued','applying'} and self.queued_path(session['id']).exists():
+                session['pendingConfiguration']['phase']='queued'
+                task=asyncio.create_task(self.apply_queued(session['id']))
+                self.pending_config_tasks[session['id']]=task
+                service.tasks.add(task);task.add_done_callback(service.tasks.discard)
 
     async def publish(self,**values):
         async with self.service.lock:
@@ -33,6 +40,12 @@ class Management:
             self.service._publish()
 
     async def provider_status(self,action,args,command_id,phase,error=None):
+        async with self.service.lock:
+            statuses=self.service.state.setdefault('actionStatus',{})
+            previous=statuses.get(action,{})
+            if phase in {'queued','working'} or previous.get('commandId')==command_id:
+                statuses[action]={'phase':phase,'error':error,'commandId':command_id,'updatedAt':time.time(),'target':{key:args[key] for key in ('id','section','name','controlId') if key in args}}
+                self.service._publish()
         if not action.startswith('providers.'):return
         key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
         async with self.service.lock:
@@ -53,7 +66,7 @@ class Management:
                 if action=='bundle.save':
                     async with self.service.lock:
                         current=self.service._session(args['sessionId'])
-                        if current['status'] not in {'idle','stopped','interrupted','error'} or any(w.get('status') in {'running','starting','queued'} for w in current.get('workers',[])):
+                        if not self.configuration_idle(current):
                             raise ValueError('Finish active work before saving this conversation bundle')
                         current['configurationBusy']=True;guarded=current['id']
                         self.service._publish()
@@ -86,6 +99,35 @@ class Management:
     def session(self,args):
         return copy.deepcopy(self.service._session(args.get('sessionId')))
 
+    def configuration_idle(self,session):
+        return session['status'] in {'idle','ready','stopped','interrupted','error'} and not session.get('configurationBusy') and not any(w.get('status') in {'running','working','starting','queued'} or w.get('persistent') and w.get('status')=='idle' for w in session.get('workers',[]))
+
+    def queued_path(self,identity):
+        return self.service.data_dir/'sessions'/identity/'pending-configuration.json'
+
+    async def apply_queued(self,identity):
+        try:
+            while not self.service.closed:
+                session=self.session({'sessionId':identity})
+                if not self.queued_path(identity).exists():return
+                if self.configuration_idle(session):
+                    config=json.loads(self.queued_path(identity).read_text())
+                    async with self.service.lock:
+                        self.service._session(identity)['pendingConfiguration']={'phase':'applying'}
+                        self.service._publish()
+                    await self.command('configuration.apply',{'id':identity,'config':config,'whenIdle':True},'queued-config-'+str(uuid.uuid4()))
+                    if self.service._session(identity).get('pendingConfiguration',{}).get('phase')=='queued':continue
+                    return
+                await asyncio.sleep(.5)
+        except asyncio.CancelledError:raise
+        except Exception:
+            async with self.service.lock:
+                try:self.service._session(identity)['pendingConfiguration']={'phase':'error','error':'Queued changes could not be applied. Reload the mount plan and retry.'}
+                except Exception:pass
+                self.service._publish()
+        finally:
+            if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
+
     async def ensure_runtime(self,session):
         if not self.service.runtime:raise ValueError('Amplifier runtime is unavailable')
         if self.service.state.get('updates',{}).get('phase')=='activating':raise ValueError('An update is activating; retry shortly')
@@ -100,7 +142,25 @@ class Management:
             await self.service.refresh_configuration(session['id'])
 
     async def perform(self,action,args,command_id=None):
-        if action.startswith(('modules.','sources.')):
+        if action=='locations.list':
+            path=Path(args.get('path') or self.service.default_workspace).expanduser()
+            if not path.is_absolute():path=Path(self.service.default_workspace)/path
+            path=path.resolve()
+            if path.is_file():path=path.parent
+            if not path.is_dir():raise ValueError('This folder does not exist. Enter a different location.')
+            try:
+                entries=[]
+                for child in path.iterdir():
+                    if child.name.startswith('.'):continue
+                    try:
+                        directory=child.is_dir()
+                        if not directory and (args.get('directoriesOnly') or not child.is_file()):continue
+                        entries.append({'name':child.name,'path':str(child),'directory':directory})
+                    except OSError:continue
+                entries.sort(key=lambda row:(not row['directory'],row['name'].casefold()))
+            except PermissionError:raise ValueError('This folder is not readable. Choose another location.') from None
+            await self.publish(locationListing={'controlId':args['controlId'],'path':str(path),'parent':str(path.parent),'entries':entries[:300],'truncated':len(entries)>300})
+        elif action.startswith(('modules.','sources.')):
             from .registry import RegistryManager
             session=self.session(args) if self.service.state['sessions'] else {'workspace':self.service.default_workspace}
             result=await RegistryManager(self.service.data_dir,store=self.settings).perform(action,{**args,'workspace':session['workspace']})
@@ -138,7 +198,7 @@ class Management:
                     setup.setdefault('metadata',{})[result['providerMetadata']['module']]=result['providerMetadata']
                 if 'models' in result:setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
                 self.service._publish()
-            if action in {'providers.save','providers.remove','routing.save','routing.use'}:await self.invalidate_configuration()
+            if action in {'providers.save','providers.remove','providers.move','routing.save','routing.use'}:await self.invalidate_configuration()
         elif action.startswith(('bundle.','bundles.')):
             from .bundles import BundleManager
             manager=BundleManager(self.service.data_dir)
@@ -164,16 +224,50 @@ class Management:
                     self.service._session(session['id'])['bundle']=saved['name']
                     self.service._publish()
                 await self.service.runtime.stop(session['id'])
+        elif action=='configuration.cancel':
+            identity=self.session({'sessionId':args['id']})['id']
+            task=self.pending_config_tasks.get(identity)
+            if self.service._session(identity).get('pendingConfiguration',{}).get('phase')=='applying':raise ValueError('These changes are already applying.')
+            if task:task.cancel()
+            self.queued_path(identity).unlink(missing_ok=True)
+            async with self.service.lock:
+                self.service._session(identity).pop('pendingConfiguration',None);self.service._publish()
         elif action in {'configuration.inspect','configuration.apply'}:
+            session=self.session({'sessionId':args['id']})
+            if action=='configuration.apply' and args.get('whenIdle') and not self.configuration_idle(session):
+                from .runtime_controls import validate_plan
+                from .host.config import write_private
+                validate_plan(args['config'])
+                write_private(self.queued_path(session['id']),json.dumps(args['config']))
+                async with self.service.lock:
+                    self.service._session(session['id'])['pendingConfiguration']={'phase':'queued','detail':'Waiting for the current turn and worker lanes to finish.'}
+                    self.service._publish()
+                if session['id'] not in self.pending_config_tasks:
+                    task=asyncio.create_task(self.apply_queued(session['id']))
+                    self.pending_config_tasks[session['id']]=task
+                    self.service.tasks.add(task);task.add_done_callback(self.service.tasks.discard)
+                return
             forwarded={'sessionId':args['id'],'operation':action,'args':{'config':args['config']} if 'config' in args else {}}
-            await self.perform('runtime.control',forwarded)
+            try:
+                await self.perform('runtime.control',forwarded)
+            except Exception as exc:
+                if action=='configuration.apply':
+                    async with self.service.lock:
+                        self.service._session(session['id'])['pendingConfiguration']={'phase':'error','error':str(exc)[:1000]}
+                        self.service._publish()
+                raise
+            if action=='configuration.apply':
+                self.queued_path(session['id']).unlink(missing_ok=True)
+                async with self.service.lock:
+                    self.service._session(session['id'])['pendingConfiguration']={'phase':'ready','detail':'Changes are applied to the loaded session.','appliedAt':time.time()}
+                    self.service._publish()
         elif action=='runtime.control':
             session=self.session(args)
             mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select'}
             if mutating:
                 async with self.service.lock:
                     current=self.service._session(session['id'])
-                    if current['status'] not in {'idle','stopped','interrupted','error'} or any(w.get('status') in {'running','starting','queued'} for w in current.get('workers',[])):
+                    if not self.configuration_idle(current):
                         raise ValueError('Finish active work before changing this conversation configuration')
                     current['configurationBusy']=True
                     self.service._publish()
@@ -191,7 +285,7 @@ class Management:
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
-                    if args['operation'] in {'configuration.inspect','configuration.apply'}:
+                    if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
                         self.service.state.setdefault('sessionConfiguration',{})[session['id']]=configuration
                         self.service._session(session['id'])['configuration']=configuration

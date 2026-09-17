@@ -255,6 +255,16 @@ class SetupManager:
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
         if action in {'providers.schema','providers.models','providers.test'}:
             return await self.probe(action,args,workspace)
+        if action=='providers.move':
+            current=self.config(workspace)
+            rows=current.providers
+            ids=[row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-') for row in rows]
+            identity=args['id'];before=args.get('beforeId')
+            if identity not in ids or before is not None and before not in ids:raise ValueError('Refresh the provider list before reordering.')
+            if identity!=before:
+                ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
+                self.store.update(workspace,scope,lambda settings:settings.update(provider_order=ids))
+            return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
         if action=='providers.loginCancel':return await self.cancel_login(args['id'])
@@ -278,12 +288,13 @@ class SetupManager:
                 directory=self.home/'config/routing' if scope=='global' else Path(workspace)/'.amplifier-unified'/('routing.local' if scope=='local' else 'routing')
                 def save(settings):
                     write_private(directory/(name+'.yaml'),yaml.safe_dump(value,sort_keys=False))
+                    if args.get('activate'):settings.setdefault('routing',{})['matrix']=name
                 self.store.update(workspace,scope,save)
             else:
                 self.matrix(workspace,name)
                 def activate(settings):settings.setdefault('routing',{})['matrix']=name
                 self.store.update(workspace,scope,activate)
-            return {**self.routing(workspace),'takesEffect':'new_sessions','scope':scope}
+            return {**self.routing(workspace),'matrix':self.matrix(workspace,name),'takesEffect':'new_sessions','scope':scope}
         raise ValueError('Unknown setup operation.')
 
     def login_state(self,identity):

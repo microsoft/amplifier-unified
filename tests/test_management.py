@@ -90,3 +90,45 @@ async def test_old_provider_results_do_not_replace_a_newer_check(app,monkeypatch
     finish.set();await old
     assert app.state['setup']['credentialCheck']['envVar']=='NEW_KEY'
     assert app.state['setup']['operations']['providers.credentials:provider-openai']['commandId']=='new'
+
+async def test_locations_browse_files_and_folders_without_reading_contents(app,tmp_path):
+    folder=tmp_path/'workspace';folder.mkdir();(folder/'sub').mkdir();(folder/'file.json').write_text('private-content');(folder/'.hidden').write_text('private')
+    await app.management.perform('locations.list',{'controlId':'fixture','path':str(folder)})
+    listing=app.state['locationListing']
+    assert [row['name'] for row in listing['entries']]==['sub','file.json']
+    assert 'private-content' not in str(listing)
+    await app.management.perform('locations.list',{'controlId':'fixture','path':str(folder),'directoriesOnly':True})
+    assert [row['name'] for row in app.state['locationListing']['entries']]==['sub']
+
+async def test_running_mount_plan_changes_queue_then_remount_same_conversation(app):
+    import asyncio,copy
+    plan={'session':{'orchestrator':{'module':'loop-live'},'context':{'module':'context-simple'}},'providers':[{'module':'provider-fixture'}],'tools':[{'module':'tool-fixture','enabled':False,'config':{'limit':2}}]}
+    calls=[]
+    class LiveRuntime:
+        async def start(self,session,emit):calls.append(('start',session['id']))
+        async def stop(self,sid):calls.append(('stop',sid))
+        async def close(self):pass
+        async def control(self,sid,op,args):
+            calls.append((op,sid))
+            if op=='configuration.apply':assert args['config']==plan;return {'requiresRestart':True}
+            return {'plan':copy.deepcopy(plan)}
+    app.runtime=LiveRuntime();session=app._session();session['status']='working'
+    app._message(session,'user','Preserve this conversation')
+    await app.management.perform('configuration.apply',{'id':session['id'],'config':plan,'whenIdle':True})
+    assert session['pendingConfiguration']['phase']=='queued' and not calls
+    session['status']='idle'
+    task=app.management.pending_config_tasks[session['id']]
+    await asyncio.wait_for(task,2)
+    assert session['pendingConfiguration']['phase']=='ready'
+    assert session['configuration']['plan']==plan
+    assert session['messages'][0]['text']=='Preserve this conversation'
+    assert all(sid==session['id'] for _,sid in calls)
+    assert ('stop',session['id']) in calls
+
+async def test_queued_mount_changes_can_be_cancelled(app):
+    plan={'session':{'orchestrator':{'module':'loop-live'},'context':{'module':'context-simple'}},'providers':[{'module':'provider-fixture'}]}
+    session=app._session();session['status']='working'
+    await app.management.perform('configuration.apply',{'id':session['id'],'config':plan,'whenIdle':True})
+    await app.management.perform('configuration.cancel',{'id':session['id']})
+    assert not app.management.queued_path(session['id']).exists()
+    assert 'pendingConfiguration' not in session

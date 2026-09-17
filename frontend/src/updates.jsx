@@ -1,8 +1,9 @@
+import {ResultNotice} from './settings-ui';
 import React from 'react';
 import {RefreshCw,Download,Undo2} from 'lucide-react';
 const labels={update:'Update available',current:'Current',pinned:'Pinned',check_failed:'Check failed',local_changes:'Local changes',not_checked:'Not checked',release_channel_needed:'Release channel not configured'};
 function SourceList({items}){
- return <ul className="a-update-list">{items.map(item=><li key={item.id}><strong>{item.label}</strong><span>{labels[item.status]||item.status}{item.ref?' · '+item.ref:''}</span>{item.current&&<small>{item.current.slice(0,8)}{item.latest&&item.latest!==item.current?' → '+item.latest.slice(0,8):''}</small>}{item.detail&&<small>{item.detail}</small>}</li>)}</ul>;
+ return <ul className="a-update-list">{items.map(item=><li key={item.id}><strong>{item.label}</strong><ResultNotice phase={item.status==='check_failed'?'error':['not_checked','pinned','local_changes'].includes(item.status)?'neutral':'ready'} message={(labels[item.status]||item.status)+(item.ref?' · '+item.ref:'')}/>{item.current&&<small>{item.current.slice(0,8)}{item.latest&&item.latest!==item.current?' → '+item.latest.slice(0,8):''}</small>}{item.detail&&<small>{item.detail}</small>}</li>)}</ul>;
 }
 export function UpdateSettings({state,act}){
  const updates=state.updates||{},options=state.settings?.updates||{},busy=['checking','staging','validating','activating'].includes(updates.phase);
@@ -19,7 +20,7 @@ export function UpdateSettings({state,act}){
    <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
   </div>
   <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!updates.pendingRelease} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!available.length||!!updates.pendingRelease} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Install available</button>{updates.canRollback&&<button className="a-soft" disabled={busy} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back</button>}</div>
-  <p role="status">{updates.detail||'No check has run yet.'}</p>{updates.error&&<p role="alert">{updates.error}</p>}
+  <ResultNotice phase={updates.error||failed?'error':busy?'working':'ready'} message={updates.error||(busy?updates.detail||'Checking updates…':updates.lastCheck?(failed?`${failed} sources could not be checked`:'Update check complete'):'')} detail={updates.detail}/>
   {updates.lastCheck&&<p className="a-caption">Last checked: {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
   <p className="a-caption">Automatic checks run while this app is open. Version pins and local edits are preserved. Core, Foundation’s host library, and patched loop-live move with tested app releases from your private amplifier-unified repository. App updates restart the host when idle. GitHub sign-in is required for private releases.</p>
   {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' sources'}</button>{expanded&&<SourceList items={items}/>}</div>}

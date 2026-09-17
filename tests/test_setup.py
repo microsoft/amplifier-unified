@@ -181,3 +181,25 @@ async def test_app_private_key_file_is_detected_without_returning_value(tmp_path
     result=await manager.perform('providers.credentials',{'module':'provider-openai','envVar':name,'workspace':str(tmp_path)})
     assert result['credentialCheck']['available'] and 'private-file-value' not in str(result)
     monkeypatch.delenv(name)
+
+@pytest.mark.asyncio
+async def test_provider_order_persists_without_copying_inherited_credentials(tmp_path):
+    from amplifier_web.host.config import write_private
+    home=tmp_path/'home'
+    write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${PRIVATE_KEY}'}} for name in ['one','two','three']]}}))
+    manager=SetupManager(home)
+    result=await manager.perform('providers.move',{'workspace':str(tmp_path),'scope':'project','id':'one','beforeId':None})
+    assert [row['id'] for row in result['providers']]==['two','three','one']
+    saved=manager.store.read(tmp_path,'project')
+    assert saved['provider_order']==['two','three','one'] and 'config' not in saved
+    with pytest.raises(ValueError):await manager.perform('providers.move',{'workspace':str(tmp_path),'id':'missing'})
+
+@pytest.mark.asyncio
+async def test_active_routing_can_be_loaded_edited_saved_and_used(manager,tmp_path):
+    await manager.perform('routing.save',{'workspace':str(tmp_path),'name':'custom','matrix':MATRIX,'activate':True})
+    active=await manager.perform('routing.use',{'workspace':str(tmp_path),'name':'custom'})
+    assert active['active']=='custom' and active['matrix']['name']=='custom'
+    edited=active['matrix'];edited['roles']['general']['candidates'][0]['model']='edited-model'
+    result=await manager.perform('routing.save',{'workspace':str(tmp_path),'name':'custom','matrix':edited,'activate':True})
+    assert result['matrix']['roles']['general']['candidates'][0]['model']=='edited-model'
+    assert manager.store.read(tmp_path)['routing']['matrix']=='custom'
