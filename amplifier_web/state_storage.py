@@ -4,6 +4,8 @@ import json
 
 
 def normalize_state(state, db):
+    from .canvas_library import remember
+    remember(state, db)
     legacy=state.pop('sessionConfiguration', {})
     controls=state.get('runtimeControl', {})
     for session in state.get('sessions', []):

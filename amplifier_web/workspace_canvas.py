@@ -11,11 +11,12 @@ import json
 from pathlib import Path
 import time
 import uuid
+from urllib.parse import urlsplit
 
 MAX_TEXT = 1_000_000
 MAX_IMAGE = 5_000_000
 MAX_SURFACE = 100_000
-KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui']
+KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui', 'browser']
 EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
     '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
     '.jsonl':'jsonl', '.ndjson':'jsonl', **{x:'image' for x in ['.png','.jpg','.jpeg','.webp','.gif']},
@@ -234,8 +235,19 @@ def canvas_command(state, action, args, origin):
         if not args.get('path'):
             _error('Automatic format detection needs a workspace file path.')
         kind = EXTENSIONS.get(Path(args['path']).suffix.lower(), 'text')
-    canvas = {"id": uuid.uuid4().hex, "view": {}, "renderReports": {},"open": True, "kind": kind, "title": args.get("title") or "Canvas", "events": [], "workspaceId": state["selectedWorkspaceId"]}
-    if kind == "a2ui":
+    canvas = {"id": uuid.uuid4().hex, "view": {}, "renderReports": {},"open": True, "kind": kind, "title": args.get("title") or "Canvas", "events": [], "workspaceId": state["selectedWorkspaceId"], "sessionId":state.get("selectedSessionId")}
+    if kind == "browser":
+        url = args.get('url','').strip()
+        try:
+            parsed=urlsplit(url)
+            if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password or any(ord(c)<33 for c in url):
+                raise ValueError()
+            parsed.port
+        except ValueError:
+            _error('Enter an http:// or https:// address without embedded credentials.')
+        canvas['url']=url
+        canvas['title']=args.get('title') or parsed.hostname
+    elif kind == "a2ui":
         if args.get("path") or args.get("content"):
             _error("Supply a surface for an A2UI canvas.")
         canvas["surface"] = validate_surface(args.get("surface"))

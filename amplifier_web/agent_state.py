@@ -35,6 +35,7 @@ def overview(state, session_id):
     selected = session_id or state.get('selectedSessionId')
     index = next((i for i,s in enumerate(state.get('sessions', [])) if s['id']==selected), None)
     core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','canvas','view','attention','voice'] if key in state}
+    core['canvasArtifacts'] = {'items':[{**{k:r.get(k) for k in ('id','title','kind','messageId','tabOpen')},'$statePath':f'/canvasArtifacts/{i}'} for i,r in list(enumerate(state.get('canvasArtifacts',[]))) if r.get('sessionId')==selected][-20:],'total':sum(r.get('sessionId')==selected for r in state.get('canvasArtifacts',[])),'$statePath':'/canvasArtifacts'}
     core['session'] = None
     if index is not None:
         session=state['sessions'][index];base=f'/sessions/{index}'

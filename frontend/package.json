@@ -9,7 +9,9 @@
     "test": "node --test tests/*.test.mjs",
     "test:settings-browser": "node tests/settings-browser.mjs",
     "test:chat-browser": "node tests/chat-browser.mjs",
-    "test:canvas-browser": "node tests/canvas-browser.mjs"
+    "test:canvas-browser": "node tests/canvas-browser.mjs",
+    "test:message-browser": "node tests/message-browser.mjs",
+    "test:artifact-browser": "node tests/artifact-browser.mjs"
   },
   "dependencies": {
     "@viz-js/viz": "^3.30.0",

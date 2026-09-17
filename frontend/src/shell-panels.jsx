@@ -1,16 +1,16 @@
+import {CanvasTabs,SavedArtifacts,BrowserAddress,BrowserPreview,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,MessageCircle,Plus,Pin,PinOff,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight} from 'lucide-react';
+import {FolderOpen,MessageCircle,Plus,Pin,PinOff,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe} from 'lucide-react';
 import {CanvasViewer} from './canvas-viewer';
 import {filterList} from './list-filter';
 import {PathField} from './settings-ui';
 
 const patch=(act,value)=>act('view.update',{patch:value});
 export function reopenCanvas(state,act){
- const c=state.canvas||{};
- return act('canvas.show',{kind:c.kind||'text',title:c.title||'Canvas',...(c.kind==='a2ui'?{surface:c.surface}:c.path?{path:c.path}:{content:c.content||''})});
+ return act('canvas.reopen',{});
 }
 export function CanvasToggle({state,act}){
- return <button type="button" className="a-icon" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} data-action={state.canvas?.open?'canvas.close':'canvas.show'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><PanelRight/></button>;
+ return <button type="button" className="a-icon" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><PanelRight/></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession}){
  const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};
@@ -41,7 +41,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession}){
     <div className="a-nav-eyebrow">Conversations <span>{chats.length}</span></div>
     <div className="a-nav-chats">{chats.map(chat=><div className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} key={chat.id}><button className="a-nav-chat-select" type="button" data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} title={chat.title} onClick={()=>choose(chat.id)}><MessageCircle/><span>{chat.title||'Untitled conversation'}</span>{['running','working','starting'].includes(chat.status)&&<span className="a-nav-busy" aria-label="Working"/>}</button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Rename ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:chat.title||''})}><Pencil/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Delete ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>setDraft({mode:'chat-delete',id:chat.id,name:chat.title||'conversation'})}><Trash2/></button></div>)}{!chats.length&&<p className="a-nav-empty">{view.navFilter?'No matching chats.':'Your conversations will appear here.'}</p>}</div>
    </div>
-   <div className="a-nav-bottom"><button className="a-nav-main" type="button" data-action="canvas.show" aria-label="Open workspace canvas" title="Canvas" onClick={()=>reopenCanvas(state,act)}><PanelRight/><span className="a-nav-reveal">Canvas</span></button></div>
+   <div className="a-nav-bottom"><button className="a-nav-main" type="button" data-action="canvas.reopen" aria-label="Open workspace canvas" title="Canvas" onClick={()=>reopenCanvas(state,act)}><PanelRight/><span className="a-nav-reveal">Canvas</span></button></div>
   </div>
  </aside>;
 }
@@ -72,10 +72,12 @@ export function AgentCanvas({state,act}){
  const latestEvent=canvas.events?.at(-1);
  return <aside className="a-canvas-panel" data-part="canvas" style={{'--canvas-width':`${width}px`}} aria-label="Agent canvas">
   <div className="a-canvas-resize" role="separator" aria-label="Resize canvas" aria-orientation="vertical" aria-valuemin={300} aria-valuemax={900} aria-valuenow={width} tabIndex={0} data-action="view.update" onPointerDown={e=>{e.preventDefault();drag.current={x:e.clientX,width};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerMove={e=>{if(drag.current)setWidth(clamp(drag.current.width+drag.current.x-e.clientX))}} onPointerUp={finish} onPointerCancel={()=>{drag.current=null;setWidth(sharedWidth)}} onKeyDown={e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const next=e.key==='Home'?300:e.key==='End'?900:clamp(width+(e.key==='ArrowLeft'?20:-20));setWidth(next);patch(act,{canvasWidth:next})}}}/>
-  <header className="a-canvas-head"><FileText/><strong>{canvas.title||'Canvas'}</strong><button type="button" className="a-icon" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open})}><FolderOpen/></button><button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.close" onClick={()=>act('canvas.close',{})}><X/></button></header>
+  <header className="a-canvas-head"><FileText/><strong>{canvas.title||'Canvas'}</strong><button type="button" className="a-icon" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/></button><button type="button" className="a-icon" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/></button><button type="button" className="a-icon" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/></button><button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.close" onClick={()=>act('canvas.close',{})}><X/></button></header>
+  <CanvasTabs state={state} act={act}/>
+  {draft.browser&&<BrowserAddress state={state} act={act}/>}
   {draft.open&&<form className="a-canvas-file-form" onSubmit={e=>{e.preventDefault();act('canvas.show',{kind:draft.kind||'auto',path:draft.path||''})}}><label htmlFor="canvas-file-path">File in this workspace</label><PathField id="canvas-file-path" value={draft.path||''} onChange={path=>changeDraft({path})} state={state} act={act} placeholder="README.md or a full path"/><div className="a-canvas-file-actions"><select aria-label="Canvas file format" value={draft.kind||'auto'} data-action="view.update" onChange={e=>changeDraft({kind:e.target.value})}><option value="auto">Detect automatically</option><option value="html">HTML</option><option value="mermaid">Mermaid</option><option value="dot">Graphviz DOT</option><option value="json">JSON</option><option value="jsonl">JSONL</option><option value="text">Text</option><option value="markdown">Markdown</option><option value="code">Code</option><option value="image">Image</option></select><button type="submit" className="a-primary" data-action="canvas.show" disabled={!draft.path?.trim()}>Open file<ChevronRight/></button></div></form>}
   {canvas.path&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}
-  <div className="a-canvas-body">{canvas.kind==='a2ui'?<A2UISurface surface={canvas.surface} act={act}/>:canvas.content?<CanvasViewer key={canvas.id} canvas={canvas} act={act}/>:<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}</div>
+  <div className="a-canvas-body">{draft.library||canvas.placeholder?<SavedArtifacts state={state} act={act}/>:canvas.kind==='browser'?<BrowserPreview key={canvas.id} canvas={canvas} act={act}/>:canvas.kind==='a2ui'?<A2UISurface surface={canvas.surface} act={act}/>:canvas.kind?<CanvasViewer key={canvas.id} canvas={canvas} act={act}/>:<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}</div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
  </aside>;
 }

@@ -16,7 +16,7 @@ interface asks the same AmplifierSession to produce visual artifacts.
 
 The guidance encourages visuals for architecture, comparisons, workflows and
 interactive explanations when useful. It never treats document content as
-instructions and asks delegated workers to coordinate use of the shared canvas.
+instructions and asks delegated workers to coordinate use of the shared canvas. Each publication creates a saved artifact rather than discarding the previous one.
 
 ```json
 {"operation":"dispatch","args":{"action":"canvas.show","args":{
@@ -42,6 +42,7 @@ state overview rather than repeating the entire app state. `canvas.show` accepts
 
 | Kind | Preview |
 | --- | --- |
+| `browser` | Live HTTP(S) URL preview, with external-browser fallback |
 | `html` | Self-contained HTML, inline CSS and interactive JavaScript |
 | `markdown` | Markdown tables, lists, code and fenced `mermaid`, `dot` or `graphviz` diagrams |
 | `mermaid` | Mermaid diagrams |
@@ -122,3 +123,51 @@ They **do not automatically execute commands or send a chat turn**. The agent
 can inspect events during its next interaction and update the surface with
 `canvas.show`. `canvas.close` preserves the last content. Layout controls such
 as `canvasWidth`, `navPinned`, and `navExpanded` are in shared `view` state.
+
+## Artifact library and tabs
+
+`canvas.show` saves a snapshot with a stable ID, title, format, owning chat,
+workspace, and creating user message. It opens a new tab without overwriting
+older artifacts. A file path is optional; direct content and A2UI surfaces are
+persisted equally. Each publication is a separate snapshot. File changes are
+not watched; publish the path again to save a newer snapshot.
+
+`canvasArtifacts` contains metadata and `$resource` body references. Only the
+active `canvas` body is included in ordinary browser state; the agent overview
+contains a bounded current-chat index. `get_state` can page a saved body, for
+example `/canvasArtifacts/0/body/content`. `canvas.select {id}` reopens a saved
+item, `canvas.tabClose {id}` closes only its tab, and `canvas.reopen` opens the
+panel. Selection and file reads are scoped to the chat and workspace. Agent
+publications default to the calling session even when the user views another
+chat. Background publications do not replace the user's active preview.
+
+Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
+only through the retained user messages. Editing forks before the original user
+message, so artifacts from that message and later turns remain in the original
+conversation. Tab changes do not preserve running JavaScript memory inside an
+HTML preview; the authored document is the durable snapshot.
+
+On first upgrade, the previous active preview is retained. Accepted inline
+`canvas.show` tool calls in existing checkpoints are recovered without replaying
+tools or executing scripts. Missing historical file content is not fabricated by
+rereading the current file. Recovered items appear in the saved library with
+closed tabs. Recovery is idempotent.
+
+## Browser preview
+
+Publish `{"kind":"browser","title":"My app","url":"http://localhost:3000"}`.
+Only HTTP(S) URLs without embedded credentials are accepted. The preview uses
+an opaque-origin iframe with scripts and forms enabled. The parent app remains
+inaccessible. Unlike authored HTML previews, it can load external website assets;
+it cannot report document contents or controls through `canvas.snapshot`.
+
+Reload is a shared `canvas.view` control. `canvas.openExternal {id}` requests a
+regular browser tab (browser popup permissions may apply). Frame navigation
+reports do not prove embedding was allowed or that the app succeeded. Some sites
+block frames, and storage/cookie/API-dependent apps may need the external browser.
+No embedding restrictions are bypassed or proxied. See the
+[iframe sandbox reference](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe).
+
+A browser artifact saves its URL, not its server process, browser profile,
+navigation history, login, or website content. A launched app must still be
+running when reopened.

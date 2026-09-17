@@ -62,8 +62,8 @@ test('canvas keyboard resize persists bounded width and closes through public ac
  await renderAct(async()=>root.unmount());
 });
 
-test('reopening a file canvas reloads its path without mixing content or arbitrary state',async()=>{
+test('reopening the canvas keeps its saved snapshot without creating another artifact',async()=>{
  let called;
  await reopenCanvas({canvas:{kind:'markdown',path:'/one/plan.md',title:'Plan',content:'Old content',events:[{}]}},async(name,args)=>{called={name,args}});
- assert.deepEqual(called,{name:'canvas.show',args:{kind:'markdown',path:'/one/plan.md',title:'Plan'}});
+ assert.deepEqual(called,{name:'canvas.reopen',args:{}});
 });

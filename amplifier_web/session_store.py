@@ -21,12 +21,23 @@ def text_content(row):
 
 def user_boundaries(messages, visible_messages):
     """Match visible user turns to transcript rows, excluding service observations."""
-    expected = [row.get("text", "") for row in visible_messages if row.get("role") == "user"]
+    expected = [row for row in visible_messages if row.get("role") == "user"]
     boundaries = []
     cursor = 0
-    for text in expected:
+    for visible in expected:
+        text = visible.get('text','')
+        def matches(row):
+            if row.get('role') != 'user':
+                return False
+            if text_content(row) == text:
+                return True
+            content=row.get('content')
+            # The encoder puts the user's text first, then attachment descriptions
+            # and image/file blocks. Those appended descriptions aren't new turns.
+            return bool(visible.get('attachments') and isinstance(content,list) and content
+                        and content[0].get('type')=='text' and content[0].get('text')==text)
         match = next((index for index in range(cursor,len(messages))
-                      if messages[index].get("role") == "user" and text_content(messages[index]) == text),None)
+                      if matches(messages[index])),None)
         if match is None:
             raise ValueError("The saved transcript does not contain every visible user turn yet. Wait for the session to finish before forking it.")
         boundaries.append(match)
@@ -69,7 +80,7 @@ def complete_tool_exchanges(messages):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, live_messages=None):
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -101,7 +112,17 @@ def fork_session(home, source, target_id, *, turn=None, live_messages=None):
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
-    boundaries = user_boundaries(messages,visible)
+    before_turn = None
+    if before_message_id is not None:
+        index = next((i for i,row in enumerate(visible) if row.get('id')==before_message_id and row.get('role')=='user'), None)
+        if index is None:
+            raise ValueError('Choose one of your messages to edit.')
+        before_turn = sum(row.get('role')=='user' for row in visible[:index+1])
+        boundaries = user_boundaries(messages,visible[:index+1])
+        messages = messages[:boundaries[-1]]
+        visible = visible[:index]
+    else:
+        boundaries = user_boundaries(messages,visible)
     if turn is not None:
         if type(turn) is not int or turn < 1 or turn > len(boundaries):
             raise ValueError("Choose an existing user turn for the fork")
@@ -117,11 +138,12 @@ def fork_session(home, source, target_id, *, turn=None, live_messages=None):
     messages = complete_tool_exchanges(messages)
     from .host.session import repair_interrupted_receipts
     messages = repair_interrupted_receipts(messages)
+    through_turn = before_turn-1 if before_turn is not None else turn or len(boundaries)
     now = datetime.now(UTC).isoformat()
     metadata = {**metadata,"session_id":target_id,"parent_id":None,"created":now,"status":"forked",
-        "preserve_system":True,"fork":{"source_session_id":source_id,"through_user_turn":turn or len(boundaries),
+        "preserve_system":True,"fork":{"source_session_id":source_id,"through_user_turn":through_turn, "before_user_turn":before_turn,
                                      "created":now,"jobs_replayed":False},
-        "turn_count":turn or len(boundaries)}
+        "turn_count":through_turn}
     # Carry only host configuration, not job ownership or child session files.
     copied = {}
     for name in ("configuration.json","control-state.json"):
@@ -138,5 +160,5 @@ def fork_session(home, source, target_id, *, turn=None, live_messages=None):
     for name,value in copied.items():
         write_private(target_dir / name,value)
     return {"messages":visible,"parentId":source["id"],"forkContext":False,
-            "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":turn or len(boundaries),"jobsReplayed":False},
+            "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") else {})}

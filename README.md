@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.1
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.2
 amplifier-unified
 ```
 
@@ -131,3 +131,27 @@ their actual provider configuration and reuse unchanged entries across remounts.
 Refresh models retries just the selected provider. A provider-supplied list is
 shown as a selector; manual model IDs are offered only when no list is available.
 Saved model IDs remain visible even if absent from the current list.
+
+### Message controls and saved artifacts
+
+Each chat entry has **Copy as Markdown**. Completed assistant turns also offer
+**Fork a new chat from here**. Edit your own message with the pencil, then choose
+**Save & regenerate**: a new selected branch keeps the full model transcript up
+to that input and submits the revised text with its original attachments. The
+original chat stays available. Later messages are excluded from the new branch;
+files and external actions already performed by tools are not rolled back.
+
+Canvas publications are saved automatically with their chat and creating turn.
+Open several files or visuals in tabs, close tabs without deleting their content,
+and reopen them from the chat links or the canvas's **Saved artifacts** library.
+File previews preserve a snapshot. Direct HTML/Markdown/diagram content needs no
+intermediate file. Artifact bodies are stored separately in SQLite and loaded on
+demand, keeping the agent's default state overview small. The upgrade recovers
+accepted inline publications from existing checkpoints when available.
+
+The globe control opens an HTTP(S) app or website in a canvas tab. Agents use
+`canvas.show` with `kind:browser` and `url`. This remembers an address; it does not
+keep the server process alive. These previews are sandboxed: some websites block
+embedding, and apps needing cookies, browser storage or same-origin API access
+may need **Open in browser**. Browser preview DOM is not exposed to the agent;
+authored HTML previews retain their existing bounded document/control bridge.

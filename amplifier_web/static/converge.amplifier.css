@@ -566,3 +566,51 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-canvas-code .hljs-string,#amp-one .a-canvas-code .hljs-attr{color:#228060}
 #amp-one .a-canvas-code .hljs-comment{color:var(--muted)}
 #amp-one .a-canvas-code .hljs-number,#amp-one .a-canvas-code .hljs-title{color:#376ccb}
+
+#amp-one .a-message-actions,#amp-one .a-turn-actions{display:flex;align-items:center;gap:5px;margin-top:7px;min-height:28px}
+#amp-one .a-message-actions .a-icon,#amp-one .a-turn-actions .a-icon{width:28px;height:28px;min-height:28px;opacity:.65}
+#amp-one .a-message-actions .a-icon:hover,#amp-one .a-turn-actions .a-icon:hover{opacity:1}
+#amp-one .a-message-actions .a-icon svg,#amp-one .a-turn-actions .a-icon svg{width:15px;height:15px}
+#amp-one .a-turn-actions{margin:0 auto 22px;width:min(100%,850px);padding-left:4px}
+#amp-one .a-copy-result{font-size:11px;display:inline-flex;align-items:center;gap:5px;overflow-wrap:anywhere}
+#amp-one .a-copy-result.success{color:var(--success,#21845a)}
+#amp-one .a-copy-result.error{color:var(--danger,#c44646)}
+#amp-one .a-copy-result svg{width:14px;height:14px;flex-shrink:0}
+#amp-one .a-message-editor{display:flex;flex-direction:column;gap:12px;min-width:0}
+#amp-one .a-message-editor textarea{width:100%;min-height:100px;max-height:45vh;resize:vertical;box-sizing:border-box;margin:0;line-height:1.55;font:inherit}
+#amp-one .a-message-editor .a-caption{margin:0;font-size:12px}
+#amp-one .a-message-edit-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+#amp-one .a-message-edit-actions button{display:inline-flex;align-items:center;gap:6px}
+#amp-one .a-chat-origin{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:0 auto 24px;width:min(100%,850px)}
+#amp-one .a-chat-origin svg{width:15px;height:15px}
+#amp-one .a-chat-origin button{font-size:12px}
+
+#amp-one.a-chat-shell .a-message.a-user:has(.a-message-editor){width:min(100%,740px);max-width:100%;box-sizing:border-box}
+
+/* Durable artifact tabs and chat receipts. */
+#amp-one .a-canvas-tabs{display:flex;gap:4px;padding:6px 10px;overflow-x:auto;flex-shrink:0;border-bottom:1px solid var(--a-line);scrollbar-width:thin}
+#amp-one .a-canvas-tab{display:flex;align-items:center;flex:0 0 auto;border-radius:8px;background:var(--a-soft);max-width:230px}
+#amp-one .a-canvas-tab.is-active{background:var(--a-tint);box-shadow:inset 0 -2px var(--a-accent)}
+#amp-one .a-canvas-tab [role=tab]{display:flex;align-items:center;gap:6px;padding:8px;border:0;background:none;color:inherit;min-width:0;font-size:12px;text-align:left}
+#amp-one .a-canvas-tab [role=tab] span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-canvas-tab svg{width:14px;height:14px;flex-shrink:0}
+#amp-one .a-canvas-tab .a-icon{width:26px;height:26px;min-height:26px}
+#amp-one .a-chat-artifacts{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 20px}
+#amp-one .a-artifact-link{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:9px 12px;border:1px solid var(--a-line);border-radius:10px;background:var(--a-surface);color:var(--a-ink);text-align:left;font-size:12px}
+#amp-one .a-artifact-link span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-artifact-link svg{width:16px;height:16px;flex-shrink:0}
+#amp-one .a-canvas-library{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0}
+#amp-one .a-canvas-library h3{display:flex;justify-content:space-between;margin:0 0 4px}
+#amp-one .a-saved-artifact{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--a-line);border-radius:10px;background:var(--a-surface);color:var(--a-ink);text-align:left;width:100%;min-width:0}
+#amp-one .a-saved-artifact>span{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+#amp-one .a-saved-artifact strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+#amp-one .a-saved-artifact small{color:var(--a-muted);font-size:11px}
+#amp-one .a-saved-artifact svg{width:17px;height:17px;flex-shrink:0}
+#amp-one .a-canvas-address{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--a-line)}
+#amp-one .a-canvas-address>div{display:flex;gap:8px;min-width:0}
+#amp-one .a-canvas-address input{min-width:0;flex:1}
+#amp-one .a-canvas-body:has(.a-browser-preview){display:flex;padding:0;overflow:hidden}
+#amp-one .a-browser-preview{display:flex;flex-direction:column;min-height:0;width:100%;flex:1}
+#amp-one .a-browser-preview iframe{min-height:0}
+#amp-one .a-browser-url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+#amp-one .a-browser-note{font-size:11px;line-height:1.5;color:var(--a-muted);padding:10px 14px;margin:0;border-top:1px solid var(--a-line)}

@@ -30,13 +30,17 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
-    "canvas.show": ("Display a visual artifact: sandboxed interactive HTML, Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, or A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui"]},"title":string(200),"content":string(7000000),"path":string(4000),"surface":{"type":"object"}},["kind"])),
-    "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
+    "canvas.show": ("Save a durable artifact in this chat and open a new canvas tab (browser kind takes an http/https url): sandboxed interactive HTML, Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, or A2UI snapshot. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
+    "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"reload":{"type":"number","minimum":0},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","error"]},"message":string(2000)},["id","part","status"])),
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
     "canvas.interact": ("Operate a standard HTML preview control from the current canvas.document snapshot. Never executes arbitrary JavaScript.", schema({"id":string(100),"controlId":string(100),"event":{"enum":["click","input"]},"value":string(4000)},["id","controlId","event"])),
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
+    "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
+    "canvas.select": ("Reopen a saved artifact by ID from canvasArtifacts", schema({"id":string(100)})),
+    "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
+    "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
@@ -45,6 +49,9 @@ ACTION_DEFINITIONS = {
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
     "session.export": ("Export a conversation", schema({"id": string(100)})),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
+    "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
+    "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
+    "message.edit": ("Fork before a user message and generate a new reply from its edited text. Original history remains available; external tool effects are not undone.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000)})),
     "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":string(200),"name":string(200),"base64":string(12000000)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":string(200),"id":string(32)},["id"])),
@@ -197,6 +204,8 @@ class AppService:
         self.state["devices"] = {}
         from .workspace_canvas import initialize
         initialize(self.state)
+        from .canvas_library import recover_legacy
+        recover_legacy(self.state,self.db,self.data_dir)
         self._save()
 
     def default_theme(self):
@@ -295,20 +304,43 @@ class AppService:
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+            from .canvas_library import remember, restore, fork_artifacts
+            remember(self.state,self.db)
+            previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
+            previous_open=self.state.get('canvas',{}).get('open',False)
             effects = []
             if action.startswith("workspace."):
                 from .workspace_canvas import workspace_command
                 workspace_command(self.state, action, args)
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
-                if action in {'canvas.copy', 'canvas.download'}:
+                if action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
+                    from .canvas_library import command
+                    command(self.state,self.db,action,args)
+                    if action=='canvas.select':
+                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
+                elif action=='canvas.openExternal':
+                    canvas=self.state['canvas']
+                    if canvas.get('id')!=args['id'] or canvas.get('kind')!='browser':raise AppError('Select a browser artifact first.')
+                    effects.append({'type':'browser.open','url':canvas['url']})
+                elif action in {'canvas.copy', 'canvas.download'}:
                     canvas = self.state['canvas']
                     if args['id'] != canvas.get('id'):
                         raise AppError('This canvas has been replaced.')
-                    content = canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
+                    content = canvas.get('url') if canvas.get('kind')=='browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
                     extension = {'markdown':'md','html':'html','mermaid':'mmd','dot':'dot','json':'json','jsonl':'jsonl','a2ui':'json'}.get(canvas.get('kind'), 'txt')
                     effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
                         'content':content,'filename':'canvas.'+extension,'mime':'text/plain','canvasId':args['id']})
+                elif action=='canvas.show':
+                    sid=args.get('sessionId',self.state.get('selectedSessionId'))
+                    owner=self._session(sid) if sid else None
+                    workspace=next((w for w in self.state['workspaces'] if owner and w['path']==owner['workspace']),None)
+                    scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace['id'] if workspace else self.state['selectedWorkspaceId']}
+                    canvas_command(scoped,action,args,origin)
+                    remember(scoped,self.db)
+                    if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
+                        self.state['canvas']=scoped['canvas']
+                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == "session.create":
@@ -335,6 +367,50 @@ class AppService:
                 self.state["sessions"].remove(session)
                 if self.state["selectedSessionId"] == session["id"]:
                     self.state["selectedSessionId"] = self.state["sessions"][0]["id"] if self.state["sessions"] else None
+            elif action == 'message.copy':
+                source = self._session(args['sessionId'])
+                message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
+                if not message:
+                    raise AppError('This message is no longer available.',404)
+                identity = str(uuid.uuid4())
+                self.state['view']['messageCopy'] = {**args,'requestId':identity,'status':'pending'}
+                effects.append({'type':'message.copy',**args,'requestId':identity})
+            elif action == 'message.copyResult':
+                result = self.state['view'].get('messageCopy',{})
+                if result.get('requestId') == args['requestId']:
+                    result.update(status=args['status'],message=args.get('message',''))
+            elif action == 'message.edit':
+                source = self._session(args['sessionId'])
+                original = next((m for m in source['messages'] if m['id']==args['messageId'] and m['role']=='user'),None)
+                if not original:
+                    raise AppError('Choose one of your own messages to edit.')
+                text = args['text'].strip()
+                if not text:
+                    raise AppError('Enter a message before regenerating.')
+                if source.get('configurationBusy'):
+                    raise AppError('Wait for configuration changes to finish.',409)
+                if not self.runtime:
+                    raise AppError('The Amplifier runtime is unavailable.')
+                if self.state.get('updates',{}).get('phase')=='activating':
+                    raise AppError('An update is activating. Please retry in a moment.',409)
+                session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
+                from .session_store import fork_session
+                try:
+                    session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id']))
+                except ValueError as exc:
+                    raise AppError(str(exc),409) from exc
+                session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
+                input_id = command_id or str(uuid.uuid4())
+                self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])))
+                self._activity(session,'queued','Generating from your edited message.',reset=True)
+                session['status']='working'
+                ensure_turn(session,input_id,text)
+                self.state['sessions'].insert(0,session)
+                self.state['selectedSessionId']=session['id']
+                self.state['view']['messageEdit']=None
+                from .workspace_canvas import select_session_workspace
+                select_session_workspace(self.state,session)
+                pending.append((self._send,(copy.deepcopy(session),text,input_id)))
             elif action == "session.fork":
                 source = self._session(args["id"])
                 if source.get("configurationBusy"):
@@ -350,6 +426,9 @@ class AppService:
                     raise AppError(str(exc),409) from exc
                 self.state["sessions"].insert(0, session)
                 self.state["selectedSessionId"] = session["id"]
+                self.state['view']['messageEdit']=None
+                from .workspace_canvas import select_session_workspace
+                select_session_workspace(self.state,session)
             elif action in {"state.export", "session.export", "theme.export"}:
                 content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else self.state["theme"]["css"]
                 mime = "text/css" if action == "theme.export" else "application/json"
@@ -429,7 +508,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -488,6 +567,10 @@ class AppService:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
+            if action in {'session.fork','message.edit'}:
+                fork_artifacts(self.state,source['id'],session)
+            if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
+                restore(self.state,self.db,open_panel=previous_open)
             self.state["events"].append({"id": command_id, "action": action, "origin": origin, "at": time.time()})
             self.state["events"] = self.state["events"][-200:]
             for effect in effects:
@@ -679,7 +762,10 @@ class AppService:
             return [item for item in actions if item['name'].startswith(prefix)]
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
-            result = await self.dispatch(args["action"], args.get("args", {}), origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
+            action_args=copy.deepcopy(args.get('args',{}))
+            if args['action']=='canvas.show':
+                action_args.setdefault('sessionId',session_id)
+            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(result['state'], {}, session_id=session_id, resolve=self.state_resource)}
         raise AppError("Unknown app bridge operation.")
 
