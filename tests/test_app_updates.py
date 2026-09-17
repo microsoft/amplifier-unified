@@ -113,3 +113,15 @@ async def test_new_host_recognizes_successful_application_restart(tmp_path):
     assert service.state['updates']['phase']=='installed'
     assert service.state['updates']['pendingRestart'] is None
     await service.close()
+
+async def test_installed_application_removed_from_pending_updates_but_sources_preserved(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    from amplifier_web import __version__
+    app={'id':'application','latest':'v'+__version__,'current':'0.0.1','status':'update'}
+    service.state['updates']={'application':app,'items':[app,{'id':'community','status':'update'}],'available':2,'appAvailable':True}
+    manager=UpdateManager(service);service.update_manager=manager
+    assert service.state['updates']['available']==1
+    assert service.state['updates']['items'][0]['status']=='current'
+    assert service.state['updates']['items'][1]['status']=='update'
+    assert not service.state['updates']['appAvailable']
+    await service.close()

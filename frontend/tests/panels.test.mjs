@@ -5,6 +5,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const [{ProviderSettings,RoutingSettings},{RuntimeSettings},{TurnTimeline},{RegistrySettings},{MaintenanceSettings}]=await Promise.all(['setup.jsx','runtime-settings.jsx','timeline.jsx','registry.jsx','maintenance.jsx'].map(file=>server.ssrLoadModule('/src/'+file)));
+const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
 const act=()=>{};
 test.after(()=>server.close());
 test('setup panels render redacted provider configuration and valid required routing roles',()=>{
@@ -52,4 +53,19 @@ test('provider environment selection shows default, custom availability and no k
  assert.match(html,/data-action="providers.credentials"/);assert.doesNotMatch(html,/type="password"/);
  state.setup.credentialCheck.available=false;
  assert.match(renderToStaticMarkup(React.createElement(ProviderSettings,{state,act})),/Not found in the app environment/);
+});
+
+test('available updates are visible without opening the full source inventory',()=>{
+ const state={view:{},settings:{},updates:{lastCheck:1,available:2,items:[{id:'current',label:'Already current source',status:'current'},{id:'changed',label:'Updated community bundle',status:'update',current:'abc',latest:'def'},{id:'pinned',label:'Pinned library',status:'pinned'}]}};
+ const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));
+ assert.match(html,/Available updates/);assert.match(html,/Updated community bundle/);assert.match(html,/1 available/);
+ assert.doesNotMatch(html,/Already current source|Pinned library/);assert.match(html,/Show all 3 sources/);
+ state.view.maintenanceDraft={updatesExpanded:true};
+ const all=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));
+ assert.match(all,/Already current source/);assert.match(all,/Pinned library/);
+});
+test('no pending updates still distinguishes failed checks from current sources',()=>{
+ const state={view:{},settings:{},updates:{lastCheck:1,items:[{id:'failed',label:'Offline source',status:'check_failed'}]}};
+ const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));
+ assert.match(html,/No updates available from the last check/);assert.match(html,/1 source could not be checked/);
 });

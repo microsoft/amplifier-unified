@@ -90,6 +90,15 @@ class UpdateManager:
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
         state.setdefault('items', [])
+        application=state.get('application',{})
+        from .app_updates import version_tuple
+        latest=version_tuple(application.get('latest'))
+        current=version_tuple(__import__('amplifier_web').__version__)
+        if latest and current and latest<=current:
+            application={**application,'current':__import__('amplifier_web').__version__,'status':'current'}
+            state.update(application=application,appAvailable=False)
+            state['items']=[application if row.get('id')=='application' else row for row in state['items']]
+            state['available']=sum(row.get('status')=='update' for row in state['items'])
         state.setdefault('lastCheck', None)
         state['release'] = active_release(self.home).get('current')
         state['canRollback'] = 'previous' in active_release(self.home)

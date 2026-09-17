@@ -1,5 +1,7 @@
 # Updates
 
+Available updates are listed immediately at the top of Settings, with application releases first. The complete source inventory is behind **Show all sources**; failed checks are called out separately. Successfully installed application releases are removed from the pending count on restart.
+
 Settings offers **Check now**, **Install available**, and **Roll back**, with automatic checking (daily by default) and opt-in automatic installation. Hourly, six-hourly, daily, or weekly schedules run while the local host is open; this is not a separate OS daemon. The Settings icon shows an update indicator. All these controls use the same agent-accessible action registry.
 
 Checks compare the actual commit in app-owned Foundation Git caches against the configured remote branch, including cached transitive bundles/modules and skill-source copies. Shared remotes are checked once per cycle, with bounded concurrency/timeouts. A failed or unrecognized source stays **Check failed**, never **Current**. Local edits and SHA/version pins are not automatically replaced. Missing, not-yet-prepared bundles are outside the cached-source inventory; their normal first preparation still resolves them through Foundation.
