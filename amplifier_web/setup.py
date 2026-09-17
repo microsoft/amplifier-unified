@@ -17,6 +17,30 @@ from .bundles import SECRET_KEYS, validate_uri
 
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}')
 
+ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+PROVIDER_ENV = {
+    'provider-openai': ('OPENAI_API_KEY',),
+    'provider-anthropic': ('ANTHROPIC_API_KEY',),
+    'provider-gemini': ('GOOGLE_API_KEY','GEMINI_API_KEY'),
+    'provider-github-copilot': ('GITHUB_TOKEN','COPILOT_AGENT_TOKEN','COPILOT_GITHUB_TOKEN','GH_TOKEN'),
+}
+
+def credential_field(module):
+    return 'github_token' if module=='provider-github-copilot' else 'api_key'
+
+def environment_credential(module,raw=None,env_var=None):
+    raw=raw or {}
+    defaults=PROVIDER_ENV.get(module,())
+    value=raw.get(credential_field(module))
+    reference=re.fullmatch(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',value) if isinstance(value,str) else None
+    if env_var is not None and (not isinstance(env_var,str) or not ENV_NAME.fullmatch(env_var)):
+        raise ValueError('Use an environment variable name containing letters, numbers and underscores, starting with a letter or underscore.')
+    chosen=env_var or (reference.group(1) if reference else next((name for name in defaults if os.environ.get(name)),defaults[0] if defaults else ''))
+    return {'module':module,'field':credential_field(module),'defaultEnvVar':defaults[0] if defaults else '',
+            'alternatives':list(defaults[1:]),'envVar':chosen,'available':bool(chosen and os.environ.get(chosen)),
+            'explicit':bool(reference),'hasStoredKey':bool(value and not reference),
+            'supported':module!='provider-openai-chatgpt'}
+
 def safe_name(value):
     if not isinstance(value,str) or not NAME.fullmatch(value) or '..' in value:
         raise ValueError('Use a name containing letters, numbers, dots, dashes, or underscores.')
@@ -75,9 +99,11 @@ class SetupManager:
                             refs.append(item)
                         else: scan(item)
             scan(raw)
+            credential=environment_credential(value['module'],raw)
             configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
-            rows.append({'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
-                'credentialsConfigured':configured,'keySource':'environment' if any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
+            if not refs:configured=credential['available']
+            rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
+                'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
         return rows
 
     def _keys(self,updates):
@@ -124,7 +150,18 @@ class SetupManager:
                         elif isinstance(value,dict): result[key]=private(value,(*path,key))
                         else: result[key]=value
                     return result
-                if args.get('apiKey') is not None: config['github_token' if module=='provider-github-copilot' else 'api_key']=args['apiKey']
+                field=credential_field(module)
+                if args.get('apiKeyEnv') is not None:
+                    if args.get('apiKey'):raise ValueError('Choose an environment variable or enter a private key, not both.')
+                    credential=environment_credential(module,env_var=args['apiKeyEnv'])
+                    if not credential['supported']:raise ValueError('This provider uses account sign-in instead of an API key.')
+                    config[field]='${'+credential['envVar']+'}'
+                elif args.get('apiKey') is not None:config[field]=args['apiKey']
+                elif not config.get(field):
+                    if old.get(field):config[field]=old[field]
+                    else:
+                        credential=environment_credential(module)
+                        if credential['supported'] and credential['available']:config[field]='${'+credential['envVar']+'}' 
                 if module=='provider-openai-chatgpt':
                     config['token_file_path']=str(self.home/'config'/('openai-chatgpt-'+identity+'-oauth.json'))
                     config['login_on_mount']=False
@@ -171,6 +208,9 @@ class SetupManager:
     async def perform(self,action,args):
         workspace=args.get('workspace') or str(Path.cwd());scope=args.get('scope','global')
         self.store.path(workspace,scope) # Validate scope even on reads.
+        if action=='providers.credentials':
+            self.config(workspace) # Load app-owned keys as well as the launch environment.
+            return {'credentialCheck':environment_credential(args['module'],env_var=args.get('envVar'))}
         if action=='providers.list':return {'providers':self.provider_rows(workspace)}
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)

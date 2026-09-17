@@ -8,7 +8,7 @@ const [{ProviderSettings,RoutingSettings},{RuntimeSettings},{TurnTimeline},{Regi
 const act=()=>{};
 test.after(()=>server.close());
 test('setup panels render redacted provider configuration and valid required routing roles',()=>{
- const state={view:{},setup:{providers:[{id:'openai',module:'provider-openai',config:{api_key:'[REDACTED]'},credentialsConfigured:true}],matrices:[]}};
+ const state={view:{providerEditor:{module:'provider-openai',credentialMode:'private'}},setup:{providers:[{id:'openai',module:'provider-openai',config:{api_key:'[REDACTED]'},credentialsConfigured:true}],matrices:[]}};
  const provider=renderToStaticMarkup(React.createElement(ProviderSettings,{state,session:{id:'s',status:'ready'},act}));
  assert.match(provider,/credentials ready/);assert.match(provider,/type="password"/);assert.match(provider,/data-action="providers.save"/);
  const routing=renderToStaticMarkup(React.createElement(RoutingSettings,{state,act}));
@@ -43,4 +43,13 @@ test('module behavior validation opt-in and real results are visible through sha
  const state={view:{registryDraft:{open:true,tab:'modules',behavioral:true,behaviorResultsExpanded:true}},registry:{validation:{id:'tool-fixture',passed:true,checks:[],behavioral:{passed:false,exitCode:1,tests:[{name:'tool response contract',status:'failed'},{name:'optional streaming',status:'skipped'}]}}}};
  const html=renderToStaticMarkup(React.createElement(RegistrySettings,{state,act}));
  assert.match(html,/Also run module behavior tests/);assert.match(html,/data-action="modules.validate"/);assert.match(html,/Behavior tests need attention/);assert.match(html,/tool response contract/);assert.match(html,/skipped/);
+});
+
+test('provider environment selection shows default, custom availability and no key input',()=>{
+ const state={view:{providerEditor:{module:'provider-openai',credentialMode:'environment',envVar:'TEAM_API_KEY'}},setup:{credentialCheck:{module:'provider-openai',defaultEnvVar:'OPENAI_API_KEY',envVar:'TEAM_API_KEY',available:true}}};
+ const html=renderToStaticMarkup(React.createElement(ProviderSettings,{state,act}));
+ assert.match(html,/OPENAI_API_KEY/);assert.match(html,/TEAM_API_KEY/);assert.match(html,/Found — this variable will supply the key/);
+ assert.match(html,/data-action="providers.credentials"/);assert.doesNotMatch(html,/type="password"/);
+ state.setup.credentialCheck.available=false;
+ assert.match(renderToStaticMarkup(React.createElement(ProviderSettings,{state,act})),/Not found in the app environment/);
 });

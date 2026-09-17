@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.3.0
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.3.1
 amplifier-unified
 ```
 
@@ -70,6 +70,8 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
 
 The server binds only to loopback and rejects cross-origin requests. This first version is for a single user's local computer, not remote hosting.
+
+Provider setup detects standard environment variables (such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`) and allows a custom variable name. Availability checks expose only names and presence; Save stores an environment reference. The backend reads its launch environment and private key file. Restart it after changing variables in a terminal. Private pasted keys remain available as an alternative; ChatGPT uses account sign-in. Copilot supports one credential per session process because its SDK shares authentication.
 
 ## Everyday controls
 

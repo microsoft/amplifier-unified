@@ -78,6 +78,24 @@ class SelectedProvider:
         return await self.original.complete(request.model_copy(update=updates), **kwargs)
 
 
+_copilot_credential = None
+
+def apply_provider_environment(plan):
+    """The pinned Copilot SDK resolves its token from process env, not config.
+
+    Workers are isolated per root session. Keep that process consistent rather
+    than allowing an ambient default to override an explicit credential choice.
+    """
+    global _copilot_credential
+    tokens={row.get('config',{}).get('github_token') for row in plan.get('providers',[])
+            if row.get('module')=='provider-github-copilot' and row.get('enabled',True)}-{None,''}
+    if len(tokens)>1 or (tokens and _copilot_credential is not None and _copilot_credential not in tokens):
+        raise ValueError('Different Copilot credentials need separate conversations; this SDK shares authentication within one session process.')
+    if tokens:
+        _copilot_credential=next(iter(tokens))
+        os.environ['COPILOT_AGENT_TOKEN']=_copilot_credential
+
+
 def _apply_settings(bundle, config):
     settings = config.settings
     bundle.providers = merge(bundle.providers, config.providers)
@@ -243,6 +261,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if key in edited:
                 setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
     baseline = loaded.to_mount_plan()
+    apply_provider_environment(baseline)
     adapted, replacements = live_plan(baseline, background_delegate)
     # Modify the public Bundle fields before prepare(): loop-live and every
     # agent-specific source go through Foundation's normal activation mechanism.
