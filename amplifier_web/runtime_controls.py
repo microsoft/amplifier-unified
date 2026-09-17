@@ -118,8 +118,12 @@ class RuntimeControls:
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
-        if saved.get("budget"):
-            await self._perform("budget.set", saved["budget"])
+        # Older snapshots recorded None for module-managed/automatic limits.
+        # Absence of an override must leave the newly mounted module's default
+        # intact, rather than passing null to the explicit budget-edit API.
+        budget={key:value for key,value in saved.get("budget",{}).items() if value is not None}
+        if budget:
+            await self._perform("budget.set", budget)
         if saved.get("selection"):
             await self._perform("provider.select", saved["selection"])
         if saved.get("mode"):
@@ -129,7 +133,7 @@ class RuntimeControls:
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in
-                  (("maxIterations",loop,"max_iterations"),("contextTokens",context,"max_tokens")) if hasattr(target,attr)}
+                  (("maxIterations",loop,"max_iterations"),("contextTokens",context,"max_tokens")) if getattr(target,attr,None) is not None}
         if self.max_output_tokens is not None:
             budget["maxOutputTokens"] = self.max_output_tokens
         previous = json.loads(self.state_path().read_text()) if self.state_path().exists() else {}

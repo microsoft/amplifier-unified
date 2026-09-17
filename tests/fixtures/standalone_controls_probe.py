@@ -57,6 +57,32 @@ async def run():
     coordinator.hooks.register('tool:pre',gate,name='fixture-deny')
     with tempfile.TemporaryDirectory() as home:
         os.environ['AMPLIFIER_WEB_HOME']=home
+        # context-simple uses None for its automatic context limit. Startup
+        # must round-trip that default, including snapshots from older builds.
+        context=coordinator.get('context')
+        original_limit=context.max_tokens
+        context.max_tokens=None
+        controls.persist()
+        assert 'contextTokens' not in json.loads(controls.state_path().read_text())['budget']
+        saved=json.loads(controls.state_path().read_text())
+        saved['budget']={'maxIterations':-1,'contextTokens':None}
+        controls.state_path().write_text(json.dumps(saved))
+        await controls.restore()
+        assert context.max_tokens is None
+        assert coordinator.get('orchestrator').max_iterations==-1
+        # Null from an older snapshot also must not replace a bundle's newly
+        # configured numeric limit during preparation.
+        context.max_tokens=12345
+        controls.state_path().write_text(json.dumps(saved))
+        await controls.restore()
+        assert context.max_tokens==12345
+        # Explicit edits still reject null, zero, negatives and booleans.
+        for invalid_limit in (None,0,-1,False):
+            try:
+                await controls.perform('budget.set',{'contextTokens':invalid_limit})
+                raise AssertionError('Invalid explicit context token limit accepted')
+            except ValueError:pass
+        context.max_tokens=original_limit
         inspected=await controls.perform('configuration.inspect')
         assert inspected['plan']['session']['orchestrator']['module']=='loop-live'
         catalog=await controls.perform('catalog.inspect')

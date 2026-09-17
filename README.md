@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.3.4
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.3.5
 amplifier-unified
 ```
 
