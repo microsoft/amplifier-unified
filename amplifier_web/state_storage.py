@@ -8,7 +8,9 @@ def normalize_state(state, db):
     remember(state, db)
     legacy=state.pop('sessionConfiguration', {})
     controls=state.get('runtimeControl', {})
+    from .execution import anchor_turns
     for session in state.get('sessions', []):
+        anchor_turns(session)
         sid=session['id'];runtime=controls.get(sid,{})
         config=session.get('configuration') or legacy.get(sid) or runtime.get('configuration.inspect')
         if not isinstance(config,dict) or 'plan' not in config:

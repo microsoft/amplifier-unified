@@ -11,7 +11,8 @@
     "test:chat-browser": "node tests/chat-browser.mjs",
     "test:canvas-browser": "node tests/canvas-browser.mjs",
     "test:message-browser": "node tests/message-browser.mjs",
-    "test:artifact-browser": "node tests/artifact-browser.mjs"
+    "test:artifact-browser": "node tests/artifact-browser.mjs",
+    "test:timeline-browser": "node tests/timeline-browser.mjs"
   },
   "dependencies": {
     "@viz-js/viz": "^3.30.0",

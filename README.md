@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.2
+uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.3
 amplifier-unified
 ```
 
@@ -77,7 +77,7 @@ Provider setup detects standard environment variables (such as `OPENAI_API_KEY` 
 
 Settings groups provider setup and routing, community bundles, effective module configuration, file permissions, history, notifications, updates and recovery. Module/source registries offer scoped advanced overrides. Per-conversation controls expose modes, goals, budgets, skills, tools and context reset. A custom bundle can be saved and used immediately or exported as a single portable Markdown file with credentials represented by environment references.
 
-Tools and delegated workers appear as collapsed lines inside their conversation turn. Expand them to inspect nested actions and model calls. Token usage and provider-reported or estimated costs roll up once through each parent and the whole turn; missing prices remain unavailable.
+Tools and delegated workers appear as collapsed lines inside their conversation turn. Work summaries retain a saved position where work began, including voice delegations without a visible input ID; completion and later messages do not move them. Expand them to inspect nested actions and model calls. Token usage and provider-reported or estimated costs roll up once through each parent and the whole turn; missing prices remain unavailable.
 
 For automation, use the same host from the terminal:
 

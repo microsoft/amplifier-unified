@@ -7,8 +7,29 @@ def ensure_turn(session,identity,label=''):
     tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
     if identity and not any(t['id']==identity for t in tree['turns']):
         tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':time.time(),'phase':'running','aggregateUsage':rollup([])})
+    anchor_turns(session)
     if identity:tree['currentTurnId']=identity
     return tree
+
+
+def anchor_turns(session):
+    """Pin work where it began, including voice work without a visible input ID.
+
+    A null anchor means before the first message. Never move a saved anchor when
+    a later transcript, response, completion, or worker update arrives.
+    """
+    messages=[m for m in session.get('messages',[]) if m.get('id')]
+    for turn in session.get('execution',{}).get('turns',[]):
+        if 'anchorMessageId' in turn:
+            continue
+        exact=next((m for m in messages if m.get('role')=='user' and (
+            m['id'] in {turn.get('messageId'),turn.get('userMessageId')} or
+            (m.get('inputId') and m['inputId'] in {turn.get('inputId'),turn.get('id')}))),None)
+        started=turn.get('startedAt')
+        preceding=[m for m in messages if isinstance(started,(int,float)) and
+                   isinstance(m.get('createdAt'),(int,float)) and m['createdAt']<=started]
+        anchor=exact or (preceding[-1] if preceding else None)
+        turn['anchorMessageId']=anchor['id'] if anchor else None
 
 
 def rollup(calls):

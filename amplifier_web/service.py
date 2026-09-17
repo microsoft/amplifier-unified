@@ -808,8 +808,8 @@ class AppService:
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
-            self._publish()
             ensure_turn(session,command_id,text)
+            self._publish()
             snapshot = copy.deepcopy(session)
         self._task(self._guard(self._send, (snapshot, text, command_id)))
         return receipt

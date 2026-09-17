@@ -23,3 +23,21 @@ test('legacy worker and tool observations form one nested group without duplicat
  assert.equal(data.nodes.filter(n=>n.kind==='worker').length,1);
  const worker=data.nodes.find(n=>n.kind==='worker');assert.equal(worker.parentId,'tool:call-a');assert.equal(worker.workerId,'session-a');assert.equal(data.turns[0].id,'observed-activity');
 });
+
+test('voice work stays at its saved position across later messages and completion',async()=>{
+ const {turnPlacements}=await import('../src/timeline-data.js');
+ const messages=[{id:'u',role:'user',createdAt:10},{id:'ack',role:'assistant',createdAt:11},{id:'response',role:'assistant',createdAt:20}];
+ const data={turns:[{id:'voice:one',anchorMessageId:'u',startedAt:12},{id:'voice:two',anchorMessageId:'ack',startedAt:13},{id:'voice:three',anchorMessageId:'ack',startedAt:14}],nodes:[]};
+ const original=turnPlacements(messages,data);
+ assert.deepEqual(original.before,[]);assert.deepEqual(original.after.get('ack'),['voice:two','voice:three']);
+ messages.push({id:'next',role:'user',createdAt:30});data.turns.forEach(t=>{t.phase='completed';t.endedAt=35});
+ assert.deepEqual(turnPlacements(messages,data),original);
+});
+
+test('older voice records use start time, and unknown records never collect at the bottom',async()=>{
+ const {turnPlacements}=await import('../src/timeline-data.js');
+ const messages=[{id:'u',role:'user',createdAt:10},{id:'ack',role:'assistant',createdAt:11},{id:'response',role:'assistant',createdAt:20}];
+ const data={turns:[{id:'voice:old',startedAt:12},{id:'node-only'},{id:'unknown'}],nodes:[{id:'tool',turnId:'node-only',startedAt:15}]};
+ const result=turnPlacements(messages,data);
+ assert.deepEqual(result.after.get('ack'),['voice:old','node-only']);assert.deepEqual(result.before,['unknown']);assert.equal(result.after.has('response'),false);
+});

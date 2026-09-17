@@ -27,6 +27,20 @@ export function messageTurnId(message,turns){
  const turn=turns.find(turn=>turn.messageId===message.id||turn.userMessageId===message.id||(message.inputId&&(turn.inputId===message.inputId||turn.id===message.inputId)));
  return turn?.id||null;
 }
+export function turnPlacements(messages,data){
+ const after=new Map(),before=[],ids=new Set(messages.map(m=>m.id));
+ for(const turn of data.turns){
+  let anchor=turn.anchorMessageId;
+  if(!Object.hasOwn(turn,'anchorMessageId')){
+   const exact=messages.find(m=>m.role==='user'&&((turn.messageId&&turn.messageId===m.id)||(turn.userMessageId&&turn.userMessageId===m.id)||(m.inputId&&(turn.inputId===m.inputId||turn.id===m.inputId))));
+   const times=data.nodes.filter(n=>n.turnId===turn.id&&Number.isFinite(n.startedAt)).map(n=>n.startedAt);
+   const started=Number.isFinite(turn.startedAt)?turn.startedAt:times.length?Math.min(...times):null;
+   anchor=exact?.id||(started!==null?messages.findLast(m=>Number.isFinite(m.createdAt)&&m.createdAt<=started)?.id:null);
+  }
+  if(anchor&&ids.has(anchor)){if(!after.has(anchor))after.set(anchor,[]);after.get(anchor).push(turn.id)}else before.push(turn.id);
+ }
+ return {after,before};
+}
 export function compactTokens(value){return value>=1000000?`${(value/1000000).toFixed(1).replace(/\.0$/,'')}m`:value>=1000?`${(value/1000).toFixed(1).replace(/\.0$/,'')}k`:String(value)}
 export function usageLabel(usage){
  if(!usage)return null;

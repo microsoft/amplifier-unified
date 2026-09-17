@@ -20,3 +20,24 @@ def test_late_worker_usage_stays_on_original_turn_and_unknown_cost_is_explicit()
     assert one['aggregateUsage']['calls']==1 and two['aggregateUsage']['calls']==0
     assert one['aggregateUsage']['costType']=='unavailable'
     assert one['aggregateUsage']['unknownCalls']==1
+
+
+def test_voice_work_positions_are_persisted_and_do_not_follow_later_messages():
+    from amplifier_web.execution import anchor_turns
+    session={'messages':[{'id':'user','role':'user','createdAt':10},{'id':'ack','role':'assistant','createdAt':11}],
+             'execution':{'turns':[{'id':'voice-delegate','startedAt':12},{'id':'voice-second','startedAt':13}], 'nodes':[]}}
+    anchor_turns(session)
+    assert [t['anchorMessageId'] for t in session['execution']['turns']]==['ack','ack']
+    session['messages'].extend([{'id':'later','role':'user','createdAt':20},{'id':'late-transcript','role':'user','createdAt':11.5}])
+    anchor_turns(session)
+    assert [t['anchorMessageId'] for t in session['execution']['turns']]==['ack','ack']
+
+
+def test_typed_turns_match_input_ids_and_work_without_messages_stays_at_start():
+    session={'messages':[{'id':'u','role':'user','inputId':'typed','createdAt':10},{'id':'other','role':'user','createdAt':15}],
+             'execution':{'turns':[{'id':'typed','startedAt':20},{'id':'early','startedAt':1}], 'nodes':[]}}
+    from amplifier_web.execution import anchor_turns
+    anchor_turns(session)
+    assert [t['anchorMessageId'] for t in session['execution']['turns']]==['u',None]
+    ensure_turn(session,'new-voice')
+    assert session['execution']['turns'][-1]['anchorMessageId']=='other'
