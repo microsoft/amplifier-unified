@@ -17,7 +17,7 @@ The default for new conversations is anchors. The existing user's conversation r
 - Actual context-simple Core validation: nine structural checks and ten behavioral tests passed.
 - Runtime after community preparation has no amplifier-app-cli or amplifier-loop-live-cli imports.
 
-See docs/CLI-PARITY.md and docs/UPDATES.md for detailed capability and update boundaries. Published-release installation and local HTTP health are checked separately at deployment.
+See docs/CLI-PARITY.md and docs/UPDATES.md for detailed capability and update boundaries. Published-release installation and isolated update staging passed. The installed v0.3.0 host serves 74,031 bytes of CSS and 68 actions at port 8941. All 50 existing conversation messages and the selected anchors-amp-dev bundle were preserved; new conversations default to anchors. Daily update checking is enabled and automatic installation is off. A private full-state backup was created before replacement.
 
 ## Device verification still needed
 
