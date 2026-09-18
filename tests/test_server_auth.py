@@ -85,7 +85,7 @@ async def test_pam_login_issues_only_unified_host_cookie(aiohttp_client, tmp_pat
     assert cookie["domain"] == "" and cookie["httponly"] and cookie["samesite"].lower() == "strict"
 
 
-async def test_login_reuses_verified_csrf_across_favicon_redirect_and_sequential_forms(
+async def test_login_reuses_verified_csrf_across_public_favicon_and_sequential_forms(
         aiohttp_client, tmp_path, monkeypatch):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
@@ -102,8 +102,9 @@ async def test_login_reuses_verified_csrf_across_favicon_redirect_and_sequential
 
         favicon = await client.get("/favicon.ico", headers={"Cookie": f"{CSRF_COOKIE}={csrf}"},
                                    allow_redirects=False)
-        assert favicon.status == 307
-        replacement = await client.get(favicon.headers["Location"],
+        assert favicon.status == 200
+        assert CSRF_COOKIE not in favicon.cookies
+        replacement = await client.get("/login?next=/",
                                        headers={"Cookie": f"{CSRF_COOKIE}={csrf}"})
         assert replacement.cookies[CSRF_COOKIE].value == csrf
         assert csrf in await replacement.text()
