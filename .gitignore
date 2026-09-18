@@ -5,3 +5,9 @@ __pycache__/
 frontend/node_modules/
 dist/
 *.sqlite3*
+
+# Generated from the upstream assets and service-worker source at build time.
+frontend/public/branding/
+frontend/public/favicon.ico
+frontend/public/licenses/
+frontend/public/sw.js

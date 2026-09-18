@@ -19,12 +19,12 @@ def remember(state, db):
     if 'messageId' not in canvas:
         canvas['messageId'] = next((m['id'] for m in reversed(session.get('messages', [])) if m.get('role')=='user' and m.get('id')), None)
     canvas.setdefault('createdAt', time.time())
-    body = {key:canvas[key] for key in ('content','surface') if key in canvas}
+    body = {key:canvas[key] for key in ('content','surface','mcp') if key in canvas}
     serialized = json.dumps(body, ensure_ascii=False)
     identity = hashlib.sha256(serialized.encode()).hexdigest()
     db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (identity,serialized))
     previous = next((r for r in rows if r['id']==canvas['id']), None)
-    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events') if key in canvas}
+    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView') if key in canvas}
     record['body'] = {'$resource':identity, 'bytes':len(serialized.encode())}
     record['tabOpen'] = previous.get('tabOpen', True) if previous else True
     if previous:
@@ -89,7 +89,7 @@ def fork_artifacts(state, source_id, target):
     kept={m['id'] for m in target.get('messages',[]) if m.get('id')}
     for row in list(state.get('canvasArtifacts',[])):
         if row.get('sessionId')==source_id and row.get('messageId') in kept:
-            state['canvasArtifacts'].append({**copy.deepcopy(row),'id':uuid.uuid4().hex,'sessionId':target['id'],'tabOpen':False})
+            state['canvasArtifacts'].append({**copy.deepcopy(row),'id':uuid.uuid4().hex,'sessionId':target['id'],'tabOpen':False,**({'sharedToolView':True} if row.get('kind')=='mcp-app' else {})})
 
 
 def recover_legacy(state, db, home):
@@ -138,7 +138,7 @@ def recover_legacy(state, db, home):
                     canvas_command(temporary,'canvas.show',payload,'migration')
                     canvas=temporary['canvas']
                     canvas.update(id=uuid.uuid5(uuid.NAMESPACE_URL,session['id']+str(call.get('id'))).hex,messageId=message_id)
-                    existing=next((r for r in state['canvasArtifacts'] if r.get('sessionId')==session['id'] and r.get('title')==canvas.get('title') and r.get('messageId')==message_id and resource(db,r['body']['$resource'])=={k:canvas[k] for k in ('content','surface') if k in canvas}),None)
+                    existing=next((r for r in state['canvasArtifacts'] if r.get('sessionId')==session['id'] and r.get('title')==canvas.get('title') and r.get('messageId')==message_id and resource(db,r['body']['$resource'])=={k:canvas[k] for k in ('content','surface','mcp') if k in canvas}),None)
                     if existing:continue
                     remember(temporary,db)
                     state['canvasArtifacts'][-1]['tabOpen']=False

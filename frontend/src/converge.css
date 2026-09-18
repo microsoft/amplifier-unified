@@ -619,3 +619,66 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-browser-note{font-size:11px;line-height:1.5;color:var(--a-muted);padding:10px 14px;margin:0;border-top:1px solid var(--a-line)}
 
 #amp-one .a-nav-chat-rename [role="alert"]{flex-basis:100%;padding:3px 4px}
+
+/* Flexible workspace panes: shared layout state, compact canvas, live focus view. */
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot{--nav-width:inherit}
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot[data-docked="true"]{flex:0 0 var(--nav-width);width:var(--nav-width)}
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot[data-docked="false"]{flex-basis:52px;width:52px}
+#amp-one.a-chat-shell .a-layout[data-pane-layout] .a-conversation{container-type:inline-size;container-name:conversation}
+#amp-one.a-chat-shell .a-layout[data-canvas-overlay="false"]:has(>.a-canvas-panel:not([data-focused="true"])) .a-conversation{min-width:var(--chat-min)}
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel{flex:0 0 var(--canvas-width);width:var(--canvas-width);max-width:none;min-width:0;border-bottom:0;border-radius:14px 14px 0 0;container-type:inline-size;container-name:canvas}
+#amp-one.a-chat-shell .a-layout[data-canvas-overlay="true"]>.a-canvas-panel{position:absolute;inset:0;z-index:20;width:auto;flex:none}
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel[data-focused="true"]{position:fixed;inset:0;z-index:60;width:auto;max-width:none;height:100dvh;border:0;border-radius:0;box-shadow:none}
+#amp-one.a-chat-shell .a-canvas-chrome{flex:none;background:var(--a-surface);border-radius:inherit;min-width:0}
+#amp-one.a-chat-shell .a-canvas-head{height:36px;min-height:36px;padding:2px 8px;gap:6px}
+#amp-one.a-chat-shell .a-canvas-head>svg{width:15px;height:15px;flex:none}
+#amp-one.a-chat-shell .a-canvas-head>strong{font-size:12px;font-weight:550;min-width:0}
+#amp-one.a-chat-shell .a-canvas-head .a-icon{width:28px;height:28px;min-width:28px;padding:5px}
+#amp-one.a-chat-shell .a-canvas-head .a-icon svg{width:16px;height:16px}
+#amp-one.a-chat-shell .a-canvas-controls{display:none}
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="true"] .a-canvas-controls{display:block;max-height:40dvh;overflow:auto}
+#amp-one.a-chat-shell .a-canvas-actions{display:flex;align-items:center;gap:6px;padding:6px 8px}
+#amp-one.a-chat-shell .a-canvas-actions>.a-icon:last-child{margin-left:auto;flex:none}
+#amp-one.a-chat-shell .a-canvas-actions .a-soft{font-size:11px;padding:5px 7px;gap:4px}
+#amp-one.a-chat-shell .a-canvas-actions .a-soft svg{width:14px;height:14px}
+#amp-one.a-chat-shell .a-canvas-tabs{padding:3px 8px;gap:3px}
+#amp-one.a-chat-shell .a-canvas-tab>button{padding-top:5px;padding-bottom:5px}
+#amp-one.a-chat-shell .a-canvas-panel .a-canvas-body{padding:0;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+#amp-one.a-chat-shell .a-canvas-body>.a-canvas-empty,
+#amp-one.a-chat-shell .a-canvas-body>.a-canvas-surface,
+#amp-one.a-chat-shell .a-canvas-body>.a-canvas-library{padding:16px;overflow:auto}
+#amp-one.a-chat-shell .a-canvas-body>.a-mcp-app-viewer{flex:1;min-width:0}
+#amp-one.a-chat-shell .a-canvas-html{min-height:0}
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-canvas-toolbar,
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-canvas-result.success,
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-browser-note,
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"]>.a-canvas-event{display:none}
+#amp-one.a-chat-shell .a-canvas-panel .a-canvas-toolbar{padding:4px 8px;gap:4px}
+#amp-one.a-chat-shell .a-canvas-panel .a-canvas-result{padding:4px 8px;font-size:11px}
+#amp-one.a-chat-shell .a-nav-resize{position:absolute;right:-8px;top:0;bottom:12px;width:14px;z-index:3;cursor:col-resize;touch-action:none}
+#amp-one.a-chat-shell .a-nav-resize:before{content:"";position:absolute;top:40%;bottom:40%;width:3px;left:6px;background:var(--a-line);border-radius:3px}
+#amp-one.a-chat-shell .a-nav-resize:hover:before,
+#amp-one.a-chat-shell .a-nav-resize:focus-visible:before{background:var(--a-accent)}
+@container conversation (max-width:520px){
+ #amp-one.a-chat-shell .a-messages{padding:18px 14px}
+ #amp-one.a-chat-shell .a-composer{width:calc(100% - 20px);padding:8px;margin-bottom:10px}
+ #amp-one.a-chat-shell .a-composer .a-icon{width:29px;min-width:29px;height:29px;padding:5px}
+ #amp-one.a-chat-shell .a-model-trigger>span{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ #amp-one.a-chat-shell .a-model-trigger{min-width:0}
+ #amp-one.a-chat-shell .a-compose-bottom{gap:4px}
+ #amp-one.a-chat-shell .a-model-popover{position:absolute;bottom:calc(100% + 12px);max-width:calc(100cqw - 24px);width:340px;left:-64px;right:auto}
+ #amp-one.a-chat-shell .a-empty h2{font-size:26px}
+}
+@media(max-width:700px){
+ #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot[data-docked="false"]{flex-basis:44px;width:44px}
+}
+
+/* Installed-app safe areas without changing the ordinary browser layout. */
+@media(display-mode:standalone){
+ #amp-one.a-chat-shell{padding-top:env(safe-area-inset-top,0px);padding-left:max(8px,env(safe-area-inset-left,0px));padding-right:max(8px,env(safe-area-inset-right,0px))}
+ #amp-one.a-chat-shell .a-composer{margin-bottom:max(18px,env(safe-area-inset-bottom,0px))}
+ #amp-one.a-chat-shell .a-canvas-panel[data-focused="true"] .a-canvas-head{height:calc(36px + env(safe-area-inset-top,0px));padding-top:env(safe-area-inset-top,0px)}
+}
+
+/* Routine MCP polling must never insert a row above the live tool UI. */
+#amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-mcp-status[data-phase="working"]{display:none}
