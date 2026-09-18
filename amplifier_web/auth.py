@@ -187,7 +187,10 @@ async def auth_required(request: web.Request, handler):
 
 async def login_page(request: web.Request) -> web.Response:
     secret = request.app["session_secret"]
-    csrf = new_csrf(secret)
+    csrf = request.cookies.get(CSRF_COOKIE)
+    # Preserve valid issuance for favicon redirects and concurrent login forms.
+    if not _verified(secret, csrf, 900, "csrf"):
+        csrf = new_csrf(secret)
     page = (Path(__file__).parent / "static" / "login.html").read_text()
     next_path = html.escape(validate_next_path(request.query.get("next")), quote=True)
     response = web.Response(text=page.replace("__CSRF__", csrf).replace("__NEXT__", next_path), content_type="text/html")
@@ -198,7 +201,8 @@ async def login_page(request: web.Request) -> web.Response:
 async def post_login(request: web.Request) -> web.Response:
     form = await request.post()
     if not authenticate_pam(str(form.get("username", "")), str(form.get("password", ""))):
-        raise web.HTTPSeeOther(login_url(request.query.get("next")) + ("&" if request.query.get("next") else "?") + "error=1")
+        url = login_url(request.query.get("next"))
+        raise web.HTTPSeeOther(url + ("&" if "?" in url else "?") + "error=1")
     response = web.HTTPSeeOther(validate_next_path(request.query.get("next")))
     response.set_cookie(SESSION_COOKIE, new_session(request.app["session_secret"]), max_age=request.app["server_config"]["session_ttl_seconds"],
                         httponly=True, samesite="Strict", secure=request.secure, path="/")
