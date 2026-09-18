@@ -1,7 +1,6 @@
 """Authenticated HTTP(S) host, event stream and bundled SPA delivery."""
 from __future__ import annotations
 import asyncio
-import hashlib
 import hmac
 import json
 from pathlib import Path
@@ -10,7 +9,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 from . import __version__
-from .auth import auth_required, control_token, login_page, post_login, session_secret
+from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
 from .tls import ca_bytes
@@ -109,7 +108,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         response = {"ok": True, "app": "amplifier-unified", "version": __version__}
         authorization = request.headers.get("Authorization", "")
         if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], app["control_token"]):
-            response["dataIdentity"] = hashlib.sha256(str(service.data_dir.resolve()).encode()).hexdigest()
+            response["dataIdentity"] = data_identity(service.data_dir)
             response["runtime"] = service.get_state()["runtime"]
         return web.json_response(response)
 

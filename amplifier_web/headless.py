@@ -46,14 +46,13 @@ async def _existing_host(client: aiohttp.ClientSession, origins: list[str], data
 
 async def run(args, *, config=None):
     runner = None
-    from .auth import control_token
+    from .auth import control_token, data_identity
     from .deployment import load_server_config
     data_dir = Path(args.data_dir)
     config = config if config is not None else load_server_config(data_dir, overrides={"port": args.port})
     context = _connection_context(data_dir, config)
     headers = {"Authorization": "Bearer " + control_token(data_dir)}
-    import hashlib
-    expected = hashlib.sha256(str(data_dir.expanduser().resolve()).encode()).hexdigest()
+    expected = data_identity(data_dir)
     async with aiohttp.ClientSession(headers=headers, connector=aiohttp.TCPConnector(ssl=context)) as client:
         base = await _existing_host(client, _connection_origins(args, config), expected)
         if base is None:

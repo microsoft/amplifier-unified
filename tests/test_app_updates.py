@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import AsyncMock
 import pytest
 from amplifier_web import app_updates
 from amplifier_web.service import AppService
@@ -49,6 +50,41 @@ async def test_unvalidated_app_cannot_replace_installed_host(tmp_path):
     service.state['updates']['pendingApp']={'revision':'a'*40}
     with pytest.raises(ValueError,match='validation'):await app_updates.activate(manager)
     await service.close()
+
+
+@pytest.mark.parametrize("marker_kind", ["missing", "corrupt-json", "list", "null", "number", "string",
+                                        "wrong-revision", "parent-is-file"])
+async def test_invalid_validation_marker_fails_before_activation_side_effects(tmp_path, monkeypatch, marker_kind):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    revision='a'*40
+    service.state['updates']['pendingApp']={'revision':revision,'latest':'v99.0.0'}
+    marker=manager.directory/'applications'/revision/'validated.json'
+    contents={'corrupt-json':'{','list':'[]','null':'null','number':'42','string':'"text"',
+              'wrong-revision':json.dumps({'revision':'b'*40,'version':'99.0.0'})}
+    if marker_kind=='parent-is-file':
+        marker.parent.parent.mkdir(parents=True,exist_ok=True)
+        marker.parent.write_text('not a directory')
+    elif marker_kind in contents:
+        marker.parent.mkdir(parents=True,exist_ok=True)
+        marker.write_text(contents[marker_kind])
+    target=AsyncMock(side_effect=AssertionError('must not inspect an installation for an invalid marker'))
+    process=AsyncMock(side_effect=AssertionError('must not install or restart for an invalid marker'))
+    close=AsyncMock()
+    monkeypatch.setattr(app_updates,'installed_target',target)
+    monkeypatch.setattr(app_updates,'process',process)
+    monkeypatch.setattr(service.runtime,'close',close)
+    try:
+        with pytest.raises(ValueError,match='must pass isolated validation'):
+            await app_updates.activate(manager)
+        target.assert_not_awaited()
+        process.assert_not_awaited()
+        close.assert_not_awaited()
+        assert service.state['updates']['phase']!='activating'
+        assert not (manager.directory/'previous-app.json').exists()
+    finally:
+        await service.close()
+
 
 async def test_development_host_cannot_overwrite_global_uv_tool(tmp_path,monkeypatch):
     monkeypatch.setattr(app_updates.shutil,'which',lambda name: str(tmp_path/'bin'/name))

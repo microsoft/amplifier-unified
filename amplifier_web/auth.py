@@ -60,6 +60,11 @@ def control_token(data_dir: Path) -> str:
     return _read_or_create(control_token_path(data_dir))
 
 
+def data_identity(data_dir: Path) -> str:
+    """Return the stable, private-data-directory identity used by local clients."""
+    return hashlib.sha256(str(Path(data_dir).expanduser().resolve()).encode()).hexdigest()
+
+
 def validate_next_path(value: str | None) -> str:
     if not value or not isinstance(value, str) or any(ord(char) < 32 for char in value):
         return "/"
@@ -166,7 +171,7 @@ async def auth_required(request: web.Request, handler):
         csrf = request.cookies.get(CSRF_COOKIE)
         submitted = (await request.post()).get("csrf", "")
         secret = request.app["session_secret"]
-        if not allowed_origin(request) or not csrf or not hmac.compare_digest(str(submitted), csrf) or not _verified(secret, csrf, 900, "csrf"):
+        if not csrf or not hmac.compare_digest(str(submitted), csrf) or not _verified(secret, csrf, 900, "csrf"):
             return web.Response(text="Login failed.", status=403)
         return await handler(request)
     authorization = request.headers.get("Authorization", "")

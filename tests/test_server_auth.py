@@ -2,7 +2,7 @@ import pytest
 
 from test_service import Runtime
 
-from amplifier_web.auth import new_csrf, new_session
+from amplifier_web.auth import data_identity, new_csrf, new_session
 from amplifier_web.server import create_app
 
 
@@ -23,6 +23,23 @@ async def test_only_bootstrap_paths_are_anonymous_and_control_bearer_protects_ap
     assert login.status == 200 and "csrf" in (await login.text())
     client.session.headers["Authorization"] = "Bearer " + app["control_token"]
     assert (await client.get("/api/state")).status == 200
+
+
+async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    cookie = new_session(app["session_secret"])
+    for headers in ({}, {"Authorization": "Bearer invalid"},
+                    {"Cookie": "amplifier_unified_session=" + cookie}):
+        response = await client.get("/api/health", headers=headers)
+        assert response.status == 200
+        body = await response.json()
+        assert "dataIdentity" not in body
+        assert "runtime" not in body
+    response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
+    assert response.status == 200
+    assert (await response.json())["dataIdentity"] == data_identity(tmp_path)
 
 
 async def test_login_rejects_cross_origin_before_pam(aiohttp_client, tmp_path):

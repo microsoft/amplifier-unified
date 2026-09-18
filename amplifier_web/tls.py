@@ -13,10 +13,7 @@ from .deployment import canonical_host, resolve_path, save_server_config, write_
 
 
 def tls_dir(data_dir: Path) -> Path:
-    path = Path(data_dir).expanduser().resolve() / "config" / "tls"
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
-    return path
+    return Path(data_dir).expanduser().resolve() / "config" / "tls"
 
 
 def _names(config: dict) -> tuple[list[str], list[str]]:
@@ -49,6 +46,8 @@ def setup_local_ca(data_dir: Path, config: dict, *, force: bool = False) -> dict
     from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
     directory = tls_dir(data_dir)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
     ca_cert, ca_key = directory / "ca.crt", directory / "ca.key"
     leaf_cert, leaf_key = directory / "leaf.crt", directory / "leaf.key"
     if force:

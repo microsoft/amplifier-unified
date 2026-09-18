@@ -100,8 +100,13 @@ async def _activate(manager):
     revision=release.get('revision','')
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid staged release revision')
     marker=manager.directory/'applications'/revision/'validated.json'
-    if not marker.exists() or json.loads(marker.read_text()).get('revision')!=revision:raise ValueError('App release must pass isolated validation before activation')
-    validated=json.loads(marker.read_text())
+    # Validate one snapshot before closing the runtime or touching the install.
+    try:
+        validated=json.loads(marker.read_text())
+    except (FileNotFoundError,NotADirectoryError,json.JSONDecodeError):
+        raise ValueError('App release must pass isolated validation before activation') from None
+    if not isinstance(validated,dict) or validated.get('revision')!=revision:
+        raise ValueError('App release must pass isolated validation before activation')
     if version_tuple(validated.get('version'))!=version_tuple(release.get('latest')):
         raise ValueError('The pending release does not match its validated package')
     async with manager.service.lock:
@@ -134,10 +139,10 @@ async def _activate(manager):
     # A generated systemd unit owns its process lifecycle.  Asking systemd to
     # restart that unit avoids racing its restart policy with a second detached
     # process spawned by this in-process updater.
-    from .deployment_service import current_process_is_unit_managed
+    from .deployment_service import UNIT_NAME, current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
         try:
-            await process('systemctl','--user','restart','amplifier-unified.service',timeout=30)
+            await process('systemctl','--user','restart',UNIT_NAME,timeout=30)
         except (RuntimeError, TimeoutError):
             await manager.publish(phase='error',pendingRestart=None,error='The app installed, but the managed service could not restart. Run amplifier-unified service restart.')
         return

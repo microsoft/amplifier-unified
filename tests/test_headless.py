@@ -1,8 +1,12 @@
 from argparse import Namespace
 import asyncio
 import json
+import aiohttp
+from aiohttp import web
+import pytest
+from amplifier_web.auth import data_identity
 from amplifier_web.server import create_app
-from amplifier_web.headless import run
+from amplifier_web.headless import _existing_host, run
 from test_service import Runtime
 
 async def test_headless_json_is_same_runtime_with_target_session(aiohttp_server,tmp_path,capsys):
@@ -56,3 +60,14 @@ async def test_management_result_correlates_exact_command(tmp_path):
     await asyncio.gather(*service.tasks)
     assert service.state['managementResults']['fresh']['phase']=='ready'
     await service.close()
+
+
+async def test_existing_host_refuses_another_data_directory(aiohttp_server, tmp_path):
+    app=web.Application()
+    async def health(request):
+        return web.json_response({'app':'amplifier-unified','dataIdentity':data_identity(tmp_path/'other')})
+    app.router.add_get('/api/health',health)
+    server=await aiohttp_server(app)
+    async with aiohttp.ClientSession() as client:
+        with pytest.raises(ValueError,match='different or older host'):
+            await _existing_host(client,[str(server.make_url('')).rstrip('/')],data_identity(tmp_path/'wanted'))
