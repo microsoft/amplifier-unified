@@ -14,7 +14,7 @@ from .updates import process
 
 REPOSITORY='bkrabach/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
-PROBE='from amplifier_web.server import create_app; from amplifier_web import __version__; from pathlib import Path; import amplifier_web; p=Path(amplifier_web.__file__).parent; assert (p/"static/index.html").is_file(); print(__version__)'
+PROBE='from amplifier_web.server import create_app; from amplifier_web import __version__; from pathlib import Path; import amplifier_web; import pam; assert callable(pam.authenticate); p=Path(amplifier_web.__file__).parent; assert (p/"static/index.html").is_file(); print(__version__)'
 
 def version_tuple(value):
     match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)',value or '')
