@@ -424,6 +424,16 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if failures:
             write_private(directory / "module-load-failures.json", json.dumps(redact(failures), indent=2, default=str))
             raise RuntimeError("Configured modules failed to mount: " + ", ".join(str(row.get("module_id", row.get("module", "unknown"))) for row in failures))
+        # Stamp only explicit, local bundle resources actually consumed by this
+        # mount. Registry caches and reports are intentionally excluded because
+        # they are rewritten by normal preparation.
+        config_inputs = []
+        for reference in (chosen, *config.app_bundles):
+            path = Path(reference).expanduser()
+            if not path.is_absolute():
+                path = config.workspace / path
+            if path.is_file():
+                config_inputs.append(str(path.resolve()))
         report = {"bundle": chosen, "workspace": str(config.workspace),
             "session_id": runtime.session_id, "resumed": messages is not None,
             "providers": list(providers), "tools": list(coordinator.get("tools") or {}),
@@ -434,6 +444,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "capabilities": {name: coordinator.get_capability(name) is not None for name in
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
             "module_load_failures": failures}
+        report["config_inputs"] = config_inputs
         write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
         registry.save()
         return session, runtime, report

@@ -119,6 +119,7 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
         native = native if getattr(native, "native_bundle_live", False) else None
         active = None
         last = ""
+        last_activation = None
         status = "error"
         idle = False
 
@@ -187,10 +188,12 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                     # and start another turn without host admission.
                     park = coordinator.get_capability("live.park")
                     if park:
-                        await park()
+                        await park(activation=last_activation)
                 kind, value = await runtime.inbox.get()
                 if kind == "input":
                     runtime.queued_inputs -= 1
+                    if value.activation is not None:
+                        last_activation = value.activation
                     if value.kind == "stop":
                         status = "cancelled" if value.target=="cancel" or active or self._active_jobs() else "completed"
                         break

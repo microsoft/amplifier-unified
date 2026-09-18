@@ -8,6 +8,8 @@ import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
+import pytest
+
 from amplifier_web.runtime import RuntimeManager, normalize_event
 from amplifier_web.runtime_worker import Worker
 from amplifier_web.shared_state import ActivationGate
@@ -103,6 +105,51 @@ class WorkerActivityTests(unittest.TestCase):
             activity=publish.call_args.args[0]
             self.assertEqual(activity['phase'],'waiting-workers')
             self.assertEqual(activity['activeWorkers'],1)
+
+
+@pytest.mark.asyncio
+async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged(tmp_path):
+    shared = pytest.importorskip("amplifier_foundation.session.shared_state")
+    from amplifier_web.shared_state import configuration_stamp
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    worker = Worker()
+    worker.workspace = workspace
+    worker.home = tmp_path / "home"
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id="warm-session")
+    worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
+    worker.shared_store_stamp = shared.file_stamp
+    worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
+    worker.activation_gate = ActivationGate()
+    first = worker.activation_gate.activate()
+    worker.activation = first
+    worker.config_inputs = ()
+    worker.parked_checkpoint_stamp = worker.shared_handle.write(
+        [{"role": "user", "content": "first"}], bundle="anchors", metadata={"fixture": True})
+    worker.parked_config_stamp = configuration_stamp(
+        workspace, "warm-session", worker.home, shared.file_stamp)
+    checkpoint_calls = []
+    async def checkpoint(status):
+        checkpoint_calls.append(status)
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        get_capability=lambda name: (
+            checkpoint
+            if name == "live.checkpoint" else None)))
+
+    with patch("amplifier_web.runtime_worker.publish"):
+        await worker.park(activation=first)
+        assert worker.parked
+        assert not worker.shared_handle
+        await worker.acquire_for_mutation()
+
+    assert checkpoint_calls == ["completed"]
+    assert not worker.parked
+    assert worker.shared_handle.active
+    with pytest.raises(RuntimeError, match="released or superseded"):
+        worker.activation_gate.check(first)
+    worker.shared_handle.release()
 
 
 class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):

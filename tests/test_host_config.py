@@ -9,11 +9,33 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, load_config, merge, expand_environment
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, merge, expand_environment
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
+from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
 
 class HostSettingsTests(unittest.TestCase):
+    def test_app_home_honors_the_data_directory_override(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+                os.environ, {"AMPLIFIER_WEB_DATA_DIR": directory}, clear=True):
+            self.assertEqual(app_home(), Path(directory).resolve())
+
+    def test_configuration_invalidation_tracks_the_same_workspace_snapshot_as_loading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            legacy = root / "legacy"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (workspace / ".amplifier").mkdir()
+
+            load_config(workspace, home=home, legacy_home=legacy)
+
+            snapshot = workspace_snapshot_path(workspace, home)
+            self.assertTrue(snapshot.is_file())
+            self.assertEqual(
+                configuration_paths(workspace, "session-id", home)[2], snapshot)
+
     def test_keys_file_refreshes_a_value_it_previously_loaded(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / "keys.env"

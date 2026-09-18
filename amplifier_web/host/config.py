@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +20,7 @@ from filelock import FileLock
 import yaml
 
 from ..deployment import write_private
+from ..shared_state import workspace_snapshot_path
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@e210edabd947af82d5121a240d6934283ac540b9"
 _KEY_FILE_VALUES = {}
@@ -205,8 +205,7 @@ def load_config(workspace, *, home=None, legacy_home=None):
     workspace = Path(workspace).expanduser().resolve(strict=True)
     legacy = Path(legacy_home or os.environ.get("AMPLIFIER_UNIFIED_IMPORT_HOME", Path.home() / ".amplifier")).expanduser().resolve()
     (home / "config").mkdir(parents=True, exist_ok=True, mode=0o700)
-    key = hashlib.sha256(str(workspace).encode()).hexdigest()[:20]
-    project_snapshot = home / "config" / "workspaces" / (key + ".yaml")
+    project_snapshot = workspace_snapshot_path(workspace, home)
     with FileLock(str(home / "config" / ".migration.lock")):
         _import_global(home, legacy)
         if not project_snapshot.exists():

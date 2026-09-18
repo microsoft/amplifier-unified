@@ -41,6 +41,7 @@ class Worker:
         self.controls = None
         self.naming = None
         self.workspace = None
+        self.home = None
         self.shared_store = None
         self.shared_handle = None
         self.activation_gate = None
@@ -48,6 +49,7 @@ class Worker:
         self.parked = False
         self.parked_checkpoint_stamp = None
         self.parked_config_stamp = None
+        self.config_inputs = ()
         self.command_lock = asyncio.Lock()
         self.start_config = None
         self.remounting = False
@@ -168,10 +170,12 @@ class Worker:
             package_root = str(Path(__file__).resolve().parent.parent)
             if package_root not in sys.path:
                 sys.path.insert(0, package_root)
+            from amplifier_web.host.config import app_home
             from amplifier_web.host.session import prepare_manager
             from amplifier_web.execution_events import ExecutionEvents
             from amplifier_web.runtime_controls import RuntimeControls
             from amplifier_module_loop_live.runtime import Runtime
+            self.home = app_home()
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -192,13 +196,14 @@ class Worker:
             shared_snapshot = await asyncio.to_thread(self.shared_handle.read)
             # Always allow loading the saved transcript when one exists; the
             # adapter marks interrupted jobs as evidence, never replays them.
-            report_directory = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")) / "runtime-reports" / config["id"]
+            report_directory = self.home / "runtime-reports" / config["id"]
             progress = asyncio.create_task(self.preparation_progress(report_directory))
             self.session, self.runtime, report = await prepare_manager(workspace,
                 runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_snapshot=shared_snapshot, write_guard=self.activation_gate.check_current)
+            self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
@@ -237,12 +242,13 @@ class Worker:
             self.session.coordinator.register_capability("live.park", self.park)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
-            self.naming=LiveSessionNaming(self.session.coordinator,Path(os.environ.get('AMPLIFIER_WEB_HOME',Path.home()/'.amplifier-unified')),publish,completed)
+            self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
             self.parked_checkpoint_stamp = self.shared_handle.stamp()
-            home = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
-            self.parked_config_stamp = configuration_stamp(workspace, config["id"], home, self.shared_store_stamp)
+            self.parked_config_stamp = configuration_stamp(
+                workspace, config["id"], self.home, self.shared_store_stamp,
+                extra_paths=self.config_inputs)
             report["tools"] = list(self.session.coordinator.get("tools"))
             # Keep absolute module sources and full mount plans on disk. The UI
             # gets a compact capability report, not credentials or config blobs.
@@ -259,25 +265,27 @@ class Worker:
                 progress.cancel()
                 await asyncio.gather(progress, return_exceptions=True)
 
-    async def park(self):
+    async def park(self, *, activation=None):
         """Checkpoint then relinquish only a settled manager activation."""
 
         async with self.command_lock:
             if self.parked or self.shared_handle is None:
                 return
+            activation = activation or self.activation
+            self.activation_gate.check(activation)
             if self.naming and self.naming.pending and not self.naming.pending.done():
                 await self.naming.pending
-            token = self.activation_gate.bind(self.activation)
+            token = self.activation_gate.bind(activation)
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint("completed")
                 self.parked_checkpoint_stamp = self.shared_handle.stamp()
-                home = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
-                    self.workspace, self.runtime.session_id, home, self.shared_store_stamp)
-                self.activation_gate.release(self.activation)
+                    self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
+                    extra_paths=self.config_inputs)
+                self.activation_gate.release(activation)
                 await asyncio.to_thread(self.shared_handle.release)
                 self.shared_handle = None
                 self.parked = True
@@ -293,10 +301,15 @@ class Worker:
         handle = await asyncio.to_thread(
             self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
         checkpoint_stamp = handle.stamp()
-        home = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
         from amplifier_web.shared_state import configuration_stamp
         config_stamp = configuration_stamp(
-            self.workspace, self.runtime.session_id, home, self.shared_store_stamp)
+            self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
+            extra_paths=self.config_inputs)
+        if self.parked_checkpoint_stamp is not None and checkpoint_stamp is None:
+            await asyncio.to_thread(handle.release)
+            raise RuntimeError(
+                "The shared session checkpoint disappeared while this runtime was "
+                "parked. Its previous context will not be replaced with local history.")
         if checkpoint_stamp != self.parked_checkpoint_stamp or config_stamp != self.parked_config_stamp:
             self.shared_handle = handle
             self.parked = False

@@ -1,13 +1,14 @@
-"""Worker-only helpers for Foundation's shared session authority.
+"""Shared host/worker helpers for Foundation's shared session authority.
 
-This module intentionally has no Foundation import.  The outer HTTP process can
-load it for tests, but the worker imports ``session.shared_state`` only after it
-has entered its isolated dependency environment.
+This module intentionally has no Foundation import, letting configuration and
+the outer HTTP process use its pure helpers. The worker imports Foundation's
+``session.shared_state`` only after entering its isolated dependency environment.
 """
 from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
+import hashlib
 import os
 from pathlib import Path
 
@@ -54,13 +55,20 @@ class ActivationGate:
         self.check(self._current.get())
 
 
+def workspace_snapshot_path(workspace: Path, home: Path) -> Path:
+    """Return the app-owned snapshot path for an imported workspace."""
+
+    digest = hashlib.sha256(str(workspace).encode()).hexdigest()[:20]
+    return home / "config" / "workspaces" / (digest + ".yaml")
+
+
 def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[Path, ...]:
     """Only stat inputs this host actually consumes during a manager mount."""
 
     return (
         home / "config" / "settings.yaml",
         home / "config" / "keys.env",
-        home / "config" / "workspaces" / (workspace.name + ".unused"),  # retained below only for stable ordering
+        workspace_snapshot_path(workspace, home),
         workspace / ".amplifier" / "settings.yaml",
         workspace / ".amplifier" / "settings.local.yaml",
         workspace / ".amplifier-unified" / "settings.yaml",
@@ -71,14 +79,12 @@ def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[P
     )
 
 
-def configuration_stamp(workspace: Path, session_id: str, home: Path, stamp) -> tuple[tuple[str, object], ...]:
+def configuration_stamp(workspace: Path, session_id: str, home: Path, stamp, *, extra_paths=()) -> tuple[tuple[str, object], ...]:
     """Return metadata-only invalidation data; no config file is parsed."""
 
-    # ``load_config`` names its imported project snapshot by a SHA-256 digest,
-    # not the workspace basename.  Derive it here without loading settings.
-    import hashlib
-
-    digest = hashlib.sha256(str(workspace).encode()).hexdigest()[:20]
-    paths = list(configuration_paths(workspace, session_id, home))
-    paths[2] = home / "config" / "workspaces" / (digest + ".yaml")
+    paths = [*configuration_paths(workspace, session_id, home)]
+    for path in extra_paths:
+        path = Path(path)
+        if path not in paths:
+            paths.append(path)
     return tuple((str(path), stamp(path)) for path in paths)
