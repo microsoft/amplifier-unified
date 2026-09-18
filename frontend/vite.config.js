@@ -12,6 +12,7 @@ export default defineConfig({
   const licenses=fileURLToPath(new URL('../amplifier_web/static/licenses',import.meta.url));mkdirSync(licenses,{recursive:true});
   copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/license.md',import.meta.url)),`${licenses}/babylonjs.txt`);
   copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/NOTICE.md',import.meta.url)),`${licenses}/babylonjs-notice.txt`);
+  for(const [name,file] of [['@modelcontextprotocol/ext-apps','mcp-apps'],['@modelcontextprotocol/client','mcp-client'],['@modelcontextprotocol/core','mcp-core'],['zod','zod']])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${file}.txt`);
   for(const name of ['mermaid','dompurify','highlight.js'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
  }}],
  build:{outDir:'../amplifier_web/static',emptyOutDir:true},

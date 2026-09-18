@@ -7,7 +7,7 @@ export function ResultNotice({phase,message,detail}){
  return <div className={`a-check-result ${working||phase==='neutral'?'pending':failed?'error':'success'}`} role={failed?'alert':'status'} aria-live="polite"><Icon aria-hidden="true" className={working?'a-progress-spinner':undefined}/><div><strong>{message}</strong>{detail&&<small>{detail}</small>}</div></div>;
 }
 export function SettingsGroup({id,title,summary,state,act,children}){
- const pages={setup:['loaded-modules','providers','routing','defaults','conversation'],capabilities:['add-bundles','app-bundles','loaded-modules','registries','share-bundle'],maintenance:['updates','history','permissions','notifications','automation','repair','reset']};
+ const pages={setup:['loaded-modules','providers','routing','defaults','conversation'],capabilities:['smart-tools','add-bundles','app-bundles','loaded-modules','registries','share-bundle'],maintenance:['updates','history','permissions','notifications','automation','repair','reset']};
  const page=state.view?.settingsExpanded?.find(key=>!state.view?.settingsSection||pages[state.view.settingsSection]?.includes(key)),open=page===id,heading=useRef();
  useEffect(()=>{if(open){heading.current?.focus({preventScroll:true});heading.current?.closest('.a-dialog')?.scrollTo(0,0)}},[open]);
  if(page&&!open)return null;

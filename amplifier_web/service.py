@@ -159,6 +159,10 @@ def validate_theme(css):
     visit(rules)
 
 
+from .smart_canvas import definitions as smart_tool_definitions
+ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
+
+
 class AppService:
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
         self.data_dir = Path(data_dir).expanduser()
@@ -174,6 +178,8 @@ class AppService:
         self.voice_service = None
         self.update_manager = None
         self.management = None
+        self.smart_tools = None
+        self.smart_canvas = None
         self.queues = set()
         self.tasks = set()
         self.lock = asyncio.Lock()
@@ -286,6 +292,8 @@ class AppService:
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None):
         args = args or {}
+        if action.startswith("smartTools."):
+            command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
         try:
@@ -518,7 +526,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -530,6 +538,17 @@ class AppService:
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Navigation switches must be true or false.")
                 self.state["view"].update(copy.deepcopy(patch))
+            elif action.startswith("smartTools."):
+                if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
+                if action == 'smartTools.context':
+                    self.smart_canvas.context(args)
+                else:
+                    scoped_args = copy.deepcopy(args)
+                    if action in {'smartTools.call','smartTools.open'}:
+                        scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
+                    if action == 'smartTools.appCall':
+                        self.smart_canvas.binding(args['canvasId'])
+                    pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
@@ -591,6 +610,8 @@ class AppService:
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
+            if action.startswith("smartTools.") and action != "smartTools.context":
+                receipt["operationId"] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             self._publish()
@@ -795,7 +816,7 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action']=='canvas.show':
+            if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(result['state'], {}, session_id=session_id, resolve=self.state_resource)}
@@ -879,6 +900,8 @@ class AppService:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.smart_tools:
+            await self.smart_tools.close()
         if self.management:
             await self.management.provider_catalog.close()
         self._save()

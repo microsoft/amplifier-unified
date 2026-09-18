@@ -1,11 +1,21 @@
 [project]
 name = "amplifier-unified"
-version = "0.5.9"
+version = "0.6.0"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
-dependencies = ["aiohttp>=3.12,<4", "cryptography>=44,<46", "python-pam>=2.0.2,<3", "six>=1.16,<2", "jsonschema>=4.23,<5", "tinycss2>=1.4,<2", "pyyaml>=6.0.3,<7", "filelock>=3.20,<4"]
+dependencies = [
+    "aiohttp>=3.12,<4",
+    "cryptography>=44,<46",
+    "python-pam>=2.0.2,<3",
+    "six>=1.16,<2",
+    "jsonschema>=4.23,<5",
+    "tinycss2>=1.4,<2",
+    "pyyaml>=6.0.3,<7",
+    "filelock>=3.20,<4",
+    "mcp>=2.2,<3",
+]
 
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"
@@ -16,6 +26,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web"]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1"]
