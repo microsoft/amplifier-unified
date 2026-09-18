@@ -189,7 +189,16 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                     park = coordinator.get_capability("live.park")
                     if park:
                         await park(activation=last_activation)
-                kind, value = await runtime.inbox.get()
+                event = await runtime.inbox.get()
+                kind, value = event
+                activation = coordinator.get_capability("live.activation")
+                if activation and not (kind == "input" and value.kind == "stop"):
+                    # The loop outlives individual acquisitions. Completion and
+                    # child events must carry the producer's token just like
+                    # user input does; never reuse its startup context token.
+                    captured = getattr(event, "activation", None)
+                    activation.bind(captured)
+                    last_activation = captured
                 if kind == "input":
                     runtime.queued_inputs -= 1
                     if value.activation is not None:
@@ -242,10 +251,12 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                 elif kind == "child_event":
                     await runtime.emit("child.updated", **value)
                     if value.get("event")=="session.closed":
-                        self.pending.append(Input("service",json.dumps(value),source="amplifier-child-lifecycle"))
+                        self.pending.append(Input("service",json.dumps(value),source="amplifier-child-lifecycle",
+                                                  activation=last_activation))
                         self.steer(_WAKE);idle=False
                 elif kind == "child_report":
-                    self.pending.append(Input("service",json.dumps(value),source="amplifier-child"))
+                    self.pending.append(Input("service",json.dumps(value),source="amplifier-child",
+                                              activation=last_activation))
                     self.steer(_WAKE)
                     idle=False
                 elif kind == "bundle_persistence_error":
@@ -279,7 +290,8 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                 if callable(remove):
                     remove()
             checkpoint = coordinator.get_capability("live.checkpoint")
-            if checkpoint:
+            activation = coordinator.get_capability("live.activation")
+            if checkpoint and (not activation or activation.current_valid):
                 try:
                     await self._synchronize_job_results(context)
                     await asyncio.wait_for(checkpoint(status), 2)
@@ -355,8 +367,10 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                                 effects="not_rolled_back")
         if deliver:
             self._pending_ephemeral_injections.extend(injections)
+            activation = self.coordinator.get_capability("live.activation")
             self.pending.append(Input("service", json.dumps({"job_id": job_id,
-                "call_id": job["call_id"], "status": outcome, "tool_report": result}), source="amplifier-delegate"))
+                "call_id": job["call_id"], "status": outcome, "tool_report": result}), source="amplifier-delegate",
+                activation=activation.current() if activation else None))
             self.steer(_WAKE)
 
 

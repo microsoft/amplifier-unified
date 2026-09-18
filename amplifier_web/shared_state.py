@@ -54,6 +54,14 @@ class ActivationGate:
     def check_current(self) -> None:
         self.check(self._current.get())
 
+    def current(self) -> Activation | None:
+        """Capture the calling task's token, never the latest owner's token."""
+        return self._current.get()
+
+    @property
+    def current_valid(self) -> bool:
+        return self._active is not None and self._current.get() is self._active
+
 
 def workspace_snapshot_path(workspace: Path, home: Path) -> Path:
     """Return the app-owned snapshot path for an imported workspace."""

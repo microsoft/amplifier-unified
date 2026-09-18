@@ -265,6 +265,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     if shared_bundle is not None and (not isinstance(shared_bundle, str) or not shared_bundle.strip()):
         raise ValueError("The shared session checkpoint has no resolvable bundle.")
     chosen = shared_bundle or bundle or config.active_bundle
+    bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
     registrations = dict(config.registrations)
@@ -388,7 +389,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),
             "session_id": runtime.session_id, "parent_id": None,
-            "bundle_name": chosen, "working_dir": str(config.workspace),
+            "bundle_name": bundle_identity, "working_dir": str(config.workspace),
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(session.config)}
         async def checkpoint(status="in_progress"):
@@ -403,8 +404,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # The held capability validates PID/ownership before the
                 # atomic replace.  Its full context beats this host's native
                 # projection on every subsequent mount.
-                held.write(transcript, bundle=chosen, metadata={
-                    **metadata, "status": status,
+                held.write(transcript, bundle=bundle_identity, metadata={
+                    **{key: value for key, value in metadata.items() if key != "config"}, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
                     "turn_count": sum(row.get("role") == "user" for row in transcript),
                 })

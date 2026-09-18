@@ -193,6 +193,7 @@ class Worker:
                 self.shared_handle = await asyncio.to_thread(
                     self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
             self.activation = self.activation_gate.activate()
+            self.runtime.capture_activation = self.activation_gate.current
             shared_snapshot = await asyncio.to_thread(self.shared_handle.read)
             # Always allow loading the saved transcript when one exists; the
             # adapter marks interrupted jobs as evidence, never replays them.
@@ -274,6 +275,11 @@ class Worker:
 
         async with self.command_lock:
             if self.parked or self.shared_handle is None:
+                return
+            loop = self.session.coordinator.get("orchestrator")
+            if (self.approvals or self.bridges or self.runtime.queued_inputs
+                    or not self.runtime.inbox.empty() or self.runtime.generation
+                    or (loop and (loop.pending or loop._active_jobs()))):
                 return
             activation = activation or self.activation
             self.activation_gate.check(activation)
@@ -365,13 +371,20 @@ class Worker:
         if op not in {"send", "control", "worker.steer", "worker.stop", "approval"}:
             await self._command_serial(data)
             return
-        async with self.command_lock:
-            await self.acquire_for_mutation()
-            token = self.bind_activation()
-            try:
-                await self._command_serial(data)
-            finally:
-                self.activation_gate.reset(token)
+        try:
+            async with self.command_lock:
+                await self.acquire_for_mutation()
+                token = self.bind_activation()
+                try:
+                    await self._command_serial(data)
+                finally:
+                    self.activation_gate.reset(token)
+        except Exception as exc:
+            reply = {"op": "reply", "id": data.get("id"),
+                     "error": f"{type(exc).__name__}: {exc}"}
+            if type(exc).__name__ == "SessionBusyError":
+                reply["owner"] = getattr(exc, "owner", None)
+            publish(reply)
 
     async def _command_serial(self, data):
         identity = data.get("id")
