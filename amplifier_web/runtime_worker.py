@@ -207,7 +207,10 @@ class Worker:
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
-            await self.controls.restore()
+            # The common checkpoint owns shared-root state.  Local controls are
+            # a native projection and must not override a CLI/web shared mount.
+            if shared_snapshot is None:
+                await self.controls.restore()
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
