@@ -19,6 +19,12 @@ async def test_only_bootstrap_paths_are_anonymous_and_control_bearer_protects_ap
     assert (await client.get("/api/state", headers={"Cookie": f"amplifier_unified_session={valid_cookie}"})).status == 200
     assert (await client.get("/api/state", headers={"Cookie": "muxplex_session=not-a-unified-session"})).status == 401
     assert (await client.post("/login", data={"username": "owner", "password": "correct"})).status == 403
+    setup = await client.get("/setup", headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14)"})
+    assert setup.status == 200
+    setup_body = await setup.text()
+    assert 'data-platform="android" open' in setup_body
+    assert "Mozilla/5.0" not in setup_body
+    assert not (tmp_path / "config" / "tls").exists()
     login = await client.get("/login")
     assert login.status == 200 and "csrf" in (await login.text())
     client.session.headers["Authorization"] = "Bearer " + app["control_token"]
