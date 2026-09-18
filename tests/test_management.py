@@ -33,6 +33,18 @@ async def test_history_import_uses_real_checkpoint_and_does_not_execute(app):
     assert app._session()['status']=='stopped'
     assert app._session()['messages'][-1]['text']=='Earlier answer'
 
+async def test_shared_history_uses_the_isolated_probe_without_starting_a_worker(app):
+    class ProbeRuntime(Runtime):
+        def __init__(self):self.requests=[]
+        async def shared_state_probe(self,request):
+            self.requests.append(request)
+            return {'items':[{'id':'shared-id','workspace':request['workspace'],'shared':True}]}
+        async def start(self,*args):raise AssertionError('A history view must not start a worker')
+    app.runtime=ProbeRuntime()
+    await app.management.perform('history.shared.list',{'workspace':app.default_workspace})
+    assert app.runtime.requests==[{'version':1,'op':'list','workspace':app.default_workspace}]
+    assert app.state['sharedHistory']['items'][0]['id']=='shared-id'
+
 async def test_turn_fork_excludes_later_messages(app):
     session=app._session()
     for role,text in [('user','one'),('assistant','answer one'),('user','two'),('assistant','answer two')]:app._message(session,role,text)

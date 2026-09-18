@@ -285,6 +285,35 @@ class RuntimeManager:
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
 
+    async def shared_state_probe(self, request):
+        """Run one read-only shared-state request inside the isolated runtime."""
+        if not isinstance(request, dict):
+            raise ValueError("Shared-state request must be an object.")
+        command = self._command()
+        command[-1] = str(Path(__file__).with_name("shared_state_probe.py"))
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
+        )
+        try:
+            proc.stdin.write(encode_message(request))
+            await proc.stdin.drain()
+            proc.stdin.close()
+            line = await asyncio.wait_for(proc.stdout.readline(), 30)
+            await asyncio.wait_for(proc.wait(), 30)
+            response = json.loads(line) if line else None
+            if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
+                raise RuntimeError("Shared-state probe returned an invalid response.")
+            if not response["ok"]:
+                raise RuntimeError(response.get("error", {}).get("message") or "Shared-state probe failed.")
+            return response["result"]
+        except TimeoutError as exc:
+            raise RuntimeError("The shared-state probe timed out without changing session ownership.") from exc
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
     async def steer_worker(self, session_id, worker_id, text):
         return await self._request(session_id, "worker.steer", worker_id=worker_id, text=text)
 

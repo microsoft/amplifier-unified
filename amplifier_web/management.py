@@ -418,6 +418,15 @@ class Management:
             await self.invalidate_configuration()
         elif action=='history.list':
             await self.publish(history=await asyncio.to_thread(self.history,args.get('legacy',False)))
+        elif action in {'history.shared.list','history.shared.view'}:
+            if not self.service.runtime:
+                raise ValueError('The isolated runtime is unavailable.')
+            request={'version':1,'op':'list' if action.endswith('.list') else 'view',
+                     'workspace':args.get('workspace') or self.service.default_workspace}
+            if action.endswith('.view'):
+                request.update(sessionId=args['id'],offset=args.get('offset',0),limit=args.get('limit',50))
+            result=await self.service.runtime.shared_state_probe(request)
+            await self.publish(sharedHistory=result)
         elif action=='history.importFile':
             from .session_store import complete_tool_exchanges,text_content
             if args['format']=='jsonl':
