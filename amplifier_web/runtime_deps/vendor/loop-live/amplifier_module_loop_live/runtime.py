@@ -17,6 +17,9 @@ class Input:
     target: str | None = None
     attachments: tuple = ()
     call_id: str | None = None
+    # Host-private capability.  It is never serialized into context or exposed
+    # to providers; the loop binds it only while executing this input.
+    activation: object | None = None
 
 
 class Runtime:

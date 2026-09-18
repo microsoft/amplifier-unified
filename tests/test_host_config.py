@@ -9,11 +9,22 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import load_config, merge, expand_environment
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, load_config, merge, expand_environment
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 
 
 class HostSettingsTests(unittest.TestCase):
+    def test_keys_file_refreshes_a_value_it_previously_loaded(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / "keys.env"
+            path.write_text("AMPLIFIER_WEB_REFRESH_TEST=first\n")
+            _KEY_FILE_VALUES.clear()
+            _load_keys(path)
+            path.write_text("AMPLIFIER_WEB_REFRESH_TEST=second\n")
+            _load_keys(path)
+            self.assertEqual(os.environ["AMPLIFIER_WEB_REFRESH_TEST"], "second")
+            _KEY_FILE_VALUES.clear()
+
     def test_migration_is_owned_private_and_not_reloaded_from_former_host(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);legacy=root/'legacy';home=root/'owned';workspace=root/'workspace'

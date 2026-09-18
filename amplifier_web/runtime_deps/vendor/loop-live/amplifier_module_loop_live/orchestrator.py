@@ -138,6 +138,8 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                       for event in ("content_block:end", "tool:pre", "tool:post", "tool:error")]
 
         async def turn(command):
+            activation = coordinator.get_capability("live.activation")
+            activation_token = activation.bind(command.activation) if activation else None
             owner_token = LIVE_OWNER.set(self)
             try:
                 await runtime.emit("generation.started", generation_id=str(uuid.uuid4()),
@@ -156,6 +158,8 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
             except Exception as exc:
                 await runtime.inbox.put(("bundle_turn", (None, type(exc).__name__)))
             finally:
+                if activation and activation_token is not None:
+                    activation.reset(activation_token)
                 LIVE_OWNER.reset(owner_token)
 
         try:
@@ -176,6 +180,14 @@ class BundleLiveOrchestrator(StreamingOrchestrator):
                 if active is None and not self.pending and not self._active_jobs() and runtime.inbox.empty() and not idle:
                     idle = True
                     await runtime.emit("session.idle", text=last)
+                    # A host may relinquish its durable session writer here while
+                    # retaining this loop and its mounted modules in memory.  It
+                    # is deliberately awaited before the next inbox read: a
+                    # callback queued before release cannot cross this boundary
+                    # and start another turn without host admission.
+                    park = coordinator.get_capability("live.park")
+                    if park:
+                        await park()
                 kind, value = await runtime.inbox.get()
                 if kind == "input":
                     runtime.queued_inputs -= 1

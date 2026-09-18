@@ -232,7 +232,8 @@ def module_source(config, snapshot, module, source):
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
-                          application_host="Amplifier Unified", **kwargs):
+                          application_host="Amplifier Unified", shared_handle=None,
+                          shared_snapshot=None, write_guard=None, **kwargs):
     from amplifier_foundation import BundleRegistry, SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -247,7 +248,22 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     os.chdir(config.workspace)
     os.environ["AMPLIFIER_HOME"] = str(config.registry_home)
     runtime = runtime or Runtime()
-    chosen = bundle or config.active_bundle
+    def shared_value(name, default=None):
+        if shared_snapshot is None:
+            return default
+        if isinstance(shared_snapshot, dict):
+            return shared_snapshot.get(name, default)
+        return getattr(shared_snapshot, name, default)
+
+    shared_bundle = shared_value("bundle")
+    if isinstance(shared_bundle, str):
+        # Legacy host projections used a display prefix.  Authority uses a
+        # portable Foundation bundle reference, so never let that projection
+        # override a shared checkpoint.
+        shared_bundle = shared_bundle.removeprefix("bundle:")
+    if shared_bundle is not None and (not isinstance(shared_bundle, str) or not shared_bundle.strip()):
+        raise ValueError("The shared session checkpoint has no resolvable bundle.")
+    chosen = shared_bundle or bundle or config.active_bundle
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
     registrations = dict(config.registrations)
@@ -306,10 +322,15 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     await materialize_bundle_providers(loaded, prepared)
     apply_provider_environment(prepared.mount_plan)
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
-        bundle_name=bundle or config.active_bundle, project_dir=str(config.workspace), project_name=config.workspace.name)
+        bundle_name=chosen, project_dir=str(config.workspace), project_name=config.workspace.name)
     store = SessionStore(config.home / "sessions")
-    saved = store.load(runtime.session_id) if resume else None
-    if resume and saved is None:
+    shared_messages = shared_value("messages")
+    shared_metadata = shared_value("metadata", {})
+    if shared_snapshot is not None and (not isinstance(shared_messages, list) or not isinstance(shared_metadata, dict)):
+        raise ValueError("The shared session checkpoint is malformed.")
+    saved = ((shared_messages, shared_metadata) if shared_snapshot is not None
+             else store.load(runtime.session_id) if resume else None)
+    if resume and saved is None and shared_handle is None:
         saved = store.import_cli(runtime.session_id, workspace=config.workspace)
     messages = saved[0] if saved else None
     jobs = JobStore(store.base_dir / runtime.session_id / "live-jobs")
@@ -319,7 +340,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             jobs.close()
             raise RuntimeError("Existing job evidence requires explicit resume")
         messages, recovered = jobs.recover(messages or [])
-    if messages is not None:
+    if messages is not None and shared_handle is None:
         messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None
@@ -366,14 +387,25 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),
             "session_id": runtime.session_id, "parent_id": None,
-            "bundle_name": bundle or config.active_bundle, "working_dir": str(config.workspace),
+            "bundle_name": chosen, "working_dir": str(config.workspace),
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(session.config)}
         async def checkpoint(status="in_progress"):
+            if write_guard:
+                write_guard()
             persist_controls = coordinator.get_capability("web.controls.persist")
             if persist_controls:
                 persist_controls()
             transcript = await coordinator.get("context").get_messages()
+            if shared_handle is not None:
+                # The held capability validates PID/ownership before the
+                # atomic replace.  Its full context beats this host's native
+                # projection on every subsequent mount.
+                shared_handle.write(transcript, bundle=chosen, metadata={
+                    **metadata, "status": status,
+                    "last_updated": datetime.now(UTC).isoformat(),
+                    "turn_count": sum(row.get("role") == "user" for row in transcript),
+                })
             store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
@@ -392,7 +424,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if failures:
             write_private(directory / "module-load-failures.json", json.dumps(redact(failures), indent=2, default=str))
             raise RuntimeError("Configured modules failed to mount: " + ", ".join(str(row.get("module_id", row.get("module", "unknown"))) for row in failures))
-        report = {"bundle": bundle or config.active_bundle, "workspace": str(config.workspace),
+        report = {"bundle": chosen, "workspace": str(config.workspace),
             "session_id": runtime.session_id, "resumed": messages is not None,
             "providers": list(providers), "tools": list(coordinator.get("tools") or {}),
             "agents": list(prepared.mount_plan.get("agents", {})), "provider_choices": choices,

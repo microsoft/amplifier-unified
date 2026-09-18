@@ -23,6 +23,7 @@ import yaml
 from ..deployment import write_private
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@e210edabd947af82d5121a240d6934283ac540b9"
+_KEY_FILE_VALUES = {}
 
 
 def app_home() -> Path:
@@ -97,9 +98,12 @@ def _import_global(home: Path, legacy: Path):
 
 
 def _load_keys(path):
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
+    values = {}
+    if path.exists():
+        lines = path.read_text().splitlines()
+    else:
+        lines = ()
+    for line in lines:
         line = line.strip()
         if line.startswith("export "):
             line = line[7:]
@@ -109,7 +113,18 @@ def _load_keys(path):
         name = name.strip()
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parsed = shlex.split(value, comments=True)
-            os.environ.setdefault(name, " ".join(parsed))
+            values[name] = " ".join(parsed)
+    # Keep explicitly supplied process environment authoritative, while values
+    # this loader previously installed are refreshed (or removed) on remount.
+    for name, previous in tuple(_KEY_FILE_VALUES.items()):
+        if name not in values and os.environ.get(name) == previous:
+            os.environ.pop(name, None)
+            _KEY_FILE_VALUES.pop(name, None)
+    for name, value in values.items():
+        previous = _KEY_FILE_VALUES.get(name)
+        if name not in os.environ or (previous is not None and os.environ.get(name) == previous):
+            os.environ[name] = value
+            _KEY_FILE_VALUES[name] = value
 
 
 def expand_environment(value, *, environment=None):

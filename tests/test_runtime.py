@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from amplifier_web.runtime import RuntimeManager, normalize_event
 from amplifier_web.runtime_worker import Worker
+from amplifier_web.shared_state import ActivationGate
 
 FIXTURE = r'''
 import json,sys
@@ -71,6 +72,21 @@ class NormalizationTests(unittest.TestCase):
 
 
 class WorkerActivityTests(unittest.TestCase):
+    def test_activation_gate_rejects_a_callback_from_before_park(self):
+        gate = ActivationGate()
+        first = gate.activate()
+        stale_context = gate.bind(first)
+        gate.reset(stale_context)
+        gate.release(first)
+        second = gate.activate()
+        current_context = gate.bind(second)
+        try:
+            gate.check_current()
+            with self.assertRaisesRegex(RuntimeError, "released or superseded"):
+                gate.check(first)
+        finally:
+            gate.reset(current_context)
+
     def test_waiting_counts_actual_pending_jobs_and_preserves_agent_identity(self):
         worker=Worker()
         loop=SimpleNamespace(jobs={
@@ -164,6 +180,15 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(self.manager.start(self.session,self.emit) for _ in range(4)))
         self.assertEqual(len(self.manager.workers),1)
         self.assertEqual(sum(k=='runtime.status' and p['status']=='starting' for k,p in self.events),1)
+
+    async def test_second_send_keeps_the_same_worker_process(self):
+        await self.manager.send(self.session, 'first', 'input-1', self.emit)
+        process = self.manager.workers[self.session['id']]['process']
+        await self.manager.send(self.session, 'second', 'input-2', self.emit)
+        self.assertIs(self.manager.workers[self.session['id']]['process'], process)
+        self.assertIsNone(process.returncode)
+        self.assertEqual(sum(k == 'runtime.status' and p['status'] == 'starting'
+                             for k, p in self.events), 1)
 
     async def test_stop_terminates_process_and_clears_owner(self):
         await self.manager.start(self.session,self.emit)
