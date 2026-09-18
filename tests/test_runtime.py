@@ -145,7 +145,8 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     worker.workspace = workspace
     worker.home = tmp_path / "home"
     worker.home.mkdir()
-    worker.runtime = SimpleNamespace(session_id="warm-session")
+    worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
+                                     inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
     worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
@@ -161,6 +162,7 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     async def checkpoint(status):
         checkpoint_calls.append(status)
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        get=lambda name: None,
         get_capability=lambda name: (
             checkpoint
             if name == "live.checkpoint" else None)))

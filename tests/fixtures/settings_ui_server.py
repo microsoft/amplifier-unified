@@ -36,6 +36,10 @@ async def main(home):
  matrix={'name':'balanced','roles':{role:{'description':role.title(),'candidates':[{'provider':'one','model':'fixture-model'},{'provider':'two','model':'fallback-model'}]} for role in ['general','fast']}}
  write_private(home/'config/routing/balanced.yaml',yaml.safe_dump(matrix))
  app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
+ # Authenticate only this synthetic loopback fixture through the existing
+ # control-bearer path. Production PAM/session policy is unchanged.
+ app['control_token']='settings-ui-fixture-only'
+ app['allowed_origins']=frozenset({'http://127.0.0.1:8957'})
  service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
  service.state['updates']['items']=group_sources([{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(86)]+[{'id':'copy-'+str(i),'label':'github.com/example/amplifier-bundle-computer-use','kind':'bundle / module','ref':'main','current':'123456789','latest':'abcdefghi','status':'update'} for i in range(2)])
  service.state['updates']['available']=1

@@ -20,6 +20,28 @@ from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 
 Emitter = Callable[[str, dict], Awaitable[None]]
 
+class SessionInUseError(RuntimeError):
+    """A definite rejected admission, not an uncertain execution failure."""
+
+    def __init__(self, owner=None):
+        self.owner = owner if isinstance(owner, dict) else {}
+        details = ", ".join(
+            f"{key}: {self.owner[key]}"
+            for key in ("app", "host", "user", "pid", "process_start", "tty", "service")
+            if self.owner.get(key) is not None
+        )
+        super().__init__(
+            "This conversation is in use"
+            + (f" ({details})" if details else " by another process")
+            + ". Finish and exit that interface, then retry. Your draft has been kept."
+        )
+
+
+def _worker_error(data):
+    if data.get("code") == "session_busy":
+        return SessionInUseError(data.get("owner"))
+    return RuntimeError(data.get("error", "Amplifier runtime failed"))
+
 
 def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
@@ -211,7 +233,7 @@ class RuntimeManager:
                     future = row["pending"].get(data.get("id"))
                     if future and not future.done():
                         if data.get("error"):
-                            future.set_exception(RuntimeError(data["error"]))
+                            future.set_exception(_worker_error(data))
                         else:
                             future.set_result(data.get("result"))
                 elif data.get("type") == "runtime.progress":
@@ -226,10 +248,11 @@ class RuntimeManager:
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.error":
-                    error = data.get("error", "Amplifier runtime failed")
+                    failure = _worker_error(data)
+                    error = str(failure)
                     reported_error = error
                     if not row["ready"].done():
-                        row["ready"].set_exception(RuntimeError(error))
+                        row["ready"].set_exception(failure)
                     await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
                     await row["emit"](data["type"], {**data, "sessionId": sid})

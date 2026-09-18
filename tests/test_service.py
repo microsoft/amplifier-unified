@@ -51,9 +51,13 @@ async def test_conversation_survives_restart_and_deduplication(tmp_path):
 
 
 async def test_busy_admission_preserves_browser_draft_attachments_and_history(tmp_path):
+    from amplifier_web.runtime import SessionInUseError
     class BusyRuntime(Runtime):
-        async def start(self, session, emit):
-            raise RuntimeError("SessionBusyError: shared session is busy")
+        async def send(self, session, text, input_id, emit):
+            # Progress uses AppService.lock just as the real RuntimeManager
+            # does. The admission path must not still be holding that lock.
+            await emit("runtime.status", {"sessionId": session["id"], "status": "starting"})
+            raise SessionInUseError({"app": "amplifier-cli", "host": "test-host", "pid": 123})
 
     app = AppService(tmp_path, BusyRuntime(), workspace=tmp_path)
     await app.dispatch("session.create", {})
@@ -63,10 +67,10 @@ async def test_busy_admission_preserves_browser_draft_attachments_and_history(tm
     attachment_id = attachment["state"]["sessions"][0]["draftAttachments"][0]["id"]
     await app.dispatch("view.update", {"patch": {"draft": "Keep this draft"}})
 
-    with pytest.raises(AppError, match="shared session is busy") as error:
-        await app.dispatch("conversation.send", {
+    with pytest.raises(AppError, match="conversation is in use") as error:
+        await asyncio.wait_for(app.dispatch("conversation.send", {
             "sessionId": session_id, "text": "Keep this draft",
-            "attachmentIds": [attachment_id]})
+            "attachmentIds": [attachment_id]}, command_id="busy-send"), 2)
 
     assert error.value.status == 409
     session = app.get_state()["sessions"][0]
@@ -75,6 +79,11 @@ async def test_busy_admission_preserves_browser_draft_attachments_and_history(tm
     assert app.get_state()["view"]["draft"] == "Keep this draft"
     assert not session.get("execution", {}).get("turns", [])
     assert not app.runtime.sent
+    assert session["lockOwner"]["app"] == "amplifier-cli"
+    duplicate = await app.dispatch("conversation.send", {
+        "sessionId": session_id, "text": "Keep this draft",
+        "attachmentIds": [attachment_id]}, command_id="busy-send")
+    assert duplicate["accepted"] is False
     await app.close()
 
 

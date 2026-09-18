@@ -174,6 +174,7 @@ class Worker:
             from amplifier_web.host.session import prepare_manager
             from amplifier_web.execution_events import ExecutionEvents
             from amplifier_web.runtime_controls import RuntimeControls
+            from amplifier_web.shared_state import ActivationGate, configuration_stamp
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
@@ -185,7 +186,6 @@ class Worker:
             # HTTP application intentionally stays independent of Foundation.
             if self.shared_store is None:
                 from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
-                from amplifier_web.shared_state import ActivationGate, configuration_stamp
                 self.shared_store = SharedSessionStore(workspace, config["id"])
                 self.shared_store_stamp = file_stamp
                 self.activation_gate = ActivationGate()
@@ -263,7 +263,10 @@ class Worker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            publish({"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"})
+            error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
+            if type(exc).__name__ == "SessionBusyError":
+                error.update(code="session_busy", owner=getattr(exc, "owner", None))
+            publish(error)
             self.shutdown.set()
         finally:
             if progress:
@@ -273,6 +276,10 @@ class Worker:
     async def park(self, *, activation=None):
         """Checkpoint then relinquish only a settled manager activation."""
 
+        # Naming may itself await an approval/bridge response. Do not hold the
+        # command lock while waiting for it; admission is rechecked below.
+        if self.naming and self.naming.pending and not self.naming.pending.done():
+            await self.naming.pending
         async with self.command_lock:
             if self.parked or self.shared_handle is None:
                 return
@@ -283,8 +290,6 @@ class Worker:
                 return
             activation = activation or self.activation
             self.activation_gate.check(activation)
-            if self.naming and self.naming.pending and not self.naming.pending.done():
-                await self.naming.pending
             token = self.activation_gate.bind(activation)
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
@@ -379,10 +384,15 @@ class Worker:
                     await self._command_serial(data)
                 finally:
                     self.activation_gate.reset(token)
+            if op == "control":
+                # A control-only action does not wake the live loop's inbox.
+                # It must therefore schedule its own settled release.
+                await self.park(activation=self.activation)
         except Exception as exc:
             reply = {"op": "reply", "id": data.get("id"),
                      "error": f"{type(exc).__name__}: {exc}"}
             if type(exc).__name__ == "SessionBusyError":
+                reply["code"] = "session_busy"
                 reply["owner"] = getattr(exc, "owner", None)
             publish(reply)
 

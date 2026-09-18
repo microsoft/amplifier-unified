@@ -153,6 +153,39 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ## Shared control and appearance
 
+### Same chat in CLI and web (development integration)
+
+This source branch requires the matching Foundation `session.shared_state` API
+and upgraded CLI adapter. Their upstream publication and the released runtime
+dependency pins must land before this feature can be installed normally.
+
+Use **Settings → Maintenance → Same-chat CLI and web → Browse shared
+conversations → Open same chat** for the selected workspace. Opening creates
+only a browser view of the same root ID; it does not import or duplicate the
+runtime transcript. The preview shows up to the latest 100 visible messages.
+Execution restores the complete common context, including tool results.
+
+CLI keeps the writer lock until exit. Web releases automatically after accepted
+work, delegated jobs, approvals, and saving settle, even if the page stays open.
+On the next action it acquires the lock and compares checkpoint/configuration
+file metadata. Unchanged valid state reuses the mounted session; changed state
+reloads. A busy owner rejects execution with diagnostics and retains the draft.
+No takeover, lock expiry, force-unlock, or automatic work replay is provided.
+
+Both applications must run as the same user on the same POSIX host, use the
+same canonical workspace, and share `AMPLIFIER_SESSION_STATE_HOME` (default:
+`${XDG_STATE_HOME:-~/.local/state}/amplifier/sessions`). Close older CLI processes
+before using shared sessions: an upgrade cannot retrofit their missing locks.
+Metadata stamps are a local cache check, not proof against arbitrary external
+file modification. This coordinates app-owned conversation writes, not
+untracked external jobs started by arbitrary plugins.
+
+Developer regression: test the actual parked worker **after another CLI write**,
+not only a second unchanged web turn. Completion events must carry the producing
+task's activation token; a persistent inbox loop's startup token expires on park.
+Runtime admission also runs outside the HTTP app state lock, because its progress
+callbacks need that lock.
+
 `GET /api/state` exposes shared session/application state and attached device snapshots. `GET /api/actions` lists action schemas. `POST /api/actions` accepts `{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control tool use the same handlers. `GET /api/events` streams state updates. State includes `attention.items`, unread counts, and section/page destinations. `attention.read` accepts item IDs to acknowledge review; it does not dismiss the underlying update or issue. Changed facts become unread again, and acknowledgements survive restarts. SQLite stores conversations, accepted command IDs and settings. Interrupted work is marked rather than silently replayed.
 
 Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.

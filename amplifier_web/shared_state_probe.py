@@ -43,7 +43,7 @@ def query(request):
             {"id": identity, "workspace": str(workspace), "shared": True}
             for identity in SharedSessionStore.list_ids(workspace)
         ]}
-    if operation != "view":
+    if operation not in {"view", "open"}:
         raise ValueError("The shared-state operation is unsupported.")
     identity = request.get("sessionId")
     if not isinstance(identity, str) or not identity:
@@ -62,10 +62,13 @@ def query(request):
         if isinstance(row, dict) and row.get("role") in {"user", "assistant"}
         and text_content(row)
     ]
+    if operation == "open":
+        offset = max(0, len(messages) - limit)
     return {
         "id": identity,
         "workspace": str(workspace),
         "bundle": checkpoint["bundle"],
+        "name": checkpoint["metadata"].get("name") or checkpoint["metadata"].get("title"),
         "messages": messages[offset:offset + limit],
         "offset": offset,
         "nextOffset": offset + limit if offset + limit < len(messages) else None,
