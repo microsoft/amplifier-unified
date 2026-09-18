@@ -58,7 +58,7 @@ test('provider environment selection shows default, custom availability and no k
 test('available updates are visible without opening the full source inventory',()=>{
  const state={view:{},settings:{},updates:{lastCheck:1,available:2,items:[{id:'current',label:'Already current source',status:'current'},{id:'changed',label:'Updated community bundle',status:'update',current:'abc',latest:'def'},{id:'pinned',label:'Pinned library',status:'pinned'}]}};
  const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));
- assert.match(html,/Available updates/);assert.match(html,/Updated community bundle/);assert.match(html,/1 available/);
+ assert.match(html,/Ecosystem updates/);assert.match(html,/Updated community bundle/);assert.match(html,/1 available/);
  assert.doesNotMatch(html,/Already current source|Pinned library/);assert.match(html,/Show all 3 sources/);
  state.view.maintenanceDraft={updatesExpanded:true};
  const all=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));

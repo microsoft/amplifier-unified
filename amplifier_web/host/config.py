@@ -77,7 +77,7 @@ def _import_global(home: Path, legacy: Path):
     old_cache = legacy / "cache"
     new_cache = foundation_home / "cache"
     if old_cache.is_dir() and not new_cache.exists():
-        shutil.copytree(old_cache, new_cache, symlinks=False)
+        shutil.copytree(old_cache, new_cache, symlinks=True)
     for row in registry.get("bundles", {}).values():
         local = row.get("local_path")
         if local:

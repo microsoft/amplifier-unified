@@ -64,6 +64,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app["control_token"] = control_token(data_dir)
     service = AppService(data_dir, runtime=runtime, workspace=workspace)
     service.port = config["port"]
+    service.server_config = config
     if runtime is None:
         from .runtime import RuntimeManager
         runtime = RuntimeManager(app_bridge=service.app_bridge)

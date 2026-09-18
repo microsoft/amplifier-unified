@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -60,7 +61,7 @@ def pinned(ref):
     return bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', ref) or re.match(r'^(refs/tags/|v?\d+\.)', ref))
 
 
-async def process(*args, cwd=None, env=None, timeout=90):
+async def process(*args, cwd=None, env=None, timeout=90, raw=False):
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
     try:
@@ -86,7 +87,69 @@ async def process(*args, cwd=None, env=None, timeout=90):
     if proc.returncode:
         # Subprocess stderr can contain configured credentials and source URLs.
         raise RuntimeError('Command failed; source could not be checked or prepared')
-    return stdout.decode(errors='replace').strip()
+    return stdout if raw else stdout.decode(errors='replace').strip()
+
+
+async def cache_changes(root):
+    """Return protected changes and proven cache artifacts, without editing files.
+
+    Imported caches used to flatten symlinks, and some upstreams track generated
+    bytecode. Only their unstaged, exactly verified forms may be restored later,
+    inside an isolated staging copy. Untracked files are never removed.
+    """
+    root = Path(root).resolve()
+    records = (await process('git','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
+    protected, artifacts = [], []
+
+    async def head_entry(path):
+        value = await process('git','--literal-pathspecs','ls-tree','-z','HEAD','--',path,cwd=root,timeout=10,raw=True)
+        entries = value.split(b'\0')
+        if len(entries)!=2 or not entries[0]:return None
+        metadata, name = entries[0].split(b'\t',1)
+        mode, kind, identity = metadata.decode('ascii').split()
+        return (mode,identity) if kind=='blob' and os.fsdecode(name)==path else None
+
+    def regular(path, mode=None):
+        candidate = root/path
+        try:
+            if not candidate.resolve(strict=True).is_relative_to(root):return False
+            if any(parent.is_symlink() for parent in [candidate,*candidate.parents] if parent!=root and parent.is_relative_to(root)):return False
+            current = candidate.stat().st_mode
+            return stat.S_ISREG(current) and (mode is None or bool(current&stat.S_IXUSR)==(mode=='100755'))
+        except (OSError,ValueError):return False
+
+    def bytecode_header(value):
+        return len(value)>=16 and value[2:4]==b'\r\n' and int.from_bytes(value[4:8],'little')&~3==0
+
+    index = 0
+    while index<len(records):
+        record=records[index];index+=1
+        if not record:continue
+        change=record[:2].decode('ascii');path=os.fsdecode(record[3:])
+        # Renames/copies have a second NUL-delimited name, even with whitespace.
+        if 'R' in change or 'C' in change:index+=1
+        if change not in {' M',' T'}:
+            protected.append(path);continue
+        entry=await head_entry(path)
+        if not entry or not regular(path):
+            protected.append(path);continue
+        mode,identity=entry
+        generated=False
+        if change==' M' and mode in {'100644','100755'} and regular(path,mode) and '__pycache__' in Path(path).parts and re.fullmatch(r'.+\.cpython-\d+(?:\.opt-\d+)?\.pyc',Path(path).name):
+            original=await process('git','cat-file','blob',identity,cwd=root,timeout=10,raw=True)
+            with (root/path).open('rb') as file:header=file.read(16)
+            generated=bytecode_header(original) and bytecode_header(header)
+        elif change==' T' and mode=='120000':
+            link=os.fsdecode(await process('git','cat-file','blob',identity,cwd=root,timeout=10,raw=True))
+            # A direct, tracked regular target only: no outside paths or chains.
+            target=Path(os.path.normpath(str(Path(path).parent/link)))
+            if not Path(link).is_absolute() and '..' not in target.parts and regular(target):
+                target_entry=await head_entry(target.as_posix())
+                if target_entry and target_entry[0] in {'100644','100755'} and regular(target,target_entry[0]) and regular(path,target_entry[0]):
+                    hashes=(await process('git','hash-object','--no-filters','--',path,str(target),cwd=root,timeout=10)).splitlines()
+                    generated=hashes==[target_entry[1],target_entry[1]]
+        (artifacts if generated else protected).append(path)
+    return protected,artifacts
 
 
 class UpdateManager:
@@ -108,12 +171,14 @@ class UpdateManager:
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
         state.setdefault('items', [])
-        application=state.get('application',{})
-        from .app_updates import version_tuple
+        from .app_updates import version_tuple,application_state
+        application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
+        state['application']=application
         latest=version_tuple(application.get('latest'))
         current=version_tuple(__import__('amplifier_web').__version__)
         if latest and current and latest<=current:
-            application={**application,'current':__import__('amplifier_web').__version__,'status':'current'}
+            application={**application,'current':__import__('amplifier_web').__version__,'status':'current','releaseBehind':latest<current,
+                         'detail':'This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if latest<current else 'The latest published application release is installed.'}
             state.update(application=application,appAvailable=False)
             state['items']=[application if row.get('id')=='application' else row for row in state['items']]
             state['available']=sum(row.get('status')=='update' for row in state['items'])
@@ -122,6 +187,7 @@ class UpdateManager:
         state.setdefault('lastCheck', None)
         state['release'] = active_release(self.home).get('current')
         state['canRollback'] = 'previous' in active_release(self.home)
+        service._save()
 
     async def publish(self, **values):
         async with self.service.lock:
@@ -130,6 +196,9 @@ class UpdateManager:
 
     def busy(self):
         state = self.service.state
+        if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
+        if any(op.get('status') in {'queued','running'} for op in state.get('smartTools',{}).get('operations',[])):return True
+        if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('requests',[])):return True
         if state.get('voice',{}).get('status') not in {None,'disconnected','idle','ended','error'}:
             return True
         for session in state['sessions']:
@@ -153,7 +222,7 @@ class UpdateManager:
                 relative = str(root.relative_to(base))
                 identity = hashlib.sha256(relative.encode()).hexdigest()[:20]
                 current = await process('git','rev-parse','HEAD',cwd=root,timeout=10)
-                dirty = await process('git','status','--porcelain','--untracked-files=no',cwd=root,timeout=10)
+                dirty, _ = await cache_changes(root)
                 rows.append({'id':identity,'label':safe_label(url),'ref':ref,'current':current,
                     'status':'local_changes' if dirty else 'pinned' if pinned(ref) else 'not_checked',
                     'path':relative,'url':url,'kind':'bundle / module','eligible':not dirty and not pinned(ref)})
@@ -260,8 +329,12 @@ class UpdateManager:
                     target=stage/'foundation'/row['path']
                     if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
                     current=await process('git','rev-parse','HEAD',cwd=target)
-                    dirty=await process('git','status','--porcelain','--untracked-files=no',cwd=target)
+                    dirty,artifacts=await cache_changes(target)
                     if dirty or current!=row['current']: raise ValueError('Source changed since check')
+                    if artifacts:
+                        # Restore only verified tracked artifacts in this copy.
+                        # Rechecking here also protects edits made after check.
+                        await process('git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
                     await self.publish(detail='Downloading '+row['label']+'…')
                     await process('git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
                     await process('git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
@@ -323,9 +396,9 @@ class UpdateManager:
                 if rollback:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
-                items=[] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' else {})} for row in self.service.state['updates'].get('items',[])]
+                items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' else {})} for row in self.service.state['updates'].get('items',[])]
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,
-                    available=0,installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
+                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
                 self.inventory=[]
                 write_private(self.directory/'inventory.json','[]')
             except Exception:

@@ -1,0 +1,16 @@
+.a-app-update{margin-bottom:20px;padding:14px;border:1px solid var(--a-line,#dce3ef);border-radius:12px;min-width:0}
+.a-app-update-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+#amp-one .a-app-update-heading h4{margin:0}
+.a-app-update-status{display:inline-flex;align-items:center;gap:5px;color:var(--a-muted,#5c6475);font-size:12px}
+.a-app-update-status svg{width:14px;height:14px;flex-shrink:0}
+.a-app-update-status.current{color:var(--a-success,#23724d)}
+.a-app-update-status.update{color:var(--a-accent,#6556bd)}
+.a-app-update-status.failed{color:var(--a-danger,#b23d50)}
+.a-app-update-versions{display:flex;flex-wrap:wrap;gap:12px 28px;margin:12px 0 8px}
+.a-app-update-versions>div{display:flex;align-items:baseline;gap:7px;min-width:0}
+.a-app-update-versions dt{font-size:12px;color:var(--a-muted,#5c6475)}
+.a-app-update-versions dd{margin:0;font-size:13px;font-weight:600;overflow-wrap:anywhere}
+#amp-one .a-app-update .a-app-update-channel,#amp-one .a-app-update .a-app-update-detail{margin:7px 0 0}
+.a-app-update .a-check-result{margin-bottom:0}
+.a-updates>.a-dialog-actions{flex-wrap:wrap;gap:8px}
+@media(max-width:440px){.a-app-update{padding:12px}.a-app-update-heading{align-items:flex-start}.a-app-update-versions{gap:9px 18px}}

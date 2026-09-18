@@ -1,0 +1,122 @@
+"""Release identity and package checks, with only isolated local Git repositories."""
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import tarfile
+import zipfile
+
+import pytest
+
+spec=importlib.util.spec_from_file_location('application_release',Path(__file__).parents[1]/'scripts/release.py')
+release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
+
+
+def git(root,*args):
+    return subprocess.check_output(['git',*args],cwd=root,text=True,stderr=subprocess.DEVNULL).strip()
+
+
+@pytest.fixture
+def repository(tmp_path):
+    (tmp_path/'amplifier_web/static/assets').mkdir(parents=True)
+    (tmp_path/'pyproject.toml').write_text('[project]\nname="amplifier-unified"\nversion="1.2.3"\n')
+    (tmp_path/'amplifier_web/__init__.py').write_text('__version__ = "1.2.3"\n')
+    (tmp_path/'amplifier_web/static/index.html').write_text('<script src="/assets/app.js"></script>')
+    (tmp_path/'amplifier_web/static/assets/app.js').write_text('console.log("packaged")')
+    git(tmp_path,'init','-b','main');git(tmp_path,'config','user.email','release-test@example.invalid');git(tmp_path,'config','user.name','Fixture')
+    git(tmp_path,'add','.');git(tmp_path,'commit','-m','release')
+    return tmp_path
+
+
+def distributions(root):
+    dist=root/'dist';dist.mkdir(exist_ok=True)
+    with zipfile.ZipFile(dist/'amplifier_unified-1.2.3-py3-none-any.whl','w') as wheel:
+        wheel.writestr('amplifier_unified-1.2.3.dist-info/METADATA','Name: amplifier-unified\nVersion: 1.2.3\n')
+        for path in (root/'amplifier_web').rglob('*'):
+            if path.is_file():wheel.write(path,path.relative_to(root))
+    with tarfile.open(dist/'amplifier_unified-1.2.3.tar.gz','w:gz') as source:
+        for path in (root/'pyproject.toml',root/'amplifier_web/__init__.py'):
+            source.add(path,'amplifier_unified-1.2.3/'+str(path.relative_to(root)))
+    return dist
+
+
+def test_release_plan_validates_versions_and_resumes_original_tag(repository):
+    original=git(repository,'rev-parse','HEAD')
+    assert release.plan(repository)=={'version':'1.2.3','tag':'v1.2.3','revision':original,'existing_tag':False}
+    git(repository,'tag','v1.2.3')
+    (repository/'README.md').write_text('Unrelated subsequent work')
+    git(repository,'add','.');git(repository,'commit','-m','later')
+    assert release.plan(repository)['revision']==original
+    assert git(repository,'rev-parse','v1.2.3')==original
+    (repository/'amplifier_web/__init__.py').write_text('__version__ = "1.2.4"\n')
+    with pytest.raises(ValueError,match='matching stable versions'):release.plan(repository)
+
+
+def test_release_refuses_a_tag_on_a_different_package_version(repository):
+    git(repository,'tag','v1.2.4')
+    (repository/'pyproject.toml').write_text('[project]\nversion="1.2.4"\n')
+    (repository/'amplifier_web/__init__.py').write_text('__version__="1.2.4"\n')
+    with pytest.raises(ValueError,match='immutable release tag'):release.plan(repository)
+
+
+def test_release_distribution_verification_checks_source_assets_and_references(repository):
+    dist=distributions(repository)
+    release.verify_dist(repository,dist,'1.2.3')
+    assert len((dist/'SHA256SUMS').read_text().splitlines())==2
+    (repository/'amplifier_web/static/assets/app.js').write_text('different')
+    with pytest.raises(ValueError,match='validated source/assets'):release.verify_dist(repository,dist,'1.2.3')
+    (repository/'amplifier_web/static/index.html').write_text('<script src="/assets/missing.js"></script>')
+    distributions(repository)
+    with pytest.raises(ValueError,match='missing asset'):release.verify_dist(repository,dist,'1.2.3')
+
+
+@pytest.mark.parametrize('published',[True,False])
+def test_release_publish_is_rerunnable_without_moving_tags_or_replacing_published_assets(repository,monkeypatch,published):
+    dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
+    def run(*args,**kwargs):
+        calls.append(args)
+        if args[:3]==('git','rev-parse','HEAD'):return revision
+        if args[:2]==('git','ls-remote'):return revision+'\trefs/tags/v1.2.3'
+        if args[:3]==('gh','release','list'):return json.dumps([{'tagName':'v1.2.3','isDraft':not published},{'tagName':'v2.0.0','isDraft':False}])
+        return ''
+    monkeypatch.setattr(release,'run',run)
+    release.publish(repository,'example/app','v1.2.3',revision,dist)
+    assert not any(call[:2]==('git','push') for call in calls)
+    if published:assert not any(call[:3] in {('gh','release','upload'),('gh','release','edit')} for call in calls)
+    else:assert calls[-1][-1]=='--latest=false'
+
+
+def test_release_never_moves_a_remote_tag(repository,monkeypatch):
+    dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
+    def run(*args,**kwargs):
+        calls.append(args)
+        return revision if args[:2]==('git','rev-parse') else 'b'*40+'\trefs/tags/v1.2.3'
+    monkeypatch.setattr(release,'run',run)
+    with pytest.raises(ValueError,match='refusing to move'):release.publish(repository,'example/app','v1.2.3',revision,dist)
+    assert len(calls)==2
+
+
+def test_new_release_publishes_only_after_draft_assets_are_uploaded(repository,monkeypatch):
+    dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
+    def run(*args,**kwargs):
+        calls.append(args)
+        if args[:3]==('git','rev-parse','HEAD'):return revision
+        if args[:3]==('gh','release','list'):return '[]'
+        return ''
+    monkeypatch.setattr(release,'run',run)
+    release.publish(repository,'example/app','v1.2.3',revision,dist)
+    mutations=[call for call in calls if call[:2]==('git','push') or call[:3] in {('gh','release','create'),('gh','release','upload'),('gh','release','edit')}]
+    assert [call[1] if call[0]=='git' else call[2] for call in mutations]==['push','create','upload','edit']
+    assert '--draft' in mutations[1] and '--verify-tag' in mutations[1]
+    assert '--draft=false' in mutations[-1] and '--latest=true' in mutations[-1]
+    assert not any('--force' in call for call in calls)
+
+
+def test_invalid_package_never_creates_a_tag_or_release(repository,monkeypatch):
+    dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
+    (repository/'amplifier_web/static/assets/app.js').write_text('unvalidated bytes')
+    def run(*args,**kwargs):calls.append(args);return revision
+    monkeypatch.setattr(release,'run',run)
+    with pytest.raises(ValueError,match='validated source/assets'):
+        release.publish(repository,'example/app','v1.2.3',revision,dist)
+    assert calls==[('git','rev-parse','HEAD')]

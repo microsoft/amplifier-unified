@@ -14,7 +14,7 @@ from .updates import process
 
 REPOSITORY='bkrabach/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
-PROBE='from amplifier_web.server import create_app; from amplifier_web import __version__; from pathlib import Path; import amplifier_web; import pam; assert callable(pam.authenticate); p=Path(amplifier_web.__file__).parent; assert (p/"static/index.html").is_file(); print(__version__)'
+PROBE='from amplifier_web.server import create_app; from amplifier_web import __version__; from pathlib import Path; import amplifier_web; import pam; import sys; assert callable(pam.authenticate); p=Path(amplifier_web.__file__).resolve().parent; assert p.is_relative_to(Path(sys.prefix).resolve()); assert (p/"static/index.html").is_file(); print(__version__)'
 
 def version_tuple(value):
     match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)',value or '')
@@ -29,18 +29,28 @@ def git_environment():
         env.update({f'GIT_CONFIG_KEY_{count}':'credential.https://github.com.helper',f'GIT_CONFIG_VALUE_{count}':'!gh auth git-credential','GIT_CONFIG_COUNT':str(count+1)})
     return env
 
+def application_state():
+    return {'id':'application','label':'Amplifier Unified','kind':'app','current':__version__,'repository':SOURCE,
+            'channel':'github-releases','status':'not_checked','detail':'Check for a published application release.'}
+
 async def check():
-    base={'id':'application','label':'Amplifier Unified','kind':'app','current':__version__,'repository':SOURCE}
+    base=application_state()
     if not shutil.which('gh'):return {**base,'status':'check_failed','detail':'Sign in with GitHub CLI to check this private release channel.'}
     try:
         data=json.loads(await process('gh','api',f'repos/{REPOSITORY}/releases/latest',timeout=30))
         tag=data['tag_name'];version=version_tuple(tag)
-        if not version:raise ValueError('Unsupported release tag')
+        if not version or data.get('draft') or data.get('prerelease'):raise ValueError('Unsupported release tag')
         output=await process('git','ls-remote',SOURCE,'refs/tags/'+tag,'refs/tags/'+tag+'^{}',env=git_environment(),timeout=30)
         rows=[line.split() for line in output.splitlines()]
         revision=next((row[0] for row in rows if row[1].endswith('^{}')),rows[0][0] if rows else '')
         if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Release revision not found')
-        return {**base,'status':'update' if version>version_tuple(__version__) else 'current','latest':tag,'revision':revision,'url':data.get('html_url',SOURCE+'/releases')}
+        current=version_tuple(__version__)
+        ahead=version<current
+        return {**base,'status':'update' if version>current else 'current','latest':tag,'revision':revision,
+            'url':data.get('html_url',SOURCE+'/releases'),'publishedAt':data.get('published_at'),'releaseBehind':ahead,
+            'detail':('This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if ahead
+                      else 'A newer application release is available; installation restarts the host when idle.' if version>current
+                      else 'The latest published application release is installed.')}
     except (ValueError,KeyError,RuntimeError,TimeoutError):
         return {**base,'status':'check_failed','detail':'No accessible published release was found. Check GitHub sign-in and release availability.'}
 
@@ -57,7 +67,7 @@ async def stage(manager):
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
     await process(uv,'tool','install','--force','git+'+SOURCE+'@'+revision,env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
-    installed=await process(python,'-c',PROBE,timeout=30)
+    installed=await process(python,'-I','-c',PROBE,timeout=30)
     if version_tuple(installed)!=version_tuple(release['latest']):raise ValueError('The release tag does not match its package version')
     write_private(folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__}))
     await manager.publish(phase='app-staged',pendingApp=release,detail='Application release validated. Waiting for work to finish before restarting.')
@@ -123,7 +133,7 @@ async def _activate(manager):
     write_private(manager.directory/'previous-app.json',json.dumps(previous))
     try:
         await process(uv,'tool','install','--force','git+'+SOURCE+'@'+release['revision'],env=git_environment(),timeout=900)
-        installed=await process(installed_python,'-c',PROBE,timeout=30)
+        installed=await process(installed_python,'-I','-c',PROBE,timeout=30)
         if version_tuple(installed)!=version_tuple(validated['version']):
             raise ValueError('Installed package differs from the validated release')
     except asyncio.CancelledError:
@@ -148,7 +158,7 @@ async def _activate(manager):
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
-    options=[executable,'--no-open','--port',str(manager.service.port),'--data-dir',str(manager.home),'--workspace',manager.service.default_workspace]
+    options=restart_arguments(manager,executable)
     helper=manager.directory/'restart.py'
     write_private(helper,'''import json,os,subprocess,sys,time
 parent=int(sys.argv[1]);args=json.loads(sys.argv[2]);logpath=sys.argv[3]
@@ -168,3 +178,18 @@ with open(logpath,'a') as log:
         return
     import signal
     os.kill(os.getpid(),signal.SIGTERM)
+
+
+def restart_arguments(manager, executable):
+    """Preserve effective CLI overrides without rewriting persistent deployment settings."""
+    from .deployment import load_server_config, validate_server
+    config=getattr(manager.service,'server_config',None)
+    config=validate_server(config) if config is not None else load_server_config(manager.home)
+    options=[executable,'--no-open','--port',str(manager.service.port),'--data-dir',str(manager.home),
+             '--workspace',manager.service.default_workspace,'--session-ttl',str(config['session_ttl_seconds'])]
+    for bind in config['bind']:options.extend(['--bind',bind])
+    for origin in config['public_origins']:options.extend(['--public-origin',origin])
+    if config['tls']['method']!='none':
+        for field in ('cert','key'):
+            if config['tls'][field]:options.extend(['--tls-'+field,config['tls'][field]])
+    return options

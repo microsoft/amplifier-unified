@@ -225,6 +225,28 @@ authored HTML previews retain their existing bounded document/control bridge.
 
 ## Install the web app
 
+### Send feedback
+
+Use **Send feedback** in the app header to submit a bug report, idea, or question
+as an issue in the private `bkrabach/amplifier-unified` repository. The host uses
+its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
+access. Review the title and details, then send. The result includes a link to
+the created issue. No label configuration is required.
+
+Only the entered text, feedback category, and submission reference are sent.
+The optional diagnostics checkbox adds exactly the displayed app version and
+OS family. It defaults off; chats, files, paths, provider configuration, and
+credentials are not attached automatically.
+
+Agents use the same typed `feedback.submit` action when the user asks them to
+send feedback, and can edit the shared `view.feedbackDraft`. Results are retained
+at `/feedback/requests`. A retry must keep the same `requestId` and payload.
+Accepted submissions are attempted at most once. If GitHub's response is lost,
+the app reports an uncertain outcome and links to the issue list; it does not
+automatically create a duplicate. Check that list before choosing **New feedback**.
+
+### Browser installation
+
 In Edge or Chrome, use the install icon in the address bar or the browser’s app
 installation menu. Safari on Mac supports **File → Add to Dock**; on iPhone/iPad,
 use **Share → Add to Home Screen**. Installation needs localhost/loopback or a
