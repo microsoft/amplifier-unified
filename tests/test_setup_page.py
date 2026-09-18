@@ -66,6 +66,23 @@ def test_renderer_has_fixed_download_fingerprint_warning_and_no_active_or_login_
     assert "HSTS" in page
 
 
+def test_renderer_instructions_require_trusted_transfer_native_install_and_browser_restart():
+    page = render_setup_page(Platform.OTHER, True, "AA:BB")
+
+    assert page.count("setup-tls export") == len(Platform)
+    assert page.count("verified SSH") == len(Platform)
+    assert page.count("before trusting") == len(Platform)
+    assert "security add-trusted-cert" in page
+    assert "certutil -addstore" in page
+    assert "Install a certificate" in page
+    assert "Certificate Trust Settings" in page
+    assert "update-ca-certificates" in page
+    assert page.count("reopen the browser") == 3
+    assert "Restart the browser" in page
+    assert "disable HSTS" in page
+    assert "http://" not in page
+
+
 def test_renderer_ca_absent_state_stays_useful():
     page = render_setup_page(Platform.OTHER, False, None)
     assert "not configured yet" in page
