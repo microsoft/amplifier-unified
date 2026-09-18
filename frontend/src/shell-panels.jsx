@@ -12,18 +12,39 @@ export function reopenCanvas(state,act){
 export function CanvasToggle({state,act}){
  return <button type="button" className="a-icon" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><PanelRight/></button>;
 }
+export function ChatRename({chat,act,cancel}){
+ const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
+ const submitting=useRef(false);
+ useEffect(()=>setName(chat.title||''),[chat.title]);
+ const submit=async e=>{
+  e.preventDefault();
+  const title=name.trim();
+  if(!title||submitting.current)return;
+  submitting.current=true;setSaving(true);setError('');
+  try{
+   const result=await act('session.rename',{id:chat.id,title});
+   if(result&&result.accepted!==false)cancel();
+   else setError(result?.error||'Could not rename. Your text is kept; try again.');
+  }catch(error){setError(error.message||'Could not rename. Please try again.')}
+  finally{submitting.current=false;setSaving(false)}
+ };
+ return <form aria-busy={saving} className="a-nav-chat a-nav-chat-rename" onSubmit={submit}><input id="nav-workspace-name" aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>{error&&<small role="alert" className="a-danger">{error}</small>}</form>;
+}
 export function WorkspaceRail({state,session,act,selectSession,newSession}){
  const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};
+ const form=useRef(null),draftRef=useRef(draft);
+ useEffect(()=>{draftRef.current=draft},[draft]);
  const workspaces=state.workspaces||[],workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId)||workspaces[0];
  const sessions=(state.sessions||[]).filter(s=>!workspace||s.workspace===workspace.path);
  const chats=filterList(sessions,view.navFilter||'',s=>[s.title||'Untitled conversation',s.description||'',s.id]);
- const setDraft=value=>patch(act,{workspaceDraft:value});
+ const setDraft=value=>{draftRef.current=value;patch(act,{workspaceDraft:value})};
  const updateDraft=value=>setDraft({...draft,...value});
  const expand=value=>{if(!pinned&&!!view.navExpanded!==value)patch(act,{navExpanded:value})};
  const choose=id=>{(selectSession||((id)=>act('session.select',{id})))(id);if(!pinned)patch(act,{navExpanded:false})};
  const add=()=>{(newSession||((path)=>act('session.create',{workspace:path})))(workspace?.path);if(!pinned)patch(act,{navExpanded:false})};
  const submit=async e=>{e.preventDefault();let result;if(draft.mode==='add')result=await act('workspace.add',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});else if(draft.mode==='rename')result=await act('workspace.rename',{id:draft.id,name:draft.name||''});else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});if(result?.accepted!==false&&result)setDraft({})};
- return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!draft.mode)expand(false)}}>
+ useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
+ return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!draftRef.current.mode)expand(false)}}>
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label={pinned?'Unpin navigation':'Pin navigation open'} title={pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>patch(act,{navPinned:!pinned,navExpanded:!pinned})}><PanelLeft/></button><strong className="a-nav-reveal">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.create" aria-label="New chat in workspace" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
@@ -31,7 +52,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession}){
    <div className="a-nav-content a-nav-reveal">
     <label className="a-nav-eyebrow" htmlFor="nav-workspace">Workspace</label><select id="nav-workspace" value={workspace?.id||''} data-action="workspace.select" onChange={e=>act('workspace.select',{id:e.target.value})}>{workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select>
     {workspace&&<div className="a-nav-workspace-path"><span title={workspace.path}>{workspace.path}</span><button type="button" className="a-icon" aria-label="Rename workspace" data-action="view.update" onClick={()=>setDraft({mode:'rename',id:workspace.id,name:workspace.name})}><Pencil/></button><button type="button" className="a-icon" aria-label="Remove workspace registration" disabled={workspaces.length<2} data-action="view.update" onClick={()=>setDraft({mode:'remove',id:workspace.id,name:workspace.name})}><Trash2/></button></div>}
-    {draft.mode&&<form className="a-nav-form" onSubmit={submit}>
+    {draft.mode&&draft.mode!=='chat-rename'&&<form ref={form} className="a-nav-form" onSubmit={submit}>
      <div className="a-nav-form-title"><strong>{draft.mode==='add'?'Add workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':draft.mode==='remove'?'Remove workspace?':'Delete conversation?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
      {draft.mode==='add'&&<><label htmlFor="nav-workspace-path">Folder</label><PathField id="nav-workspace-path" value={draft.path||''} onChange={path=>updateDraft({path})} directory state={state} act={act} placeholder="~/Projects/my-project"/></>}
      {['add','rename','chat-rename'].includes(draft.mode)?<><label htmlFor="nav-workspace-name">{draft.mode==='add'?'Name (optional)':'Name'}</label><input id="nav-workspace-name" value={draft.name||''} required={draft.mode!=='add'} data-action="view.update" onChange={e=>updateDraft({name:e.target.value})}/></>:<p>{draft.mode==='remove'?`Remove ${draft.name} from this list? Its files and chats will stay on disk.`:`Delete ${draft.name}? This removes its conversation history and stops any work in progress.`}</p>}
@@ -39,7 +60,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession}){
     </form>}
     <div className="a-nav-search"><Search/><input aria-label="Filter conversations" type="search" value={view.navFilter||''} placeholder="Find chats · * ? patterns" data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
     <div className="a-nav-eyebrow">Conversations <span>{chats.length}</span></div>
-    <div className="a-nav-chats">{chats.map(chat=><div className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} key={chat.id}><button className="a-nav-chat-select" type="button" data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} title={[chat.title,chat.description].filter(Boolean).join(' — ')} onClick={()=>choose(chat.id)}><MessageCircle/><span>{chat.title||'Untitled conversation'}</span>{['running','working','starting'].includes(chat.status)&&<span className="a-nav-busy" aria-label="Working"/>}</button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Rename ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:chat.title||''})}><Pencil/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Delete ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>setDraft({mode:'chat-delete',id:chat.id,name:chat.title||'conversation'})}><Trash2/></button></div>)}{!chats.length&&<p className="a-nav-empty">{view.navFilter?'No matching chats.':'Your conversations will appear here.'}</p>}</div>
+    <div className="a-nav-chats">{chats.map(chat=>draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename key={chat.id} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} key={chat.id}><button className="a-nav-chat-select" type="button" data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} title={[chat.title,chat.description].filter(Boolean).join(' — ')} onClick={()=>choose(chat.id)}><MessageCircle/><span>{chat.title||'Untitled conversation'}</span>{['running','working','starting'].includes(chat.status)&&<span className="a-nav-busy" aria-label="Working"/>}</button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Rename ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>{expand(true);setDraft({mode:'chat-rename',id:chat.id,name:chat.title||''})}}><Pencil/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Delete ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>{expand(true);setDraft({mode:'chat-delete',id:chat.id,name:chat.title||'conversation'})}}><Trash2/></button></div>)}{!chats.length&&<p className="a-nav-empty">{view.navFilter?'No matching chats.':'Your conversations will appear here.'}</p>}</div>
    </div>
    <div className="a-nav-bottom"><button className="a-nav-main" type="button" data-action="canvas.reopen" aria-label="Open workspace canvas" title="Canvas" onClick={()=>reopenCanvas(state,act)}><PanelRight/><span className="a-nav-reveal">Canvas</span></button></div>
   </div>

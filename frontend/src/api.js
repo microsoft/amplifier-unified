@@ -12,6 +12,17 @@ export function download(filename, content, type='application/json') {
   const blob=new Blob([typeof content==='string'?content:JSON.stringify(content,null,2)],{type});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+export function applyIconTooltips(root) {
+  if(!root)return;
+  for(const control of root.querySelectorAll('button[aria-label],a[aria-label],[role="button"][aria-label]')){
+    if(!control.classList?.contains('a-icon')&&!control.querySelector?.('svg'))continue;
+    const label=control.getAttribute('aria-label');
+    if(label&&(!control.title||control.dataset.iconTitle==='auto')){
+      control.title=label;
+      control.dataset.iconTitle='auto';
+    }
+  }
+}
 export function visibleView(root, clientId) {
   if(!root)return {clientId};
   const controls=[...root.querySelectorAll('button,input,textarea,select,a')].filter(el=>el.getClientRects().length).map(el=>({id:el.id||null,action:el.dataset.action||el.closest('[data-action]')?.dataset.action||null,label:el.getAttribute('aria-label')||el.labels?.[0]?.textContent||el.textContent?.trim().slice(0,160),type:el.type||el.tagName.toLowerCase(),value:(el.type==='password'||el.dataset.private==='true')?'[redacted]':el.value,disabled:!!el.disabled,focused:document.activeElement===el}));

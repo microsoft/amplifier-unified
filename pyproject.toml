@@ -4,7 +4,8 @@ version = "0.5.9"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["aiohttp>=3.12,<4", "cryptography>=44,<46", "python-pam>=2.0.2,<3", "jsonschema>=4.23,<5", "tinycss2>=1.4,<2", "pyyaml>=6.0.3,<7", "filelock>=3.20,<4"]
+# python-pam imports six but does not declare it in its distribution metadata.
+dependencies = ["aiohttp>=3.12,<4", "cryptography>=44,<46", "python-pam>=2.0.2,<3", "six>=1.16,<2", "jsonschema>=4.23,<5", "tinycss2>=1.4,<2", "pyyaml>=6.0.3,<7", "filelock>=3.20,<4"]
 
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"

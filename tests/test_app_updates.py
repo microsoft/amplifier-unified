@@ -8,6 +8,22 @@ from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager
 from test_service import Runtime
 
+
+def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    # Model the observed wheel's undeclared import in a fresh child process.
+    # A candidate with a usable server but broken PAM must not replace the host.
+    (tmp_path / 'pam.py').write_text('raise ModuleNotFoundError("missing PAM dependency")\n')
+    env = {**os.environ, 'PYTHONPATH': str(tmp_path)}
+    result = subprocess.run([sys.executable, '-c', app_updates.PROBE],
+                            cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'missing PAM dependency' in result.stderr
+
+
 async def test_release_check_requires_real_tag_revision(monkeypatch):
     monkeypatch.setattr(app_updates.shutil,'which',lambda _: '/bin/tool')
     calls=[]
