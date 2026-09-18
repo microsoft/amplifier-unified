@@ -22,4 +22,9 @@ def counter_add(amount: int = 1) -> dict[str, Any]:
 
 apps.add_html_resource('ui://counter/app', Path(sys.argv[1]).read_text())
 server = MCPServer('Independent counter', extensions=[apps])
+
+@server.resource('counter://media/{identity}', mime_type='text/plain')
+def media(identity: str) -> str:
+    return f'Retained {identity}'
+
 server.run()

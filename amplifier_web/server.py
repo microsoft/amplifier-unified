@@ -197,6 +197,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)
 
+    async def smart_canvas_resource(request):
+        try:
+            result = await service.smart_canvas.resource(
+                request.match_info['identity'], request.query.get('kind', 'read'),
+                uri=request.query.get('uri'), cursor=request.query.get('cursor'))
+        except ValueError as exc:
+            raise AppError(str(exc), 400) from None
+        return web.json_response(result, headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/canvas/{identity}/resources', smart_canvas_resource)
+
     async def smart_operation(request):
         operation = service.smart_tools.operation(request.match_info['identity'])
         if not operation:
