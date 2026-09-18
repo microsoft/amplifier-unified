@@ -40,6 +40,18 @@ try{
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
  assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,1,'Nested content cannot call host tools');
+ // Layout changes must not reconnect the MCP App or replay its startup tools.
+ const operationCount=state.smartTools.operations.length;
+ await frame.locator('body').evaluate(el=>el.dataset.liveMarker='same-frame');
+ await action('view.update',{patch:{canvasWidth:1000,canvasFocused:true,canvasControlsExpanded:false}});
+ await page.mouse.move(500,400);
+ await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').getBoundingClientRect().width===innerWidth);
+ assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
+ const frameBox=await page.locator('.a-canvas-html').boundingBox();assert.equal(frameBox.x,0);assert.equal(frameBox.width,1450);assert.equal(frameBox.y,36);
+ await action('view.update',{patch:{canvasFocused:false}});
+ assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
+ assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,operationCount);
+
  // An agent takes the same action through app_control's shared dispatch contract.
  const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4}});
  await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='completed'),receipt.operationId);

@@ -5,13 +5,13 @@ import assert from 'node:assert/strict';
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
 const browser=await chromium.launch({headless:true});
-const context=await browser.newContext({viewport:{width:1400,height:950},permissions:['clipboard-read','clipboard-write']});
+const context=await browser.newContext({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'},permissions:['clipboard-read','clipboard-write']});
 const page=await context.newPage(),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const ready=()=>page.waitForFunction(()=>window.amplifier.getState().canvas.renderReports?.preview?.status==='ready',{},{timeout:30000});
 try{
- await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
+ await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');await action('view.update',{patch:{canvasControlsPinned:true}});
  await action('canvas.show',{kind:'html',title:'Interactive example',content:`<!doctype html><html><head><style>body{font:16px system-ui;padding:24px;background:#eef2ff}button{padding:12px}</style></head><body><h1>Interactive canvas</h1><button onclick="this.textContent='Clicked'">Try it</button><p id="boundary"></p><script>let denied=false;try{parent.document.title}catch(e){denied=true}document.getElementById('boundary').textContent=denied?'Parent isolated':'FAILED';fetch('/api/state').then(()=>document.body.dataset.network='FAILED').catch(()=>document.body.dataset.network='blocked');</script></body></html>`});
  await ready();
  await page.waitForFunction(()=>window.amplifier.getState().canvas.document?.controls?.some(c=>c.label==='Try it'));

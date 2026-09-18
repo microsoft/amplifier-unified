@@ -185,6 +185,7 @@ def canvas_command(state, action, args, origin):
     initialize(state)
     if action == "canvas.close":
         state["canvas"]["open"] = False
+        state.setdefault("view", {})["canvasFocused"] = False
         return
     if action in {"canvas.view", "canvas.report", "canvas.snapshot", "canvas.interact"}:
         canvas = state['canvas']

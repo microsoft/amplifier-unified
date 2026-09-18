@@ -1,8 +1,9 @@
 import {CanvasTabs,SavedArtifacts,BrowserAddress,BrowserPreview,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe} from 'lucide-react';
+import {FolderOpen,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,Pin} from 'lucide-react';
 import {CanvasViewer} from './canvas-viewer';
 import {McpAppViewer} from './mcp-app-viewer';
+import {PaneResizer,usePanelLayout} from './panel-layout';
 import {filterList} from './list-filter';
 import {PathField} from './settings-ui';
 
@@ -32,6 +33,7 @@ export function ChatRename({chat,act,cancel}){
  return <form aria-busy={saving} className="a-nav-chat a-nav-chat-rename" onSubmit={submit}><input id="nav-workspace-name" aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>{error&&<small role="alert" className="a-danger">{error}</small>}</form>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession}){
+ const layout=usePanelLayout(state,act);
  const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};
  const form=useRef(null),draftRef=useRef(draft);
  useEffect(()=>{draftRef.current=draft},[draft]);
@@ -45,7 +47,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession}){
  const add=()=>{(newSession||((path)=>act('session.create',{workspace:path})))(workspace?.path);if(!pinned)patch(act,{navExpanded:false})};
  const submit=async e=>{e.preventDefault();let result;if(draft.mode==='add')result=await act('workspace.add',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});else if(draft.mode==='rename')result=await act('workspace.rename',{id:draft.id,name:draft.name||''});else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});if(result?.accepted!==false&&result)setDraft({})};
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
- return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!draftRef.current.mode)expand(false)}}>
+ return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!draftRef.current.mode)expand(false)}}>
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label={pinned?'Unpin navigation':'Pin navigation open'} title={pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>patch(act,{navPinned:!pinned,navExpanded:!pinned})}><PanelLeft/></button><strong className="a-nav-reveal">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.create" aria-label="New chat in workspace" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
@@ -65,6 +67,7 @@ export function WorkspaceRail({state,session,act,selectSession,newSession}){
    </div>
    <div className="a-nav-bottom"><button className="a-nav-main" type="button" data-action="canvas.reopen" aria-label="Open workspace canvas" title="Canvas" onClick={()=>reopenCanvas(state,act)}><PanelRight/><span className="a-nav-reveal">Canvas</span></button></div>
   </div>
+  {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
  </aside>;
 }
 
@@ -85,20 +88,46 @@ export function A2UISurface({surface,act}){
  return <div className="a-canvas-surface" data-part="agent-surface">{render(surface?.root)}</div>;
 }
 export function AgentCanvas({state,act}){
- const canvas=state.canvas||{},draft=state.view?.canvasDraft||{},sharedWidth=Number(state.view?.canvasWidth)||440,[width,setWidth]=useState(sharedWidth),drag=useRef(null);
- useEffect(()=>setWidth(sharedWidth),[sharedWidth]);
- const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value}});
- const clamp=value=>Math.round(Math.min(900,Math.max(300,value)));
- const finish=e=>{if(!drag.current)return;const next=clamp(drag.current.width+drag.current.x-e.clientX);drag.current=null;setWidth(next);patch(act,{canvasWidth:next})};
+ const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
+ actRef.current=act;
+ const focused=!!canvas.open&&!!view.canvasFocused,controls=!!view.canvasControlsPinned||!!view.canvasControlsExpanded;
+ const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},canvasControlsExpanded:true});
+ const controlRegions='.a-canvas-chrome,.a-canvas-toolbar,.a-canvas-result.success,.a-browser-note';
+ const inControls=target=>!!target?.closest?.(controlRegions)&&!!panel.current?.contains(target);
+ const collapseControls=()=>{if(controls&&!view.canvasControlsPinned&&!draft.open&&!draft.browser)patch(act,{canvasControlsExpanded:false})};
+ useEffect(()=>{
+  if(!focused||!panel.current)return;
+  const previous=document.activeElement,el=panel.current,app=el.closest('#amp-one'),hidden=[];
+  // Keep the live viewer mounted. Only the surrounding app becomes inert.
+  for(const child of [...(app?.children||[]),...(el.parentElement?.children||[])]){
+   if(child===el||child.contains(el)||child.matches('style,.a-overlay,[role="dialog"]'))continue;
+   hidden.push([child,child.inert]);child.inert=true;
+  }
+  el.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true});
+  const escape=e=>{if(e.key==='Escape'&&!document.querySelector('.a-overlay')){e.preventDefault();patch(actRef.current,{canvasFocused:false})}};
+  document.addEventListener('keydown',escape);
+  return()=>{document.removeEventListener('keydown',escape);for(const [child,inert] of hidden)child.inert=inert;if(previous?.isConnected)previous.focus?.({preventScroll:true})};
+ },[focused]);
  if(!canvas.open)return null;
  const latestEvent=canvas.events?.at(-1);
- return <aside className="a-canvas-panel" data-part="canvas" style={{'--canvas-width':`${width}px`}} aria-label="Agent canvas">
-  <div className="a-canvas-resize" role="separator" aria-label="Resize canvas" aria-orientation="vertical" aria-valuemin={300} aria-valuemax={900} aria-valuenow={width} tabIndex={0} data-action="view.update" onPointerDown={e=>{e.preventDefault();drag.current={x:e.clientX,width};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerMove={e=>{if(drag.current)setWidth(clamp(drag.current.width+drag.current.x-e.clientX))}} onPointerUp={finish} onPointerCancel={()=>{drag.current=null;setWidth(sharedWidth)}} onKeyDown={e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const next=e.key==='Home'?300:e.key==='End'?900:clamp(width+(e.key==='ArrowLeft'?20:-20));setWidth(next);patch(act,{canvasWidth:next})}}}/>
-  <header className="a-canvas-head"><FileText/><strong>{canvas.title||'Canvas'}</strong><button type="button" className="a-icon" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/></button><button type="button" className="a-icon" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/></button><button type="button" className="a-icon" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/></button><button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.close" onClick={()=>act('canvas.close',{})}><X/></button></header>
+ return <aside ref={panel} className="a-canvas-panel" data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
+  onPointerOut={e=>{if(e.pointerType!=='touch'&&inControls(e.target)&&!inControls(e.relatedTarget)&&!inControls(document.activeElement))collapseControls()}}
+  onBlur={e=>{if(inControls(e.target)&&!inControls(e.relatedTarget)&&!panel.current?.querySelector(controlRegions.split(',').map(selector=>selector+':hover').join(',')))collapseControls()}}>
+  {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
+  <div className="a-canvas-chrome" onPointerEnter={e=>{if(e.pointerType!=='touch'&&!controls)patch(act,{canvasControlsExpanded:true})}}>
+   <header className="a-canvas-head"><FileText/><strong title={canvas.title||'Canvas'}>{canvas.title||'Canvas'}</strong>
+    <button type="button" className="a-icon" aria-label="Canvas controls" aria-expanded={controls} data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls,canvasControlsPinned:false,canvasDraft:{...draft,open:false,browser:false}})}><SlidersHorizontal/></button>
+    <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
+    <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.close" onClick={()=>act('canvas.close',{})}><X/></button>
+   </header>
+   <div className="a-canvas-controls" inert={!controls}>
+    <div className="a-canvas-actions"><button type="button" className="a-soft" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Library</button><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/>File</button><button type="button" className="a-icon" aria-label={view.canvasControlsPinned?'Unpin canvas controls':'Pin canvas controls'} aria-pressed={!!view.canvasControlsPinned} data-action="view.update" onClick={()=>patch(act,{canvasControlsPinned:!view.canvasControlsPinned,canvasControlsExpanded:!view.canvasControlsPinned})}><Pin/></button></div>
   <CanvasTabs state={state} act={act}/>
   {draft.browser&&<BrowserAddress state={state} act={act}/>}
   {draft.open&&<form className="a-canvas-file-form" onSubmit={e=>{e.preventDefault();act('canvas.show',{kind:draft.kind||'auto',path:draft.path||''})}}><label htmlFor="canvas-file-path">File in this workspace</label><PathField id="canvas-file-path" value={draft.path||''} onChange={path=>changeDraft({path})} state={state} act={act} placeholder="README.md or a full path"/><div className="a-canvas-file-actions"><select aria-label="Canvas file format" value={draft.kind||'auto'} data-action="view.update" onChange={e=>changeDraft({kind:e.target.value})}><option value="auto">Detect automatically</option><option value="html">HTML</option><option value="babylon">3D · Babylon.js</option><option value="mermaid">Mermaid</option><option value="dot">Graphviz DOT</option><option value="json">JSON</option><option value="jsonl">JSONL</option><option value="text">Text</option><option value="markdown">Markdown</option><option value="code">Code</option><option value="image">Image</option></select><button type="submit" className="a-primary" data-action="canvas.show" disabled={!draft.path?.trim()}>Open file<ChevronRight/></button></div></form>}
   {canvas.path&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}
+   </div>
+  </div>
   <div className="a-canvas-body">{draft.library||canvas.placeholder?<SavedArtifacts state={state} act={act}/>:canvas.kind==='mcp-app'?<McpAppViewer key={canvas.id} canvas={canvas} act={act}/>:canvas.kind==='browser'?<BrowserPreview key={canvas.id} canvas={canvas} act={act}/>:canvas.kind==='a2ui'?<A2UISurface surface={canvas.surface} act={act}/>:canvas.kind?<CanvasViewer key={canvas.id} canvas={canvas} act={act}/>:<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}</div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
  </aside>;
