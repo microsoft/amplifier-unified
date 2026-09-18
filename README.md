@@ -30,6 +30,10 @@ amplifier-unified
 
 End users need no Node installation: compiled React assets ship in the Python package. **Settings → Maintenance → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
 
+## Smart Tools and collaborative canvas apps
+
+**Settings → Capabilities → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
+
 ## Development
 
 ```sh
@@ -155,7 +159,7 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ### Same chat in CLI and web
 
-Unified 0.6 pins the Foundation `session.shared_state` API. CLI participation
+Unified 0.7 pins the Foundation `session.shared_state` API. CLI participation
 requires the upgraded shared-root adapter; restart older CLI processes after
 updating. Native Windows CLI persistence remains available, but shared-session
 locking is supported only on POSIX local filesystems.
@@ -251,7 +255,10 @@ storage. Removing a draft attachment detaches it without deleting historical
 files.
 
 The left rail expands on hover; its sidebar icon toggles whether it stays pinned. It manages existing workspace
-folders and their conversations. The right canvas has an adjustable width and
+folders and their conversations. Drag either pane divider to resize; chat can
+shrink to 360 pixels. The canvas focus button fills the app frame without reloading
+its content. Its compact header reveals viewer controls on hover or click, with
+a pin to keep them open. The right canvas has an adjustable width and
 previews interactive HTML, Babylon.js 3D scenes, Markdown, Mermaid, Graphviz, code, JSON/JSONL, images,
 and declarative agent UI. The agent receives explicit canvas guidance on every
 turn and can inspect render results and operate standard HTML controls. See
@@ -291,3 +298,44 @@ keep the server process alive. These previews are sandboxed: some websites block
 embedding, and apps needing cookies, browser storage or same-origin API access
 may need **Open in browser**. Browser preview DOM is not exposed to the agent;
 authored HTML previews retain their existing bounded document/control bridge.
+
+## Install the web app
+
+### Send feedback
+
+Use **Send feedback** in the app header to submit a bug report, idea, or question
+as an issue in the private `bkrabach/amplifier-unified` repository. The host uses
+its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
+access. Review the title and details, then send. The result includes a link to
+the created issue. No label configuration is required.
+
+Only the entered text, feedback category, and submission reference are sent.
+The optional diagnostics checkbox adds exactly the displayed app version and
+OS family. It defaults off; chats, files, paths, provider configuration, and
+credentials are not attached automatically.
+
+Agents use the same typed `feedback.submit` action when the user asks them to
+send feedback, and can edit the shared `view.feedbackDraft`. Results are retained
+at `/feedback/requests`. A retry must keep the same `requestId` and payload.
+Accepted submissions are attempted at most once. If GitHub's response is lost,
+the app reports an uncertain outcome and links to the issue list; it does not
+automatically create a duplicate. Check that list before choosing **New feedback**.
+
+### Browser installation
+
+In Edge or Chrome, use the install icon in the address bar or the browser’s app
+installation menu. Safari on Mac supports **File → Add to Dock**; on iPhone/iPad,
+use **Share → Add to Home Screen**. Installation needs localhost/loopback or a
+trusted HTTPS deployment. Browser support varies; the ordinary web UI still works.
+
+The installed app uses the official Amplifier icon, a dedicated window, and the
+selected chat’s title. Keep the Python service running at the same address: PWA
+installation does not start or replace the backend. Offline navigation shows a
+reconnection page. The service worker caches only public branding and that help
+page; it never caches authenticated pages, API data, chats, or canvas artifacts,
+and never forces an active window to reload.
+
+The complete official assets are retained in [assets](assets/UPSTREAM.md), pinned
+to an upstream revision with its license. `npm --prefix frontend run build` syncs
+the web icons and generates a versioned public-assets service worker. Installation
+requirements follow the [web app manifest guidance](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).

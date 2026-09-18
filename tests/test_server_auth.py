@@ -1,8 +1,10 @@
+import time
+
 import pytest
 
 from test_service import Runtime
 
-from amplifier_web.auth import data_identity, new_csrf, new_session
+from amplifier_web.auth import CSRF_COOKIE, _signed, _verified, data_identity, new_csrf, new_session
 from amplifier_web.server import create_app
 
 
@@ -114,6 +116,96 @@ async def test_pam_login_issues_only_unified_host_cookie(aiohttp_client, tmp_pat
     assert cookie["domain"] == "" and cookie["httponly"] and cookie["samesite"].lower() == "strict"
 
 
+async def test_login_reuses_verified_csrf_across_public_favicon_and_sequential_forms(
+        aiohttp_client, tmp_path, monkeypatch):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    pam_calls = []
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam",
+                        lambda username, password: pam_calls.append((username, password)) or True)
+
+    for _ in range(2):
+        client.session.cookie_jar.clear()
+        login = await client.get("/login?next=/")
+        csrf = login.cookies[CSRF_COOKIE].value
+        assert csrf in await login.text()
+
+        favicon = await client.get("/favicon.ico", headers={"Cookie": f"{CSRF_COOKIE}={csrf}"},
+                                   allow_redirects=False)
+        assert favicon.status == 200
+        assert CSRF_COOKIE not in favicon.cookies
+        replacement = await client.get("/login?next=/",
+                                       headers={"Cookie": f"{CSRF_COOKIE}={csrf}"})
+        assert replacement.cookies[CSRF_COOKIE].value == csrf
+        assert csrf in await replacement.text()
+
+        response = await client.post("/login?next=/", headers={"Cookie": f"{CSRF_COOKIE}={csrf}"},
+                                     data={"username": "owner", "password": "correct", "csrf": csrf},
+                                     allow_redirects=False)
+        assert response.status == 303
+        assert response.headers["Location"] == "/"
+
+    assert pam_calls == [("owner", "correct"), ("owner", "correct")]
+
+
+@pytest.mark.parametrize("invalid", [
+    lambda secret: None,
+    lambda secret: new_csrf(secret) + "x",
+    lambda secret: _signed(secret, {"kind": "csrf", "issued": 1, "nonce": "expired"}),
+    lambda secret: _signed(secret, {"kind": "session", "issued": int(time.time()), "nonce": "wrong-kind"}),
+    lambda secret: _signed(secret, {"kind": "csrf", "issued": int(time.time()) + 60, "nonce": "future"}),
+])
+async def test_login_replaces_missing_or_invalid_csrf_cookie(aiohttp_client, tmp_path, invalid):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    old_csrf = invalid(app["session_secret"])
+    headers = {} if old_csrf is None else {"Cookie": f"{CSRF_COOKIE}={old_csrf}"}
+
+    response = await client.get("/login", headers=headers)
+    csrf = response.cookies[CSRF_COOKIE].value
+    assert csrf != old_csrf
+    assert _verified(app["session_secret"], csrf, 900, "csrf")
+    assert csrf in await response.text()
+
+
+async def test_expired_and_mismatched_login_csrf_remain_rejected(aiohttp_client, tmp_path, monkeypatch):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam",
+                        lambda *args: pytest.fail("invalid CSRF must not invoke PAM"))
+    secret = app["session_secret"]
+    expired = _signed(secret, {"kind": "csrf", "issued": 1, "nonce": "expired"})
+    valid = new_csrf(secret)
+
+    expired_response = await client.post("/login", headers={"Cookie": f"{CSRF_COOKIE}={expired}"},
+                                         data={"csrf": expired})
+    mismatch_response = await client.post("/login", headers={"Cookie": f"{CSRF_COOKIE}={valid}"},
+                                          data={"csrf": new_csrf(secret)})
+    assert expired_response.status == 403
+    assert mismatch_response.status == 403
+
+
+@pytest.mark.parametrize(("path", "location"), [
+    ("/login?next=/", "/login?error=1"),
+    ("/login?next=/projects%3Ftab%3Done", "/login?next=/projects?tab%3Done&error=1"),
+])
+async def test_failed_pam_login_redirects_to_well_formed_login_url(
+        aiohttp_client, tmp_path, monkeypatch, path, location):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam", lambda *args: False)
+    csrf = new_csrf(app["session_secret"])
+
+    response = await client.post(path, headers={"Cookie": f"{CSRF_COOKIE}={csrf}"},
+                                 data={"csrf": csrf}, allow_redirects=False)
+    assert response.status == 303
+    assert response.headers["Location"] == location
+
+
 async def test_opaque_origin_login_stays_blocked_even_with_valid_csrf(aiohttp_client, tmp_path, monkeypatch):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
@@ -153,7 +245,7 @@ async def test_external_document_navigation_reaches_login_or_setup(aiohttp_clien
                                         headers=NAVIGATION_HEADERS, allow_redirects=False)
     assert response.status == 200
     if method == "GET":
-        assert "Amplifier Unified" in await response.text()
+        assert "Amplifier" in await response.text()
     assert (await client.get("/api/state")).status == 401
 
 
@@ -209,3 +301,23 @@ async def test_external_navigation_does_not_allow_unknown_host(aiohttp_client, t
     response = await client.get("/login", headers={**NAVIGATION_HEADERS, "Host": "attacker.example"})
     assert response.status == 403
     assert (await response.json())["error"] == "This Host is not configured."
+
+async def test_pwa_metadata_is_public_but_conversations_and_canvas_stay_private(aiohttp_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    for path in ['/manifest.webmanifest','/sw.js','/pwa.js','/offline.html','/app-pages.css',
+                 '/favicon.ico','/branding/pwa/pwa-192.png','/branding/pwa/pwa-512.png']:
+        response = await client.get(path, allow_redirects=False)
+        assert response.status == 200, path
+        assert 'Set-Cookie' not in response.headers
+    manifest = await (await client.get('/manifest.webmanifest')).json()
+    assert manifest['start_url'] == '/' and manifest['display'] == 'standalone'
+    for path in ['/api/state','/api/canvas/private/document','/api/attachments/private']:
+        assert (await client.get(path, allow_redirects=False)).status == 401
+    assert (await client.get('/', allow_redirects=False)).status == 307
+    assert (await client.get('/index.html', allow_redirects=False)).status == 307
+    assert (await client.post('/sw.js', allow_redirects=False)).status == 307
+    login = await client.get('/login?error=1')
+    assert login.headers['Cache-Control'] == 'no-store'
+    assert 'Could not sign in.' in await login.text()

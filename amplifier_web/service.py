@@ -61,7 +61,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition", schema({"ids":{"type":"array","items":string(300),"maxItems":500}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout", schema({"patch": {"type": "object"}})),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
@@ -113,8 +113,8 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
-    "updates.check": ("Check ecosystem sources for updates", schema()),
-    "updates.install": ("Stage and validate available ecosystem updates; activate when idle", schema()),
+    "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
+    "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice or workspace defaults", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
@@ -162,6 +162,12 @@ def validate_theme(css):
     visit(rules)
 
 
+from .smart_canvas import definitions as smart_tool_definitions
+ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
+from .feedback import definitions as feedback_definitions
+ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
+
+
 class AppService:
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
         self.data_dir = Path(data_dir).expanduser()
@@ -177,8 +183,11 @@ class AppService:
         self.voice_service = None
         self.update_manager = None
         self.management = None
+        self.smart_tools = None
+        self.smart_canvas = None
         self.queues = set()
         self.tasks = set()
+        self.smart_tool_tasks = set()
         self.lock = asyncio.Lock()
         self.closed = False
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
@@ -213,6 +222,8 @@ class AppService:
         for session in self.state['sessions']:
             session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
             persist(self.data_dir,session)
+        from .feedback import Feedback
+        self.feedback = Feedback(self)
         self._save()
 
     def default_theme(self):
@@ -289,6 +300,8 @@ class AppService:
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None):
         args = args or {}
+        if action.startswith("smartTools."):
+            command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
         try:
@@ -306,7 +319,7 @@ class AppService:
                     return {**json.loads(previous[1]), "state": self.get_state(), "duplicate": True}
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if self.state.get("updates",{}).get("phase") == "activating" and action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
+            if self.state.get("updates",{}).get("phase") == "activating" and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -520,18 +533,33 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
                     if key in patch and patch[key] not in options:
                         raise AppError("Invalid " + key)
-                if "canvasWidth" in patch and (type(patch["canvasWidth"]) not in {int, float} or not 300 <= patch["canvasWidth"] <= 900):
-                    raise AppError("Canvas width must be between 300 and 900 pixels.")
-                for key in ("navPinned", "navExpanded"):
+                for key, minimum in (("canvasWidth", 300), ("navWidth", 216)):
+                    if key in patch and (type(patch[key]) not in {int, float} or not minimum <= patch[key] <= 16384):
+                        raise AppError(f"{key} must be between {minimum} and 16384 pixels.")
+                for key in ("navPinned", "navExpanded", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded"):
                     if key in patch and type(patch[key]) is not bool:
-                        raise AppError("Navigation switches must be true or false.")
+                        raise AppError("Layout switches must be true or false.")
                 self.state["view"].update(copy.deepcopy(patch))
+            elif action == "feedback.submit":
+                if self.feedback.accept(args):
+                    pending.append((self.feedback.send, (args['requestId'],)))
+            elif action.startswith("smartTools."):
+                if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
+                if action == 'smartTools.context':
+                    self.smart_canvas.context(args)
+                else:
+                    scoped_args = copy.deepcopy(args)
+                    if action in {'smartTools.call','smartTools.open'}:
+                        scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
+                    if action == 'smartTools.appCall':
+                        self.smart_canvas.binding(args['canvasId'])
+                    pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
@@ -593,6 +621,10 @@ class AppService:
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
+            if action.startswith("smartTools.") and action != "smartTools.context":
+                receipt["operationId"] = command_id
+            if action == "feedback.submit":
+                receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             self._publish()
@@ -603,7 +635,10 @@ class AppService:
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 await fn(*values)
             else:
-                self._task(self._guard(fn, values))
+                task = self._task(self._guard(fn, values))
+                if action.startswith("smartTools."):
+                    self.smart_tool_tasks.add(task)
+                    task.add_done_callback(self.smart_tool_tasks.discard)
         return {**result, "state": self.get_state()}
 
     async def _guard(self, fn, args):
@@ -836,7 +871,7 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action']=='canvas.show':
+            if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(result['state'], {}, session_id=session_id, resolve=self.state_resource)}
@@ -920,6 +955,8 @@ class AppService:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.smart_tools:
+            await self.smart_tools.close()
         if self.management:
             await self.management.provider_catalog.close()
         self._save()

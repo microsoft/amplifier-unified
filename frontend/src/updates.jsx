@@ -1,7 +1,8 @@
 import {useListFilter} from './list-filter.jsx';
 import {ResultNotice} from './settings-ui';
 import React from 'react';
-import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin} from 'lucide-react';
+import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3} from 'lucide-react';
+import './updates.css';
 const labels={update:'Update available',current:'Current',pinned:'Pinned',check_failed:'Check failed',local_changes:'Local changes',not_checked:'Not checked',release_channel_needed:'Release channel not configured'};
 function SourceList({items,state,act,id}){
  const [shown,filter,query]=useListFilter(state,act,id,items,row=>[row.label,row.id,row.kind,row.status,row.ref,row.detail],'Filter update sources');
@@ -13,23 +14,38 @@ function SourceList({items,state,act,id}){
 }
 export function UpdateSettings({state,act}){
  const updates=state.updates||{},options=state.settings?.updates||{},busy=['checking','staging','validating','activating'].includes(updates.phase);
- const items=updates.items||[],available=items.filter(item=>item.status==='update').sort((a,b)=>(a.kind==='app'?-1:0)-(b.kind==='app'?-1:0)||a.label.localeCompare(b.label)),issues=items.filter(item=>['check_failed','local_changes'].includes(item.status));
+ const application=updates.application||(updates.items||[]).find(item=>item.kind==='app')||{};
+ const items=(updates.items||[]).filter(item=>item.kind!=='app'&&item.id!=='application');
+ const available=items.filter(item=>item.status==='update').sort((a,b)=>a.label.localeCompare(b.label)),issues=items.filter(item=>['check_failed','local_changes'].includes(item.status));
+ const appAvailable=application.status==='update',pending=updates.pendingApp||updates.pendingRelease||updates.pendingRestart;
+ const appState=updates.pendingRestart?'restarting':updates.pendingApp?(updates.error?'failed':'staged'):application.status==='check_failed'?'failed':application.releaseBehind?'ahead':application.status||'not_checked';
+ const appLabels={restarting:'Restarting',staged:'Ready to restart',update:'Update available',current:'Latest release installed',failed:'Needs attention',ahead:'Ahead of published release',not_checked:'Not checked',release_channel_needed:'Release channel not configured'};
+ const AppIcon=appState==='current'?Check:appState==='update'?ArrowUpCircle:appState==='failed'?AlertCircle:Clock3;
+ const appDetail=updates.pendingRestart?'The app is installed. The local server is restarting; this page will reconnect.':updates.pendingApp?updates.error||'The app passed validation and will restart when conversations, worker lanes, smart tools, and calls are idle.':application.detail;
+ const installLabel=updates.pendingRestart?'Restarting…':updates.pendingApp?'Apply app update':updates.pendingRelease?'Apply ecosystem update':appAvailable?'Install app update':'Install available';
+ const resultPhase=updates.error||['error','interrupted'].includes(updates.phase)?'error':updates.pendingRestart||busy?'working':updates.phase==='installed'?'success':'neutral';
+ const resultMessage=updates.error||(['error','interrupted'].includes(updates.phase)?updates.detail||'The update did not finish.':busy||pending||updates.phase==='installed'?updates.detail:'');
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;
  const change=patch=>act('settings.update',{patch:{updates:patch}});
  return <section className="a-updates" data-part="updates">
-  <p className="a-caption">Updates are prepared and validated separately, then activated when conversations, worker lanes, and calls are idle.</p>
-  <div data-part="available-updates"><h4>Available updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?'No updates available from the last check.':'Check for updates to see what’s new.'}</p>}</div>
+  <div className="a-app-update" data-part="application-update" aria-label="Application release status">
+   <div className="a-app-update-heading"><h4>Amplifier Unified</h4><span className={'a-app-update-status '+appState}><AppIcon aria-hidden="true"/>{appLabels[appState]||appState}</span></div>
+   <dl className="a-app-update-versions"><div><dt>Installed</dt><dd>{application.current||'Not reported'}</dd></div><div><dt>Latest release</dt><dd>{application.latest||'Not checked'}</dd></div></dl>
+   <p className="a-caption a-app-update-channel">Published GitHub releases · app updates restart the local server.</p>
+   {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-app-update-detail">{appDetail}</p>)}
+  </div>
+  <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4><p className="a-caption">Bundles, modules, and libraries load on the next resumed turn after activation.</p>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?'No updates available from the last check.':'Check for updates to see what’s new.'}</p>}</div>
   {!!issues.length&&<div><h4>Needs attention</h4><SourceList items={issues} state={state} act={act} id="update-issues"/></div>}
-  <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!updates.pendingRelease||!!updates.pendingApp} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!available.length||!!updates.pendingRelease||!!updates.pendingApp} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Install available</button>{updates.canRollback&&<button className="a-soft" disabled={busy} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back</button>}</div>
-  <ResultNotice phase={updates.error?'error':busy?'working':'pending'} message={updates.error||(busy||updates.pendingRelease||updates.pendingApp?updates.detail:'')}/>
+  <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!!updates.pendingRestart||(!available.length&&!appAvailable&&!pending)} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>{installLabel}</button>{updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}</div>
+  {(appAvailable||updates.pendingApp)&&available.length>0&&<p className="a-caption">The app updates first and restarts the server. Ecosystem updates can be installed afterward.</p>}
+  <ResultNotice phase={resultPhase} message={resultMessage}/>
   {updates.lastCheck&&<p className="a-caption a-check-inline"><Check/>Last checked {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
-  {updates.phase==='installed'&&<p className="a-caption">{updates.detail}</p>}
   <div className="a-update-options">
    <label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false} onChange={e=>change({autoCheck:e.target.checked,...(!e.target.checked?{autoInstall:false}:{})})}/>Automatically check for updates</label>
    <label><input type="checkbox" data-action="settings.update" disabled={options.autoCheck===false} checked={!!options.autoInstall} onChange={e=>change({autoInstall:e.target.checked})}/>Automatically install eligible updates when idle</label>
    <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
   </div>
-  <p className="a-caption">Checks run while the local server is running. Bundle and module updates load on the next resumed turn after activation. App updates restart the server. Pins and local edits stay unchanged.</p>
-  {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' sources'}</button>{expanded&&<><p className="a-caption">Source inventory for troubleshooting version pins and checks.</p><SourceList items={items} state={state} act={act} id="update-sources"/></>}</div>}
+  <p className="a-caption">Checks include the app and ecosystem while the local server is running. Updates activate when work and calls are idle. Automatic app installation includes a server restart. Pins and local edits stay unchanged.</p>
+  {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<><p className="a-caption">Source inventory for troubleshooting version pins and checks.</p><SourceList items={items} state={state} act={act} id="update-sources"/></>}</div>}
  </section>;
 }

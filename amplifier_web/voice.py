@@ -458,9 +458,16 @@ class VoiceService:
                 raise VoiceError("Create or select a conversation before calling.", 409, "no_session")
             preference = state.get("settings", {}).get("preferredVoice", MODELS["live"])
             selected = ("realtime" if preference == MODELS["realtime"] else "live") if provider == "auto" else provider
-            call = VoiceCall(self, session_id)
-            self.call = call
-            await self.service.set_voice_status({"status": "connecting", "sessionId": session_id, "error": None})
+            # This endpoint bypasses command dispatch. Claim the active call
+            # under the same lock used by update activation before any provider
+            # request can start; activation then sees the connecting status.
+            async with self.service.lock:
+                if self.service.state.get("updates", {}).get("phase") == "activating":
+                    raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
+                call = VoiceCall(self, session_id)
+                self.call = call
+                self.service.state["voice"].update({"status": "connecting", "sessionId": session_id, "error": None})
+                self.service._publish()
             try:
                 try:
                     result = await call.create(sdp, selected)
