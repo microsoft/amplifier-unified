@@ -61,7 +61,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition", schema({"ids":{"type":"array","items":string(300),"maxItems":500}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout", schema({"patch": {"type": "object"}})),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
@@ -526,17 +526,18 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
                     if key in patch and patch[key] not in options:
                         raise AppError("Invalid " + key)
-                if "canvasWidth" in patch and (type(patch["canvasWidth"]) not in {int, float} or not 300 <= patch["canvasWidth"] <= 900):
-                    raise AppError("Canvas width must be between 300 and 900 pixels.")
-                for key in ("navPinned", "navExpanded"):
+                for key, minimum in (("canvasWidth", 300), ("navWidth", 216)):
+                    if key in patch and (type(patch[key]) not in {int, float} or not minimum <= patch[key] <= 16384):
+                        raise AppError(f"{key} must be between {minimum} and 16384 pixels.")
+                for key in ("navPinned", "navExpanded", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded"):
                     if key in patch and type(patch[key]) is not bool:
-                        raise AppError("Navigation switches must be true or false.")
+                        raise AppError("Layout switches must be true or false.")
                 self.state["view"].update(copy.deepcopy(patch))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")

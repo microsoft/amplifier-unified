@@ -7,6 +7,40 @@ Removing a registration never deletes its folder or conversations. Keep at least
 one workspace registered. `workspaces` and `selectedWorkspaceId` appear in the
 same state visible to the agent and user.
 
+## Workspace layout
+
+Drag the canvas's left divider or pinned navigation's right divider. Chat keeps
+360 pixels, canvas keeps 300, and pinned navigation keeps 216; the pane being
+resized gets the remaining room. Keyboard users can focus a divider and use
+arrows (20 pixels), Home (minimum), or End (maximum). On narrow windows, the
+canvas covers the workspace instead of squeezing both panes.
+
+The canvas has a compact 36-pixel title row. Hover over it or open **Canvas
+controls** to reveal tabs, files, websites, source and viewer tools. Pin those
+controls to keep them visible. Rendering failures stay visible even when controls
+are collapsed. HTML, browser and MCP App views use the full content area without
+host padding. Documents retain readable internal margins.
+
+**Focus canvas** fills the app frame; **Exit canvas focus** returns to the split
+layout. Escape also exits when focus is in the host UI (embedded apps may consume
+keyboard events). Resizing and focusing keep the current viewer mounted; they do
+not reload its content or reconnect its tool server. Closing or changing tabs
+still follows the viewer's normal lifecycle.
+
+All layout controls use `view.update` and are available to agents:
+
+| Patch field | Meaning |
+| --- | --- |
+| `canvasWidth` | Preferred width, 300–16384 pixels; fitted to available room |
+| `navWidth` | Preferred pinned navigation width, 216–16384 pixels |
+| `navPinned`, `navExpanded` | Keep navigation open or reveal it temporarily |
+| `canvasFocused` | Full-frame view; false restores the split layout |
+| `canvasControlsPinned`, `canvasControlsExpanded` | Keep controls visible or reveal temporarily |
+
+Preferences persist in `/view`; browser snapshots in `/devices` include actual
+pane bounds and divider minimum/maximum/current widths. Closing the canvas clears
+full-frame mode while retaining preferred split widths.
+
 ## Agent awareness and access
 
 The host mounts `app_control` and injects canvas guidance as ephemeral system

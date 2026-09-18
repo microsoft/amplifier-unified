@@ -179,7 +179,10 @@ storage. Removing a draft attachment detaches it without deleting historical
 files.
 
 The left rail expands on hover; its sidebar icon toggles whether it stays pinned. It manages existing workspace
-folders and their conversations. The right canvas has an adjustable width and
+folders and their conversations. Drag either pane divider to resize; chat can
+shrink to 360 pixels. The canvas focus button fills the app frame without reloading
+its content. Its compact header reveals viewer controls on hover or click, with
+a pin to keep them open. The right canvas has an adjustable width and
 previews interactive HTML, Babylon.js 3D scenes, Markdown, Mermaid, Graphviz, code, JSON/JSONL, images,
 and declarative agent UI. The agent receives explicit canvas guidance on every
 turn and can inspect render results and operate standard HTML controls. See

@@ -187,3 +187,19 @@ async def test_html_standard_controls_are_visible_and_agent_operable(service):
         await service.dispatch('canvas.interact', {'id':identity,'controlId':'invented','event':'click'})
     await service.dispatch('canvas.view', {'id':identity,'patch':{'source':True}})
     assert 'document' not in service.state['canvas'] and 'interaction' not in service.state['canvas']
+
+
+async def test_canvas_focus_and_large_layout_preferences_are_shared_and_durable(service):
+    preferences = {"canvasWidth":1800,"navWidth":280,"canvasFocused":True,
+                   "canvasControlsPinned":True,"canvasControlsExpanded":True}
+    await service.dispatch("view.update", {"patch":preferences}, origin="agent")
+    restored = AppService(service.data_dir)
+    assert all(restored.get_state()["view"][key] == value for key, value in preferences.items())
+    await restored.close()
+    for patch in [{"navWidth":215}, {"navWidth":True}, {"canvasFocused":"true"},
+                  {"canvasControlsPinned":1}, {"canvasControlsExpanded":None}, {"canvasWidth":float('nan')}]:
+        with pytest.raises(AppError):
+            await service.dispatch("view.update", {"patch":patch}, origin="agent")
+    await service.dispatch("canvas.close", {}, origin="agent")
+    assert not service.get_state()["view"]["canvasFocused"]
+    assert service.get_state()["view"]["canvasWidth"] == 1800
