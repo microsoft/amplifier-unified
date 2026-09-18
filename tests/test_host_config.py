@@ -66,6 +66,7 @@ class HostSettingsTests(unittest.TestCase):
     def test_environment_values_never_execute_shell_and_missing_is_explicit(self):
         with patch.dict(os.environ,{'AMPLIFIER_TEST_VALUE':'$(echo private)','AMPLIFIER_TEST_EMPTY':''},clear=False):
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_VALUE}'),'$(echo private)')
+            self.assertEqual(expand_environment('${AMPLIFIER_TEST_VALUE}',environment={'AMPLIFIER_TEST_VALUE':'injected'}),'injected')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:-fallback}'),'fallback')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:INFO}'),'INFO')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:}'),'')
@@ -73,6 +74,15 @@ class HostSettingsTests(unittest.TestCase):
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_EMPTY:fallback}'),'')
             with self.assertRaisesRegex(ValueError,'AMPLIFIER_TEST_ABSENT'):
                 expand_environment('${AMPLIFIER_TEST_ABSENT}')
+
+    def test_apply_settings_defers_provider_config_but_expands_provider_source(self):
+        bundle=SimpleNamespace(providers=[],tools=[],hooks=[],session={})
+        providers=[{'module':'provider-test','id':'one','source':'${PROVIDER_SOURCE}','config':{'base_url':'${OPTIONAL_BASE_URL}'}}]
+        config=SimpleNamespace(settings={'config':{'providers':providers}},providers=providers)
+        with patch.dict(os.environ,{'PROVIDER_SOURCE':'source'},clear=False):
+            result=_apply_settings(bundle,config)
+            self.assertEqual(result.providers[0]['source'],'source')
+            self.assertEqual(result.providers[0]['config']['base_url'],'${OPTIONAL_BASE_URL}')
 
     def test_unsupported_root_orchestrator_is_not_silently_replaced(self):
         with self.assertRaisesRegex(ValueError,'not compatible'):

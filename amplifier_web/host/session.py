@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from .config import expand_environment, load_config, merge, write_private
+from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 VENDORED_LOOP = Path(__file__).resolve().parents[1] / "runtime_deps" / "vendor" / "loop-live"
 LOOP_SOURCE = str(VENDORED_LOOP) if (VENDORED_LOOP / "pyproject.toml").exists() else "git+https://github.com/bkrabach/amplifier-module-loop-live@bb9f5966d285ee4a93f4d84309aacf4bd9a09b5a"
@@ -104,7 +105,7 @@ def apply_provider_environment(plan):
     than allowing an ambient default to override an explicit credential choice.
     """
     global _copilot_credential
-    tokens={row.get('config',{}).get('github_token') for row in plan.get('providers',[])
+    tokens={row.get('config',{}).get('github_token') for row in iter_provider_rows(plan)
             if row.get('module')=='provider-github-copilot' and row.get('enabled',True)}-{None,''}
     if len(tokens)>1 or (tokens and _copilot_credential is not None and _copilot_credential not in tokens):
         raise ValueError('Different Copilot credentials need separate conversations; this SDK shares authentication within one session process.')
@@ -144,7 +145,12 @@ def _apply_settings(bundle, config):
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
                 row["instance_id"] = row["id"]
-            values.append(expand_environment(row))
+            if kind == "providers":
+                if "source" in row:
+                    row["source"] = expand_environment(row["source"])
+                values.append(row)
+            else:
+                values.append(expand_environment(row))
         setattr(bundle, kind, values)
     return bundle
 
@@ -156,20 +162,21 @@ def is_snapshot(bundle):
     return getattr(bundle, "version", None) == SNAPSHOT_VERSION
 
 
-def _expand_module_configuration(node):
-    """Resolve declared configuration, never expand prompt/instruction text."""
+def _expand_module_configuration(node, in_provider=False):
+    """Resolve declared configuration, leaving provider config for schema materialization."""
     if isinstance(node, list):
-        return [_expand_module_configuration(value) for value in node]
+        return [_expand_module_configuration(value, in_provider=in_provider) for value in node]
     if not isinstance(node, dict):
         return copy.deepcopy(node)
+    provider = in_provider or node.get("module", "").startswith("provider-")
     result = {}
     for key, value in node.items():
         if key in {"config", "source"}:
-            result[key] = expand_environment(value)
+            result[key] = copy.deepcopy(value) if provider and key == "config" else expand_environment(value)
         elif key in {"instruction", "instructions", "system_prompt"}:
             result[key] = copy.deepcopy(value)
         else:
-            result[key] = _expand_module_configuration(value)
+            result[key] = _expand_module_configuration(value, in_provider=provider)
     if result.get("module", "").startswith("provider-") and result.get("id") and not result.get("instance_id"):
         result["instance_id"] = result["id"]
     return result
@@ -280,7 +287,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if key in edited:
                 setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
     baseline = loaded.to_mount_plan()
-    apply_provider_environment(baseline)
     adapted, replacements = live_plan(baseline, background_delegate)
     # Modify the public Bundle fields before prepare(): loop-live and every
     # agent-specific source go through Foundation's normal activation mechanism.
@@ -297,6 +303,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     prepared = await loaded.prepare(strict=True,
         source_resolver=lambda module, source: module_source(config, snapshot, module, source),
         progress_callback=progress)
+    await materialize_bundle_providers(loaded, prepared)
+    apply_provider_environment(prepared.mount_plan)
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         bundle_name=bundle or config.active_bundle, project_dir=str(config.workspace), project_name=config.workspace.name)
     store = SessionStore(config.home / "sessions")
