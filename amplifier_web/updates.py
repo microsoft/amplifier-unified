@@ -62,11 +62,12 @@ def pinned(ref):
 
 
 async def process(*args, cwd=None, env=None, timeout=90, raw=False):
+    started=time.monotonic()
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-    except BaseException:
+    except BaseException as error:
         if proc.returncode is None:
             try:
                 if os.name != 'nt':
@@ -83,11 +84,16 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
                 except ProcessLookupError:
                     pass
                 await proc.wait()
+        if isinstance(error,TimeoutError):
+            from .update_diagnostics import CommandTimeout
+            raise CommandTimeout(time.monotonic()-started) from None
         raise
     if proc.returncode:
-        # Subprocess stderr can contain configured credentials and source URLs.
-        raise RuntimeError('Command failed; source could not be checked or prepared')
-    return stdout if raw else stdout.decode(errors='replace').strip()
+        from .update_diagnostics import CommandFailure,command_facts
+        raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
+    if raw:return stdout
+    from .update_diagnostics import CommandOutput,command_facts
+    return CommandOutput(stdout.decode(errors='replace').strip(),command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
 
 
 async def cache_changes(root):
@@ -166,8 +172,9 @@ class UpdateManager:
         restarted=state.get('pendingRestart') or {}
         if restarted.get('version')==__import__('amplifier_web').__version__:
             state.update(phase='installed',pendingRestart=None,pendingApp=None,appAvailable=False,
-                         installedAt=time.time(),detail='Application update installed and restarted successfully.')
+                         installedAt=time.time(),error=None,detail='Application update installed and restarted successfully.')
         elif state.get('phase') in {'checking','staging','validating','activating'}:
+            if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
         state.setdefault('items', [])
@@ -187,6 +194,12 @@ class UpdateManager:
         state.setdefault('lastCheck', None)
         state['release'] = active_release(self.home).get('current')
         state['canRollback'] = 'previous' in active_release(self.home)
+        from .update_diagnostics import UpdateDiagnostics
+        self.diagnostics=UpdateDiagnostics(self)
+        if restarted.get('version')==__import__('amplifier_web').__version__:
+            self.diagnostics.begin('application',restarted.get('revision'),restarted.get('attemptId'))
+            self.diagnostics.clear_failure()
+            self.diagnostics.record('restart-ack','succeeded',observedVersion=__import__('amplifier_web').__version__)
         service._save()
 
     async def publish(self, **values):
@@ -239,11 +252,17 @@ class UpdateManager:
         return rows
 
     async def command(self, action):
+        previous_error=self.service.state['updates'].get('error')
         try:
             await getattr(self, action)()
         except asyncio.CancelledError: raise
-        except Exception:
-            await self.publish(phase='error',error='The update operation failed; no conversation work was replayed.')
+        except Exception as error:
+            if self.service.state['updates'].get('phase')=='error' and self.service.state['updates'].get('error') and self.service.state['updates']['error']!=previous_error:return
+            from .update_diagnostics import exception_type
+            last=self.diagnostics.state.get('latest',{})
+            phase=last.get('phase',action)
+            if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
+            await self.publish(phase='error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
 
     async def check(self):
         if self.lock.locked() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
@@ -313,12 +332,14 @@ class UpdateManager:
                 await self.publish(detail='Check for updates before installing. No eligible updates are available.')
                 return
             release=uuid.uuid4().hex
+            self.diagnostics.begin('ecosystem',release)
+            self.diagnostics.record('ecosystem-stage','started')
             stage=self.directory/'releases'/release
             stage.mkdir(parents=True,mode=0o700)
             source=foundation_home(self.home)
             try:
                 await self.publish(phase='staging',detail='Preparing an isolated copy of the ecosystem…',error=None)
-                await asyncio.to_thread(shutil.copytree,source,stage/'foundation',symlinks=True)
+                await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,shutil.copytree,source,stage/'foundation',symlinks=True)
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await asyncio.to_thread(shutil.copytree,self.home/name,stage/name)
                 for config_file in (stage/'config').rglob('*.yaml'):
@@ -336,18 +357,24 @@ class UpdateManager:
                         # Rechecking here also protects edits made after check.
                         await process('git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
                     await self.publish(detail='Downloading '+row['label']+'…')
-                    await process('git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
-                    await process('git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
+                    await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+                    await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
                     meta=target/'.amplifier_cache_meta.json'
                     data=json.loads(meta.read_text());data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
                     meta.write_text(json.dumps(data))
                 await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
                 await self.validate(stage,release)
                 write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__}))
+                self.diagnostics.clear_failure()
+                self.diagnostics.record('ecosystem-stage','succeeded')
                 await self.publish(phase='staged',pendingRelease=release,detail='Update validated; waiting for conversations and calls to be idle.')
             except asyncio.CancelledError: raise
-            except Exception:
-                await self.publish(phase='error',pendingRelease=None,error='The staged update failed validation. Current sources remain active; no conversation work was replayed.')
+            except Exception as error:
+                from .update_diagnostics import exception_type
+                last=self.diagnostics.state.get('latest',{})
+                phase=last.get('phase','ecosystem-stage')
+                if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
+                await self.publish(phase='error',pendingRelease=None,error='Ecosystem update failed during '+phase.replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
                 return
         await self.activate()
 
@@ -361,7 +388,7 @@ class UpdateManager:
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_UNIFIED_RELEASE':'',
             'UV_OVERRIDE':str(Path(__file__).parent/'runtime_deps/compatibility.txt')}
         for workspace,bundle in sorted(configs):
-            await process(*command,workspace,bundle,env=env,timeout=900)
+            await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,env=env,timeout=900)
 
     async def activate(self, rollback=False):
         if self.lock.locked(): return
@@ -397,12 +424,16 @@ class UpdateManager:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
                 items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' else {})} for row in self.service.state['updates'].get('items',[])]
-                await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,
+                await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
                     available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
+                self.diagnostics.clear_failure()
+                self.diagnostics.record('ecosystem-activation','succeeded')
                 self.inventory=[]
                 write_private(self.directory/'inventory.json','[]')
-            except Exception:
-                await self.publish(phase='error',error='Could not activate update; retry when the app is idle.')
+            except Exception as error:
+                from .update_diagnostics import exception_type
+                self.diagnostics.record('ecosystem-activation','failed',errorType=exception_type(error))
+                await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
 
     async def rollback(self):
         await self.activate(rollback=True)
@@ -429,7 +460,13 @@ class UpdateManager:
             try:
                 await self.tick()
             except asyncio.CancelledError: raise
-            except Exception: await self.publish(phase='error',error='Background update failed; current installation remains available.')
+            except Exception as error:
+                from .update_diagnostics import exception_type
+                last=self.diagnostics.state.get('latest',{})
+                if last.get('status') not in {'failed','interrupted'}:
+                    self.diagnostics.record('background-update','failed',errorType=exception_type(error))
+                phase=self.diagnostics.state['latest']['phase']
+                await self.publish(phase='error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             await asyncio.sleep(60)
 
     async def close(self):

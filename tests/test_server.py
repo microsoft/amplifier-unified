@@ -19,7 +19,7 @@ async def test_api_rejects_cross_origin_and_serves_state(authenticated_client, t
     payload = await created.json()
     assert payload["state"]["selectedSessionId"]
     state = await client.get("/api/state")
-    assert (await state.json())["revision"] == payload["revision"]
+    assert (await state.json())["revision"] >= payload["revision"]  # Background diagnostics may publish.
 
 
 async def test_frontend_has_real_stylesheet_asset(authenticated_client, tmp_path):
@@ -77,3 +77,12 @@ async def test_state_details_load_provenance_without_repeating_it_in_snapshots(a
     assert '$resource' in snapshot['sessions'][0]['configuration']['provenance']
     page=await (await client.get('/api/state/detail',params={'path':'/sessions/0/configuration/provenance/agents/0/include_paths/0','offset':'16000'})).json()
     assert page['value']=='a'*4000 and page['nextOffset'] is None
+
+
+async def test_diagnostics_rejects_unknown_test_ids_without_growing_state(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(app)
+    for identity in ['absent-1', 'absent-2', 'absent-3']:
+        response = await client.post('/api/actions', json={'action':'diagnostics.test','args':{'id':identity}})
+        assert response.status == 400
+    assert app['service'].diagnostics.results == {}

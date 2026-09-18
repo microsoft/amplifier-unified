@@ -30,3 +30,12 @@ Full private state backup and selected reset are available under Maintenance. Ba
 The source inventory groups identical repository/ref/revision/status entries and shows their cache-copy count. Installation retains its full path inventory and updates every eligible cached copy. Different branches, revisions, or statuses stay separate. Successful checks use compact inline status; failures include an explanatory notice.
 
 Unread attention counts lead from Settings through Maintenance to Updates. Users and agents can mark items reviewed through `attention.read`; the underlying condition stays visible until resolved, and a new version or changed error becomes unread again.
+
+
+## Update diagnostics
+
+Each application update now has an attempt ID and a separate receipt for candidate installation, candidate probe, installed-tool discovery, runtime shutdown, tool replacement, installed-package probe/version comparison, and restart. Ecosystem copying, fetching, checkout, compatibility probes and activation use the same receipt format. Failed phases remain visible in `updates.diagnostics.lastFailure`; successful staging or restart clears the current failure while retaining recent history. The user and agent read the same state.
+
+Receipts contain only a fixed set of operational facts: phase/status, correlation IDs, elapsed time, exit status, output byte counts, fixed error classifications and allowlisted probe results. Subprocess text, command arguments, workspace paths, source URLs, exception messages and environment variables are never included. Python probes return framed JSON, so unrelated startup messages cannot be mistaken for the package version. Missing imports, missing assets, package location checks, version mismatches, command failures and timeouts remain distinguishable.
+
+When the app diagnostic collector is available it owns durable storage and configured routing of these events. Otherwise the updater writes a private `updates/diagnostics.jsonl` fallback (0600), rotated at approximately 1MB with one previous file. App state retains the latest 50 events. There is no automatic replay after an interrupted install, paid call, or uncertain result. Historical failures without command receipts cannot be reconstructed from successful later probes; a successful retry does not establish the original cause.

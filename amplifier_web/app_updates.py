@@ -14,7 +14,46 @@ from .updates import process
 
 REPOSITORY='bkrabach/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
-PROBE='from amplifier_web.server import create_app; from amplifier_web import __version__; from pathlib import Path; import amplifier_web; import pam; import sys; assert callable(pam.authenticate); p=Path(amplifier_web.__file__).resolve().parent; assert p.is_relative_to(Path(sys.prefix).resolve()); assert (p/"static/index.html").is_file(); print(__version__)'
+PROBE = r'''import json,sys
+facts={"ok":False,"stage":"imports","isolated":bool(sys.flags.isolated),"pythonVersion":"%s.%s.%s"%sys.version_info[:3]}
+try:
+ from pathlib import Path
+ import amplifier_web
+ from amplifier_web import __version__
+ from amplifier_web.server import create_app
+ import pam
+ facts["version"]=__version__
+ facts["stage"]="package"
+ p=Path(amplifier_web.__file__).resolve().parent
+ facts["packageInEnvironment"]=p.is_relative_to(Path(sys.prefix).resolve())
+ assert facts["packageInEnvironment"]
+ facts["stage"]="assets"
+ facts["frontendPresent"]=(p/"static/index.html").is_file()
+ assert facts["frontendPresent"]
+ facts["stage"]="login"
+ facts["loginAvailable"]=callable(pam.authenticate)
+ assert facts["loginAvailable"]
+ facts.update(ok=True,stage="complete")
+except Exception as error:
+ name=type(error).__name__
+ facts["errorType"]=name if name in {"AssertionError","ImportError","ModuleNotFoundError","FileNotFoundError","PermissionError","OSError","RuntimeError","ValueError"} else "Exception"
+print("AMPLIFIER_UPDATE_PROBE="+json.dumps(facts),flush=True)
+if not facts["ok"]:raise SystemExit(1)
+'''
+
+
+def verified_version(manager,output,expected,phase):
+    from .update_diagnostics import probe_record
+    report=probe_record(output)
+    version=report.get('version') if report and report.get('ok') else output.strip() if report is None else None
+    if version_tuple(version)!=version_tuple(expected) or version_tuple(version) is None:
+        facts={'errorType':'ValueError'}
+        if version_tuple(expected):facts['expectedVersion']=expected.removeprefix('v')
+        if version_tuple(version):facts['observedVersion']=version.removeprefix('v')
+        if report:facts['probe']=report
+        manager.diagnostics.record(phase,'failed',**facts)
+        raise ValueError('The probed package does not match the validated release version')
+    return version.removeprefix('v')
 
 def version_tuple(value):
     match=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)',value or '')
@@ -55,6 +94,18 @@ async def check():
         return {**base,'status':'check_failed','detail':'No accessible published release was found. Check GitHub sign-in and release availability.'}
 
 async def stage(manager):
+    manager.diagnostics.begin('application',manager.service.state['updates'].get('application',{}).get('revision'))
+    manager.diagnostics.record('stage','started')
+    try:await _stage(manager)
+    except asyncio.CancelledError:raise
+    except Exception:
+        phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
+        if manager.diagnostics.state.get('latest',{}).get('status')!='failed':manager.diagnostics.record(phase,'failed',errorType='ValueError')
+        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.')
+        raise
+
+
+async def _stage(manager):
     release=manager.service.state['updates'].get('application',{})
     if release.get('status')!='update':raise ValueError('Check for an application release first')
     revision=release['revision']
@@ -65,17 +116,26 @@ async def stage(manager):
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
-    await process(uv,'tool','install','--force','git+'+SOURCE+'@'+revision,env=env,timeout=900)
+    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force','git+'+SOURCE+'@'+revision,env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
-    installed=await process(python,'-I','-c',PROBE,timeout=30)
-    if version_tuple(installed)!=version_tuple(release['latest']):raise ValueError('The release tag does not match its package version')
-    write_private(folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__}))
-    await manager.publish(phase='app-staged',pendingApp=release,detail='Application release validated. Waiting for work to finish before restarting.')
+    output=await manager.diagnostics.run('candidate-probe',process,python,'-I','-c',PROBE,timeout=30)
+    installed=verified_version(manager,output,release['latest'],'candidate-version')
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId']}))
+    manager.diagnostics.clear_failure()
+    manager.diagnostics.record('stage','succeeded',observedVersion=installed)
+    await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId']},detail='Application release validated. Waiting for work to finish before restarting.')
 
 async def activate(manager):
     if manager.lock.locked() or manager.closed:return
     async with manager.lock:
-        await _activate(manager)
+        try:await _activate(manager)
+        except Exception as error:
+            from .update_diagnostics import exception_type
+            last=manager.diagnostics.state.get('latest',{})
+            if last.get('status')!='failed':
+                manager.diagnostics.begin('application',manager.service.state['updates'].get('pendingApp',{}).get('revision'))
+                manager.diagnostics.record('activation-validation','failed',errorType=exception_type(error))
+            raise
 
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
@@ -121,7 +181,8 @@ async def _activate(manager):
         raise ValueError('The pending release does not match its validated package')
     async with manager.service.lock:
         if manager.busy():return
-    uv,executable,installed_python,previous=await installed_target()
+    manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
+    uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)
     helper_python=marker.parent/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     if not helper_python.is_file():
         raise ValueError('The validated app environment is missing; stage the release again')
@@ -129,38 +190,43 @@ async def _activate(manager):
         if manager.busy():return
         manager.service.state['updates'].update(phase='activating',detail='Installing the app update and restarting…')
         manager.service._publish()
-    if manager.service.runtime:await manager.service.runtime.close()
-    write_private(manager.directory/'previous-app.json',json.dumps(previous))
     try:
-        await process(uv,'tool','install','--force','git+'+SOURCE+'@'+release['revision'],env=git_environment(),timeout=900)
-        installed=await process(installed_python,'-I','-c',PROBE,timeout=30)
-        if version_tuple(installed)!=version_tuple(validated['version']):
-            raise ValueError('Installed package differs from the validated release')
+        if manager.service.runtime:await manager.diagnostics.run('runtime-close',manager.service.runtime.close)
+        manager.diagnostics.sync('recovery-record',write_private,manager.directory/'previous-app.json',json.dumps(previous))
+        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force','git+'+SOURCE+'@'+release['revision'],env=git_environment(),timeout=900)
+        output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,timeout=30)
+        installed=verified_version(manager,output,validated['version'],'replacement-version')
     except asyncio.CancelledError:
-        await manager.publish(phase='interrupted',error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')
+        await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')
         raise
-    except Exception:
-        await manager.publish(phase='error',pendingApp=None,error='App installation or verification failed; the running host was retained. Check the recorded previous installation and repair the uv tool before restarting.')
+    except Exception as error:
+        last=manager.diagnostics.state.get('latest',{})
+        phase=last.get('phase','activation')
+        if last.get('status')!='failed':
+            from .update_diagnostics import exception_type
+            manager.diagnostics.record(phase,'failed',errorType=exception_type(error))
+        await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained; review the diagnostic receipt before retrying.')
         return
     # Keep the work gate closed until this process exits. Publishing installed
     # here would permit a new conversation between the helper spawn and SIGTERM.
-    await manager.publish(phase='activating',pendingApp=None,appAvailable=False,
-        pendingRestart={'version':validated['version'],'revision':revision},detail='Application installed. Restarting the local host…')
+    manager.diagnostics.clear_failure()
+    await manager.publish(phase='activating',pendingApp=None,appAvailable=False,error=None,
+        pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId']},detail='Application installed. Restarting the local host…')
     # A generated systemd unit owns its process lifecycle.  Asking systemd to
     # restart that unit avoids racing its restart policy with a second detached
     # process spawned by this in-process updater.
     from .deployment_service import UNIT_NAME, current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
         try:
-            await process('systemctl','--user','restart',UNIT_NAME,timeout=30)
+            await manager.diagnostics.run('service-restart',process,'systemctl','--user','restart',UNIT_NAME,timeout=30)
         except (RuntimeError, TimeoutError):
             await manager.publish(phase='error',pendingRestart=None,error='The app installed, but the managed service could not restart. Run amplifier-unified service restart.')
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
-    options=restart_arguments(manager,executable)
+    options=manager.diagnostics.sync('restart-configuration',restart_arguments,manager,executable)
     helper=manager.directory/'restart.py'
-    write_private(helper,'''import json,os,subprocess,sys,time
+    manager.diagnostics.sync('restart-helper-file',write_private,helper,'''import json,os,subprocess,sys,time
 parent=int(sys.argv[1]);args=json.loads(sys.argv[2]);logpath=sys.argv[3]
 for _ in range(120):
  try: os.kill(parent,0)
@@ -172,11 +238,12 @@ with open(logpath,'a') as log:
  subprocess.Popen(args,start_new_session=True,stdout=log,stderr=log)
 ''')
     try:
-        await asyncio.create_subprocess_exec(str(helper_python),str(helper),str(os.getpid()),json.dumps(options),str(manager.directory/'restart.log'),start_new_session=True,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+        await manager.diagnostics.run('restart-helper',asyncio.create_subprocess_exec,str(helper_python),str(helper),str(os.getpid()),json.dumps(options),str(manager.directory/'restart.log'),start_new_session=True,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
     except (OSError,ValueError):
         await manager.publish(phase='error',pendingRestart=None,error='The update installed, but its restart helper could not start. Restart Amplifier Unified from the terminal.')
         return
     import signal
+    manager.diagnostics.record('restart-request','succeeded')
     os.kill(os.getpid(),signal.SIGTERM)
 
 

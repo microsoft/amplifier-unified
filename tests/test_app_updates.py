@@ -21,7 +21,9 @@ def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
     result = subprocess.run([sys.executable, '-c', app_updates.PROBE],
                             cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode != 0
-    assert 'missing PAM dependency' in result.stderr
+    from amplifier_web.update_diagnostics import probe_record
+    assert probe_record(result.stdout)['errorType']=='ModuleNotFoundError'
+    assert 'missing PAM dependency' not in result.stdout+result.stderr
 
 
 async def test_release_check_requires_real_tag_revision(monkeypatch):

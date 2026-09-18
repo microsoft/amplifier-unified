@@ -24,6 +24,10 @@ def snapshot(state):
     for op in state.get('smartTools',{}).get('operations',[]):
         if op.get('status') in {'failed','interrupted'}:
             add('smart-tool:'+op['id'],'Smart Tool needs attention','capabilities','smart-tools',op.get('error','The tool did not finish.'),op.get('updatedAt'))
+    for dest in state.get('diagnostics',{}).get('destinations',[]):
+        if dest.get('error'):add('diagnostics:'+dest['id'],'Context Intelligence delivery needs attention','maintenance','diagnostics',dest['error'].get('type','Delivery failed'))
+    local=state.get('diagnostics',{}).get('local',{})
+    if local.get('storageError') or local.get('configurationError') or local.get('dropped') or local.get('outboxDropped') or local.get('expiredPending'):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=local)
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
     for session in state.get('sessions',[]):
         if session.get('error'):add('session:'+session['id'],'Conversation needs attention','setup','conversation',session['error'])

@@ -36,6 +36,15 @@ class HostSettingsTests(unittest.TestCase):
             self.assertEqual(
                 configuration_paths(workspace, "session-id", home)[2], snapshot)
 
+    def test_workspace_snapshot_is_stable_through_symlink_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            workspace=root/'workspace';workspace.mkdir()
+            alias=root/'alias';alias.symlink_to(workspace,target_is_directory=True)
+            home=root/'home';home.mkdir()
+            home_alias=root/'home-alias';home_alias.symlink_to(home,target_is_directory=True)
+            self.assertEqual(workspace_snapshot_path(alias,home_alias),workspace_snapshot_path(workspace,home))
+
     def test_keys_file_refreshes_a_value_it_previously_loaded(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / "keys.env"
