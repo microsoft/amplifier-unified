@@ -66,7 +66,7 @@ def _parse() -> argparse.Namespace:
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
     service.add_argument("--replace", action="store_true", help="Back up and replace an existing generated unit (install only)")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
-    setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force"], default="default")
+    setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     subcommands.add_parser("doctor", help="Check deployment prerequisites and configuration")
     completion = subcommands.add_parser("completion", help="Print shell completion setup")
     completion.add_argument("shell", choices=["bash", "zsh", "fish"])
@@ -140,11 +140,18 @@ def _doctor(data_dir: Path) -> None:
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
     print("Binds:", ", ".join(config["bind"]))
     print("Port:", config["port"])
+    from .shared_state import shared_state_home
+    print("Shared session state:", shared_state_home())
+    print("CLI/TUI must use the same shared state root and canonical workspace.")
 
 
 def _setup_tls(data_dir: Path, mode: str) -> None:
+    from .tls import ca_bytes, ca_fingerprint, exported_ca_bytes, setup_local_ca, tls_ready
+    if mode == "export":
+        import sys
+        sys.stdout.buffer.write(exported_ca_bytes(data_dir))
+        return
     config = load_server_config(data_dir)
-    from .tls import ca_bytes, ca_fingerprint, setup_local_ca, tls_ready
     if mode == "status":
         print("Local CA:", "configured" if ca_bytes(data_dir) else "not configured")
         print("TLS:", config["tls"]["method"])

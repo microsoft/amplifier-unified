@@ -108,14 +108,31 @@ def ssl_context(data_dir: Path, config: dict) -> ssl.SSLContext | None:
 def ca_bytes(data_dir: Path) -> bytes | None:
     """Read only the fixed, app-owned CA path and only when it is actually a CA."""
     try:
-        from cryptography import x509
-        certificate = (tls_dir(data_dir) / "ca.crt").read_bytes()
-        parsed = x509.load_pem_x509_certificate(certificate)
-        if not parsed.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
-            return None
-        return certificate
+        return exported_ca_bytes(data_dir)
     except Exception:
         return None
+
+
+def exported_ca_bytes(data_dir: Path) -> bytes:
+    """Return the existing public CA, rejecting missing, malformed, and leaf PEMs."""
+    from cryptography import x509
+
+    path = tls_dir(data_dir) / "ca.crt"
+    try:
+        certificate = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Local CA certificate is not configured: {path}") from exc
+    try:
+        parsed = x509.load_pem_x509_certificate(certificate)
+    except ValueError as exc:
+        raise ValueError(f"Local CA certificate is malformed: {path}") from exc
+    try:
+        is_ca = parsed.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except x509.ExtensionNotFound as exc:
+        raise ValueError(f"Local CA certificate has no CA constraint: {path}") from exc
+    if not is_ca:
+        raise ValueError(f"Local CA certificate is not a CA: {path}")
+    return certificate
 
 
 def ca_fingerprint(data_dir: Path) -> str | None:

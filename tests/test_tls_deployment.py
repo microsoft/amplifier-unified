@@ -1,4 +1,7 @@
+import io
 import stat
+from types import SimpleNamespace
+
 import pytest
 
 from amplifier_web.cli import _doctor, _setup_tls
@@ -83,3 +86,56 @@ def test_tls_setup_restricts_existing_directory_even_when_reusing_leaf(tmp_path)
     setup_local_ca(tmp_path, config)
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert (directory / "leaf.crt").read_bytes() == leaf
+
+
+def test_setup_tls_export_emits_only_the_existing_public_ca_without_writing(tmp_path, monkeypatch):
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca
+
+    setup_local_ca(tmp_path, load_server_config(tmp_path))
+    directory = tmp_path / "config/tls"
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    output = io.BytesIO()
+    monkeypatch.setattr("sys.stdout", SimpleNamespace(buffer=output))
+
+    _setup_tls(tmp_path, "export")
+
+    assert output.getvalue() == before["ca.crt"]
+    assert b"PRIVATE KEY" not in output.getvalue()
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "contents,error",
+    [
+        (None, FileNotFoundError),
+        (b"not a certificate", ValueError),
+    ],
+)
+def test_setup_tls_export_rejects_missing_or_malformed_ca_without_creating_tls_state(tmp_path, contents, error):
+    directory = tmp_path / "config/tls"
+    if contents is not None:
+        directory.mkdir(parents=True)
+        (directory / "ca.crt").write_bytes(contents)
+
+    with pytest.raises(error, match="Local CA certificate"):
+        _setup_tls(tmp_path, "export")
+
+    if contents is None:
+        assert not directory.exists()
+        assert not (tmp_path / "config").exists()
+    else:
+        assert list(directory.iterdir()) == [directory / "ca.crt"]
+        assert not (tmp_path / "config" / "server.yaml").exists()
+
+
+def test_setup_tls_export_rejects_a_leaf_certificate(tmp_path):
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca
+
+    setup_local_ca(tmp_path, load_server_config(tmp_path))
+    directory = tmp_path / "config/tls"
+    (directory / "ca.crt").write_bytes((directory / "leaf.crt").read_bytes())
+
+    with pytest.raises(ValueError, match="not a CA"):
+        _setup_tls(tmp_path, "export")

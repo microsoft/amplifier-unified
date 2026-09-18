@@ -40,6 +40,19 @@ class Worker:
         self.telemetry = None
         self.controls = None
         self.naming = None
+        self.workspace = None
+        self.home = None
+        self.shared_store = None
+        self.shared_handle = None
+        self.activation_gate = None
+        self.activation = None
+        self.parked = False
+        self.parked_checkpoint_stamp = None
+        self.parked_config_stamp = None
+        self.config_inputs = ()
+        self.command_lock = asyncio.Lock()
+        self.start_config = None
+        self.remounting = False
 
     async def ask(self, prompt, options):
         identity = str(uuid.uuid4())
@@ -157,25 +170,49 @@ class Worker:
             package_root = str(Path(__file__).resolve().parent.parent)
             if package_root not in sys.path:
                 sys.path.insert(0, package_root)
+            from amplifier_web.host.config import app_home
             from amplifier_web.host.session import prepare_manager
             from amplifier_web.execution_events import ExecutionEvents
             from amplifier_web.runtime_controls import RuntimeControls
+            from amplifier_web.shared_state import ActivationGate, configuration_stamp
             from amplifier_module_loop_live.runtime import Runtime
+            self.home = app_home()
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
+            self.workspace = workspace
+            self.start_config = dict(config)
+            # This import happens only in the runtime subprocess.  The outer
+            # HTTP application intentionally stays independent of Foundation.
+            if self.shared_store is None:
+                from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
+                self.shared_store = SharedSessionStore(workspace, config["id"])
+                self.shared_store_stamp = file_stamp
+                self.activation_gate = ActivationGate()
+            if self.shared_handle is None:
+                self.shared_handle = await asyncio.to_thread(
+                    self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+            self.activation = self.activation_gate.activate()
+            self.runtime.capture_activation = self.activation_gate.current
+            shared_snapshot = await asyncio.to_thread(self.shared_handle.read)
             # Always allow loading the saved transcript when one exists; the
             # adapter marks interrupted jobs as evidence, never replays them.
-            report_directory = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")) / "runtime-reports" / config["id"]
+            report_directory = self.home / "runtime-reports" / config["id"]
             progress = asyncio.create_task(self.preparation_progress(report_directory))
             self.session, self.runtime, report = await prepare_manager(workspace,
                 runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
-                report_dir=report_directory)
+                report_dir=report_directory, shared_handle=self.shared_handle,
+                shared_handle_getter=lambda: self.shared_handle,
+                shared_snapshot=shared_snapshot, write_guard=self.activation_gate.check_current)
+            self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
-            await self.controls.restore()
+            # The common checkpoint owns shared-root state.  Local controls are
+            # a native projection and must not override a CLI/web shared mount.
+            if shared_snapshot is None:
+                await self.controls.restore()
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
@@ -206,11 +243,17 @@ class Worker:
             # spawning, provider routing, approvals, or execution ownership.
             self.session.coordinator.register_capability("live.host", ObservedHost())
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
+            self.session.coordinator.register_capability("live.activation", self.activation_gate)
+            self.session.coordinator.register_capability("live.park", self.park)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
-            self.naming=LiveSessionNaming(self.session.coordinator,Path(os.environ.get('AMPLIFIER_WEB_HOME',Path.home()/'.amplifier-unified')),publish,completed)
+            self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
+            self.parked_checkpoint_stamp = self.shared_handle.stamp()
+            self.parked_config_stamp = configuration_stamp(
+                workspace, config["id"], self.home, self.shared_store_stamp,
+                extra_paths=self.config_inputs)
             report["tools"] = list(self.session.coordinator.get("tools"))
             # Keep absolute module sources and full mount plans on disk. The UI
             # gets a compact capability report, not credentials or config blobs.
@@ -220,14 +263,106 @@ class Worker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            publish({"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"})
+            error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
+            if type(exc).__name__ == "SessionBusyError":
+                error.update(code="session_busy", owner=getattr(exc, "owner", None))
+            publish(error)
             self.shutdown.set()
         finally:
             if progress:
                 progress.cancel()
                 await asyncio.gather(progress, return_exceptions=True)
 
+    async def park(self, *, activation=None):
+        """Checkpoint then relinquish only a settled manager activation."""
+
+        # Naming may itself await an approval/bridge response. Do not hold the
+        # command lock while waiting for it; admission is rechecked below.
+        if self.naming and self.naming.pending and not self.naming.pending.done():
+            await self.naming.pending
+        async with self.command_lock:
+            if self.parked or self.shared_handle is None:
+                return
+            loop = self.session.coordinator.get("orchestrator")
+            if (self.approvals or self.bridges or self.runtime.queued_inputs
+                    or not self.runtime.inbox.empty() or self.runtime.generation
+                    or (loop and (loop.pending or loop._active_jobs()))):
+                return
+            activation = activation or self.activation
+            self.activation_gate.check(activation)
+            token = self.activation_gate.bind(activation)
+            try:
+                checkpoint = self.session.coordinator.get_capability("live.checkpoint")
+                if checkpoint:
+                    await checkpoint("completed")
+                self.parked_checkpoint_stamp = self.shared_handle.stamp()
+                from amplifier_web.shared_state import configuration_stamp
+                self.parked_config_stamp = configuration_stamp(
+                    self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
+                    extra_paths=self.config_inputs)
+                self.activation_gate.release(activation)
+                await asyncio.to_thread(self.shared_handle.release)
+                self.shared_handle = None
+                self.parked = True
+            finally:
+                self.activation_gate.reset(token)
+        publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
+
+    async def acquire_for_mutation(self):
+        """Acquire after a parked loop wakes, before it can accept an input."""
+
+        if not self.parked:
+            return
+        handle = await asyncio.to_thread(
+            self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+        checkpoint_stamp = handle.stamp()
+        from amplifier_web.shared_state import configuration_stamp
+        config_stamp = configuration_stamp(
+            self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
+            extra_paths=self.config_inputs)
+        if self.parked_checkpoint_stamp is not None and checkpoint_stamp is None:
+            await asyncio.to_thread(handle.release)
+            raise RuntimeError(
+                "The shared session checkpoint disappeared while this runtime was "
+                "parked. Its previous context will not be replaced with local history.")
+        if checkpoint_stamp != self.parked_checkpoint_stamp or config_stamp != self.parked_config_stamp:
+            self.shared_handle = handle
+            self.parked = False
+            await self.remount()
+            return
+        self.shared_handle = handle
+        self.activation = self.activation_gate.activate()
+        self.parked = False
+        publish({"type": "runtime.reactivated", "session_id": self.runtime.session_id,
+                 "reused": True})
+
+    async def remount(self):
+        """Replace stale mounted state after lock+stamp validation."""
+
+        self.remounting = True
+        try:
+            if self.execution and not self.execution.done():
+                self.execution.cancel()
+                await asyncio.gather(self.execution, return_exceptions=True)
+            if self.controls:
+                await self.controls.close()
+            if self.session:
+                await self.session.cleanup()
+            self.session = self.controls = self.naming = self.execution = None
+            await self.start(self.start_config)
+        finally:
+            self.remounting = False
+
+    def bind_activation(self):
+        """Bind the current capability to a command task, never to a global writer."""
+
+        if self.parked or self.shared_handle is None:
+            raise RuntimeError("The session is parked and has no active shared writer.")
+        return self.activation_gate.bind(self.activation)
+
     def executed(self, task):
+        if self.remounting:
+            return
         if not task.cancelled():
             error = task.exception()
             if error:
@@ -235,6 +370,33 @@ class Worker:
         self.shutdown.set()
 
     async def command(self, data):
+        """Serialize admission with parking and bind a per-work write token."""
+
+        op = data.get("op")
+        if op not in {"send", "control", "worker.steer", "worker.stop", "approval"}:
+            await self._command_serial(data)
+            return
+        try:
+            async with self.command_lock:
+                await self.acquire_for_mutation()
+                token = self.bind_activation()
+                try:
+                    await self._command_serial(data)
+                finally:
+                    self.activation_gate.reset(token)
+            if op == "control":
+                # A control-only action does not wake the live loop's inbox.
+                # It must therefore schedule its own settled release.
+                await self.park(activation=self.activation)
+        except Exception as exc:
+            reply = {"op": "reply", "id": data.get("id"),
+                     "error": f"{type(exc).__name__}: {exc}"}
+            if type(exc).__name__ == "SessionBusyError":
+                reply["code"] = "session_busy"
+                reply["owner"] = getattr(exc, "owner", None)
+            publish(reply)
+
+    async def _command_serial(self, data):
         identity = data.get("id")
         try:
             op = data.get("op")
@@ -268,7 +430,10 @@ class Worker:
                 raise RuntimeError("Session is not ready")
             elif op == "send":
                 from amplifier_module_loop_live.runtime import Input
-                input_id = await self.runtime.submit(Input("user", data["text"], id=data["input_id"], attachments=tuple(data.get("attachments",[]))))
+                input_id = await self.runtime.submit(Input(
+                    "user", data["text"], id=data["input_id"],
+                    attachments=tuple(data.get("attachments", [])),
+                    activation=self.activation))
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 result = await self.controls.perform(data["operation"], data.get("arguments", {}))
@@ -287,7 +452,7 @@ class Worker:
                         job = loop.jobs.get(wid)
                     if not job or job["task"].done():
                         raise ValueError("Worker is no longer active")
-                    await self.runtime.submit(Input("cancel_job", target=wid))
+                    await self.runtime.submit(Input("cancel_job", target=wid, activation=self.activation))
                     result = {"accepted": True, "completed": False}
                 else:
                     raise ValueError("This finite worker cannot receive messages; ask the main session to revise its work")
@@ -334,6 +499,11 @@ class Worker:
                 await self.controls.close()
             if self.session:
                 await self.session.cleanup()
+            if self.shared_handle is not None:
+                try:
+                    await asyncio.to_thread(self.shared_handle.release)
+                finally:
+                    self.shared_handle = None
 
 
 if __name__ == "__main__":

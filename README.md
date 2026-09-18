@@ -79,11 +79,42 @@ normally `~/.amplifier-unified`. Non-loopback binds fail to start unless TLS and
 at least one exact HTTPS public origin are configured. `setup-tls` creates a
 private CA and leaf key under `config/tls`, and later runs reuse that leaf.
 Run `setup-tls force` after changing an address that must appear in the
-certificate. Visit `/setup` or download `/ca.crt` to install that CA once on
-each LAN client. The CA download is anonymous, so verify its SHA-256 fingerprint
-out of band against the value printed by `setup-tls` or `doctor` before
-installing it. The only public bootstrap paths are `/login`, `/setup`,
-`/api/ca`, `/ca.crt`, and `/api/health`.
+certificate; this keeps the existing CA and rotates only the leaf.
+
+**First client, before opening the browser:** HSTS can block the HTTPS setup
+page until its CA is trusted. Use a verified SSH connection to the account that
+runs Unified, or a trusted local console. On that host:
+
+```sh
+amplifier-unified setup-tls export > amplifier-unified-ca.crt
+amplifier-unified doctor
+```
+
+Use the same `--data-dir` before `setup-tls`/`doctor` if the service uses a
+non-default data directory. Export prints only the existing public CA and never
+creates, rotates, or exports a private key. From the client, transfer that file
+over already-verified SSH (replace the placeholders, including the absolute
+path where you exported it):
+
+```sh
+scp '<owner>@<host>:/absolute/path/amplifier-unified-ca.crt' .
+openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256
+```
+
+Compare the fingerprint with the trusted-host `doctor` result before importing.
+On macOS, use Keychain Access's **login** keychain and trust for SSL; on Windows,
+use **Manage user certificates → Trusted Root Certification Authorities**.
+No administrator trust store is necessary for normal per-user setup. For iOS,
+install the verified profile and enable **Certificate Trust Settings**; on
+Android, install it explicitly as a **CA certificate**. Use approved management
+on managed devices. Restart the browser afterward.
+
+Once TLS is trusted, `/setup` contains the platform-specific instructions and
+an existing-CA download link. Anonymous downloads and their displayed fingerprint
+are not independent proof of authenticity. Do not disable HSTS or certificate
+checks, or enter login credentials through an untrusted TLS connection.
+The only public bootstrap paths remain `/login`, `/setup`, `/api/ca`, `/ca.crt`,
+and `/api/health`.
 
 Use `amplifier-unified doctor` to check PAM, TLS, and deployment settings.
 Linux systemd user-service lifecycle is available through
@@ -99,6 +130,13 @@ the shell where `uv --version` works (keep your `--workspace` selection).
 installs the same CLI and service support.
 
 ## Standalone host and session flow
+
+Provider environment references remain in saved settings unchanged. At runtime,
+an unset exact `${NAME}` resolves to an empty string only for a provider-declared
+optional nonsecret field. Unknown fields/schemas and embedded references remain
+strict. An explicitly referenced required secret must be present and nonempty;
+another ambient provider credential cannot substitute for it. The same rule
+applies to root/agent providers and model-list/connection tests.
 
 No `amplifier-app-cli`, `amplifier-loop-live-cli`, or `amplifier-workspace` host libraries are installed or imported. The application owns configuration, approvals, checkpoints and child-session lifecycle, using Foundation's public bundle preparation and session APIs.
 
@@ -118,6 +156,44 @@ Configuration lives in `~/.amplifier-unified/config/settings.yaml`, with private
 Community bundles retain their providers, tools, hooks and agents. The supported streaming orchestrator is explicitly overlaid with loop-live and the original/adapted mount plans are recorded privately. Custom incompatible root orchestrators fail with an actionable error. The app currently includes a reviewed local loop-live change for delivered-input correlation and manager-turn completion; [the upstream contribution](docs/loop-live-upstream/README.md) is prepared but not published.
 
 ## Shared control and appearance
+
+### Same chat in CLI and web
+
+Unified 0.7 pins the Foundation `session.shared_state` API. CLI participation
+requires the upgraded shared-root adapter; restart older CLI processes after
+updating. Native Windows CLI persistence remains available, but shared-session
+locking is supported only on POSIX local filesystems.
+
+Use **Settings → Maintenance → Same-chat CLI and web → Browse shared
+conversations → Open same chat** for the selected workspace. Opening creates
+only a browser view of the same root ID; it does not import or duplicate the
+runtime transcript. The preview shows up to the latest 100 visible messages.
+Execution restores the complete common context, including tool results.
+
+CLI keeps the writer lock until exit. Web releases automatically after accepted
+work, delegated jobs, approvals, and saving settle, even if the page stays open.
+On the next action it acquires the lock and compares checkpoint/configuration
+file metadata. Unchanged valid state reuses the mounted session; changed state
+reloads. A busy owner rejects execution with diagnostics and retains the draft.
+No takeover, lock expiry, force-unlock, or automatic work replay is provided.
+
+Both applications must run as the same user on the same POSIX host, use the
+same canonical workspace, and share `AMPLIFIER_SESSION_STATE_HOME` (default:
+`${XDG_STATE_HOME:-~/.local/state}/amplifier/sessions`). Close older CLI processes
+before using shared sessions: an upgrade cannot retrofit their missing locks.
+Generated user services pin the installing shell's resolved state root explicitly.
+`amplifier-unified doctor` prints that location; use the same path in the CLI
+and any third participant. For TUI integration, see Foundation's
+[participant guide](https://github.com/microsoft/amplifier-foundation/blob/main/docs/SHARED_SESSION_STATE.md).
+Metadata stamps are a local cache check, not proof against arbitrary external
+file modification. This coordinates app-owned conversation writes, not
+untracked external jobs started by arbitrary plugins.
+
+Developer regression: test the actual parked worker **after another CLI write**,
+not only a second unchanged web turn. Completion events must carry the producing
+task's activation token; a persistent inbox loop's startup token expires on park.
+Runtime admission also runs outside the HTTP app state lock, because its progress
+callbacks need that lock.
 
 `GET /api/state` exposes shared session/application state and attached device snapshots. `GET /api/actions` lists action schemas. `POST /api/actions` accepts `{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control tool use the same handlers. `GET /api/events` streams state updates. State includes `attention.items`, unread counts, and section/page destinations. `attention.read` accepts item IDs to acknowledge review; it does not dismiss the underlying update or issue. Changed facts become unread again, and acknowledgements survive restarts. SQLite stores conversations, accepted command IDs and settings. Interrupted work is marked rather than silently replayed.
 

@@ -103,6 +103,9 @@ ACTION_DEFINITIONS = {
     "permissions.get": ("Inspect scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]}},[])),
     "permissions.save": ("Save scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]},"allowed":{"type":"array","items":string(4000)},"denied":{"type":"array","items":string(4000)}},["allowed","denied"])),
     "history.list": ("Browse persisted and optionally legacy sessions",schema({"legacy":{"type":"boolean"}},[])),
+    "history.shared.list": ("List common shared sessions for a workspace without mounting a worker",schema({"workspace":string(4000)},[])),
+    "history.shared.view": ("View common shared session history without mounting a worker",schema({"id":string(200),"workspace":string(4000),"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},["id","workspace"])),
+    "history.shared.open": ("Open the same shared conversation without copying its runtime history",schema({"id":string(200),"workspace":string(4000)},["id","workspace"])),
     "history.import": ("Open a persisted or legacy session",schema({"id":string(200)})),
     "history.export": ("Export runtime transcript and metadata",schema({"sessionId":string(200),"format":{"enum":["json","jsonl"]}},["sessionId"])),
     "history.cleanup": ("Preview or clean old conversation entries",schema({"days":{"type":"integer","minimum":1},"apply":{"type":"boolean"},"purge":{"type":"boolean"}},[])),
@@ -474,16 +477,15 @@ class AppService:
                 attachments=[available[identity] for identity in requested]
                 if not text and not attachments:raise AppError("Enter a message or attach a file.")
                 text=text or 'Please review the attached files.'
+                if not self.runtime:
+                    raise AppError("The Amplifier runtime is unavailable.")
                 input_id = command_id or str(uuid.uuid4())
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
-                session["draftAttachments"]=[row for row in session.get("draftAttachments",[]) if row["id"] not in requested]
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
                 session["status"] = "working"
                 session.pop("error", None)
-                if self.state["selectedSessionId"] == session["id"] and self.state["view"].get("draft", "").strip() == args["text"].strip():
-                    self.state["view"]["draft"] = ""
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), text, input_id)))
             elif action == "conversation.stop":
@@ -628,11 +630,16 @@ class AppService:
             self._publish()
             result = {**receipt, "state": self.get_state()}
         for fn, values in pending:
-            task=self._task(self._guard(fn, values))
-            if action.startswith("smartTools."):
-                self.smart_tool_tasks.add(task)
-                task.add_done_callback(self.smart_tool_tasks.discard)
-        return result
+            if action == "conversation.send" and fn == self._send:
+                # Runtime progress callbacks acquire self.lock. Admission must
+                # run outside it, and the HTTP receipt waits for the actual ack.
+                await fn(*values)
+            else:
+                task = self._task(self._guard(fn, values))
+                if action.startswith("smartTools."):
+                    self.smart_tool_tasks.add(task)
+                    task.add_done_callback(self.smart_tool_tasks.discard)
+        return {**result, "state": self.get_state()}
 
     async def _guard(self, fn, args):
         try:
@@ -644,7 +651,41 @@ class AppService:
     async def _send(self, session, text, input_id):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
-        await self.runtime.send(session, text, input_id, self.on_runtime_event)
+        from .runtime import SessionInUseError
+        try:
+            await self.runtime.send(session, text, input_id, self.on_runtime_event)
+        except SessionInUseError as exc:
+            async with self.lock:
+                current = self._session(session["id"])
+                current["messages"] = [
+                    row for row in current["messages"] if row.get("inputId") != input_id
+                ]
+                execution = current.get("execution", {})
+                execution["turns"] = [
+                    row for row in execution.get("turns", []) if row.get("id") != input_id
+                ]
+                if execution.get("currentTurnId") == input_id:
+                    execution["currentTurnId"] = (
+                        execution["turns"][-1]["id"] if execution["turns"] else None
+                    )
+                current.update(status="error", error=str(exc))
+                current["lockOwner"] = exc.owner
+                self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
+                    json.dumps({"accepted": False, "error": str(exc), "status": 409}), input_id))
+                self._publish()
+            raise AppError(str(exc), 409) from exc
+        async with self.lock:
+            current = self._session(session["id"])
+            sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
+            attached = {row["id"] for row in sent.get("attachments", [])}
+            current["draftAttachments"] = [
+                row for row in current.get("draftAttachments", []) if row["id"] not in attached
+            ]
+            if (self.state["selectedSessionId"] == current["id"]
+                    and self.state["view"].get("draft", "").strip() == text.strip()):
+                self.state["view"]["draft"] = ""
+            current.pop("lockOwner", None)
+            self._publish()
 
     async def _end_call(self):
         try:

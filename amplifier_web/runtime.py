@@ -20,6 +20,29 @@ from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 
 Emitter = Callable[[str, dict], Awaitable[None]]
 
+class SessionInUseError(RuntimeError):
+    """A definite rejected admission, not an uncertain execution failure."""
+
+    def __init__(self, owner=None):
+        self.owner = owner if isinstance(owner, dict) else {}
+        details = ", ".join(
+            f"{key}: {self.owner[key]}"
+            for key in ("app", "hostname", "host", "user", "pid",
+                        "process_start_identity", "process_start", "acquired_at", "tty", "service")
+            if self.owner.get(key) is not None
+        )
+        super().__init__(
+            "This conversation is in use"
+            + (f" ({details})" if details else " by another process")
+            + ". Finish and exit that interface, then retry. Your draft has been kept."
+        )
+
+
+def _worker_error(data):
+    if data.get("code") == "session_busy":
+        return SessionInUseError(data.get("owner"))
+    return RuntimeError(data.get("error", "Amplifier runtime failed"))
+
 
 def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
@@ -211,7 +234,7 @@ class RuntimeManager:
                     future = row["pending"].get(data.get("id"))
                     if future and not future.done():
                         if data.get("error"):
-                            future.set_exception(RuntimeError(data["error"]))
+                            future.set_exception(_worker_error(data))
                         else:
                             future.set_result(data.get("result"))
                 elif data.get("type") == "runtime.progress":
@@ -226,10 +249,11 @@ class RuntimeManager:
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
                         "report": data.get("report", {})})
                 elif data.get("type") == "runtime.error":
-                    error = data.get("error", "Amplifier runtime failed")
+                    failure = _worker_error(data)
+                    error = str(failure)
                     reported_error = error
                     if not row["ready"].done():
-                        row["ready"].set_exception(RuntimeError(error))
+                        row["ready"].set_exception(failure)
                     await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
                     await row["emit"](data["type"], {**data, "sessionId": sid})
@@ -284,6 +308,35 @@ class RuntimeManager:
 
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
+
+    async def shared_state_probe(self, request):
+        """Run one read-only shared-state request inside the isolated runtime."""
+        if not isinstance(request, dict):
+            raise ValueError("Shared-state request must be an object.")
+        command = self._command()
+        command[-1] = str(Path(__file__).with_name("shared_state_probe.py"))
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
+        )
+        try:
+            proc.stdin.write(encode_message(request))
+            await proc.stdin.drain()
+            proc.stdin.close()
+            line = await asyncio.wait_for(proc.stdout.readline(), 30)
+            await asyncio.wait_for(proc.wait(), 30)
+            response = json.loads(line) if line else None
+            if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
+                raise RuntimeError("Shared-state probe returned an invalid response.")
+            if not response["ok"]:
+                raise RuntimeError(response.get("error", {}).get("message") or "Shared-state probe failed.")
+            return response["result"]
+        except TimeoutError as exc:
+            raise RuntimeError("The shared-state probe timed out without changing session ownership.") from exc
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
 
     async def steer_worker(self, session_id, worker_id, text):
         return await self._request(session_id, "worker.steer", worker_id=worker_id, text=text)

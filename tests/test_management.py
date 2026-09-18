@@ -33,6 +33,43 @@ async def test_history_import_uses_real_checkpoint_and_does_not_execute(app):
     assert app._session()['status']=='stopped'
     assert app._session()['messages'][-1]['text']=='Earlier answer'
 
+async def test_shared_history_uses_the_isolated_probe_without_starting_a_worker(app):
+    class ProbeRuntime(Runtime):
+        def __init__(self):self.requests=[]
+        async def shared_state_probe(self,request):
+            self.requests.append(request)
+            return {'items':[{'id':'shared-id','workspace':request['workspace'],'shared':True}]}
+        async def start(self,*args):raise AssertionError('A history view must not start a worker')
+    app.runtime=ProbeRuntime()
+    await app.management.perform('history.shared.list',{'workspace':app.default_workspace})
+    assert app.runtime.requests==[{'version':1,'op':'list','workspace':app.default_workspace}]
+    assert app.state['sharedHistory']['items'][0]['id']=='shared-id'
+
+async def test_open_shared_root_keeps_identity_workspace_and_authority(app, tmp_path):
+    workspace = tmp_path / 'other-workspace'
+    workspace.mkdir()
+    class ProbeRuntime(Runtime):
+        async def shared_state_probe(self, request):
+            assert request['op'] == 'open'
+            return {'id': 'shared-root', 'workspace': str(workspace),
+                    'bundle': 'portable-bundle', 'offset': 12, 'totalMessages': 112,
+                    'messages': [{'role': 'user', 'text': 'CLI latest turn'}]}
+        async def start(self, *args):
+            raise AssertionError('Opening history must not mount a writer')
+    app.runtime = ProbeRuntime()
+    await app.management.perform('history.shared.open', {
+        'id': 'shared-root', 'workspace': str(workspace)})
+    selected = app._session()
+    assert selected['id'] == 'shared-root'
+    assert selected['workspace'] == str(workspace)
+    assert selected['bundle'] == 'portable-bundle'
+    assert selected['messages'][0]['text'] == 'CLI latest turn'
+    assert app.state['settings']['workspace'] == str(workspace)
+    assert not (app.data_dir / 'sessions' / 'shared-root' / 'checkpoint.json').exists()
+    await app.management.perform('history.shared.open', {
+        'id': 'shared-root', 'workspace': str(workspace)})
+    assert sum(row['id'] == 'shared-root' for row in app.state['sessions']) == 1
+
 async def test_turn_fork_excludes_later_messages(app):
     session=app._session()
     for role,text in [('user','one'),('assistant','answer one'),('user','two'),('assistant','answer two')]:app._message(session,role,text)

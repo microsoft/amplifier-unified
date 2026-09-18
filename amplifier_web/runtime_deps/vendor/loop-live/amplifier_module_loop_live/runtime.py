@@ -17,6 +17,28 @@ class Input:
     target: str | None = None
     attachments: tuple = ()
     call_id: str | None = None
+    # Host-private capability.  It is never serialized into context or exposed
+    # to providers; the loop binds it only while executing this input.
+    activation: object | None = None
+
+
+class _Event(tuple):
+    """Keep tuple-compatible inbox events tied to their producing task."""
+
+    def __new__(cls, item, activation):
+        event = super().__new__(cls, item)
+        event.activation = activation
+        return event
+
+
+class _Inbox(asyncio.Queue):
+    def __init__(self, runtime):
+        super().__init__()
+        self.runtime = runtime
+
+    def put_nowait(self, item):
+        capture = self.runtime.capture_activation
+        super().put_nowait(_Event(item, capture() if capture else None))
 
 
 class Runtime:
@@ -26,7 +48,8 @@ class Runtime:
         self.session_id = session_id or str(uuid.uuid4())
         # Bound external input separately so tool/provider completion cannot deadlock
         # behind a full command queue during shutdown.
-        self.inbox = asyncio.Queue()
+        self.capture_activation = None
+        self.inbox = _Inbox(self)
         self.queued_inputs = 0
         self.events = []
         self.sequence = 0

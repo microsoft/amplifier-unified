@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,8 +20,10 @@ from filelock import FileLock
 import yaml
 
 from ..deployment import write_private
+from ..shared_state import workspace_snapshot_path
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@e210edabd947af82d5121a240d6934283ac540b9"
+_KEY_FILE_VALUES = {}
 
 
 def app_home() -> Path:
@@ -97,9 +98,12 @@ def _import_global(home: Path, legacy: Path):
 
 
 def _load_keys(path):
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
+    values = {}
+    if path.exists():
+        lines = path.read_text().splitlines()
+    else:
+        lines = ()
+    for line in lines:
         line = line.strip()
         if line.startswith("export "):
             line = line[7:]
@@ -109,20 +113,32 @@ def _load_keys(path):
         name = name.strip()
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parsed = shlex.split(value, comments=True)
-            os.environ.setdefault(name, " ".join(parsed))
+            values[name] = " ".join(parsed)
+    # Keep explicitly supplied process environment authoritative, while values
+    # this loader previously installed are refreshed (or removed) on remount.
+    for name, previous in tuple(_KEY_FILE_VALUES.items()):
+        if name not in values and os.environ.get(name) == previous:
+            os.environ.pop(name, None)
+            _KEY_FILE_VALUES.pop(name, None)
+    for name, value in values.items():
+        previous = _KEY_FILE_VALUES.get(name)
+        if name not in os.environ or (previous is not None and os.environ.get(name) == previous):
+            os.environ[name] = value
+            _KEY_FILE_VALUES[name] = value
 
 
-def expand_environment(value):
+def expand_environment(value, *, environment=None):
+    values = os.environ if environment is None else environment
     if isinstance(value, dict):
-        return {key: expand_environment(item) for key, item in value.items()}
+        return {key: expand_environment(item, environment=values) for key, item in value.items()}
     if isinstance(value, list):
-        return [expand_environment(item) for item in value]
+        return [expand_environment(item, environment=values) for item in value]
     if not isinstance(value, str):
         return value
     def substitute(match):
         name, fallback = match.groups()
         shell_default = fallback is not None and fallback.startswith("-")
-        current = os.environ.get(name)
+        current = values.get(name)
         if current is not None and (current or not shell_default):
             return current
         if fallback is not None:
@@ -189,8 +205,7 @@ def load_config(workspace, *, home=None, legacy_home=None):
     workspace = Path(workspace).expanduser().resolve(strict=True)
     legacy = Path(legacy_home or os.environ.get("AMPLIFIER_UNIFIED_IMPORT_HOME", Path.home() / ".amplifier")).expanduser().resolve()
     (home / "config").mkdir(parents=True, exist_ok=True, mode=0o700)
-    key = hashlib.sha256(str(workspace).encode()).hexdigest()[:20]
-    project_snapshot = home / "config" / "workspaces" / (key + ".yaml")
+    project_snapshot = workspace_snapshot_path(workspace, home)
     with FileLock(str(home / "config" / ".migration.lock")):
         _import_global(home, legacy)
         if not project_snapshot.exists():

@@ -9,11 +9,44 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import load_config, merge, expand_environment
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, merge, expand_environment
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
+from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
 
 class HostSettingsTests(unittest.TestCase):
+    def test_app_home_honors_the_data_directory_override(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+                os.environ, {"AMPLIFIER_WEB_DATA_DIR": directory}, clear=True):
+            self.assertEqual(app_home(), Path(directory).resolve())
+
+    def test_configuration_invalidation_tracks_the_same_workspace_snapshot_as_loading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            legacy = root / "legacy"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (workspace / ".amplifier").mkdir()
+
+            load_config(workspace, home=home, legacy_home=legacy)
+
+            snapshot = workspace_snapshot_path(workspace, home)
+            self.assertTrue(snapshot.is_file())
+            self.assertEqual(
+                configuration_paths(workspace, "session-id", home)[2], snapshot)
+
+    def test_keys_file_refreshes_a_value_it_previously_loaded(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / "keys.env"
+            path.write_text("AMPLIFIER_WEB_REFRESH_TEST=first\n")
+            _KEY_FILE_VALUES.clear()
+            _load_keys(path)
+            path.write_text("AMPLIFIER_WEB_REFRESH_TEST=second\n")
+            _load_keys(path)
+            self.assertEqual(os.environ["AMPLIFIER_WEB_REFRESH_TEST"], "second")
+            _KEY_FILE_VALUES.clear()
+
     def test_migration_is_owned_private_and_not_reloaded_from_former_host(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);legacy=root/'legacy';home=root/'owned';workspace=root/'workspace'
@@ -66,6 +99,7 @@ class HostSettingsTests(unittest.TestCase):
     def test_environment_values_never_execute_shell_and_missing_is_explicit(self):
         with patch.dict(os.environ,{'AMPLIFIER_TEST_VALUE':'$(echo private)','AMPLIFIER_TEST_EMPTY':''},clear=False):
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_VALUE}'),'$(echo private)')
+            self.assertEqual(expand_environment('${AMPLIFIER_TEST_VALUE}',environment={'AMPLIFIER_TEST_VALUE':'injected'}),'injected')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:-fallback}'),'fallback')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:INFO}'),'INFO')
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_ABSENT:}'),'')
@@ -73,6 +107,15 @@ class HostSettingsTests(unittest.TestCase):
             self.assertEqual(expand_environment('${AMPLIFIER_TEST_EMPTY:fallback}'),'')
             with self.assertRaisesRegex(ValueError,'AMPLIFIER_TEST_ABSENT'):
                 expand_environment('${AMPLIFIER_TEST_ABSENT}')
+
+    def test_apply_settings_defers_provider_config_but_expands_provider_source(self):
+        bundle=SimpleNamespace(providers=[],tools=[],hooks=[],session={})
+        providers=[{'module':'provider-test','id':'one','source':'${PROVIDER_SOURCE}','config':{'base_url':'${OPTIONAL_BASE_URL}'}}]
+        config=SimpleNamespace(settings={'config':{'providers':providers}},providers=providers)
+        with patch.dict(os.environ,{'PROVIDER_SOURCE':'source'},clear=False):
+            result=_apply_settings(bundle,config)
+            self.assertEqual(result.providers[0]['source'],'source')
+            self.assertEqual(result.providers[0]['config']['base_url'],'${OPTIONAL_BASE_URL}')
 
     def test_unsupported_root_orchestrator_is_not_silently_replaced(self):
         with self.assertRaisesRegex(ValueError,'not compatible'):

@@ -8,8 +8,11 @@ import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
+import pytest
+
 from amplifier_web.runtime import RuntimeManager, normalize_event
 from amplifier_web.runtime_worker import Worker
+from amplifier_web.shared_state import ActivationGate
 
 FIXTURE = r'''
 import json,sys
@@ -71,6 +74,48 @@ class NormalizationTests(unittest.TestCase):
 
 
 class WorkerActivityTests(unittest.TestCase):
+    def test_inbox_completion_carries_producer_activation_not_loop_startup(self):
+        import importlib.util
+        path = Path(__file__).parents[1] / "amplifier_web/runtime_deps/vendor/loop-live/amplifier_module_loop_live/runtime.py"
+        spec = importlib.util.spec_from_file_location("warm_runtime_fixture", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+            gate = ActivationGate()
+            runtime = module.Runtime("fixture")
+            runtime.capture_activation = gate.current
+            first = gate.activate()
+            runtime.inbox.put_nowait(("bundle_turn", ("old", None)))
+            gate.release(first)
+            second = gate.activate()
+            runtime.inbox.put_nowait(("bundle_turn", ("new", None)))
+            old, current = runtime.inbox.get_nowait(), runtime.inbox.get_nowait()
+            self.assertIs(old.activation, first)
+            self.assertIs(current.activation, second)
+            with self.assertRaisesRegex(RuntimeError, "released or superseded"):
+                gate.bind(old.activation)
+            gate.bind(current.activation)
+            gate.check_current()
+            self.assertEqual(tuple(current), ("bundle_turn", ("new", None)))
+        finally:
+            sys.modules.pop(spec.name, None)
+
+    def test_activation_gate_rejects_a_callback_from_before_park(self):
+        gate = ActivationGate()
+        first = gate.activate()
+        stale_context = gate.bind(first)
+        gate.reset(stale_context)
+        gate.release(first)
+        second = gate.activate()
+        current_context = gate.bind(second)
+        try:
+            gate.check_current()
+            with self.assertRaisesRegex(RuntimeError, "released or superseded"):
+                gate.check(first)
+        finally:
+            gate.reset(current_context)
+
     def test_waiting_counts_actual_pending_jobs_and_preserves_agent_identity(self):
         worker=Worker()
         loop=SimpleNamespace(jobs={
@@ -87,6 +132,53 @@ class WorkerActivityTests(unittest.TestCase):
             activity=publish.call_args.args[0]
             self.assertEqual(activity['phase'],'waiting-workers')
             self.assertEqual(activity['activeWorkers'],1)
+
+
+@pytest.mark.asyncio
+async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged(tmp_path):
+    shared = pytest.importorskip("amplifier_foundation.session.shared_state")
+    from amplifier_web.shared_state import configuration_stamp
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    worker = Worker()
+    worker.workspace = workspace
+    worker.home = tmp_path / "home"
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
+                                     inbox=asyncio.Queue(), generation=None)
+    worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
+    worker.shared_store_stamp = shared.file_stamp
+    worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
+    worker.activation_gate = ActivationGate()
+    first = worker.activation_gate.activate()
+    worker.activation = first
+    worker.config_inputs = ()
+    worker.parked_checkpoint_stamp = worker.shared_handle.write(
+        [{"role": "user", "content": "first"}], bundle="anchors", metadata={"fixture": True})
+    worker.parked_config_stamp = configuration_stamp(
+        workspace, "warm-session", worker.home, shared.file_stamp)
+    checkpoint_calls = []
+    async def checkpoint(status):
+        checkpoint_calls.append(status)
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        get=lambda name: None,
+        get_capability=lambda name: (
+            checkpoint
+            if name == "live.checkpoint" else None)))
+
+    with patch("amplifier_web.runtime_worker.publish"):
+        await worker.park(activation=first)
+        assert worker.parked
+        assert not worker.shared_handle
+        await worker.acquire_for_mutation()
+
+    assert checkpoint_calls == ["completed"]
+    assert not worker.parked
+    assert worker.shared_handle.active
+    with pytest.raises(RuntimeError, match="released or superseded"):
+        worker.activation_gate.check(first)
+    worker.shared_handle.release()
 
 
 class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
@@ -164,6 +256,15 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(self.manager.start(self.session,self.emit) for _ in range(4)))
         self.assertEqual(len(self.manager.workers),1)
         self.assertEqual(sum(k=='runtime.status' and p['status']=='starting' for k,p in self.events),1)
+
+    async def test_second_send_keeps_the_same_worker_process(self):
+        await self.manager.send(self.session, 'first', 'input-1', self.emit)
+        process = self.manager.workers[self.session['id']]['process']
+        await self.manager.send(self.session, 'second', 'input-2', self.emit)
+        self.assertIs(self.manager.workers[self.session['id']]['process'], process)
+        self.assertIsNone(process.returncode)
+        self.assertEqual(sum(k == 'runtime.status' and p['status'] == 'starting'
+                             for k, p in self.events), 1)
 
     async def test_stop_terminates_process_and_clears_owner(self):
         await self.manager.start(self.session,self.emit)

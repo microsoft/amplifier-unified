@@ -418,6 +418,44 @@ class Management:
             await self.invalidate_configuration()
         elif action=='history.list':
             await self.publish(history=await asyncio.to_thread(self.history,args.get('legacy',False)))
+        elif action == 'history.shared.open':
+            if not self.service.runtime:
+                raise ValueError('The isolated runtime is unavailable.')
+            result = await self.service.runtime.shared_state_probe({
+                'version': 1, 'op': 'open', 'sessionId': args['id'],
+                'workspace': args['workspace'], 'limit': 100})
+            async with self.service.lock:
+                session = next((s for s in self.service.state['sessions']
+                                if s['id'] == result['id']), None)
+                if session and Path(session['workspace']).resolve() != Path(result['workspace']):
+                    raise ValueError('This session ID is already open for a different workspace.')
+                if session is None:
+                    session = self.service._new_session({
+                        'title': result.get('name') or 'Shared conversation ' + result['id'][:8],
+                        'workspace': result['workspace'], 'bundle': result['bundle']})
+                    session['id'] = result['id']
+                    self.service.state['sessions'].insert(0, session)
+                if session['status'] not in {'starting', 'working', 'stopping'}:
+                    session.update(status='idle', bundle=result['bundle'], messages=[],
+                                   shared=True, sharedHistoryOffset=result['offset'],
+                                   sharedHistoryTotal=result['totalMessages'])
+                    for row in result['messages']:
+                        self.service._message(session, row['role'], row['text'], source='shared')
+                self.service.state['selectedSessionId'] = session['id']
+                from .workspace_canvas import select_session_workspace
+                select_session_workspace(self.service.state, session)
+                # Only UI presentation is saved here. The next worker admission
+                # locks and reads the complete common checkpoint, never bubbles.
+                self.service._publish()
+        elif action in {'history.shared.list','history.shared.view'}:
+            if not self.service.runtime:
+                raise ValueError('The isolated runtime is unavailable.')
+            request={'version':1,'op':'list' if action.endswith('.list') else 'view',
+                     'workspace':args.get('workspace') or self.service.default_workspace}
+            if action.endswith('.view'):
+                request.update(sessionId=args['id'],offset=args.get('offset',0),limit=args.get('limit',50))
+            result=await self.service.runtime.shared_state_probe(request)
+            await self.publish(sharedHistory=result)
         elif action=='history.importFile':
             from .session_store import complete_tool_exchanges,text_content
             if args['format']=='jsonl':
