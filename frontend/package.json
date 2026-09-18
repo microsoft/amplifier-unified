@@ -15,7 +15,10 @@
     "test:timeline-browser": "node tests/timeline-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
-    "test:panel-browser": "node tests/panel-layout-browser.mjs"
+    "test:panel-browser": "node tests/panel-layout-browser.mjs",
+    "prebuild": "node scripts/sync-branding.mjs",
+    "predev": "node scripts/sync-branding.mjs",
+    "test:pwa-browser": "node tests/pwa-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

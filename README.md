@@ -222,3 +222,22 @@ keep the server process alive. These previews are sandboxed: some websites block
 embedding, and apps needing cookies, browser storage or same-origin API access
 may need **Open in browser**. Browser preview DOM is not exposed to the agent;
 authored HTML previews retain their existing bounded document/control bridge.
+
+## Install the web app
+
+In Edge or Chrome, use the install icon in the address bar or the browser’s app
+installation menu. Safari on Mac supports **File → Add to Dock**; on iPhone/iPad,
+use **Share → Add to Home Screen**. Installation needs localhost/loopback or a
+trusted HTTPS deployment. Browser support varies; the ordinary web UI still works.
+
+The installed app uses the official Amplifier icon, a dedicated window, and the
+selected chat’s title. Keep the Python service running at the same address: PWA
+installation does not start or replace the backend. Offline navigation shows a
+reconnection page. The service worker caches only public branding and that help
+page; it never caches authenticated pages, API data, chats, or canvas artifacts,
+and never forces an active window to reload.
+
+The complete official assets are retained in [assets](assets/UPSTREAM.md), pinned
+to an upstream revision with its license. `npm --prefix frontend run build` syncs
+the web icons and generates a versioned public-assets service worker. Installation
+requirements follow the [web app manifest guidance](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable).

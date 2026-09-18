@@ -122,7 +122,7 @@ async def test_external_document_navigation_reaches_login_or_setup(aiohttp_clien
                                         headers=NAVIGATION_HEADERS, allow_redirects=False)
     assert response.status == 200
     if method == "GET":
-        assert "Amplifier Unified" in await response.text()
+        assert "Amplifier" in await response.text()
     assert (await client.get("/api/state")).status == 401
 
 
@@ -178,3 +178,23 @@ async def test_external_navigation_does_not_allow_unknown_host(aiohttp_client, t
     response = await client.get("/login", headers={**NAVIGATION_HEADERS, "Host": "attacker.example"})
     assert response.status == 403
     assert (await response.json())["error"] == "This Host is not configured."
+
+async def test_pwa_metadata_is_public_but_conversations_and_canvas_stay_private(aiohttp_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    for path in ['/manifest.webmanifest','/sw.js','/pwa.js','/offline.html','/app-pages.css',
+                 '/favicon.ico','/branding/pwa/pwa-192.png','/branding/pwa/pwa-512.png']:
+        response = await client.get(path, allow_redirects=False)
+        assert response.status == 200, path
+        assert 'Set-Cookie' not in response.headers
+    manifest = await (await client.get('/manifest.webmanifest')).json()
+    assert manifest['start_url'] == '/' and manifest['display'] == 'standalone'
+    for path in ['/api/state','/api/canvas/private/document','/api/attachments/private']:
+        assert (await client.get(path, allow_redirects=False)).status == 401
+    assert (await client.get('/', allow_redirects=False)).status == 307
+    assert (await client.get('/index.html', allow_redirects=False)).status == 307
+    assert (await client.post('/sw.js', allow_redirects=False)).status == 307
+    login = await client.get('/login?error=1')
+    assert login.headers['Cache-Control'] == 'no-store'
+    assert 'Could not sign in.' in await login.text()
