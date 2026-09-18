@@ -16,6 +16,7 @@ try{
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  await page.locator('#chat-provider').waitFor();
  await page.locator('#chat-model').selectOption('fixture-vision');
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.selection?.model==='fixture-vision'));
  await page.locator('#chat-effort').fill('3');
  await page.getByRole('button',{name:'Pin model',exact:true}).click();
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.pinned));
@@ -60,6 +61,10 @@ try{
  await page.getByRole('button',{name:'Rename workspace',exact:true}).click();
  await page.locator('#nav-workspace-name').fill('My project');await page.getByRole('button',{name:'Save name',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().workspaces.some(w=>w.name==='My project'));
+ await page.getByRole('button',{name:'Rename Settings test',exact:true}).click();
+ await page.getByRole('textbox',{name:'New name for Settings test'}).fill('Renamed chat');await page.getByRole('button',{name:'Save conversation name',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.title==='Renamed chat'));
+ assert.equal(await page.locator('button[aria-label]:has(svg):not([title]),a[aria-label]:has(svg):not([title])').count(),0);
  await page.getByRole('button',{name:'Unpin navigation',exact:true}).click();
  await page.mouse.move(1000,30);
 

@@ -4,7 +4,7 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {WorkspaceRail,AgentCanvas,A2UISurface,reopenCanvas}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkspaceRail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas}=await server.ssrLoadModule('/src/shell-panels.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const initial=()=>({view:{navExpanded:true},workspaces:[{id:'one',name:'One',path:'/one'},{id:'two',name:'Two',path:'/two'}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
@@ -28,6 +28,20 @@ test('rail pin, workspace selection, chat selection and drafts all use shared ac
  assert.deepEqual(calls.at(-1).args.patch.workspaceDraft,{mode:'rename',id:'one',name:'One'});
  await renderAct(async()=>root.root.findAll(node=>node.props.className==='a-nav-chat-select')[1].props.onClick());
  assert.ok(calls.some(call=>call.name==='session.select'&&call.args.id==='b'));
+ await renderAct(async()=>root.unmount());
+});
+
+test('chat rename opens the editor for that conversation and submits its new title',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Rename Another plan'}).props.onClick());
+ await renderAct(async()=>root.update(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]})));
+ const input=root.root.findByProps({id:'nav-workspace-name'});
+ assert.equal(input.props.value,'Another plan');
+ await renderAct(async()=>input.props.onChange({target:{value:'Renamed plan'}}));
+ await renderAct(async()=>root.root.findByType(ChatRename).findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.ok(calls.some(call=>call.name==='session.rename'&&call.args.id==='b'&&call.args.title==='Renamed plan'));
+ assert.equal(calls.filter(call=>call.name==='view.update').length,2);
  await renderAct(async()=>root.unmount());
 });
 
