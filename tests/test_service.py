@@ -8,6 +8,9 @@ class Runtime:
     def __init__(self):
         self.sent = []
         self.stopped = []
+        self.started = []
+    async def start(self, session, emit):
+        self.started.append(session["id"])
     async def send(self, session, text, input_id, emit):
         self.sent.append((session["id"], text, input_id))
         await emit("assistant.message", {"sessionId": session["id"], "text": "Test transport result", "inputId": input_id})
@@ -45,6 +48,34 @@ async def test_conversation_survives_restart_and_deduplication(tmp_path):
     with pytest.raises(AppError, match="different contents"):
         await restored.dispatch("conversation.send", {"text": "Changed"}, command_id="send")
     await restored.close()
+
+
+async def test_busy_admission_preserves_browser_draft_attachments_and_history(tmp_path):
+    class BusyRuntime(Runtime):
+        async def start(self, session, emit):
+            raise RuntimeError("SessionBusyError: shared session is busy")
+
+    app = AppService(tmp_path, BusyRuntime(), workspace=tmp_path)
+    await app.dispatch("session.create", {})
+    session_id = app.get_state()["selectedSessionId"]
+    attachment = await app.dispatch("attachment.add", {
+        "sessionId": session_id, "name": "draft.txt", "base64": "ZHJhZnQ="})
+    attachment_id = attachment["state"]["sessions"][0]["draftAttachments"][0]["id"]
+    await app.dispatch("view.update", {"patch": {"draft": "Keep this draft"}})
+
+    with pytest.raises(AppError, match="shared session is busy") as error:
+        await app.dispatch("conversation.send", {
+            "sessionId": session_id, "text": "Keep this draft",
+            "attachmentIds": [attachment_id]})
+
+    assert error.value.status == 409
+    session = app.get_state()["sessions"][0]
+    assert session["messages"] == []
+    assert session["draftAttachments"][0]["id"] == attachment_id
+    assert app.get_state()["view"]["draft"] == "Keep this draft"
+    assert not session.get("execution", {}).get("turns", [])
+    assert not app.runtime.sent
+    await app.close()
 
 
 async def test_shared_agent_control_state_and_stale_revisions(service):

@@ -461,6 +461,16 @@ class AppService:
                 attachments=[available[identity] for identity in requested]
                 if not text and not attachments:raise AppError("Enter a message or attach a file.")
                 text=text or 'Please review the attached files.'
+                if not self.runtime:
+                    raise AppError("The Amplifier runtime is unavailable.")
+                # Acquire and prepare before committing the browser input.  A
+                # busy shared root therefore leaves the draft/attachments and
+                # durable conversation history untouched for a later retry.
+                try:
+                    await self.runtime.start(copy.deepcopy(session), self.on_runtime_event)
+                except Exception as exc:
+                    status = 409 if "busy" in str(exc).lower() else 400
+                    raise AppError(str(exc), status) from exc
                 input_id = command_id or str(uuid.uuid4())
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
                 session["draftAttachments"]=[row for row in session.get("draftAttachments",[]) if row["id"] not in requested]
