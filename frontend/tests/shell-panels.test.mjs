@@ -31,6 +31,20 @@ test('rail pin, workspace selection, chat selection and drafts all use shared ac
  await renderAct(async()=>root.unmount());
 });
 
+test('chat rename opens the editor for that conversation and submits its new title',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Rename Another plan'}).props.onClick());
+ await renderAct(async()=>root.update(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]})));
+ const input=root.root.findByProps({id:'nav-workspace-name'});
+ assert.equal(input.props.value,'Another plan');
+ await renderAct(async()=>input.props.onChange({target:{value:'Renamed plan'}}));
+ await renderAct(async()=>root.update(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]})));
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.ok(calls.some(call=>call.name==='session.rename'&&call.args.id==='b'&&call.args.title==='Renamed plan'));
+ await renderAct(async()=>root.unmount());
+});
+
 test('registration removal requires explicit confirm and preserves unrelated chat actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};state.view.workspaceDraft={mode:'remove',id:'two',name:'Two'};let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});

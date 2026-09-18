@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {request} from '../src/api.js';
+import {request,applyIconTooltips} from '../src/api.js';
 
 test('commands send structured JSON to same origin and return server receipt',async()=>{
  const original=globalThis.fetch;
@@ -11,4 +11,16 @@ test('server validation errors remain visible and do not report success',async()
 });
 test('unexpected HTML response gives useful connection error',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});await assert.rejects(request('/api/state'),/unexpected response \(502\)/);}finally{globalThis.fetch=original}
+});
+test('icon tooltips mirror accessible labels without replacing richer authored text',()=>{
+ const automatic={title:'',dataset:{},getAttribute:()=> 'Rename conversation'};
+ const authored={title:'Attach files · up to 8 MB',dataset:{},getAttribute:()=> 'Add attachments'};
+ const root={querySelectorAll:()=>[automatic,authored]};
+ applyIconTooltips(root);
+ assert.equal(automatic.title,'Rename conversation');
+ assert.equal(automatic.dataset.iconTitle,'auto');
+ assert.equal(authored.title,'Attach files · up to 8 MB');
+ automatic.getAttribute=()=> 'Rename selected conversation';
+ applyIconTooltips(root);
+ assert.equal(automatic.title,'Rename selected conversation');
 });

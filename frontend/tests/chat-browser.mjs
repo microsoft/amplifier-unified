@@ -60,6 +60,12 @@ try{
  await page.getByRole('button',{name:'Rename workspace',exact:true}).click();
  await page.locator('#nav-workspace-name').fill('My project');await page.getByRole('button',{name:'Save name',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().workspaces.some(w=>w.name==='My project'));
+ const chatTitle=await page.evaluate(()=>{const state=window.amplifier.getState();return state.sessions.find(s=>s.id===state.selectedSessionId).title});
+ const chatRow=page.locator('.a-nav-chat').filter({has:page.getByRole('button',{name:chatTitle,exact:true})});await chatRow.hover();
+ await chatRow.getByRole('button',{name:`Rename ${chatTitle}`,exact:true}).click();
+ await page.locator('#nav-workspace-name').fill('Renamed chat');await page.getByRole('button',{name:'Save name',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.title==='Renamed chat'));
+ assert.equal(await page.locator('.a-icon[aria-label]:not([title])').count(),0);
  await page.getByRole('button',{name:'Unpin navigation',exact:true}).click();
  await page.mouse.move(1000,30);
 
