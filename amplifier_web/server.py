@@ -18,7 +18,10 @@ from .tls import ca_bytes
 
 def _set_response_headers(response: web.StreamResponse, path: str) -> web.StreamResponse:
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Chromium sends Origin: null on navigation POSTs from a no-referrer
+    # document. Keep the login form same-origin without leaking referrers to
+    # other sites; do not weaken the Origin check to accept opaque origins.
+    response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
     response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") else "no-cache"
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response

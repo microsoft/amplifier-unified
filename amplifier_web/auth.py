@@ -139,9 +139,25 @@ def is_api_request(request: web.Request) -> bool:
     return request.path.startswith("/api/")
 
 
+def is_entry_navigation(request: web.Request) -> bool:
+    """Allow external links to entry pages, never cross-site API or form calls.
+
+    A browser link and its /login redirect can both carry cross-site Fetch
+    Metadata. They still pass the normal Host, Origin, and authentication gates.
+    """
+    return (
+        request.method in {"GET", "HEAD"}
+        and request.path in {"/", "/login", "/setup"}
+        and "Origin" not in request.headers
+        and request.headers.get("Sec-Fetch-Mode") == "navigate"
+        and request.headers.get("Sec-Fetch-Dest") == "document"
+    )
+
+
 @web.middleware
 async def auth_required(request: web.Request, handler):
-    if request.headers.get("Sec-Fetch-Site") == "cross-site" or not allowed_origin(request):
+    cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
+    if (cross_site and not is_entry_navigation(request)) or not allowed_origin(request):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
     public = {"/login", "/setup", "/api/ca", "/ca.crt", "/api/health"}
     if request.path in public and request.method in {"GET", "HEAD"}:

@@ -42,6 +42,13 @@ uv run pytest
 uv build
 ```
 
+For authentication changes, also run the real Chromium login smoke:
+`uv run --with playwright pytest tests/test_browser_auth.py`
+(install Chromium once with `uv run --with playwright playwright install chromium`).
+It checks external-link navigation and the browser's actual form `Origin`;
+handwritten HTTP headers alone miss these failures. PAM is stubbed only in the
+isolated test, which never uses real credentials or changes system certificate trust.
+
 The runtime dependencies are pinned separately under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
 
 ## Deployment, PAM, and HTTPS

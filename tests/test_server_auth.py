@@ -1,6 +1,8 @@
+import pytest
+
 from test_service import Runtime
 
-from amplifier_web.auth import new_session
+from amplifier_web.auth import new_csrf, new_session
 from amplifier_web.server import create_app
 
 
@@ -51,10 +53,111 @@ async def test_pam_login_issues_only_unified_host_cookie(aiohttp_client, tmp_pat
     client = await aiohttp_client(app)
     monkeypatch.setattr("amplifier_web.auth.authenticate_pam", lambda username, password: username == "owner" and password == "correct")
     login = await client.get("/login")
+    assert login.headers["Referrer-Policy"] == "same-origin"
     csrf = login.cookies["amplifier_unified_csrf"].value
-    response = await client.post("/login", headers={"Cookie": f"amplifier_unified_csrf={csrf}"},
+    response = await client.post("/login", headers={"Cookie": f"amplifier_unified_csrf={csrf}",
+                                                  "Host": "127.0.0.1:8941",
+                                                  "Origin": "http://127.0.0.1:8941",
+                                                  "Sec-Fetch-Site": "same-origin"},
                                  data={"username": "owner", "password": "correct", "csrf": csrf},
                                  allow_redirects=False)
     assert response.status == 303
     cookie = response.cookies["amplifier_unified_session"]
     assert cookie["domain"] == "" and cookie["httponly"] and cookie["samesite"].lower() == "strict"
+
+
+async def test_opaque_origin_login_stays_blocked_even_with_valid_csrf(aiohttp_client, tmp_path, monkeypatch):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam",
+                        lambda *args: pytest.fail("opaque-origin form must not invoke PAM"))
+    csrf = (await client.get("/login")).cookies["amplifier_unified_csrf"].value
+    response = await client.post("/login", headers={
+        "Origin": "null", "Sec-Fetch-Site": "same-origin",
+        "Cookie": f"amplifier_unified_csrf={csrf}",
+    }, data={"username": "owner", "password": "synthetic", "csrf": csrf})
+    assert response.status == 403
+    assert (await client.get("/setup")).headers["Referrer-Policy"] == "no-referrer"
+
+
+# External links send cross-site Fetch Metadata even though they are ordinary
+# document navigations, not cross-origin API calls. Test the redirect too.
+NAVIGATION_HEADERS = {
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-User": "?1",
+}
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/", "/login", "/setup"])
+async def test_external_document_navigation_reaches_login_or_setup(aiohttp_client, tmp_path, method, path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    response = await client.request(method, path, headers=NAVIGATION_HEADERS, allow_redirects=False)
+    if path == "/":
+        assert response.status == 307 and response.headers["Location"] == "/login"
+        # A redirect can retain the original cross-site navigation metadata.
+        response = await client.request(method, response.headers["Location"],
+                                        headers=NAVIGATION_HEADERS, allow_redirects=False)
+    assert response.status == 200
+    if method == "GET":
+        assert "Amplifier Unified" in await response.text()
+    assert (await client.get("/api/state")).status == 401
+
+
+@pytest.mark.parametrize("path", ["/api/state", "/api/actions", "/api/events", "/api/health",
+                                 "/api/ca", "/ca.crt", "/index.html"])
+async def test_navigation_metadata_does_not_exempt_other_routes(aiohttp_client, tmp_path, path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS, "Cookie": "amplifier_unified_session=" + new_session(app["session_secret"])}
+    response = await client.get(path, headers=headers, allow_redirects=False)
+    assert response.status == 403
+
+
+@pytest.mark.parametrize("mode,destination", [("cors", "empty"), ("no-cors", "image"),
+                                            ("navigate", "iframe"), ("websocket", "empty"),
+                                            ("", ""), ("navigate", "")])
+async def test_cross_site_fetches_and_frames_stay_blocked(aiohttp_client, tmp_path, mode, destination):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS, "Sec-Fetch-Mode": mode, "Sec-Fetch-Dest": destination}
+    assert (await client.get("/login", headers=headers)).status == 403
+
+
+@pytest.mark.parametrize("origin", ["https://attacker.example", "null", "http://127.0.0.1:8941"])
+async def test_cross_site_navigation_with_origin_stays_blocked(aiohttp_client, tmp_path, origin):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS, "Host": "127.0.0.1:8941", "Origin": origin}
+    assert (await client.get("/login", headers=headers)).status == 403
+
+
+async def test_cross_site_form_with_valid_csrf_is_rejected_before_pam(aiohttp_client, tmp_path, monkeypatch):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam",
+                        lambda *args: pytest.fail("cross-site form must not invoke PAM"))
+    csrf = new_csrf(app["session_secret"])
+    response = await client.post("/login", headers={
+        **NAVIGATION_HEADERS,
+        "Cookie": f"amplifier_unified_csrf={csrf}",
+    }, data={"username": "owner", "password": "synthetic", "csrf": csrf}, allow_redirects=False)
+    assert response.status == 403
+
+
+async def test_external_navigation_does_not_allow_unknown_host(aiohttp_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    response = await client.get("/login", headers={**NAVIGATION_HEADERS, "Host": "attacker.example"})
+    assert response.status == 403
+    assert (await response.json())["error"] == "This Host is not configured."
