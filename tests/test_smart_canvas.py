@@ -23,6 +23,10 @@ class Tools:
     def persist_operation(self, record):pass
     def operation(self, identity):return next((o for o in self.service.state['smartTools']['operations'] if o['id']==identity), None)
     async def close(self):pass
+    async def resource_request(self, identity, kind, **args):
+        assert identity == 'one'
+        assert args['expected_configuration'] == configuration_key(self.service.state['smartTools']['servers'][0])
+        return {'contents':[{'uri':args['uri'],'text':'Scoped media'}]}
 
 
 async def settled(service):
@@ -82,6 +86,21 @@ async def test_commands_deduplicate_before_tool_call(service):
     assert second['duplicate'] and second['operationId']==first['operationId']
     await settled(service)
     assert len(service.state['smartTools']['operations'])==1
+
+
+async def test_resources_use_saved_binding_and_reject_detach_during_read(service):
+    await service.smart_canvas.open({'id':'one','tool':'read'})
+    cid=service.state['canvas']['id']
+    result=await service.smart_canvas.resource(cid,'read',uri='counter://media/one')
+    assert result['contents'][0]['text']=='Scoped media'
+    original=service.smart_tools.resource_request
+    async def detached(*args,**kwargs):
+        result=await original(*args,**kwargs)
+        await service.dispatch('canvas.close')
+        return result
+    service.smart_tools.resource_request=detached
+    with pytest.raises(AppError,match='no longer active'):
+        await service.smart_canvas.resource(cid,'read',uri='counter://media/one')
 
 
 async def test_failed_open_has_visible_terminal_operation(service):

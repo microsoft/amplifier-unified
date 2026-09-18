@@ -308,11 +308,12 @@ class SmartToolsManager:
         args = copy.deepcopy(args)
         operation = {
             "id": command_id, "action": action, "origin": origin,
-            "target": {key: args[key] for key in ("id", "name", "repository", "ref", "path", "sessionId") if key in args},
+            "target": {key: args[key] for key in ("id", "name", "repository", "ref", "path", "sessionId", "uri") if key in args},
             "status": "running", "createdAt": time.time(), "updatedAt": time.time(),
         }
-        if action == "smartTools.call":
-            operation["arguments"] = self._redact(copy.deepcopy(args.get("arguments", {})))
+        if action in {"smartTools.call", "smartTools.resources", "smartTools.readResource"}:
+            if action == "smartTools.call":
+                operation["arguments"] = self._redact(copy.deepcopy(args.get("arguments", {})))
             server = next((row for row in self.state["servers"] if row["id"] == args.get("id")), None)
             if server is not None:
                 operation["configuration"] = configuration_key(server)
@@ -361,6 +362,8 @@ class SmartToolsManager:
             return {"id": args["id"], "status": "disconnected"}
         if name == "call":
             return await self.call_tool(args["id"], args["name"], args.get("arguments", {}), origin=origin, timeout_seconds=args.get("timeoutSeconds", 60), allowed_tools=args.get("_allowedTools"), expected_configuration=args.get("_configuration"))
+        if name in {"resources", "readResource"}:
+            return await self.resource_request(args["id"], "read" if name == "readResource" else args.get("kind", "list"), uri=args.get("uri"), cursor=args.get("cursor"), expected_configuration=args.get("_configuration"))
         if name == "catalog":
             return await self.catalog()
         if name == "inspect":
@@ -481,6 +484,36 @@ class SmartToolsManager:
         finally:
             if connection.task.done():
                 await self._change(lambda _: self._server(identity).update(status="disconnected"))
+
+    async def resource_request(self, identity, kind, *, uri=None, cursor=None, expected_configuration=None):
+        """Forward bounded MCP resource requests, never resolve URIs in the host.
+
+        The configured server owns resource authorization. A view gets only its
+        saved server binding, with no authority to choose another connection.
+        Large media must use tool-defined bounded resource chunks.
+        """
+        connection = await self._connection(identity)
+        key = configuration_key(self._server(identity))
+        if expected_configuration is not None and key != expected_configuration:
+            raise ValueError("This tool's connection settings changed. Reopen its view before using it.")
+        if "resources" not in self._server(identity).get("capabilities", {}):
+            raise ValueError("This MCP server does not advertise resource access.")
+        if kind == "read":
+            if not isinstance(uri, str) or not uri or len(uri) > 4000 or any(ord(c) < 32 for c in uri):
+                raise ValueError("Choose a resource URI supplied by this tool.")
+            parsed = urlsplit(uri)
+            if not parsed.scheme or parsed.username or parsed.password:
+                raise ValueError("Resource URIs must be absolute and contain no credentials.")
+            result = await connection.request("read_resource", uri, timeout=30)
+        elif kind in {"list", "templates"}:
+            if cursor is not None and (not isinstance(cursor, str) or len(cursor) > 4000):
+                raise ValueError("The resource cursor is invalid.")
+            result = await connection.request("list_resources" if kind == "list" else "list_resource_templates", cursor=cursor, timeout=30)
+        else:
+            raise ValueError("Unknown resource operation.")
+        if self.connections.get(identity) is not connection or configuration_key(self._server(identity)) != key:
+            raise ValueError("The resource connection changed while reading. Reopen its view.")
+        return self._redact(_bounded(result))
 
     async def read_app(self, identity, uri):
         connection = await self._connection(identity)

@@ -29,6 +29,8 @@ def definitions(schema, string):
         'smartTools.remove': ('Remove this server registration, keeping installed files and tool-owned work.', schema(identity)),
         'smartTools.call': ('Call a discovered model-visible tool. Receipt operationId identifies the durable result under smartTools.operations. A timeout is not proof that tool-owned work stopped; inspect its status before retrying.', schema({**identity,'name':string(200),'arguments':{'type':'object'},'sessionId':string(200),'timeoutSeconds':{'type':'number','minimum':1,'maximum':300}}, ['id','name'])),
         'smartTools.result': ('Inspect an older or large operation result in /smartTools/inspectedOperation. Follow $resource state paths for paged content.', schema({'operationId':string(100)})),
+        'smartTools.resources': ('List a connected MCP server’s resources or resource templates, one page at a time. Resource reads are bounded to 2 MB; use the tool’s chunk resources for media.', schema({**identity,'kind':{'enum':['list','templates']},'cursor':string(4000)}, ['id'])),
+        'smartTools.readResource': ('Read a resource URI through this connected MCP server. The host never fetches the URI directly. Use tool-provided bounded chunks for large media.', schema({**identity,'uri':string(4000)}, ['id','uri'])),
         'smartTools.open': ('Open a discovered MCP App in a durable canvas tab. Supply operationId to send that call’s arguments and result to the view. Closing a tab does not cancel tool work.', schema({**identity,'tool':string(200),'operationId':string(100),'sessionId':string(200)}, ['id','tool'])),
         'smartTools.appCall': ('Call an app-visible tool through the current canvas binding. Cannot select a different server. Results also appear in shared smartTools.operations.', schema({'canvasId':string(100),'name':string(200),'arguments':{'type':'object'}}, ['canvasId','name'])),
         'smartTools.context': ('Record the current MCP App view context as untrusted display data, visible to the agent on its next state read. Does not start a model turn.', schema({'canvasId':string(100),'context':{'type':'object'}}, ['canvasId','context'])),
@@ -48,6 +50,15 @@ class SmartCanvas:
         if not server or configuration_key(server) != binding['configuration']:
             raise api.AppError('This server configuration changed. Open a fresh tool view.', 409)
         return canvas, binding
+
+    async def resource(self, identity, kind, *, uri=None, cursor=None):
+        _, binding = self.binding(identity)
+        result = await self.service.smart_tools.resource_request(
+            binding['serverId'], kind, uri=uri, cursor=cursor,
+            expected_configuration=binding['configuration'])
+        # Do not return bytes to a detached view or a replacement connection.
+        self.binding(identity)
+        return result
 
     async def command(self, action, args, operation_id, origin):
         manager = self.service.smart_tools

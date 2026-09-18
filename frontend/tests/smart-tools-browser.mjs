@@ -12,14 +12,19 @@ const app=new App({name:'Independent counter',version:'1.0.0'},{});
 const draw=async result=>{const value=result.structuredContent;document.querySelector('#count').textContent=String(value.count);await app.updateModelContext({structuredContent:value});};
 app.ontoolresult=draw;
 document.querySelector('#add').onclick=async()=>draw(await app.callServerTool({name:'counter_add',arguments:{amount:1}}));
+document.querySelector('#media').onclick=async()=>{
+ try{const result=await app.readServerResource({uri:'counter://media/preview'});document.querySelector('#resource').textContent=result.contents[0].text}
+ catch(error){document.querySelector('#resource').textContent=error.message}
+};
 await app.connect();
+await app.listServerResources();
 await draw(await app.callServerTool({name:'counter_read',arguments:{}}));
 document.querySelector('#isolation').textContent=(()=>{try{return parent.document.title}catch{return 'Parent isolated'}})();
 fetch('/api/state').then(()=>document.body.dataset.network='FAILED').catch(()=>document.body.dataset.network='blocked');
 `;
 const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'counter.js'},bundle:true,write:false,format:'esm',minify:true});
 const attack=`<script>parent.parent.postMessage({jsonrpc:'2.0',id:'forged',method:'tools/call',params:{name:'counter_add',arguments:{amount:1000}}},'*')</script>`;
-const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
+const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
 await writeFile(join(temp,'app.html'),html);
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
 let browser;
@@ -35,6 +40,8 @@ try{
  const frame=page.frameLocator('.a-canvas-html');
  try{await frame.getByText('Parent isolated',{exact:true}).waitFor({timeout:12000})}catch(e){console.log(await page.locator('.a-canvas-body').innerText());console.log(await frame.locator('body').innerText());throw e}
  const stableFrame=await page.locator('.a-canvas-html').boundingBox();
+ await frame.getByRole('button',{name:'Read media'}).click();
+ await frame.locator('#resource').filter({hasText:'Retained preview'}).waitFor();
  await page.route('**/api/smart-tools/operations/*',async route=>{await new Promise(resolve=>setTimeout(resolve,400));await route.continue()});
  await frame.getByRole('button',{name:'Add one'}).click();
  await page.waitForFunction(()=>document.querySelector('.a-mcp-status')?.dataset.phase==='working');
@@ -71,6 +78,8 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers.find(s=>s.id==='counter').command==='invalid-command');
  await frame.getByRole('button',{name:'Add one'}).click();
  await page.getByText('This server configuration changed. Open a fresh tool view.',{exact:true}).waitFor();
+ await frame.getByRole('button',{name:'Read media'}).click();
+ await frame.locator('#resource').filter({hasText:'configuration changed'}).waitFor();
  assert.deepEqual(errors.filter(e=>!e.includes('configuration changed')),[]);
  console.log('MCP Apps browser passed: official SDK handshake, shared tool actions and view state, sandbox isolation, nested-message rejection, durable reopen without mutation replay, stale-config denial.');
 }finally{await browser?.close();fixture.kill();await rm(temp,{recursive:true,force:true})}

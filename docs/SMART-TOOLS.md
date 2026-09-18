@@ -36,6 +36,8 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
 
 - `smartTools.catalog`, `inspect`, `install`, `configure`, `connect`, `disconnect`, `remove`.
 - `smartTools.call {id,name,arguments,sessionId?}` returns an `operationId` receipt.
+- `smartTools.resources {id,kind?,cursor?}` lists resources or templates one page
+  at a time; `smartTools.readResource {id,uri}` reads through that server.
 - `smartTools.open {id,tool,operationId?,sessionId?}` attaches a standard view.
 - `smartTools.result {operationId}` exposes a retained receipt at
   `/smartTools/inspectedOperation`, including pageable references for large results.
@@ -78,6 +80,12 @@ This initial host profile supports:
 - Self-contained MCP App HTML; scripts/styles are inline, images/media are embedded,
   and nested generated previews may use isolated blob frames.
 - Scoped `tools/list`, `tools/call`, and text/structured `ui/update-model-context`.
+- Standard `resources/list`, `resources/templates/list`, and `resources/read`
+  through the view's saved server binding. The host never fetches resource URIs
+  itself. Encoded responses are limited to 2 MB; large media uses tool-defined
+  bounded chunk resources assembled into blob URLs by the App. Domain resource
+  authorization belongs to the configured server. Closed views and changed
+  connections cannot continue reads. Media reads do not bloat chat history.
 - Explicit environment references, input validation, source-window checks, opaque
   iframe origins, stale-configuration checks, and recorded results.
 - User-clicked downloads from tool views. Other device permissions and network/asset

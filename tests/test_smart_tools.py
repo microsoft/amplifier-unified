@@ -110,6 +110,41 @@ async def test_unadvertised_and_wrong_mime_resources_are_rejected(manager, tmp_p
         await manager.read_app("board", "ui://board/wrong-mime")
 
 
+async def test_standard_resources_are_bounded_and_configuration_bound(manager, tmp_path):
+    import base64
+    await register(manager, tmp_path)
+    connected = await manager.connect("board")
+    key = configuration_key(connected)
+    templates = await manager.resource_request("board", "templates", expected_configuration=key)
+    assert any(row["uriTemplate"] == "board://retained/{identity}" for row in templates["resourceTemplates"])
+    listed = await manager.resource_request("board", "list")
+    assert any(row["uri"] == "ui://board/main" for row in listed["resources"])
+    result = await manager.command("smartTools.readResource", {"id":"board", "uri":"board://retained/one"}, "media", origin="agent")
+    assert base64.b64decode(result["contents"][0]["blob"]) == b"retained media"
+    assert manager.operation("media")["configuration"] == key
+    with pytest.raises(ValueError, match="too large"):
+        await manager.resource_request("board", "read", uri="board://retained/large")
+    for uri in ("relative/file", "https://user:secret@example.com/file", "board://bad\nuri"):
+        with pytest.raises(ValueError, match="resource URI|Resource URIs"):
+            await manager.resource_request("board", "read", uri=uri)
+    with pytest.raises(ValueError, match="settings changed"):
+        await manager.resource_request("board", "read", uri="board://retained/one", expected_configuration="old")
+
+
+async def test_resource_read_rejects_connection_replaced_during_read(manager, tmp_path):
+    await register(manager, tmp_path)
+    await manager.connect("board")
+    connection = manager.connections["board"]
+    original = connection.request
+    async def changed(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        manager.state["servers"][0]["args"].append("replacement")
+        return result
+    connection.request = changed
+    with pytest.raises(ValueError, match="changed while reading"):
+        await manager.resource_request("board", "read", uri="board://retained/one")
+
+
 async def test_failures_and_restarts_leave_visible_receipts_without_replaying(manager, tmp_path):
     await register(manager, tmp_path)
     await manager.connect("board")

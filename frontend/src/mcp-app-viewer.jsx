@@ -28,7 +28,7 @@ export function McpAppViewer({canvas,act}){
   const report=(phase,text)=>{if(!live)return;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   const start=async()=>{
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
-    {serverTools:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
+    {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
     {hostContext:{theme:document.querySelector('#amp-one')?.dataset.scheme==='dark'?'dark':'light',displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language}});
    bridge.oncalltool=async params=>{
     report('working',`Running ${params.name}…`);
@@ -39,6 +39,10 @@ export function McpAppViewer({canvas,act}){
     }catch(error){report('error',error.message);throw error}
    };
    bridge.onlisttools=()=>request(`/api/canvas/${canvas.id}/tools`,{signal:controller.signal});
+   const resource=(kind,params={})=>request(`/api/canvas/${canvas.id}/resources?${new URLSearchParams({kind,...params})}`,{signal:controller.signal});
+   bridge.onreadresource=params=>resource('read',{uri:params.uri});
+   bridge.onlistresources=params=>resource('list',params?.cursor?{cursor:params.cursor}:{});
+   bridge.onlistresourcetemplates=params=>resource('templates',params?.cursor?{cursor:params.cursor}:{});
    bridge.onupdatemodelcontext=async context=>{
     await command('smartTools.context',{canvasId:canvas.id,context},controller.signal);return {};
    };

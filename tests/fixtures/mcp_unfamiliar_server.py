@@ -61,5 +61,14 @@ def wrong_view() -> str:
     return "not HTML"
 
 
+@server.resource("board://retained/{identity}", mime_type="application/octet-stream")
+def retained_resource(identity: str) -> bytes:
+    if identity == "large":
+        return b"x" * 2_000_001
+    if identity == "secret":
+        return os.environ.get("EXPLICIT_TOKEN", "unset").encode()
+    return b"retained media"
+
+
 if __name__ == "__main__":
     server.run()
