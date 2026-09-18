@@ -178,3 +178,18 @@ async def test_grouped_display_still_installs_every_cached_copy(app,repo):
     await manager.install()
     assert app.state['updates']['phase']=='installed'
     assert git(foundation_home(app.data_dir)/'cache/second','rev-parse','HEAD')==repo[2]
+
+
+async def test_ecosystem_activation_does_not_claim_application_was_installed(app,repo):
+    manager,_=await prepare(app,repo)
+    release={'id':'application','label':'Amplifier Unified','kind':'app','current':'0.1.0','latest':'v99.0.0','status':'update'}
+    app.state['updates'].update(application=release,items=[release,{'id':'module','label':'Fixture module','current':'old','latest':'new','status':'update'}],appAvailable=True)
+    # A staged ecosystem can coexist with a subsequently discovered app update.
+    app.state['updates']['appAvailable']=False
+    async def validate(*args):pass
+    manager.validate=validate
+    await manager.install()
+    assert app.state['updates']['items'][0]==release
+    assert app.state['updates']['application']==release
+    assert app.state['updates']['available']==1
+    assert app.state['updates']['items'][1]['status']=='current'

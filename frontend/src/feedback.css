@@ -1,0 +1,16 @@
+#amp-one .a-feedback form {display:grid;gap:8px}
+#amp-one .a-feedback form>label:not(.a-feedback-checkbox) {margin:6px 0 0}
+#amp-one .a-feedback textarea {min-height:120px;resize:vertical;line-height:1.5}
+#amp-one .a-feedback .a-feedback-checkbox {display:flex;align-items:center;gap:9px;margin:8px 0 0}
+#amp-one .a-feedback .a-feedback-checkbox input {width:16px;height:16px;min-height:16px;flex:0 0 auto;margin:0}
+#amp-one .a-feedback .a-dialog-actions {margin-top:10px}
+#amp-one .a-feedback-link,#amp-one .a-feedback-recent a {display:inline-flex;align-items:center;gap:6px}
+#amp-one .a-feedback-result {margin:12px 0 18px}
+#amp-one .a-feedback-result .a-check-result {margin:0 0 8px}
+#amp-one .a-feedback-recent {display:grid;gap:8px;margin-top:14px}
+#amp-one .a-feedback-recent h3 {margin:0}
+#amp-one .a-feedback-recent a {min-width:0;overflow-wrap:anywhere}
+@media(max-width:600px){
+ #amp-one .a-overlay:has(.a-feedback){padding:0;align-items:stretch;background:var(--a-surface);backdrop-filter:none}
+ #amp-one .a-dialog:has(.a-feedback){width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:16px}
+}

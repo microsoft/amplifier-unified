@@ -196,3 +196,135 @@ async def test_installed_application_removed_from_pending_updates_but_sources_pr
     assert service.state['updates']['items'][1]['status']=='update'
     assert not service.state['updates']['appAvailable']
     await service.close()
+
+
+async def test_current_version_is_visible_and_saved_before_any_check(tmp_path):
+    from amplifier_web import __version__
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    app=service.state['updates']['application']
+    assert app['status']=='not_checked' and app['current']==__version__
+    assert app['channel']=='github-releases'
+    saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    assert saved['updates']['application']['current']==__version__
+    await service.close()
+
+
+async def test_installed_ahead_of_release_is_explicit_and_never_tracks_main(monkeypatch):
+    monkeypatch.setattr(app_updates.shutil,'which',lambda _: '/fixture/tool')
+    calls=[]
+    async def process(*args,**kwargs):
+        calls.append(args)
+        if args[0]=='gh':return json.dumps({'tag_name':'v0.0.1','published_at':'2026-01-01T00:00:00Z'})
+        return 'a'*40+'\trefs/tags/v0.0.1'
+    monkeypatch.setattr(app_updates,'process',process)
+    result=await app_updates.check()
+    assert result['status']=='current' and result['releaseBehind'] is True
+    assert result['latest']=='v0.0.1' and 'newer than' in result['detail']
+    assert result['publishedAt']=='2026-01-01T00:00:00Z'
+    assert not any('refs/heads/main' in part for call in calls for part in call)
+
+
+async def test_restart_preserves_effective_server_overrides_without_saving_them(tmp_path,monkeypatch):
+    from amplifier_web.cli import _parse,_server_overrides
+    from amplifier_web.deployment import load_server_config,validate_server
+    import sys
+    service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    before=load_server_config(tmp_path)
+    saved=(tmp_path/'config/server.yaml').read_text()
+    service.port=9443
+    service.server_config=validate_server({**before,'bind':['127.0.0.1','192.0.2.5'],'port':9443,
+        'public_origins':['https://app.example:9443'],'session_ttl_seconds':300,
+        'tls':{'method':'ca','cert':'custom-cert.pem','key':'custom-key.pem'}})
+    options=app_updates.restart_arguments(manager,'/fixture/launcher')
+    monkeypatch.setattr(sys,'argv',options)
+    parsed=_parse()
+    assert load_server_config(tmp_path,overrides=_server_overrides(parsed))==service.server_config
+    assert (tmp_path/'config/server.yaml').read_text()==saved
+    assert parsed.workspace==service.default_workspace
+    await service.close()
+
+
+async def test_running_smart_tool_defers_application_activation(tmp_path,monkeypatch):
+    service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    service.state['smartTools']={'operations':[{'id':'tool','status':'running'}]}
+    process=AsyncMock(side_effect=AssertionError('must wait for active Smart Tool'))
+    monkeypatch.setattr(app_updates,'process',process)
+    await app_updates.activate(manager)
+    process.assert_not_awaited()
+    assert service.state['updates'].get('phase')!='activating'
+    await service.close()
+
+
+async def test_accepted_smart_tool_task_blocks_update_before_operation_record(tmp_path,monkeypatch):
+    import asyncio
+    from amplifier_web.service import AppError
+    service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    started=asyncio.Event();finish=asyncio.Event()
+    async def command(*args):
+        started.set();await finish.wait()
+    service.smart_tools=SimpleNamespace(close=AsyncMock())
+    service.smart_canvas=SimpleNamespace(command=command)
+    await service.dispatch('smartTools.call',{'id':'fixture','name':'work'},command_id='queued-tool')
+    assert manager.busy()
+    await started.wait()
+    assert manager.busy()
+    service.state['updates']['phase']='activating'
+    with pytest.raises(AppError,match='update is activating'):
+        await service.dispatch('smartTools.call',{'id':'fixture','name':'second'})
+    finish.set()
+    await asyncio.gather(*service.smart_tool_tasks)
+    assert not manager.busy()
+    await service.close()
+
+
+async def test_candidate_probe_is_isolated_from_checkout_and_pythonpath(tmp_path,monkeypatch):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    service.state['updates']['application']={'status':'update','revision':'a'*40,'latest':'v99.0.0'}
+    calls=[]
+    monkeypatch.setattr(app_updates.shutil,'which',lambda _: '/fixture/uv')
+    async def process(*args,**kwargs):
+        calls.append(args)
+        return '99.0.0' if '-c' in args else ''
+    monkeypatch.setattr(app_updates,'process',process)
+    await app_updates.stage(manager)
+    assert calls[-1][-3:]==('-I','-c',app_updates.PROBE)
+    assert 'is_relative_to(Path(sys.prefix)' in app_updates.PROBE
+    await service.close()
+
+
+async def test_direct_voice_connect_claims_work_under_update_lock(tmp_path,monkeypatch):
+    import asyncio
+    from amplifier_web.voice import VoiceCall,VoiceError,VoiceService
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    await service.dispatch('session.create',{})
+    manager=UpdateManager(service);service.update_manager=manager
+    voice=VoiceService(service,api_key='fixture-only',http=object())
+    create=AsyncMock(return_value={'id':'fixture','sdp':'answer'})
+    monkeypatch.setattr(VoiceCall,'create',create)
+    # A request that started before activation but waited for the state lock
+    # must still fail before opening a paid provider connection.
+    async with service.lock:
+        pending=asyncio.create_task(voice.connect('v=0'))
+        await asyncio.sleep(0)
+        service.state['updates']['phase']='activating'
+    with pytest.raises(VoiceError,match='update is activating'):
+        await pending
+    create.assert_not_awaited()
+    assert voice.call is None
+    service.state['updates']['phase']='app-staged'
+    await voice.connect('v=0')
+    assert manager.busy()
+    create.assert_awaited_once()
+    voice.call.closed=True
+    await service.close()
+
+
+@pytest.mark.parametrize('status,expected',[('queued',True),('sending',True),('submitted',False),('unknown',False)])
+async def test_feedback_submission_defers_update(tmp_path,status,expected):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    service.state['feedback']={'requests':[{'id':'fixture','status':status}]}
+    assert manager.busy() is expected
+    await service.close()

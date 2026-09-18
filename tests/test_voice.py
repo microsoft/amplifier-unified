@@ -6,9 +6,11 @@ from amplifier_web.voice import ProviderError, VoiceCall, VoiceError, VoiceServi
 
 class Service:
     def __init__(self):
-        self.state = {"selectedSessionId": "main", "sessions": [{"id": "main", "messages": [], "workers": []}], "view": {"mode": "chat"}}
+        self.state = {"selectedSessionId": "main", "sessions": [{"id": "main", "messages": [], "workers": []}], "view": {"mode": "chat"}, "voice": {}}
         self.transcripts, self.calls, self.statuses = [], [], []
         self.result = asyncio.Event()
+        self.lock = asyncio.Lock()
+    def _publish(self): self.statuses.append(dict(self.state['voice']))
     def get_state(self): return self.state
     async def set_voice_status(self, status): self.statuses.append(status)
     async def record_voice_transcript(self, role, text, **kwargs): self.transcripts.append((role, text, kwargs))

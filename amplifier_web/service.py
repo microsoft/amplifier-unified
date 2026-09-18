@@ -110,8 +110,8 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
-    "updates.check": ("Check ecosystem sources for updates", schema()),
-    "updates.install": ("Stage and validate available ecosystem updates; activate when idle", schema()),
+    "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
+    "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice or workspace defaults", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
@@ -161,6 +161,8 @@ def validate_theme(css):
 
 from .smart_canvas import definitions as smart_tool_definitions
 ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
+from .feedback import definitions as feedback_definitions
+ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
 
 class AppService:
@@ -182,6 +184,7 @@ class AppService:
         self.smart_canvas = None
         self.queues = set()
         self.tasks = set()
+        self.smart_tool_tasks = set()
         self.lock = asyncio.Lock()
         self.closed = False
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
@@ -216,6 +219,8 @@ class AppService:
         for session in self.state['sessions']:
             session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
             persist(self.data_dir,session)
+        from .feedback import Feedback
+        self.feedback = Feedback(self)
         self._save()
 
     def default_theme(self):
@@ -311,7 +316,7 @@ class AppService:
                     return {**json.loads(previous[1]), "state": self.get_state(), "duplicate": True}
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if self.state.get("updates",{}).get("phase") == "activating" and action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
+            if self.state.get("updates",{}).get("phase") == "activating" and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -526,7 +531,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -539,6 +544,9 @@ class AppService:
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
                 self.state["view"].update(copy.deepcopy(patch))
+            elif action == "feedback.submit":
+                if self.feedback.accept(args):
+                    pending.append((self.feedback.send, (args['requestId'],)))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':
@@ -613,12 +621,17 @@ class AppService:
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
+            if action == "feedback.submit":
+                receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             self._publish()
             result = {**receipt, "state": self.get_state()}
         for fn, values in pending:
-            self._task(self._guard(fn, values))
+            task=self._task(self._guard(fn, values))
+            if action.startswith("smartTools."):
+                self.smart_tool_tasks.add(task)
+                task.add_done_callback(self.smart_tool_tasks.discard)
         return result
 
     async def _guard(self, fn, args):
