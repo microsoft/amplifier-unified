@@ -44,6 +44,8 @@ def test_host_alias_is_exclusive_with_bind_and_options_do_not_follow_command(mon
     monkeypatch.setattr(sys, "argv", ["amplifier-unified", "service", "install", "--replace"])
     args = _parse()
     assert args.service_command == "install" and args.replace
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "setup-tls", "export"])
+    assert _parse().mode == "export"
 
 
 def test_tls_option_overlay_preserves_unmentioned_nested_values(tmp_path):

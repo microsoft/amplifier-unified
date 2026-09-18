@@ -12,6 +12,7 @@ from . import __version__
 from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
+from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 
 
@@ -120,10 +121,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                             headers={"Content-Disposition": 'attachment; filename="amplifier-unified-ca.crt"'})
 
     async def setup(request):
-        available = ca_bytes(data_dir) is not None
-        body = "<!doctype html><title>Amplifier Unified setup</title><h1>Amplifier Unified setup</h1>"
-        body += '<p><a href="/ca.crt">Download this host’s local CA certificate</a>.</p>' if available else "<p>Run <code>amplifier-unified setup-tls</code> on the host.</p>"
-        return web.Response(text=body, content_type="text/html")
+        certificate = ca_bytes(data_dir)
+        from .tls import ca_fingerprint
+        return web.Response(
+            text=render_setup_page(
+                detect_platform(request.headers.get("User-Agent")),
+                certificate is not None,
+                ca_fingerprint(data_dir),
+            ),
+            content_type="text/html",
+            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"},
+        )
 
     async def events(request):
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
