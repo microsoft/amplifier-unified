@@ -13,15 +13,22 @@ export function CanvasToggle({state,act}){
  return <button type="button" className="a-icon" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><PanelRight/></button>;
 }
 export function ChatRename({chat,act,cancel}){
- const [name,setName]=useState(chat.title||'');
+ const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
+ const submitting=useRef(false);
+ useEffect(()=>setName(chat.title||''),[chat.title]);
  const submit=async e=>{
   e.preventDefault();
   const title=name.trim();
-  if(!title)return;
-  const result=await act('session.rename',{id:chat.id,title});
-  if(result?.accepted!==false)cancel();
+  if(!title||submitting.current)return;
+  submitting.current=true;setSaving(true);setError('');
+  try{
+   const result=await act('session.rename',{id:chat.id,title});
+   if(result&&result.accepted!==false)cancel();
+   else setError(result?.error||'Could not rename. Your text is kept; try again.');
+  }catch(error){setError(error.message||'Could not rename. Please try again.')}
+  finally{submitting.current=false;setSaving(false)}
  };
- return <form className="a-nav-chat a-nav-chat-rename" onSubmit={submit}><input id="nav-workspace-name" aria-label={`New name for ${chat.title||'conversation'}`} value={name} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" data-action="view.update" onClick={cancel}><X/></button></form>;
+ return <form aria-busy={saving} className="a-nav-chat a-nav-chat-rename" onSubmit={submit}><input id="nav-workspace-name" aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>{error&&<small role="alert" className="a-danger">{error}</small>}</form>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession}){
  const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};

@@ -81,3 +81,24 @@ test('reopening the canvas keeps its saved snapshot without creating another art
  await reopenCanvas({canvas:{kind:'markdown',path:'/one/plan.md',title:'Plan',content:'Old content',events:[{}]}},async(name,args)=>{called={name,args}});
  assert.deepEqual(called,{name:'canvas.reopen',args:{}});
 });
+
+
+test('rename preserves failed text, prevents duplicate submission, and reflects agent renames',async()=>{
+ let finish;const calls=[];let cancelled=0;
+ const act=async(name,args)=>{calls.push({name,args});return await new Promise(resolve=>finish=resolve)};
+ let chat={id:'a',title:'Original'},root;
+ const render=()=>React.createElement(ChatRename,{chat,act,cancel:()=>cancelled++});
+ await renderAct(async()=>{root=create(render())});
+ await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'My new name'}}));
+ let pending;
+ await renderAct(async()=>{pending=root.root.findByType('form').props.onSubmit({preventDefault(){}})});
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.equal(calls.length,1);
+ await renderAct(async()=>{finish(undefined);await pending});
+ assert.equal(cancelled,0);assert.equal(root.root.findByType('input').props.value,'My new name');
+ assert.equal(root.root.findByProps({role:'alert'}).children.length,1);
+ chat={...chat,title:'Agent supplied title'};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByType('input').props.value,'Agent supplied title');
+ await renderAct(async()=>root.unmount());
+});
