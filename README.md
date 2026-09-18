@@ -8,7 +8,7 @@ A local Python host serving a bundled React interface. One conversation supports
 uv run --project /path/to/amplifier-web amplifier-unified --workspace /path/to/your/project
 ```
 
-Then open http://127.0.0.1:8941. Start a conversation, choose a community bundle URI or the configured `anchors` default, and send a message. The runtime prepares its pinned environment on first use. On first launch, existing Amplifier settings, bundle registry/cache and keys are copied into the app-owned configuration. Later launches read the app configuration and server environment credentials. Missing credentials or unavailable providers are reported as errors, never simulated responses.
+Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, choose a community bundle URI or the configured `anchors` default, and send a message. The runtime prepares its pinned environment on first use. On first launch, existing Amplifier settings, bundle registry/cache and keys are copied into the app-owned configuration. Later launches read the app configuration and server environment credentials. Missing credentials or unavailable providers are reported as errors, never simulated responses.
 
 The first message may take several minutes while the runtime environment and configured modules are prepared. The conversation shows the current preparation phase and elapsed time; your message remains queued until preparation finishes. A preparation timeout reports an error instead of silently resending it.
 
@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified@v0.5.6
+uv tool install git+https://github.com/bkrabach/amplifier-unified
 amplifier-unified
 ```
 
@@ -43,6 +43,45 @@ uv build
 ```
 
 The runtime dependencies are pinned separately under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
+
+## Deployment, PAM, and HTTPS
+
+The host has native, independent authentication. It does not trust a reverse
+proxy, shared cookies, or another application's session. Every browser,
+including `localhost`, must authenticate using PAM's `login` service with the
+exact operating-system user that owns the host process. Browser sessions use an
+app-specific, signed, expiring `amplifier_unified_session` cookie; automation
+uses the separately generated control bearer in the private app data directory.
+
+By default Unified only listens at `127.0.0.1:8941`. To publish it on a LAN or
+tailnet, configure exact HTTPS origins and create the app-owned local CA:
+
+```sh
+amplifier-unified config set public_origins '["https://host.example:8941", "https://192.0.2.5:8941"]'
+amplifier-unified setup-tls
+amplifier-unified config set bind '["192.168.1.5", "127.0.0.1"]'
+amplifier-unified service install
+```
+
+`config/server.yaml` is private (`0600`) under the selected data directory,
+normally `~/.amplifier-unified`. Non-loopback binds fail to start unless TLS and
+at least one exact HTTPS public origin are configured. `setup-tls` creates a
+private CA and leaf key under `config/tls`, and later runs reuse that leaf.
+Run `setup-tls force` after changing an address that must appear in the
+certificate. Visit `/setup` or download `/ca.crt` to install that CA once on
+each LAN client. The CA download is anonymous, so verify its SHA-256 fingerprint
+out of band against the value printed by `setup-tls` or `doctor` before
+installing it. The only public bootstrap paths are `/login`, `/setup`,
+`/api/ca`, `/ca.crt`, and `/api/health`.
+
+Use `amplifier-unified doctor` to check PAM, TLS, and deployment settings.
+Linux systemd user-service lifecycle is available through
+`amplifier-unified service install|start|stop|restart|status|logs|uninstall`.
+The generated service has no credential values and reads its private
+configuration at runtime. Replacing an existing generated unit requires
+`amplifier-unified service install --replace`; its prior contents are saved as
+a private timestamped backup. `uv tool install git+https://github.com/bkrabach/amplifier-unified`
+installs the same CLI and service support.
 
 ## Standalone host and session flow
 
@@ -69,7 +108,9 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
 
-The server binds only to loopback and rejects cross-origin requests. This first version is for a single user's local computer, not remote hosting.
+The server accepts only configured Hosts and exact public origins, rejects
+cross-site requests, and does not use `X-Forwarded-*` headers. Remote hosting
+requires native HTTPS and PAM as described above.
 
 Provider setup detects standard environment variables (such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`) and allows a custom variable name. Availability checks expose only names and presence; Save stores an environment reference. The backend reads its launch environment and private key file. Restart it after changing variables in a terminal. Private pasted keys remain available as an alternative; ChatGPT uses account sign-in. Copilot supports one credential per session process because its SDK shares authentication.
 
@@ -91,7 +132,13 @@ amplifier-unified tool bash --args '{"command":"pwd"}'
 amplifier-unified completion zsh
 ```
 
-Connection options (`--port`, `--workspace`, `--data-dir`) precede the subcommand. One-shot commands connect to an existing host or start a temporary local host; they use the same approvals and runtime. Noninteractive tools cannot grant human approval automatically.
+Connection options (`--port`, `--workspace`, `--data-dir`, repeatable
+`--bind`, `--host`, repeatable `--public-origin`, `--tls-cert`, `--tls-key`,
+and `--session-ttl`) precede the subcommand. One-shot commands attach the
+private control bearer and trust the configured app CA; they first connect to
+an existing configured origin with the matching data identity, or start a
+temporary loopback-only host. Noninteractive tools cannot grant human approval
+automatically.
 
 See the [CLI parity audit](docs/CLI-PARITY.md) for implementation evidence and limits. Native notification replies, multi-device synchronization and STT/agent/TTS fallback remain follow-ups. Microphone/audio and real provider account login require a device/account trial. Custom root orchestrators incompatible with the live adapter produce an explicit error.
 

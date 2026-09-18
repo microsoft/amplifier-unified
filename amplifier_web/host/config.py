@@ -16,16 +16,17 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import tempfile
 
 from filelock import FileLock
 import yaml
+
+from ..deployment import write_private
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@e210edabd947af82d5121a240d6934283ac540b9"
 
 
 def app_home() -> Path:
-    return Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")).expanduser().resolve()
+    return Path(os.environ.get("AMPLIFIER_WEB_HOME", os.environ.get("AMPLIFIER_WEB_DATA_DIR", Path.home() / ".amplifier-unified"))).expanduser().resolve()
 
 
 def merge(base, overlay):
@@ -56,19 +57,6 @@ def read_yaml(path):
     if not isinstance(value, dict):
         raise ValueError(f"Settings must be a mapping: {path}")
     return value
-
-
-def write_private(path: Path, text: str):
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".settings-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(text)
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def _copy_private(source: Path, target: Path):

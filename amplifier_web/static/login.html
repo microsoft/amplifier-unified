@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Amplifier Unified sign in</title>
+<style>body{font:16px system-ui,sans-serif;margin:8vh auto;max-width:24rem;color:#182333}label,input,button{display:block;width:100%;box-sizing:border-box;margin:.6rem 0}input,button{padding:.65rem}button{background:#255ac7;color:white;border:0;border-radius:.3rem}</style>
+<main><h1>Amplifier Unified</h1><p>Sign in with this host's system account.</p>
+<form method="post" action="/login?next=__NEXT__"><input type="hidden" name="csrf" value="__CSRF__"><label>Username<input name="username" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Sign in</button></form></main>

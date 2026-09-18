@@ -131,6 +131,16 @@ async def _activate(manager):
     # here would permit a new conversation between the helper spawn and SIGTERM.
     await manager.publish(phase='activating',pendingApp=None,appAvailable=False,
         pendingRestart={'version':validated['version'],'revision':revision},detail='Application installed. Restarting the local host…')
+    # A generated systemd unit owns its process lifecycle.  Asking systemd to
+    # restart that unit avoids racing its restart policy with a second detached
+    # process spawned by this in-process updater.
+    from .deployment_service import current_process_is_unit_managed
+    if current_process_is_unit_managed(manager.home):
+        try:
+            await process('systemctl','--user','restart','amplifier-unified.service',timeout=30)
+        except (RuntimeError, TimeoutError):
+            await manager.publish(phase='error',pendingRestart=None,error='The app installed, but the managed service could not restart. Run amplifier-unified service restart.')
+        return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
     options=[executable,'--no-open','--port',str(manager.service.port),'--data-dir',str(manager.home),'--workspace',manager.service.default_workspace]

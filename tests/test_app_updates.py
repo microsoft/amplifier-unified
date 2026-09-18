@@ -70,7 +70,7 @@ async def prepared_activation(tmp_path,monkeypatch):
     monkeypatch.setattr(app_updates,'installed_target',target)
     return service,manager,candidate
 
-async def test_restart_keeps_gate_closed_and_uses_staged_python(tmp_path,monkeypatch):
+async def test_manually_launched_host_with_installed_unit_uses_helper_and_termination(tmp_path,monkeypatch):
     service,manager,candidate=await prepared_activation(tmp_path,monkeypatch)
     calls=[]
     async def process(*args,**kwargs):
@@ -87,6 +87,8 @@ async def test_restart_keeps_gate_closed_and_uses_staged_python(tmp_path,monkeyp
         assert service.state['updates']['phase']=='activating'
         calls.append(('terminate',))
     monkeypatch.setattr(app_updates,'process',process)
+    monkeypatch.setattr('amplifier_web.deployment_service.managed_unit', lambda home: True)
+    monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda home: False)
     monkeypatch.setattr(app_updates.asyncio,'create_subprocess_exec',spawn)
     monkeypatch.setattr(app_updates.os,'kill',kill)
     await app_updates.activate(manager)
@@ -94,6 +96,23 @@ async def test_restart_keeps_gate_closed_and_uses_staged_python(tmp_path,monkeyp
     assert json.loads((manager.directory/'previous-app.json').read_text())['source']=='file:///actual/previous/source'
     assert service.state['updates']['pendingRestart']['version']=='99.0.0'
     await service.close()
+
+
+async def test_managed_service_restart_does_not_spawn_a_second_host(tmp_path,monkeypatch):
+    service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    calls=[]
+    async def process(*args,**kwargs):
+        calls.append(args)
+        return '99.0.0' if '-c' in args else ''
+    monkeypatch.setattr(app_updates,'process',process)
+    monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed',lambda home: True)
+    monkeypatch.setattr(app_updates.asyncio,'create_subprocess_exec',lambda *args,**kwargs: pytest.fail('managed service must not spawn a helper'))
+    monkeypatch.setattr(app_updates.os,'kill',lambda *args: pytest.fail('managed service must not terminate itself'))
+    await app_updates.activate(manager)
+    assert calls[-1]==('systemctl','--user','restart','amplifier-unified.service')
+    assert service.state['updates']['pendingRestart']['version']=='99.0.0'
+    await service.close()
+
 
 async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypatch):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)

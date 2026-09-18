@@ -7,8 +7,9 @@ from amplifier_web.server import create_app
 from test_service import Runtime
 
 
-async def test_api_rejects_cross_origin_and_serves_state(aiohttp_client, tmp_path):
-    client = await aiohttp_client(await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False))
+async def test_api_rejects_cross_origin_and_serves_state(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
+    client = await authenticated_client(app)
     response = await client.get("/api/health")
     assert response.status == 200
     bad = await client.post("/api/actions", headers={"Origin": "https://untrusted.example"}, json={"action": "session.create", "args": {}})
@@ -21,8 +22,9 @@ async def test_api_rejects_cross_origin_and_serves_state(aiohttp_client, tmp_pat
     assert (await state.json())["revision"] == payload["revision"]
 
 
-async def test_frontend_has_real_stylesheet_asset(aiohttp_client, tmp_path):
-    client = await aiohttp_client(await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False))
+async def test_frontend_has_real_stylesheet_asset(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
+    client = await authenticated_client(app)
     response = await client.get("/")
     assert response.status == 200
     html = await response.text()
@@ -35,9 +37,9 @@ async def test_frontend_has_real_stylesheet_asset(aiohttp_client, tmp_path):
         assert len(await css.text()) > 10000
 
 
-async def test_open_event_stream_does_not_delay_host_shutdown(aiohttp_client, tmp_path):
+async def test_open_event_stream_does_not_delay_host_shutdown(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
-    client = await aiohttp_client(app)
+    client = await authenticated_client(app)
     response = await client.get("/api/events")
     assert await response.content.readline() == b"event: state\n"
     await asyncio.wait_for(app.shutdown(), 1)
@@ -45,9 +47,9 @@ async def test_open_event_stream_does_not_delay_host_shutdown(aiohttp_client, tm
     response.close()
 
 
-async def test_html_canvas_is_separate_opaque_sandbox(aiohttp_client, tmp_path):
+async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
-    client = await aiohttp_client(app)
+    client = await authenticated_client(app)
     await app['service'].dispatch('canvas.show', {'kind':'html','content':'<button onclick="this.textContent=42">Test</button>'})
     identity = app['service'].state['canvas']['id']
     response = await client.get('/api/canvas/'+identity+'/document')
@@ -64,9 +66,9 @@ async def test_html_canvas_is_separate_opaque_sandbox(aiohttp_client, tmp_path):
     assert (await client.get('/api/canvas/'+identity+'/document')).status == 404
 
 
-async def test_state_details_load_provenance_without_repeating_it_in_snapshots(aiohttp_client, tmp_path):
+async def test_state_details_load_provenance_without_repeating_it_in_snapshots(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
-    client = await aiohttp_client(app)
+    client = await authenticated_client(app)
     await app['service'].dispatch('session.create',{})
     details={'agents':[{'name':'test','include_paths':['a'*20000]}]}
     app['service'].state['sessions'][0]['configuration']={'plan':{},'provenance':details}

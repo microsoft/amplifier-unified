@@ -109,8 +109,9 @@ async def test_runtime_routes_only_matching_message_attachments():
     assert result['attachments'] == [{'id': 'current-file'}]
 
 
-async def test_attachment_http_images_inline_documents_download(aiohttp_client, tmp_path):
-    client = await aiohttp_client(await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False))
+async def test_attachment_http_images_inline_documents_download(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(app)
     for row, data, disposition in [(upload(tmp_path), PNG, 'inline'), (upload(tmp_path, 'note.html', b'<script>bad</script>'), b'<script>bad</script>', 'attachment')]:
         response = await client.get(row['url'])
         assert response.status == 200 and await response.read() == data

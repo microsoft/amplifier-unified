@@ -2,30 +2,66 @@
 import asyncio
 import json
 from pathlib import Path
+import ssl
 import sys
 import uuid
 import aiohttp
 from aiohttp import web
 
-async def run(args):
-    runner=None
-    connected=None
-    base=f'http://127.0.0.1:{args.port}'
-    async with aiohttp.ClientSession() as client:
+
+def _connection_context(data_dir: Path, config: dict) -> ssl.SSLContext | None:
+    if config["tls"]["method"] == "none":
+        return None
+    ca = data_dir / "config" / "tls" / "ca.crt"
+    if not ca.is_file():
+        raise ValueError("Configured HTTPS requires the app-owned local CA.")
+    return ssl.create_default_context(cafile=str(ca))
+
+
+def _connection_origins(args, config: dict) -> list[str]:
+    """Configured origins first; the loopback address remains the local fallback."""
+    scheme = "https" if config["tls"]["method"] != "none" else "http"
+    local = f"{scheme}://127.0.0.1:{args.port}"
+    return list(dict.fromkeys([*config["public_origins"], local]))
+
+
+async def _existing_host(client: aiohttp.ClientSession, origins: list[str], data_identity: str) -> str | None:
+    """Find a configured host with the app's identity, never trusting port ownership."""
+    invalid_host = False
+    for base in origins:
         try:
-            async with client.get(base+'/api/health',timeout=aiohttp.ClientTimeout(total=2)) as response:
-                if response.status!=200:raise RuntimeError('Unavailable')
-                connected=await response.json()
-        except (aiohttp.ClientError,TimeoutError,RuntimeError):
+            async with client.get(base + "/api/health", timeout=aiohttp.ClientTimeout(total=2)) as response:
+                if response.status != 200:
+                    continue
+                connected = await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            continue
+        if connected.get("app") == "amplifier-unified" and connected.get("dataIdentity") == data_identity:
+            return base
+        invalid_host = True
+    if invalid_host:
+        raise ValueError("A configured origin belongs to a different or older host. Choose its matching data directory, update it, or select another port.")
+    return None
+
+
+async def run(args, *, config=None):
+    runner = None
+    from .auth import control_token
+    from .deployment import load_server_config
+    data_dir = Path(args.data_dir)
+    config = config if config is not None else load_server_config(data_dir, overrides={"port": args.port})
+    context = _connection_context(data_dir, config)
+    headers = {"Authorization": "Bearer " + control_token(data_dir)}
+    import hashlib
+    expected = hashlib.sha256(str(data_dir.expanduser().resolve()).encode()).hexdigest()
+    async with aiohttp.ClientSession(headers=headers, connector=aiohttp.TCPConnector(ssl=context)) as client:
+        base = await _existing_host(client, _connection_origins(args, config), expected)
+        if base is None:
             from .server import create_app
-            runner=web.AppRunner(await create_app(Path(args.data_dir),workspace=args.workspace,background_updates=False))
-            await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
-            port=site._server.sockets[0].getsockname()[1];base=f'http://127.0.0.1:{port}'
-        if connected is not None:
-            import hashlib
-            expected=hashlib.sha256(str(Path(args.data_dir).expanduser().resolve()).encode()).hexdigest()
-            if connected.get('app')!='amplifier-unified' or connected.get('dataIdentity')!=expected:
-                raise ValueError('This port belongs to a different or older host. Choose its matching data directory, update it, or select another port.')
+            runner = web.AppRunner(await create_app(data_dir, workspace=args.workspace, background_updates=False,
+                                                    server_config=config))
+            await runner.setup(); site = web.TCPSite(runner, "127.0.0.1", 0); await site.start()
+            port = site._server.sockets[0].getsockname()[1]; base = f"http://127.0.0.1:{port}"
         async def state():
             async with client.get(base+'/api/state') as response:return await response.json()
         async def dispatch(action,values):
