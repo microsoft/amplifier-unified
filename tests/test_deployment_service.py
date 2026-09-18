@@ -1,5 +1,7 @@
 from pathlib import Path
+import os
 import shlex
+import shutil
 import sys
 
 import pytest
@@ -104,3 +106,69 @@ def test_current_process_must_have_systemd_invocation_and_our_cgroup(tmp_path, m
     monkeypatch.setattr(deployment_service.Path, "read_text",
                         lambda path: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/amplifier-unified.service\n")
     assert deployment_service.current_process_is_unit_managed(tmp_path)
+
+
+def _unit_environment_path(unit):
+    assignment = next(line.removeprefix("Environment=") for line in unit.read_text().splitlines()
+                      if line.startswith("Environment="))
+    # systemd accepts quoted assignments and expands %% to literal %.
+    return shlex.split(assignment)[0].removeprefix("PATH=").replace("%%", "%")
+
+
+@pytest.mark.parametrize("location", ["snap/bin", "custom tools/bin", "literal%h/bin", 'quote"and\\slash/bin'])
+def test_installed_service_can_find_uv_from_installer_path(tmp_path, monkeypatch, location):
+    uv_dir = tmp_path / location
+    uv_dir.mkdir(parents=True)
+    uv = uv_dir / "uv"
+    # A lexical executable path matters for dispatchers such as /snap/bin/uv.
+    dispatcher = tmp_path / "dispatcher"
+    dispatcher.write_text("#!/bin/sh\nexit 0\n")
+    dispatcher.chmod(0o755)
+    uv.symlink_to(dispatcher)
+    installer_path = str(uv_dir) + os.pathsep + os.defpath
+    monkeypatch.setenv("PATH", installer_path)
+    unit = tmp_path / "amplifier-unified.service"
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
+    deployment_service.install(tmp_path / "data", tmp_path)
+    service_path = _unit_environment_path(unit)
+    assert service_path == installer_path
+    assert shutil.which("uv", path=service_path) == str(uv)
+    # Exercise the actual runtime discovery, not only the generated text.
+    monkeypatch.setenv("PATH", service_path)
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "data"))
+    from amplifier_web.runtime import RuntimeManager
+    assert RuntimeManager()._command()[0] == str(uv)
+
+
+def test_replacing_service_restarts_it_to_apply_new_environment(tmp_path, monkeypatch):
+    unit = tmp_path / "amplifier-unified.service"
+    unit.write_text(deployment_service.MARKER + "\n[Service]\nEnvironment=PATH=/old/bin\n")
+    calls = []
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setenv("PATH", "/snap/bin:/usr/bin:/bin")
+    deployment_service.install(tmp_path / "data", tmp_path, replace=True)
+    assert calls == [("daemon-reload",), ("enable", deployment_service.UNIT_NAME),
+                     ("restart", deployment_service.UNIT_NAME)]
+    assert _unit_environment_path(unit) == "/snap/bin:/usr/bin:/bin"
+
+
+def test_missing_path_uses_portable_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("PATH", raising=False)
+    unit = tmp_path / "amplifier-unified.service"
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
+    deployment_service.install(tmp_path / "data", tmp_path)
+    assert _unit_environment_path(unit) == f"{Path.home() / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+
+
+@pytest.mark.parametrize("value", ["/bin\n[Service]\nExecStart=/bad", "/bin\r", "/bin\x01"])
+def test_path_control_characters_cannot_inject_unit_directives(tmp_path, monkeypatch, value):
+    unit = tmp_path / "amplifier-unified.service"
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    monkeypatch.setenv("PATH", value)
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: pytest.fail("invalid PATH"))
+    with pytest.raises(ValueError, match="PATH"):
+        deployment_service.install(tmp_path / "data", tmp_path)
+    assert not unit.exists()

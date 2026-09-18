@@ -87,7 +87,11 @@ Linux systemd user-service lifecycle is available through
 The generated service has no credential values and reads its private
 configuration at runtime. Replacing an existing generated unit requires
 `amplifier-unified service install --replace`; its prior contents are saved as
-a private timestamped backup. `uv tool install git+https://github.com/bkrabach/amplifier-unified`
+a private timestamped backup. Installation captures the invoking shell's `PATH`
+so the runtime can find `uv` in Snap or custom locations, and starts/restarts
+the service to apply it. After changing tool locations, rerun installation from
+the shell where `uv --version` works (keep your `--workspace` selection).
+`uv tool install git+https://github.com/bkrabach/amplifier-unified`
 installs the same CLI and service support.
 
 ## Standalone host and session flow

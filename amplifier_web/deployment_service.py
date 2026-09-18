@@ -51,6 +51,14 @@ def _backup(path: Path, content: str) -> None:
 
 
 def install(data_dir: Path, workspace: str | Path | None = None, *, replace: bool = False) -> None:
+    # The runtime discovers uv by PATH, just like the installer's shell. A
+    # fixed short PATH loses Snap, Homebrew, or custom installs. Preserve
+    # lexical paths: /snap/bin/uv is a dispatcher, not its resolved target.
+    service_path = os.environ.get("PATH") or f"{Path.home() / '.local' / 'bin'}:/usr/local/bin:/usr/bin:/bin"
+    if any(ord(char) < 32 or ord(char) == 127 for char in service_path):
+        raise ValueError("PATH must not contain control characters.")
+    # Escape systemd's quoted assignment and percent specifiers, not shell syntax.
+    service_path = service_path.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
     path = unit_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
@@ -77,14 +85,16 @@ Type=simple
 ExecStart={" ".join(shlex.quote(item) for item in command)}
 Restart=on-failure
 RestartSec=5
-Environment=PATH={Path.home() / ".local" / "bin"}:/usr/local/bin:/usr/bin:/bin
+Environment="PATH={service_path}"
 
 [Install]
 WantedBy=default.target
 """
     write_private(path, content)
     _systemctl("daemon-reload")
-    _systemctl("enable", "--now", UNIT_NAME)
+    _systemctl("enable", UNIT_NAME)
+    # enable --now leaves an already-running host's old environment in place.
+    _systemctl("restart", UNIT_NAME)
 
 
 def uninstall() -> None:
