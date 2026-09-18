@@ -164,7 +164,13 @@ async def auth_required(request: web.Request, handler):
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if (cross_site and not is_entry_navigation(request)) or not allowed_origin(request):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
-    public = {"/login", "/setup", "/api/ca", "/ca.crt", "/api/health"}
+    # Public, immutable UI resources only. Authentication still gates the SPA,
+    # every API, and all user-authored files/canvas documents.
+    public = {"/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
+              "/manifest.webmanifest", "/sw.js", "/pwa.js", "/offline.html", "/app-pages.css", "/favicon.ico",
+              "/branding/favicons/favicon.ico", "/branding/favicons/favicon-32.png",
+              "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",
+              "/branding/pwa/pwa-192.png", "/branding/pwa/pwa-512.png"}
     if request.path in public and request.method in {"GET", "HEAD"}:
         return await handler(request)
     if request.path == "/login" and request.method == "POST":
@@ -190,7 +196,8 @@ async def login_page(request: web.Request) -> web.Response:
     csrf = new_csrf(secret)
     page = (Path(__file__).parent / "static" / "login.html").read_text()
     next_path = html.escape(validate_next_path(request.query.get("next")), quote=True)
-    response = web.Response(text=page.replace("__CSRF__", csrf).replace("__NEXT__", next_path), content_type="text/html")
+    error = "Could not sign in. Check your host username and password and try again." if request.query.get("error") else ""
+    response = web.Response(text=page.replace("__CSRF__", csrf).replace("__NEXT__", next_path).replace("__ERROR__", error), content_type="text/html")
     response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
     return response
 

@@ -31,7 +31,7 @@ export function McpAppViewer({canvas,act}){
     {serverTools:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
     {hostContext:{theme:document.querySelector('#amp-one')?.dataset.scheme==='dark'?'dark':'light',displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language}});
    bridge.oncalltool=async params=>{
-    report('loading',`Running ${params.name}…`);
+    report('working',`Running ${params.name}…`);
     try{
      const result=await command('smartTools.appCall',{canvasId:canvas.id,name:params.name,arguments:params.arguments||{}},controller.signal);
      report(result?.isError?'error':'ready',result?.isError?'The tool reported an error. See its result below.':'Tool view connected');
@@ -62,7 +62,7 @@ export function McpAppViewer({canvas,act}){
   return()=>{live=false;clearTimeout(timeout);controller.abort();bridge?.close().catch(()=>{})};
  },[canvas.id,canvas.view?.reload]);
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
-  <div className={`a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
+  <div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
    <button type="button" className="a-icon" aria-label="Reconnect tool server" data-action="smartTools.connect" onClick={async()=>{try{await command('smartTools.connect',{id:canvas.mcp.serverId});await act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}catch(error){setStatus({phase:'error',text:error.message})}}}><RefreshCw/></button>
   </div>

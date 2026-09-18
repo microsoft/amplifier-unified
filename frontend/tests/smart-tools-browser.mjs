@@ -34,8 +34,15 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().canvas.kind==='mcp-app');
  const frame=page.frameLocator('.a-canvas-html');
  try{await frame.getByText('Parent isolated',{exact:true}).waitFor({timeout:12000})}catch(e){console.log(await page.locator('.a-canvas-body').innerText());console.log(await frame.locator('body').innerText());throw e}
+ const stableFrame=await page.locator('.a-canvas-html').boundingBox();
+ await page.route('**/api/smart-tools/operations/*',async route=>{await new Promise(resolve=>setTimeout(resolve,400));await route.continue()});
  await frame.getByRole('button',{name:'Add one'}).click();
+ await page.waitForFunction(()=>document.querySelector('.a-mcp-status')?.dataset.phase==='working');
+ assert.equal(await page.locator('.a-mcp-status').isVisible(),false);
+ assert.equal((await page.locator('.a-canvas-html').boundingBox()).y,stableFrame.y);
+
  await frame.locator('#count').filter({hasText:/^1$/}).waitFor();
+ await page.unroute('**/api/smart-tools/operations/*');
  await page.waitForFunction(()=>window.amplifier.getState().canvas.mcp.context.structuredContent?.count===1);
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
