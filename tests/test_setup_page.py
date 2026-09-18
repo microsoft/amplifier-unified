@@ -66,7 +66,9 @@ def test_renderer_has_fixed_fingerprint_warning_and_no_active_or_login_content()
     assert "password" not in page.lower()
     assert "HSTS" in page
     assert "Certificate installation is never performed here." in page
-    assert "/ca.crt" not in page
+    assert parsed.attrs.count(("href", "/ca.crt")) == 1
+    assert "Already using a trusted connection?" in page
+    assert page.index("Before browser use") < page.index('href="/ca.crt"')
 
 
 def test_renderer_instructions_use_trusted_transfer_then_minimal_user_trust():

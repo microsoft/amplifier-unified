@@ -75,11 +75,42 @@ normally `~/.amplifier-unified`. Non-loopback binds fail to start unless TLS and
 at least one exact HTTPS public origin are configured. `setup-tls` creates a
 private CA and leaf key under `config/tls`, and later runs reuse that leaf.
 Run `setup-tls force` after changing an address that must appear in the
-certificate. Visit `/setup` or download `/ca.crt` to install that CA once on
-each LAN client. The CA download is anonymous, so verify its SHA-256 fingerprint
-out of band against the value printed by `setup-tls` or `doctor` before
-installing it. The only public bootstrap paths are `/login`, `/setup`,
-`/api/ca`, `/ca.crt`, and `/api/health`.
+certificate; this keeps the existing CA and rotates only the leaf.
+
+**First client, before opening the browser:** HSTS can block the HTTPS setup
+page until its CA is trusted. Use a verified SSH connection to the account that
+runs Unified, or a trusted local console. On that host:
+
+```sh
+amplifier-unified setup-tls export > amplifier-unified-ca.crt
+amplifier-unified doctor
+```
+
+Use the same `--data-dir` before `setup-tls`/`doctor` if the service uses a
+non-default data directory. Export prints only the existing public CA and never
+creates, rotates, or exports a private key. From the client, transfer that file
+over already-verified SSH (replace the placeholders, including the absolute
+path where you exported it):
+
+```sh
+scp '<owner>@<host>:/absolute/path/amplifier-unified-ca.crt' .
+openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256
+```
+
+Compare the fingerprint with the trusted-host `doctor` result before importing.
+On macOS, use Keychain Access's **login** keychain and trust for SSL; on Windows,
+use **Manage user certificates → Trusted Root Certification Authorities**.
+No administrator trust store is necessary for normal per-user setup. For iOS,
+install the verified profile and enable **Certificate Trust Settings**; on
+Android, install it explicitly as a **CA certificate**. Use approved management
+on managed devices. Restart the browser afterward.
+
+Once TLS is trusted, `/setup` contains the platform-specific instructions and
+an existing-CA download link. Anonymous downloads and their displayed fingerprint
+are not independent proof of authenticity. Do not disable HSTS or certificate
+checks, or enter login credentials through an untrusted TLS connection.
+The only public bootstrap paths remain `/login`, `/setup`, `/api/ca`, `/ca.crt`,
+and `/api/health`.
 
 Use `amplifier-unified doctor` to check PAM, TLS, and deployment settings.
 Linux systemd user-service lifecycle is available through
@@ -95,6 +126,13 @@ the shell where `uv --version` works (keep your `--workspace` selection).
 installs the same CLI and service support.
 
 ## Standalone host and session flow
+
+Provider environment references remain in saved settings unchanged. At runtime,
+an unset exact `${NAME}` resolves to an empty string only for a provider-declared
+optional nonsecret field. Unknown fields/schemas and embedded references remain
+strict. An explicitly referenced required secret must be present and nonempty;
+another ambient provider credential cannot substitute for it. The same rule
+applies to root/agent providers and model-list/connection tests.
 
 No `amplifier-app-cli`, `amplifier-loop-live-cli`, or `amplifier-workspace` host libraries are installed or imported. The application owns configuration, approvals, checkpoints and child-session lifecycle, using Foundation's public bundle preparation and session APIs.
 

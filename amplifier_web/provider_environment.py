@@ -144,11 +144,12 @@ def _schema_fields(schema):
         raise ValueError("provider_environment.unsupported_schema")
     fields = {}
     for field in schema["fields"]:
-        if not isinstance(field, dict) or not isinstance(field.get("id"), str):
+        if not isinstance(field, dict) or not isinstance(field.get("id"), str) or not field["id"]:
             raise ValueError("provider_environment.unsupported_schema")
         field_type = field.get("field_type")
         required = field.get("required")
-        if not isinstance(field_type, str) or not isinstance(required, bool) or field["id"] in fields:
+        if (field_type not in ("text", "secret", "choice", "boolean")
+                or not isinstance(required, bool) or field["id"] in fields):
             raise ValueError("provider_environment.unsupported_schema")
         fields[field["id"]] = field
     return fields

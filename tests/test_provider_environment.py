@@ -113,3 +113,14 @@ async def test_distinct_provider_schemas_load_concurrently():
 def test_missing_schema_fails_loudly():
     with pytest.raises(ValueError, match="provider_environment.unsupported_schema"):
         materialize_provider_config({"api_key": "key"}, {})
+
+
+@pytest.mark.parametrize("field", [
+    {"id": "endpoint", "field_type": "future-or-invalid", "required": False},
+    {"id": "endpoint", "field_type": "", "required": False},
+    {"id": "endpoint", "field_type": [], "required": False},
+    {"id": "", "field_type": "text", "required": False},
+])
+def test_unknown_schema_cannot_authorize_empty_optional_reference(field):
+    with pytest.raises(ValueError, match="provider_environment.unsupported_schema"):
+        materialize_provider_config({"endpoint": "${MISSING}"}, {"fields": [field]}, environment={})

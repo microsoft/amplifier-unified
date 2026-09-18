@@ -85,6 +85,8 @@ def render_setup_page(platform: Platform, certificate_available: bool, fingerpri
         raise ValueError("A configured CA must have a SHA-256 fingerprint")
 
     certificate_status = (
+        '<p>Already using a trusted connection? '
+        '<a class="download" href="/ca.crt">Download the existing public CA</a>.</p>'
         f'<p><strong>SHA-256 fingerprint:</strong> <code>{escape(fingerprint or "", quote=True)}</code></p>'
         if certificate_available
         else '<p class="warning">A local CA is not configured yet. On the trusted host, run '
