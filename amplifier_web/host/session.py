@@ -233,7 +233,8 @@ def module_source(config, snapshot, module, source):
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
-                          shared_snapshot=None, write_guard=None, **kwargs):
+                          shared_handle_getter=None, shared_snapshot=None,
+                          write_guard=None, **kwargs):
     from amplifier_foundation import BundleRegistry, SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -397,11 +398,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if persist_controls:
                 persist_controls()
             transcript = await coordinator.get("context").get_messages()
-            if shared_handle is not None:
+            held = shared_handle_getter() if shared_handle_getter else shared_handle
+            if held is not None:
                 # The held capability validates PID/ownership before the
                 # atomic replace.  Its full context beats this host's native
                 # projection on every subsequent mount.
-                shared_handle.write(transcript, bundle=chosen, metadata={
+                held.write(transcript, bundle=chosen, metadata={
                     **metadata, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
                     "turn_count": sum(row.get("role") == "user" for row in transcript),

@@ -202,6 +202,7 @@ class Worker:
                 runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
+                shared_handle_getter=lambda: self.shared_handle,
                 shared_snapshot=shared_snapshot, write_guard=self.activation_gate.check_current)
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
