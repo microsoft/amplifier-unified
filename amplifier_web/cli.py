@@ -140,6 +140,9 @@ def _doctor(data_dir: Path) -> None:
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir) or "not configured")
     print("Binds:", ", ".join(config["bind"]))
     print("Port:", config["port"])
+    from .shared_state import shared_state_home
+    print("Shared session state:", shared_state_home())
+    print("CLI/TUI must use the same shared state root and canonical workspace.")
 
 
 def _setup_tls(data_dir: Path, mode: str) -> None:

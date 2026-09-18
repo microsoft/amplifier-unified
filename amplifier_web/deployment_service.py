@@ -59,6 +59,13 @@ def install(data_dir: Path, workspace: str | Path | None = None, *, replace: boo
         raise ValueError("PATH must not contain control characters.")
     # Escape systemd's quoted assignment and percent specifiers, not shell syntax.
     service_path = service_path.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    # Freeze the installer's resolved root. A user service need not inherit the
+    # shell's XDG_STATE_HOME, and two roots would mean two unrelated locks.
+    from .shared_state import shared_state_home
+    state_home = str(shared_state_home())
+    if any(ord(char) < 32 or ord(char) == 127 for char in state_home):
+        raise ValueError("Shared session state path must not contain control characters.")
+    state_home = state_home.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
     path = unit_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
@@ -86,6 +93,7 @@ ExecStart={" ".join(shlex.quote(item) for item in command)}
 Restart=on-failure
 RestartSec=5
 Environment="PATH={service_path}"
+Environment="AMPLIFIER_SESSION_STATE_HOME={state_home}"
 
 [Install]
 WantedBy=default.target

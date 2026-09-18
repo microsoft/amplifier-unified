@@ -12,6 +12,16 @@ import hashlib
 import os
 from pathlib import Path
 
+def shared_state_home() -> Path:
+    """Resolve Foundation's state-root convention without importing its runtime."""
+    configured = os.environ.get("AMPLIFIER_SESSION_STATE_HOME")
+    if configured:
+        return Path(configured).expanduser().absolute()
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return (Path(state_home).expanduser() / "amplifier" / "sessions").absolute()
+    return Path.home() / ".local" / "state" / "amplifier" / "sessions"
+
 
 @dataclass(frozen=True)
 class Activation:

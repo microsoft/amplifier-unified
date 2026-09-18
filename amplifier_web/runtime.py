@@ -27,7 +27,8 @@ class SessionInUseError(RuntimeError):
         self.owner = owner if isinstance(owner, dict) else {}
         details = ", ".join(
             f"{key}: {self.owner[key]}"
-            for key in ("app", "host", "user", "pid", "process_start", "tty", "service")
+            for key in ("app", "hostname", "host", "user", "pid",
+                        "process_start_identity", "process_start", "acquired_at", "tty", "service")
             if self.owner.get(key) is not None
         )
         super().__init__(

@@ -153,11 +153,12 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ## Shared control and appearance
 
-### Same chat in CLI and web (development integration)
+### Same chat in CLI and web
 
-This source branch requires the matching Foundation `session.shared_state` API
-and upgraded CLI adapter. Their upstream publication and the released runtime
-dependency pins must land before this feature can be installed normally.
+Unified 0.6 pins the Foundation `session.shared_state` API. CLI participation
+requires the upgraded shared-root adapter; restart older CLI processes after
+updating. Native Windows CLI persistence remains available, but shared-session
+locking is supported only on POSIX local filesystems.
 
 Use **Settings → Maintenance → Same-chat CLI and web → Browse shared
 conversations → Open same chat** for the selected workspace. Opening creates
@@ -176,6 +177,10 @@ Both applications must run as the same user on the same POSIX host, use the
 same canonical workspace, and share `AMPLIFIER_SESSION_STATE_HOME` (default:
 `${XDG_STATE_HOME:-~/.local/state}/amplifier/sessions`). Close older CLI processes
 before using shared sessions: an upgrade cannot retrofit their missing locks.
+Generated user services pin the installing shell's resolved state root explicitly.
+`amplifier-unified doctor` prints that location; use the same path in the CLI
+and any third participant. For TUI integration, see Foundation's
+[participant guide](https://github.com/microsoft/amplifier-foundation/blob/main/docs/SHARED_SESSION_STATE.md).
 Metadata stamps are a local cache check, not proof against arbitrary external
 file modification. This coordinates app-owned conversation writes, not
 untracked external jobs started by arbitrary plugins.

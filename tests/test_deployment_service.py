@@ -172,3 +172,35 @@ def test_path_control_characters_cannot_inject_unit_directives(tmp_path, monkeyp
     with pytest.raises(ValueError, match="PATH"):
         deployment_service.install(tmp_path / "data", tmp_path)
     assert not unit.exists()
+
+
+@pytest.mark.parametrize("selection", ["default", "xdg", "explicit"])
+def test_service_pins_shell_shared_root_before_systemd_changes_environment(tmp_path, monkeypatch, selection):
+    monkeypatch.delenv("AMPLIFIER_SESSION_STATE_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "owner")
+    expected = tmp_path / "owner" / ".local" / "state" / "amplifier" / "sessions"
+    if selection == "xdg":
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+        expected = tmp_path / "state" / "amplifier" / "sessions"
+    elif selection == "explicit":
+        expected = tmp_path / 'shared %h "state"'
+        monkeypatch.setenv("AMPLIFIER_SESSION_STATE_HOME", str(expected))
+    unit = tmp_path / "amplifier-unified.service"
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
+    deployment_service.install(tmp_path / "data", tmp_path)
+    line = next(row.removeprefix("Environment=") for row in unit.read_text().splitlines()
+                if row.startswith('Environment="AMPLIFIER_SESSION_STATE_HOME='))
+    resolved = shlex.split(line)[0].split("=", 1)[1].replace("%%", "%")
+    assert resolved == str(expected)
+    assert not expected.exists(), "Resolving the namespace must not create shared state"
+
+
+def test_shared_state_control_characters_cannot_inject_unit_directives(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_SESSION_STATE_HOME", str(tmp_path / "bad\npath"))
+    unit = tmp_path / "amplifier-unified.service"
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: unit)
+    with pytest.raises(ValueError, match="control characters"):
+        deployment_service.install(tmp_path / "data", tmp_path)
+    assert not unit.exists()
