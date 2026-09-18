@@ -46,7 +46,7 @@ async def test_models_and_test_use_isolated_provider_without_starting_session(ma
     monkeypatch.setenv('TEAM_CHECK_KEY','secret-fixture-value')
     await manager.perform('providers.save',{'id':'one','module':'provider-openai','config':{'base_url':'https://example.test/v1'},'apiKeyEnv':'TEAM_CHECK_KEY','workspace':str(tmp_path)})
     child=tmp_path/'probe.py'
-    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']['api_key']=='secret-fixture-value'; assert r['config']['base_url']=='https://example.test/v1'; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':'discovered'}],'test':{'reachable':True,'modelCount':1}}))")
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']['api_key']=='${TEAM_CHECK_KEY}'; assert r['config']['base_url']=='https://example.test/v1'; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':'discovered'}],'test':{'reachable':True,'modelCount':1}}))")
     manager.probe_command=[sys.executable,str(child)]
     async def runtime(*args):raise AssertionError('Must not start a conversation')
     manager.runtime_operation=runtime
@@ -55,6 +55,7 @@ async def test_models_and_test_use_isolated_provider_without_starting_session(ma
     assert 'secret-fixture-value' not in str(result)
     result=await manager.perform('providers.test',{'id':'one','workspace':str(tmp_path),'sessionId':'s'})
     assert result['test']['reachable'] and result['test']['providerId']=='one'
+    assert manager.store.read(tmp_path)['config']['providers'][0]['config']['api_key']=='${TEAM_CHECK_KEY}'
 
 @pytest.mark.asyncio
 async def test_schema_does_not_need_configured_credentials(manager,tmp_path):
@@ -161,6 +162,18 @@ async def test_implicit_environment_and_provider_fallback_are_reported_without_v
     assert row['credential']['defaultEnvVar']=='GOOGLE_API_KEY'
     assert 'private-google-key' not in str(row)
 
+@pytest.mark.asyncio
+async def test_probe_references_implicit_environment_credential_without_serializing_its_value(manager,tmp_path,monkeypatch):
+    import sys
+    monkeypatch.setenv('OPENAI_API_KEY','private-openai-key')
+    manager.store.update(tmp_path,'global',lambda s:s.update(config={'providers':[{'id':'one','module':'provider-openai','config':{}}]}))
+    child=tmp_path/'probe.py'
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']['api_key']=='${OPENAI_API_KEY}'; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':'discovered'}]}))")
+    manager.probe_command=[sys.executable,str(child)]
+    result=await manager.perform('providers.models',{'id':'one','workspace':str(tmp_path)})
+    assert result['models']==[{'id':'discovered'}]
+
+
 def test_explicit_copilot_environment_choice_wins_over_ambient_default(monkeypatch):
     from amplifier_web.host import session
     monkeypatch.setattr(session,'_copilot_credential',None)
@@ -169,6 +182,16 @@ def test_explicit_copilot_environment_choice_wins_over_ambient_default(monkeypat
     assert os.environ['COPILOT_AGENT_TOKEN']=='selected'
     with pytest.raises(ValueError,match='separate conversations'):
         session.apply_provider_environment({'providers':[{'module':'provider-github-copilot','config':{'github_token':'different'}}]})
+
+def test_copilot_credentials_include_nested_agent_providers(monkeypatch):
+    from amplifier_web.host import session
+    monkeypatch.setattr(session,'_copilot_credential',None)
+    with pytest.raises(ValueError,match='separate conversations'):
+        session.apply_provider_environment({
+            'providers':[{'module':'provider-github-copilot','config':{'github_token':'root'}}],
+            'agents':{'worker':{'providers':[{'module':'provider-github-copilot','config':{'github_token':'nested'}}]}},
+        })
+
 
 @pytest.mark.asyncio
 async def test_app_private_key_file_is_detected_without_returning_value(tmp_path,monkeypatch):

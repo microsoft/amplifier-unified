@@ -1,38 +1,28 @@
 """Query a provider's public setup APIs without starting a conversation."""
 from __future__ import annotations
 import asyncio
-import importlib
-import importlib.metadata
 import inspect
 import json
 import os
-from pathlib import Path
 import sys
+
+from amplifier_web.provider_environment import (
+    close_provider,
+    config_schema,
+    construct_provider,
+    materialize_provider_config,
+    provider_class,
+)
 
 
 def public(value):
     if hasattr(value, 'model_dump'): value=value.model_dump(mode='json')
     if isinstance(value, dict):
-        if value.get('field_type')=='secret':value={key:item for key,item in value.items() if key not in {'default','value'}}
+        if value.get('field_type')=='secret': return {key:public(item) for key,item in value.items() if key not in {'default','value'}}
         return {key:public(item) for key,item in value.items()
                 if not any(word in key.lower() for word in ('api_key','password','access_token','refresh_token','github_token','secret'))}
     if isinstance(value,(tuple,list)): return [public(item) for item in value]
     return value
-
-
-def provider_class(module_id):
-    module=None
-    for entry in importlib.metadata.entry_points(group='amplifier.modules'):
-        if entry.name==module_id:
-            loaded=entry.load()
-            module=importlib.import_module(loaded.__module__)
-            break
-    if module is None:
-        module=importlib.import_module('amplifier_module_'+module_id.replace('-','_'))
-    candidates=[getattr(module,name) for name in dir(module) if name.endswith('Provider') and not name.startswith('_')]
-    candidates=[cls for cls in candidates if inspect.isclass(cls) and callable(getattr(cls,'get_info',None)) and not getattr(cls,'_is_protocol',False)]
-    if not candidates: raise ValueError('No public provider setup class')
-    return candidates[0]
 
 
 async def query(request):
@@ -42,35 +32,37 @@ async def query(request):
         bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':request['source']}]})
         await bundle.prepare(strict=True)
     cls=provider_class(request['module'])
-    config=request.get('config',{})
-    # The constructor contract varies between providers. Bind the real config
-    # and only the supported connection arguments; never substitute fake URLs.
-    parameters=inspect.signature(cls).parameters
-    kwargs={key:config[key] for key in parameters if key in config}
-    if 'config' in parameters:kwargs['config']=config
-    provider=cls(**kwargs)
+    # Metadata discovery is deliberately configuration-free. This keeps schema
+    # inspection offline and allows the materializer to decide which optional
+    # references can be blank before the configured provider is constructed.
+    schema_provider=construct_provider(cls,{})
+    try:
+        info=schema_provider.get_info()
+        if inspect.isawaitable(info): info=await info
+        schema=await config_schema(schema_provider, info=info)
+    finally:
+        await close_provider(schema_provider)
+    if request['action']=='providers.schema':
+        return {'info':public(info),'configSchema':public(schema)}
+    config=materialize_provider_config(request.get('config',{}),schema)
+    if request['module']=='provider-github-copilot' and config.get('github_token'):
+        os.environ['COPILOT_AGENT_TOKEN']=config['github_token']
+    provider=construct_provider(cls,config)
     async def invoke(name):
         value=getattr(provider,name)()
         return await value if inspect.isawaitable(value) else value
     try:
         info=public(await invoke('get_info'))
-        schema=public(await invoke('get_config_schema')) if callable(getattr(provider,'get_config_schema',None)) else {'fields':info.get('config_fields',[])}
-        result={'info':info,'configSchema':schema}
-        if request['action']!='providers.schema':
-            supported=callable(getattr(provider,'list_models',None))
-            result['modelsSupported']=supported
-            if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')
-            result['models']=public(await invoke('list_models')) if supported else []
-            if request['action']=='providers.test':
-                result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
+        result={'info':info,'configSchema':public(schema)}
+        supported=callable(getattr(provider,'list_models',None))
+        result['modelsSupported']=supported
+        if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')
+        result['models']=public(await invoke('list_models')) if supported else []
+        if request['action']=='providers.test':
+            result['test']={'reachable':True,'modelCount':len(result['models']),'method':'provider.list_models'}
         return result
     finally:
-        close=getattr(provider,'close',None) or getattr(provider,'aclose',None)
-        if callable(close):
-            try:
-                value=close()
-                if inspect.isawaitable(value):await asyncio.wait_for(value,3)
-            except Exception:pass
+        await close_provider(provider)
 
 
 def main():

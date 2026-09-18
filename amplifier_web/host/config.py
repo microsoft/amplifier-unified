@@ -112,17 +112,18 @@ def _load_keys(path):
             os.environ.setdefault(name, " ".join(parsed))
 
 
-def expand_environment(value):
+def expand_environment(value, *, environment=None):
+    values = os.environ if environment is None else environment
     if isinstance(value, dict):
-        return {key: expand_environment(item) for key, item in value.items()}
+        return {key: expand_environment(item, environment=values) for key, item in value.items()}
     if isinstance(value, list):
-        return [expand_environment(item) for item in value]
+        return [expand_environment(item, environment=values) for item in value]
     if not isinstance(value, str):
         return value
     def substitute(match):
         name, fallback = match.groups()
         shell_default = fallback is not None and fallback.startswith("-")
-        current = os.environ.get(name)
+        current = values.get(name)
         if current is not None and (current or not shell_default):
             return current
         if fallback is not None:

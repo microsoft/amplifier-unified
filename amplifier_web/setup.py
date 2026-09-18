@@ -110,7 +110,6 @@ class SetupManager:
         return rows
 
     def catalog_key(self,args,workspace):
-        from .host.config import expand_environment
         from .provider_catalog import fingerprint
         config=self.config(workspace)
         row=next((row for row in config.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
@@ -136,7 +135,6 @@ class SetupManager:
         return result
 
     async def probe(self,action,args,workspace):
-        from .host.config import expand_environment
         from .runtime import RuntimeManager
         configured=self.config(workspace)
         row=next((row for row in configured.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
@@ -144,13 +142,13 @@ class SetupManager:
         if not module:raise ValueError('Save this provider before discovering models or testing it.')
         safe_name(module)
         raw=(row or {}).get('config',{}) if row and row['module']==module else {}
-        # Metadata needs no credentials and must remain available when a key is
-        # missing. Discovery uses saved config, including custom endpoints.
-        config={} if action=='providers.schema' else expand_environment(raw)
+        # The isolated probe discovers metadata with config={}; its shared
+        # materializer then expands this in-memory copy before provider mount.
+        config={} if action=='providers.schema' else copy.deepcopy(raw)
         if action!='providers.schema':
             credential=environment_credential(module,raw)
             field=credential['field']
-            if not config.get(field) and credential['available']:config[field]=os.environ[credential['envVar']]
+            if not config.get(field) and credential['available']:config[field]='${'+credential['envVar']+'}'
         command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)}
         if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
