@@ -20,7 +20,7 @@ def backup(service):
     archive=folder/'private-state.tar.gz'
     with tarfile.open(archive,'w:gz') as output:
         output.add(database,arcname='app.sqlite3')
-        for name in ('config','routing','bundles','sessions'):
+        for name in ('config','routing','bundles','sessions','smart-tools/work'):
             path=service.data_dir/name
             if path.exists():output.add(path,arcname=name,recursive=True)
     archive.chmod(0o600)

@@ -21,6 +21,9 @@ def snapshot(state):
         if op.get('phase') not in {'error','failed'} or not op.get('error'):continue
         section,page=routes.get(action.split('.')[0],('maintenance','repair'))
         add('action:'+action,'Action needs attention',section,page,op['error'],op.get('commandId'))
+    for op in state.get('smartTools',{}).get('operations',[]):
+        if op.get('status') in {'failed','interrupted'}:
+            add('smart-tool:'+op['id'],'Smart Tool needs attention','capabilities','smart-tools',op.get('error','The tool did not finish.'),op.get('updatedAt'))
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
     for session in state.get('sessions',[]):
         if session.get('error'):add('session:'+session['id'],'Conversation needs attention','setup','conversation',session['error'])

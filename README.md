@@ -30,6 +30,10 @@ amplifier-unified
 
 End users need no Node installation: compiled React assets ship in the Python package. **Settings → Maintenance → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
 
+## Smart Tools and collaborative canvas apps
+
+**Settings → Capabilities → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
+
 ## Development
 
 ```sh

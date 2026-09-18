@@ -71,6 +71,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.state["runtime"]["available"] = True
     app["service"] = service
     app["runtime"] = runtime
+    from .smart_tools import SmartToolsManager
+    from .smart_canvas import SmartCanvas
+    service.smart_tools = SmartToolsManager(service)
+    service.smart_canvas = SmartCanvas(service)
+    service._publish()
     from .management import Management
     service.management = Management(service)
     if preload_providers:
@@ -172,14 +177,33 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def canvas_document(request):
         canvas = service.state.get("canvas", {})
-        if canvas.get("id") != request.match_info["identity"] or canvas.get("kind") not in {"html", "babylon"}:
+        if canvas.get("id") != request.match_info["identity"] or canvas.get("kind") not in {"html", "babylon", "mcp-app"}:
             raise AppError("Canvas document no longer available", 404)
+        if canvas.get("kind") == "mcp-app":
+            from .smart_canvas import document_response
+            service.smart_canvas.binding(canvas["id"])
+            return document_response(canvas)
         identity = json.dumps(canvas["id"])
         bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / "canvas_bridge.js").read_text().replace("__CANVAS_ID__", identity) + "</script>"
         return web.Response(text=bootstrap + canvas_source(canvas), content_type="text/html", headers={
             "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})
 
+    async def smart_canvas_tools(request):
+        _, binding = service.smart_canvas.binding(request.match_info['identity'])
+        server = next(s for s in service.state['smartTools']['servers'] if s['id'] == binding['serverId'])
+        tools = [t for t in server.get('tools',[]) if t['name'] in binding['allowedTools']]
+        return web.json_response({'tools':tools})
+
+    app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)
+
+    async def smart_operation(request):
+        operation = service.smart_tools.operation(request.match_info['identity'])
+        if not operation:
+            return web.json_response({'status':'pending'}, status=200)
+        return web.json_response(operation)
+
+    app.router.add_get('/api/smart-tools/operations/{identity}', smart_operation)
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", post_login)
     app.router.add_get("/setup", setup)
