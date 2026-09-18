@@ -130,6 +130,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 ca_fingerprint(data_dir),
             ),
             content_type="text/html",
+            headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"},
         )
 
     async def events(request):

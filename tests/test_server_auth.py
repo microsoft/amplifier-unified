@@ -19,16 +19,41 @@ async def test_only_bootstrap_paths_are_anonymous_and_control_bearer_protects_ap
     assert (await client.get("/api/state", headers={"Cookie": f"amplifier_unified_session={valid_cookie}"})).status == 200
     assert (await client.get("/api/state", headers={"Cookie": "muxplex_session=not-a-unified-session"})).status == 401
     assert (await client.post("/login", data={"username": "owner", "password": "correct"})).status == 403
-    setup = await client.get("/setup", headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14)"})
+    setup = await client.get("/setup", headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14; attacker.example)"})
     assert setup.status == 200
+    assert setup.headers["Referrer-Policy"] == "no-referrer"
+    assert setup.headers["Content-Security-Policy"] == (
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'"
+    )
     setup_body = await setup.text()
     assert 'data-platform="android" open' in setup_body
     assert "Mozilla/5.0" not in setup_body
+    assert "attacker.example" not in setup_body
     assert not (tmp_path / "config" / "tls").exists()
     login = await client.get("/login")
     assert login.status == 200 and "csrf" in (await login.text())
     client.session.headers["Authorization"] = "Bearer " + app["control_token"]
     assert (await client.get("/api/state")).status == 200
+
+
+@pytest.mark.parametrize("path,expected_status", [
+    ("/login", 200),
+    ("/setup", 200),
+    ("/api/ca", 404),
+    ("/ca.crt", 404),
+    ("/api/health", 200),
+])
+async def test_anonymous_access_is_limited_to_the_bootstrap_routes(aiohttp_client, tmp_path, path, expected_status):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+
+    response = await client.get(path, allow_redirects=False)
+    assert response.status == expected_status
+    assert (await client.get("/api/state", allow_redirects=False)).status == 401
+    root = await client.get("/", allow_redirects=False)
+    assert root.status == 307 and root.headers["Location"] == "/login"
 
 
 async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_client, tmp_path):

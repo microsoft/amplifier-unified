@@ -48,32 +48,42 @@ def test_renderer_rejects_unclosed_platform_values_and_does_not_echo_untrusted_v
     with pytest.raises(TypeError):
         render_setup_page("attacker.example", True, "AA:BB")  # type: ignore[arg-type]
 
-    page = render_setup_page(Platform.OTHER, True, "AA:BB")
+    page = render_setup_page(Platform.OTHER, True, "AA:BB\"><img src=x onerror=alert(1)>")
     assert "attacker.example" not in page
     assert "Mozilla/" not in page
+    assert '<img src=x onerror=alert(1)>' not in page
+    assert "&lt;img src=x onerror=alert(1)&gt;" in page
 
 
-def test_renderer_has_fixed_download_fingerprint_warning_and_no_active_or_login_content():
+def test_renderer_has_fixed_fingerprint_warning_and_no_active_or_login_content():
     page = render_setup_page(Platform.WINDOWS, True, "AA:BB")
     parsed = Tags()
     parsed.feed(page)
 
-    assert ('href', '/ca.crt') in parsed.attrs
     assert "SHA-256 fingerprint:" in page
     assert "not independent proof" in page
     assert not {"script", "iframe", "frame", "form"} & set(parsed.tags)
     assert "password" not in page.lower()
     assert "HSTS" in page
+    assert "Certificate installation is never performed here." in page
+    assert "/ca.crt" not in page
 
 
-def test_renderer_instructions_require_trusted_transfer_native_install_and_browser_restart():
+def test_renderer_instructions_use_trusted_transfer_then_minimal_user_trust():
     page = render_setup_page(Platform.OTHER, True, "AA:BB")
 
-    assert page.count("setup-tls export") == len(Platform)
-    assert page.count("verified SSH") == len(Platform)
-    assert page.count("before trusting") == len(Platform)
-    assert "security add-trusted-cert" in page
-    assert "certutil -addstore" in page
+    assert page.index("Before browser use") < page.index("Choose your device")
+    assert page.count("setup-tls export") == 1
+    assert page.count("verified SSH") == 1
+    assert "&lt;trusted-host&gt;" in page
+    assert "openssl x509 -in amplifier-unified-ca.crt -noout -fingerprint -sha256" in page
+    assert "security add-trusted-cert -r trustRoot -p ssl -k \"$HOME/Library/Keychains/login.keychain-db\"" in page
+    assert "Keychain Access" in page
+    assert "System.keychain" not in page
+    assert "sudo security" not in page
+    assert "certutil -user -addstore -f Root amplifier-unified-ca.crt" in page
+    assert "elevated PowerShell" not in page
+    assert "Managed devices may require their approved administrator path" in page
     assert "Install a certificate" in page
     assert "Certificate Trust Settings" in page
     assert "update-ca-certificates" in page
