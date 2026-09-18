@@ -77,6 +77,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)
     service.smart_canvas = SmartCanvas(service)
+    service.diagnostics.start()
     service._publish()
     from .management import Management
     service.management = Management(service)

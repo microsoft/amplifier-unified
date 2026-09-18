@@ -309,17 +309,54 @@ its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
 access. Review the title and details, then send. The result includes a link to
 the created issue. No label configuration is required.
 
-Only the entered text, feedback category, and submission reference are sent.
+Use **Add files or images**, drop files on the feedback form, or paste an image.
+Previews show the included files; remove any you do not want to send. Staging is
+local until **Send feedback**. Limits are eight files, 8 MB each, and 24 MB total.
+
+Only the entered text, selected files, feedback category, and submission reference are sent.
 The optional diagnostics checkbox adds exactly the displayed app version and
 OS family. It defaults off; chats, files, paths, provider configuration, and
 credentials are not attached automatically.
 
+GitHub's [create-issue API](https://docs.github.com/en/rest/issues/issues#create-an-issue)
+does not upload binary attachments. The app uses the documented
+[Git Data API](https://docs.github.com/en/rest/git/commits#create-a-commit) to store
+selected files on an isolated `feedback-assets/<requestId>` branch in this
+private repository and includes immutable file links in the issue. Images have
+local previews and open in GitHub's authenticated file viewer; inline images in
+the issue itself are not promised. The sign-in needs **Contents: write** as well
+as **Issues: write**. The app checks that the destination is still private before
+uploading. It does not modify the main branch or create a release. Files remain
+in Git history; removing a local draft attachment does not delete a previously
+submitted file. Do not include secrets in the files you select.
+
 Agents use the same typed `feedback.submit` action when the user asks them to
-send feedback, and can edit the shared `view.feedbackDraft`. Results are retained
+send feedback, and can edit the shared `view.feedbackDraft`. Use
+`feedback.attachment.add` with `requestId`, display `name`, and `base64` to stage
+a file locally, or `feedback.attachment.remove` with its `id` to remove it.
+`view.feedbackDraft.attachments` contains the same preview metadata the user
+sees, and `view.feedbackDraft.previewId` selects the expanded preview. Include
+the reviewed IDs in `feedback.submit.attachmentIds`; chat attachments cannot be
+silently substituted. The app verifies the stored bytes against their staged
+hashes before sending. Results are retained
 at `/feedback/requests`. A retry must keep the same `requestId` and payload.
 Accepted submissions are attempted at most once. If GitHub's response is lost,
-the app reports an uncertain outcome and links to the issue list; it does not
-automatically create a duplicate. Check that list before choosing **New feedback**.
+the app reports an uncertain outcome and links to the issue list and attachment
+branch; files may have been stored even if no issue was created. It does not
+automatically upload again or create a duplicate. Check those links before
+choosing **New feedback**. Local previews and submission receipts survive a restart.
+
+### Diagnostics and Context Intelligence
+
+Settings → Maintenance → **Diagnostics & Context Intelligence** keeps correlated
+app, session, worker, tool, canvas, usage and update metadata locally. You can add
+personal and team servers independently, choose the streams for each, and test
+credentials and ingestion. No destination is configured automatically; conversation
+text is a separate opt-in. The app depends on the public Context Intelligence
+library and uses the server's ordinary authenticated event API. Agents have the
+same configuration, tests, paged inspection and export controls.
+
+See [capture, routing, privacy and delivery semantics](docs/CONTEXT-INTELLIGENCE.md).
 
 ### Browser installation
 

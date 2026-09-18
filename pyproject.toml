@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.7.0"
+version = "0.7.1"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -15,6 +15,8 @@ dependencies = [
     "pyyaml>=6.0.3,<7",
     "filelock>=3.20,<4",
     "mcp>=2.2,<3",
+    "httpx>=0.28,<1",
+    "amplifier-bundle-context-intelligence[client] @ git+https://github.com/bkrabach/amplifier-bundle-context-intelligence@d4a1172bcee8c72d6cdd07f987dacd03eb01d816",
 ]
 
 [project.scripts]
@@ -23,6 +25,9 @@ amplifier-unified = "amplifier_web.cli:main"
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web"]

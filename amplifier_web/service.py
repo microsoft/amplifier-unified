@@ -26,6 +26,12 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
+    "diagnostics.configure": ("Configure local Context Intelligence capture and explicitly enabled per-server stream routes. API keys are environment references. Changing a destination cancels its queued deliveries; already accepted or in-flight data cannot be recalled.", schema({"config":{"type":"object"}})),
+    "diagnostics.test": ("Test saved destination authentication and write access by sending one synthetic probe; no conversation content.", schema({"id":string(100)})),
+    "diagnostics.environment": ("Check that a credential environment variable exists in the service without revealing it.",schema({"name":string(200)})),
+    "diagnostics.retry": ("Retry failed deliveries still authorized by this destination's current policy; never replay historical unselected data.",schema({"id":string(100)})),
+    "diagnostics.records": ("Read retained diagnostics by session and stream glob, newest first. Continue using nextBefore. Metadata is the default; conversation text is captured only if explicitly enabled.",schema({"sessionId":string(200),"stream":string(100),"before":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
+    "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
     "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200)},["path"])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
@@ -224,6 +230,8 @@ class AppService:
             persist(self.data_dir,session)
         from .feedback import Feedback
         self.feedback = Feedback(self)
+        from .diagnostics import Diagnostics
+        self.diagnostics = Diagnostics(self)
         self._save()
 
     def default_theme(self):
@@ -282,6 +290,7 @@ class AppService:
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        self.diagnostics.record('conversation',{'event':'prompt:submit' if role=='user' else 'prompt:complete','data':{'id':message['id'],'role':role,'prompt' if role=='user' else 'response':text,'inputId':extra.get('inputId')}},session_id=session.get('runtimeSessionId') or session['id'],workspace=session['workspace'])
         return message
 
     def _activity(self, session, phase, label, *, reset=False):
@@ -329,7 +338,24 @@ class AppService:
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_open=self.state.get('canvas',{}).get('open',False)
             effects = []
-            if action.startswith("workspace."):
+            diagnostic_result = None
+            if action == 'diagnostics.export':
+                page=self.state.get('diagnostics',{}).get('lastResult',{})
+                if page.get('action')!='diagnostics.records':raise AppError('Inspect the records to export first.')
+                lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],'timestamp':r['data']['timestamp'],'data':r['data']}) for r in reversed(page.get('items',[]))]
+                effects.append({'type':'download','filename':'amplifier-diagnostics.jsonl','mime':'application/x-ndjson','content':'\n'.join(lines)+'\n'})
+            elif action=='diagnostics.test':
+                if not any(row['id']==args['id'] for row in self.diagnostics.config['destinations']):
+                    raise AppError('Save this destination before testing it.')
+                if self.diagnostics.results.get(args['id'],{}).get('phase')=='working':
+                    raise AppError('A connection test is already running for this destination.',409)
+                self.diagnostics.results[args['id']]={'phase':'working','message':'Checking authentication and event ingestion…'}
+                self.state['diagnostics']['results']=copy.deepcopy(self.diagnostics.results)
+                pending.append((self._diagnostics_test,(args['id'],self.diagnostics.policy_generation)))
+            elif action.startswith('diagnostics.'):
+                try:diagnostic_result=await self.diagnostics.command(action,args)
+                except ValueError as exc:raise AppError(str(exc)) from None
+            elif action.startswith("workspace."):
                 from .workspace_canvas import workspace_command
                 workspace_command(self.state, action, args)
             elif action.startswith("canvas."):
@@ -533,7 +559,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -546,6 +572,8 @@ class AppService:
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
                 self.state["view"].update(copy.deepcopy(patch))
+            elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
+                self.feedback.attachment_command(action,args)
             elif action == "feedback.submit":
                 if self.feedback.accept(args):
                     pending.append((self.feedback.send, (args['requestId'],)))
@@ -614,6 +642,10 @@ class AppService:
                 fork_artifacts(self.state,source['id'],session)
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
+            if not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
+                owner=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state.get('selectedSessionId'))),{})
+                stream='canvas' if action.startswith('canvas.') else 'smartTools' if action.startswith('smartTools.') else 'sessions' if action.startswith('session.') else 'workers' if action.startswith('worker.') else 'app'
+                self.diagnostics.record(stream,{'event':'app:action','data':{'action':action,'origin':origin,'commandId':command_id,'sessionId':owner.get('id'),'runtimeSessionId':owner.get('runtimeSessionId'),'artifactId':self.state.get('canvas',{}).get('id') if stream=='canvas' else None}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
             self.state["events"].append({"id": command_id, "action": action, "origin": origin, "at": time.time()})
             self.state["events"] = self.state["events"][-200:]
             for effect in effects:
@@ -621,6 +653,7 @@ class AppService:
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
+            if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
             if action == "feedback.submit":
@@ -727,6 +760,7 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
+            self.diagnostics.runtime_event(kind,payload,session)
             if kind == 'session.naming':
                 from .naming import automatic,persist
                 name=payload.get('name');description=payload.get('description')
@@ -944,6 +978,15 @@ class AppService:
         finally:
             self.unsubscribe(queue)
 
+    async def _diagnostics_test(self, identity, generation):
+        try:result=await self.diagnostics.test(identity,generation)
+        except ValueError:result={'phase':'error','message':'Save this destination before testing it.'}
+        if result is None:return  # The destination changed while its test was running.
+        async with self.lock:
+            self.state['diagnostics']['results']=copy.deepcopy(self.diagnostics.results)
+            self.state['diagnostics']['lastResult']={'action':'diagnostics.test',**result}
+            self._publish()
+
     async def close(self):
         self.closed = True
         if self.update_manager:
@@ -959,5 +1002,6 @@ class AppService:
             await self.smart_tools.close()
         if self.management:
             await self.management.provider_catalog.close()
+        await self.diagnostics.close()
         self._save()
         self.db.close()

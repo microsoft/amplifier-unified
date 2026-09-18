@@ -104,6 +104,14 @@ async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_
     assert [row['module'] for row in plan['tools']]==['tool-filesystem']
     assert plan['agents']['worker']['tools']==[]
     assert plan['agents']['worker']['instruction']=='Keep literal ${PROMPT_EXAMPLE}.'
+    # Provider references remain portable through composition; the schema-aware
+    # mount stage resolves them once the provider source has been prepared.
+    assert plan['providers'][0]['config']=={'api_key':'${SNAPSHOT_TEST_API_KEY}','model':'saved-model'}
+    from amplifier_web.provider_environment import materialize_bundle_providers
+    async def schema_loader(module):
+        assert module=='provider-test'
+        return {'fields':[{'id':'api_key','field_type':'secret','required':True}]}
+    await materialize_bundle_providers(loaded,SimpleNamespace(mount_plan=plan),schema_loader=schema_loader)
     assert plan['providers'][0]['config']=={'api_key':'credential-for-this-host','model':'saved-model'}
     assert plan['providers'][0]['instance_id']=='saved-provider'
     assert plan.get('hooks',[])==[]

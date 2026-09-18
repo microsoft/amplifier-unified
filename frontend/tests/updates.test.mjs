@@ -100,3 +100,41 @@ test('visible update controls use the shared action registry and only promise ec
  assert.match(JSON.stringify(root.toJSON()),/Roll back ecosystem/);
  await renderAct(async()=>root.unmount());
 });
+
+const failure={id:'failure',at:100,attemptId:'a'.repeat(32),commandId:'b'.repeat(32),kind:'application',phase:'replacement-probe',status:'failed',exitCode:1,durationMs:250,probe:{ok:false,stage:'imports',errorType:'ModuleNotFoundError'}};
+test('failed update shows its phase and correlation ID with details collapsed',()=>{
+ const html=render({diagnostics:{attemptId:failure.attemptId,lastFailure:failure,events:[failure]}});
+ assert.match(html,/Check installed package/);
+ assert.match(html,/ModuleNotFoundError/);
+ assert.match(html,/Exit 1/);
+ assert.match(html,new RegExp(failure.attemptId));
+ assert.match(html,/View update details/);
+ assert.doesNotMatch(html,/update-diagnostic-receipt/);
+});
+
+test('diagnostic disclosure is agent-controllable and displays only sanitized receipt fields',async()=>{
+ const calls=[];let root;
+ const diagnostics={attemptId:failure.attemptId,lastFailure:{...failure,stdout:'raw secret'},events:[{...failure,stdout:'raw secret',env:{secret:'hidden'}}]};
+ const initial=state({diagnostics});
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(name,args)=>calls.push({name,args})}))});
+ const toggle=root.root.findAll(node=>node.type==='button'&&node.props.className?.includes('a-update-diagnostics-toggle'))[0];
+ await renderAct(async()=>toggle.props.onClick());
+ assert.equal(calls[0].name,'view.update');
+ assert.equal(calls[0].args.patch.maintenanceDraft.updateDiagnosticsExpanded,true);
+ const expanded={...initial,view:{maintenanceDraft:{updateDiagnosticsExpanded:true}}};
+ await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:expanded,act:()=>{}})));
+ const receipt=root.root.findByProps({id:'update-diagnostic-receipt'});
+ assert.equal(receipt.props.readOnly,true);
+ assert.match(receipt.props.value,/replacement-probe/);
+ assert.doesNotMatch(receipt.props.value,/raw secret|hidden|stdout"|env"/);
+ const parsed=JSON.parse(receipt.props.value);
+ assert.equal(parsed.lastFailure.commandId,failure.commandId);
+ await renderAct(async()=>root.unmount());
+});
+
+test('completed retry retains history without showing an active failure notice',()=>{
+ const done={...failure,id:'done',phase:'restart-ack',status:'succeeded',exitCode:0,probe:undefined};
+ const html=render({diagnostics:{attemptId:done.attemptId,events:[failure,done],latest:done}});
+ assert.match(html,/View update details/);
+ assert.doesNotMatch(html,/a-update-failure"/);
+});

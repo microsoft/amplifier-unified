@@ -8,7 +8,7 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
 import asyncio, json, sys, tempfile
 from pathlib import Path
 from aiohttp import web
@@ -16,6 +16,14 @@ sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('../../tests/fixtures'
 import settings_ui_server as fixture
 from amplifier_web import feedback
 calls=[]
+uploads=[]
+async def github_api(endpoint, payload):
+ uploads.append({'endpoint':endpoint,'payload':payload})
+ if payload is None:return {'private':True}
+ if endpoint.endswith('/git/refs'):return {'object':{'sha':'c'*40}}
+ return {'sha':'c'*40 if endpoint.endswith('/git/commits') else 'a'*40}
+feedback.github_api=github_api
+feedback.shutil.which=lambda name:'/fixture/gh'
 async def create_issue(title, body):
  calls.append({'title':title,'body':body})
  await asyncio.sleep(.15)
@@ -25,7 +33,7 @@ async def main():
  with tempfile.TemporaryDirectory(prefix='amplifier-feedback-ui-') as home:
   app=await fixture.main(Path(home));service=app['service']
   service.state['updates'].update(application={'id':'application','kind':'app','label':'Amplifier Unified','current':'0.6.3','latest':'v0.6.4','status':'update','detail':'A newer application release is available; installation restarts the host when idle.'},appAvailable=True)
-  async def inspect(request):return web.json_response({'calls':calls})
+  async def inspect(request):return web.json_response({'calls':calls,'uploads':uploads})
   app.router.add_get('/api/fixture/feedback',inspect)
   runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
@@ -50,6 +58,33 @@ try{
  await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture');
  await page.getByLabel('Details',{exact:true}).fill('This is a mocked browser test.');
  assert.equal(await page.getByRole('checkbox',{name:'Include app version and operating system'}).isChecked(),false);
+ const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=';
+ await page.getByLabel('Choose feedback files').setInputFiles({name:'picked-image.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+ await page.getByRole('button',{name:'Preview picked-image.png',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Preview picked-image.png',exact:true}).click();
+ await page.getByAltText('Preview of picked-image.png').waitFor();
+ assert.equal(await page.getByAltText('Preview of picked-image.png').evaluate(image=>image.complete&&image.naturalWidth>0),true);
+ await page.getByLabel('Details',{exact:true}).evaluate((element,png)=>{
+  const bytes=Uint8Array.from(atob(png),char=>char.charCodeAt(0)),transfer=new DataTransfer();
+  transfer.items.add(new File([bytes],'pasted-image.png',{type:'image/png'}));
+  element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));
+ },png);
+ await page.getByRole('button',{name:'Preview pasted-image.png',exact:true}).waitFor();
+ await page.locator('.a-feedback-files').evaluate(element=>{
+  const transfer=new DataTransfer();transfer.items.add(new File(['dropped details'],'dropped.txt',{type:'text/plain'}));
+  element.dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
+ });
+ await page.getByRole('button',{name:'Preview dropped.txt',exact:true}).waitFor();
+ await page.evaluate(()=>window.amplifier.dispatch('feedback.attachment.add',{requestId:'agent-file-request',name:'agent.txt',base64:btoa('agent attachment')}));
+ await page.getByRole('button',{name:'Preview agent.txt',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Remove agent.txt',exact:true}).click();
+ await page.getByRole('button',{name:'Preview agent.txt',exact:true}).waitFor({state:'hidden'});
+ assert.equal((await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()))).uploads.length,0);
+ await page.screenshot({path:'/tmp/amplifier-feedback-attachments-desktop.png'});
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:'/tmp/amplifier-feedback-attachments-narrow.png'});
+ assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+ await page.setViewportSize({width:1280,height:900});
  await page.getByRole('dialog').getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
  assert.equal(await page.locator('.a-feedback .a-check-result.success').count(),1);
@@ -58,6 +93,9 @@ try{
  const saved=await page.evaluate(()=>window.amplifier.getState().view.feedbackDraft.pending);
  const calls=await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()));
  assert.equal(calls.calls.length,1);assert.equal(calls.calls[0].title,'Canvas feedback fixture');assert.doesNotMatch(calls.calls[0].body,/App version:|fixture-private-key/);
+ assert.equal(calls.uploads.filter(call=>call.endpoint.endsWith('/git/blobs')).length,3);
+ assert.match(calls.calls[0].body,/picked-image\.png/);assert.match(calls.calls[0].body,/pasted-image\.png/);assert.match(calls.calls[0].body,/dropped\.txt/);assert.doesNotMatch(calls.calls[0].body,/agent\.txt/);
+ assert.equal(saved.attachmentIds.length,3);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
@@ -72,7 +110,7 @@ try{
  await page.screenshot({path:'/tmp/amplifier-updates-narrow.png'});
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/tmp/amplifier-updates-desktop.png'});
  assert.deepEqual(errors,[]);
- console.log('Feedback browser passed: header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout; update version cards captured. No live issue created.');
+ console.log('Feedback browser passed: picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
 }finally{
  await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

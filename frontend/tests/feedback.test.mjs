@@ -77,3 +77,32 @@ test('every editable form control publishes shared view state, including optiona
  assert.match(JSON.stringify(root.toJSON()),/0.6.4/);assert.match(JSON.stringify(root.toJSON()),/Darwin/);
  await renderAct(async()=>root.unmount());
 });
+
+test('selected attachment IDs are frozen through lost acknowledgement and preview is agent-visible',async()=>{
+ const file={id:'a'.repeat(32),name:'report.png',mime:'image/png',size:68,url:'/ignored'};
+ let state=base(),root;state.view.feedbackDraft.attachments=[file];
+ const calls=[];
+ async function action(name,args){
+  calls.push({name,args:structuredClone(args)});
+  if(name==='view.update'){state={...state,view:{...state.view,...args.patch}};root.update(React.createElement(FeedbackPanel,{state,act:action}))}
+  else throw new Error('Response lost');
+ }
+ await renderAct(async()=>{root=create(React.createElement(FeedbackPanel,{state,act:action}))});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Preview report.png'}).props.onClick());
+ assert.equal(calls.at(-1).args.patch.feedbackDraft.previewId,file.id);
+ assert.equal(root.root.findByProps({alt:'Preview of report.png'}).props.src,'/api/attachments/'+file.id);
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ const first=calls.find(call=>call.name==='feedback.submit').args;
+ assert.deepEqual(first.attachmentIds,[file.id]);
+ assert.equal(root.root.findAllByProps({'aria-label':'Remove report.png'}).length,0);
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ const sends=calls.filter(call=>call.name==='feedback.submit');assert.equal(sends.length,2);assert.deepEqual(sends[1].args,first);
+ await renderAct(async()=>root.unmount());
+});
+
+test('an untrusted shared preview URL is never used as an image source',()=>{
+ const state=base();state.view.feedbackDraft.attachments=[{id:'a'.repeat(32),name:'screenshot.png',size:1,mime:'image/png',url:'https://outside.example/collect'}];
+ const html=renderToStaticMarkup(React.createElement(FeedbackPanel,{state,act:()=>{}}));
+ assert.match(html,/\/api\/attachments\/aaaaaaaa/);assert.doesNotMatch(html,/outside\.example/);
+ assert.match(html,/private repository/);assert.match(html,/24 MB total/);
+});

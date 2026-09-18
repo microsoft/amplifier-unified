@@ -329,6 +329,9 @@ class SmartToolsManager:
         def finish(**values):
             operation.update(**values, updatedAt=time.time())
             self.persist_operation(operation)
+            owner=next((s for s in self.service.state.get('sessions',[]) if s['id']==args.get('sessionId')), {})
+            if getattr(self.service,'diagnostics',None):
+                self.service.diagnostics.record('smartTools',{'event':'smart-tool:operation','data':{'operationId':command_id,'action':action,'origin':origin,'status':operation['status'],'serverId':args.get('id'),'durationMs':round((time.time()-operation['createdAt'])*1000)}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
         try:
             result = self._redact(_bounded(await self.execute(action, args, origin=origin)))
             is_error = isinstance(result, dict) and result.get("isError") is True

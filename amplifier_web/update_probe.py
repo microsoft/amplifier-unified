@@ -1,20 +1,30 @@
 """No-model compatibility probe in a staged environment, never a user session."""
 import asyncio
 import importlib.util
-import os
+import json
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from amplifier_web.host.session import prepare_manager
+from amplifier_web.update_diagnostics import exception_type,PROBE_PREFIX
 
 async def main():
     async def deny(*args): return 'deny'
-    session,runtime,report=await prepare_manager(sys.argv[1],bundle=sys.argv[2],resume=False,ask=deny)
+    facts={'ok':False,'stage':'prepare'}
+    session=None
     try:
-        if not report.get('standalone') or not report.get('providers'): raise RuntimeError('Incomplete staged runtime')
-        for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'):
-            if importlib.util.find_spec(name): raise RuntimeError('A CLI host dependency was introduced')
-    finally: await session.cleanup()
-    print('VALIDATED')
+        from amplifier_web.host.session import prepare_manager
+        session,runtime,report=await prepare_manager(sys.argv[1],bundle=sys.argv[2],resume=False,ask=deny)
+        facts.update(stage='capabilities',standalone=bool(report.get('standalone')),providersPresent=bool(report.get('providers')))
+        if not facts['standalone'] or not facts['providersPresent']:raise RuntimeError('Incomplete staged runtime')
+        facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))
+        if not facts['cliAbsent']:raise RuntimeError('A CLI host dependency was introduced')
+        facts.update(ok=True,stage='complete')
+    except Exception as error:facts.update(ok=False,errorType=exception_type(error))
+    finally:
+        if session:
+            try:await session.cleanup()
+            except Exception as error:facts.update(ok=False,stage='cleanup',errorType=exception_type(error))
+    print(PROBE_PREFIX+json.dumps(facts),flush=True)
+    if not facts['ok']:raise SystemExit(1)
 
 asyncio.run(main())

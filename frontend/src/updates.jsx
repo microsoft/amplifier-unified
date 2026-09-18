@@ -3,6 +3,7 @@ import {ResultNotice} from './settings-ui';
 import React from 'react';
 import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3} from 'lucide-react';
 import './updates.css';
+import {UpdateDiagnostics} from './update-diagnostics.jsx';
 const labels={update:'Update available',current:'Current',pinned:'Pinned',check_failed:'Check failed',local_changes:'Local changes',not_checked:'Not checked',release_channel_needed:'Release channel not configured'};
 function SourceList({items,state,act,id}){
  const [shown,filter,query]=useListFilter(state,act,id,items,row=>[row.label,row.id,row.kind,row.status,row.ref,row.detail],'Filter update sources');
@@ -39,6 +40,7 @@ export function UpdateSettings({state,act}){
   <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!!updates.pendingRestart||(!available.length&&!appAvailable&&!pending)} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>{installLabel}</button>{updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}</div>
   {(appAvailable||updates.pendingApp)&&available.length>0&&<p className="a-caption">The app updates first and restarts the server. Ecosystem updates can be installed afterward.</p>}
   <ResultNotice phase={resultPhase} message={resultMessage}/>
+  <UpdateDiagnostics state={state} act={act}/>
   {updates.lastCheck&&<p className="a-caption a-check-inline"><Check/>Last checked {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
   <div className="a-update-options">
    <label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false} onChange={e=>change({autoCheck:e.target.checked,...(!e.target.checked?{autoInstall:false}:{})})}/>Automatically check for updates</label>
