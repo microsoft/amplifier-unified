@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act as renderAct} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {ModelControl}=await server.ssrLoadModule('/src/chat-controls.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test.after(()=>server.close());
+test('late catalogs and select-to-text replacement both persist through the shared provider action',async()=>{
+ const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},session={id:'chat',status:'idle'};
+ let state={view:{composerModel:{open:true,sessionId:'chat',instance:'openai',model:'first'}},runtimeControl:{chat:{}}},root;
+ const render=()=>React.createElement(ModelControl,{state,session,act,ensureSession:async()=>session,working:false});
+ await renderAct(async()=>{root=create(render())});
+ assert.equal(root.root.findAllByProps({id:'chat-model'}).filter(n=>typeof n.type==='string').length,0);
+ state={...state,runtimeControl:{chat:{'configuration.providers':{providers:[{id:'openai',info:{defaults:{model:'first'}}}],effective:{instance:'openai',model:'first'}},modelCatalogs:{openai:{phase:'ready',models:[{id:'first'},{id:'second'}]}}}}};
+ await renderAct(async()=>root.update(render()));
+ const picker=()=>root.root.findAllByProps({id:'chat-model'}).find(n=>typeof n.type==='string');
+ await renderAct(async()=>picker().props.onChange({target:{value:'second'}}));
+ assert.deepEqual(calls.filter(c=>c.args.operation==='provider.select').map(c=>c.args.args),[{instance:'openai',model:'second'}]);
+ state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,modelCatalogs:{openai:{phase:'ready',models:[]}}}}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(picker().type,'input');
+ await renderAct(async()=>picker().props.onChange({target:{value:'custom'}}));
+ assert.equal(calls.filter(c=>c.args.operation==='provider.select').length,1);
+ await renderAct(async()=>picker().props.onBlur({target:{value:'custom'}}));
+ assert.deepEqual(calls.filter(c=>c.args.operation==='provider.select').at(-1).args.args,{instance:'openai',model:'custom'});
+ // An agent uses this same action; its returned catalog must update the trigger.
+ state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,'configuration.providers':{...state.runtimeControl.chat['configuration.providers'],pinned:true,effective:{instance:'openai',model:'agent-choice'}}}}};
+ await renderAct(async()=>root.update(render()));
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('agent-choice')));
+ await renderAct(async()=>root.unmount());
+});

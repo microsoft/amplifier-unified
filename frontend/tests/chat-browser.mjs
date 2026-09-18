@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
 const browser=await chromium.launch({headless:true});
-const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];
+const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
 page.on('pageerror',error=>{errors.push(error.message);console.error(error.message)});
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=','base64');
@@ -16,6 +16,7 @@ try{
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  await page.locator('#chat-provider').waitFor();
  await page.locator('#chat-model').selectOption('fixture-vision');
+ await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.selection?.model==='fixture-vision'));
  await page.locator('#chat-effort').fill('3');
  await page.getByRole('button',{name:'Pin model',exact:true}).click();
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.pinned));
@@ -60,6 +61,13 @@ try{
  await page.getByRole('button',{name:'Rename workspace',exact:true}).click();
  await page.locator('#nav-workspace-name').fill('My project');await page.getByRole('button',{name:'Save name',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().workspaces.some(w=>w.name==='My project'));
+ await page.locator('.a-nav-chat-select').filter({hasText:'Settings test'}).hover();
+ await page.getByRole('button',{name:'Rename Settings test',exact:true}).click();
+ await page.getByRole('textbox',{name:'New name for Settings test'}).fill('Renamed chat');
+ await page.waitForFunction(async()=>Object.values((await (await fetch('/api/state')).json()).devices||{}).some(d=>d.controls?.some(c=>c.label==='New name for Settings test'&&c.value==='Renamed chat')));
+ await page.getByRole('button',{name:'Save conversation name',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.title==='Renamed chat'));
+ await page.waitForFunction(()=>document.querySelectorAll('button[aria-label]:has(svg):not([title]),a[aria-label]:has(svg):not([title])').length===0);
  await page.getByRole('button',{name:'Unpin navigation',exact:true}).click();
  await page.mouse.move(1000,30);
 
