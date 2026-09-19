@@ -200,6 +200,7 @@ class AppService:
         self.queues = set()
         self.tasks = set()
         self.smart_tool_tasks = set()
+        self.smart_tool_requests = {}
         self.lock = asyncio.Lock()
         self.closed = False
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
@@ -881,7 +882,19 @@ class AppService:
                 if action.startswith("smartTools."):
                     self.smart_tool_tasks.add(task)
                     task.add_done_callback(self.smart_tool_tasks.discard)
+                    self.smart_tool_requests[command_id] = task
+                    task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         return {**result, "state": self.browser_state()}
+
+    async def wait_smart_tool(self, identity, timeout=300):
+        """Wait for the original admitted operation; disconnect never replays it."""
+        task = self.smart_tool_requests.get(identity)
+        if task:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout)
+            except TimeoutError:
+                pass
+        return self.smart_tools.operation(identity) or {'id': identity, 'status': 'pending'}
 
     async def _guard(self, fn, args):
         try:

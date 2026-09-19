@@ -88,6 +88,28 @@ async def test_commands_deduplicate_before_tool_call(service):
     assert len(service.state['smartTools']['operations'])==1
 
 
+async def test_interactive_wait_timeout_does_not_cancel_or_repeat(service):
+    import asyncio
+    gate = asyncio.Event()
+    original = service.smart_tools.command
+    calls = []
+    async def delayed(*args, **kwargs):
+        calls.append(args)
+        await gate.wait()
+        return await original(*args, **kwargs)
+    service.smart_tools.command = delayed
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+    args = {'canvasId': service.state['canvas']['id'], 'name': 'read'}
+    receipt = await service.dispatch('smartTools.appCall', args, command_id='slow-input')
+    assert (await service.wait_smart_tool(receipt['operationId'], timeout=.01))['status'] == 'pending'
+    assert not service.smart_tool_requests['slow-input'].done()
+    duplicate = await service.dispatch('smartTools.appCall', args, command_id='slow-input')
+    assert duplicate['duplicate']
+    gate.set()
+    assert (await service.wait_smart_tool('slow-input'))['status'] == 'completed'
+    assert len(calls) == 1
+
+
 async def test_resources_use_saved_binding_and_reject_detach_during_read(service):
     await service.smart_canvas.open({'id':'one','tool':'read'})
     cid=service.state['canvas']['id']

@@ -42,14 +42,20 @@ try{
  const stableFrame=await page.locator('.a-canvas-html').boundingBox();
  await frame.getByRole('button',{name:'Read media'}).click();
  await frame.locator('#resource').filter({hasText:'Retained preview'}).waitFor();
- await page.route('**/api/smart-tools/operations/*',async route=>{await new Promise(resolve=>setTimeout(resolve,400));await route.continue()});
+ let toolInFlight=false,polledCalls=0;
+ page.on('request',req=>{if(req.url().includes('/api/smart-tools/operations/'))polledCalls++});
+ await page.route('**/api/canvas/*/tools/call',async route=>{toolInFlight=true;await new Promise(resolve=>setTimeout(resolve,400));await route.continue()});
+ const readsBefore=polledCalls;
  await frame.getByRole('button',{name:'Add one'}).click();
- await page.waitForFunction(()=>document.querySelector('.a-mcp-status')?.dataset.phase==='working');
+ await page.waitForTimeout(100);
+ assert.equal(toolInFlight,true);
+ assert.equal(await page.locator('.a-mcp-status').getAttribute('data-phase'),'ready','Interaction must not flicker the host render status');
  assert.equal(await page.locator('.a-mcp-status').isVisible(),false);
  assert.equal((await page.locator('.a-canvas-html').boundingBox()).y,stableFrame.y);
 
  await frame.locator('#count').filter({hasText:/^1$/}).waitFor();
- await page.unroute('**/api/smart-tools/operations/*');
+ assert.equal(polledCalls,readsBefore,'Completed interactive calls return directly without operation polling');
+ await page.unroute('**/api/canvas/*/tools/call');
  await page.waitForFunction(()=>window.amplifier.getState().canvas.mcp.context.structuredContent?.count===1);
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
