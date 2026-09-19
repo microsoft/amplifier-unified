@@ -51,6 +51,11 @@ async def test_shared_hook_events_are_indexed_once_redacted_and_never_backfilled
         await app.dispatch('session.create', {})
         sid = app._session()['id']
         now = datetime.now(timezone.utc).isoformat()
+        app._session()['runtimeReport'] = {'contextIntelligence': {'enabled': True}}
+        # Raw kernel capture is authoritative; neither UI event path should
+        # manufacture a second tool event beside the community hook's row.
+        app.diagnostics.runtime_event('tool.post', {'tool': 'fixture'}, app._session())
+        app.diagnostics.runtime_event('execution.event', {'kind': 'tool', 'phase': 'completed', 'label': 'fixture'}, app._session())
         append_event(tmp_path, sid, 'tool:post', {'timestamp': now, 'tool_name': 'fixture', 'result': 'private content'})
         await app.diagnostics.flush()
         await app.diagnostics.flush()

@@ -472,7 +472,7 @@ class Diagnostics:
 
     def _runtime_event(self,kind,payload,session):
         if kind in {'message.delta','assistant.delta','transcript.delta','session.naming','session.naming.progress'}:return
-        if kind=='execution.event' and 'contextIntelligence' in session.get('runtimeReport',{}):
+        if (kind=='execution.event' or kind.startswith(('tool.', 'provider.'))) and 'contextIntelligence' in session.get('runtimeReport',{}):
             # Kernel evidence comes from the mounted community hook. Do not
             # manufacture a second provider/tool event from a UI progress card.
             return
