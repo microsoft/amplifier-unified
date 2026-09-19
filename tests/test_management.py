@@ -93,6 +93,16 @@ async def test_transcript_file_import_keeps_tool_evidence_without_execution(app)
     assert saved[1]['jobs_replayed'] is False
     assert [m['text'] for m in session['messages']]==['Inspect','Finished']
 
+async def test_import_hides_reminders_only_in_display_and_retains_literal_quotes(app):
+    text='<system-reminder>Quoted by the user</system-reminder>'
+    rows=[{'role':'user','content':text,'metadata':{'ephemeral':True,'persisted':True}},
+          {'role':'user','content':text}, {'role':'assistant','content':'A literal quote'}]
+    await app.management.perform('history.importFile',{'content':json.dumps(rows),'format':'json'})
+    session=app._session()
+    assert [m['text'] for m in session['messages']]==[text,'A literal quote']
+    assert [m['nativeIndex'] for m in session['messages']]==[1,2]
+    assert SessionStore.for_app(app.data_dir,session['workspace']).load(session['id'])[0]==rows
+
 async def test_provider_status_survives_unrelated_operations_and_does_not_block_quick_checks(app,monkeypatch):
     import asyncio
     from amplifier_web.setup import SetupManager

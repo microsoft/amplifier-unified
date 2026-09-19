@@ -462,6 +462,74 @@ async def test_web_history_rewrite_reports_error_without_replacing_ui_rows(tmp_p
     assert session['messages'] == original
 
 
+@pytest.mark.parametrize('trailing_boundary', [False, True])
+async def test_restart_removes_verified_cached_reminders_without_changing_context(tmp_path, app_factory, trailing_boundary):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_store import fork_session
+
+    text = '<system-reminder source="fixture">Keep this context.</system-reminder>'
+    rows = [
+        {'role': 'user', 'content': text, 'metadata': {'ephemeral': True, 'persisted': True}},
+        # Literal user quotes must survive, even with exactly the same text.
+        {'role': 'user', 'content': text},
+        {'role': 'assistant', 'content': 'That is an internal reminder wrapper.'},
+        {'role': 'user', 'content': [{'type': 'text', 'text': '<system-reminders>Tail context</system-reminders>'}],
+         'metadata': {'ephemeral': True, 'persisted': True}},
+    ]
+    workspace = tmp_path / 'reminder-workspace'
+    directory = native_session(workspace, 'cached-reminders', rows)
+    canonical = {name: (directory / name).read_bytes() for name in
+                 ('transcript.jsonl', 'metadata.json', 'context-intelligence/events.jsonl')}
+    app = app_factory(workspace=workspace)
+    session = app._new_session({})
+    session.update(runtimeSessionId='cached-reminders', nativeIdentity='cached-reminders',
+                   nativeProject=project_slug(workspace), historyManaged=False, historyLoaded=True,
+                   draftAttachments=[{'id': 'draft', 'name': 'keep.png'}])
+    session['messages'] = [display_message(row, index, session, include_internal=True) for index, row in enumerate(rows)]
+    session['messages'][1]['attachments'] = [{'id': 'keep-attachment', 'name': 'quote.txt'}]
+    retained = copy.deepcopy(session['messages'][1:3])
+    boundary = 3 if trailing_boundary else 2
+    session.update(nativeRevision=revision(session), nativeBoundary=boundary,
+                   nativeBoundaryId=session['messages'][boundary]['id'])
+    app.state['sessions'].append(session)
+    app.state['selectedSessionId'] = session['id']
+    app._publish()
+    await app.close()
+
+    resumed = app_factory(workspace=workspace)
+    assert resumed._session()['historyLoaded'] is False
+    await resumed.history.refresh()
+    visible = resumed._session()
+    assert visible['historyError'] is None
+    assert visible['messages'] == retained
+    assert visible['nativeBoundary'] == 2
+    assert visible['sharedHistoryTotal'] == 2
+    assert visible['draftAttachments'] == [{'id': 'draft', 'name': 'keep.png'}]
+    assert not resumed.runtime.started and not resumed.runtime.sent
+    await resumed.history.load(visible['id'])
+    assert visible['messages'] == retained
+    assert all((directory / name).read_bytes() == value for name, value in canonical.items())
+
+    fork = fork_session(resumed.data_dir, visible, 'reminder-fork', turn=1)
+    saved = SessionStore.for_app(resumed.data_dir, workspace).load('reminder-fork')[0]
+    assert saved == rows  # Internal context still reaches the fork and resume.
+    assert fork['messages'] == retained and fork['sharedHistoryTotal'] == 2
+
+
+def test_cached_reminder_cleanup_requires_exact_native_provenance():
+    from amplifier_web.automatic_history import display_identity, remove_internal_copies
+    session = {'id': 'root', 'messages': [
+        {'id': 'different-text', 'role': 'user', 'nativeIndex': 0, 'text': 'Real user input'},
+        {'id': 'different-index', 'role': 'user', 'nativeIndex': 1, 'text': '<system-reminder>Quoted</system-reminder>'},
+        {'id': 'unindexed', 'role': 'user', 'text': '<system-reminder>Quoted</system-reminder>'},
+    ]}
+    before = copy.deepcopy(session['messages'])
+    hidden = {0: display_identity(session, 0, 'user', '<system-reminder>Quoted</system-reminder>')}
+    remove_internal_copies(session, hidden)
+    assert session['messages'] == before
+
+
 async def test_ensure_loaded_refreshes_already_loaded_chat_before_continuing(tmp_path, app_factory):
     directory = native_session(tmp_path / 'cli', 'ensure-fresh')
     app = app_factory()

@@ -52,17 +52,21 @@ def revision(session):
     return None
 
 
-def display_message(row, index, session):
+def display_identity(session, index, role, text):
+    key = json.dumps([session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id'], index, role, text], ensure_ascii=False)
+    return hashlib.sha256(key.encode()).hexdigest()[:32]
+
+
+def display_message(row, index, session, *, include_internal=False):
     if not isinstance(row, dict) or row.get('role') not in {'user', 'assistant'}:
         return None
-    if (row.get('metadata') or {}).get('ephemeral'):
+    if not include_internal and (row.get('metadata') or {}).get('ephemeral'):
         return None
     text = text_content(row)
     if not text:
         return None
     from .session_store import message_time
-    key = json.dumps([session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id'], index, row['role'], text], ensure_ascii=False)
-    return {'id': hashlib.sha256(key.encode()).hexdigest()[:32], 'role': row['role'],
+    return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
             'createdAt': message_time(row) or session.get('createdAt', 0)}
 
@@ -84,9 +88,13 @@ def read_transcript(session, *, before=None, limit=100):
     history = reader.load(include_events=False)
     rows = deque(maxlen=limit)
     total = users = 0
+    hidden = {}
     for index, value in enumerate(history.messages):
         row = display_message(value, index, session)
         if row is None:
+            internal = display_message(value, index, session, include_internal=True)
+            if internal is not None:
+                hidden[index] = internal['id']
             continue
         if before is None or total < before:
             rows.append((total, users, row))
@@ -100,7 +108,26 @@ def read_transcript(session, *, before=None, limit=100):
                                for d in history.diagnostics] + activity['diagnostics']
     return {'messages': visible, 'offset': rows[0][0] if rows else 0,
             'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start,
-            'activity': activity}
+            'activity': activity, 'hiddenMessages': hidden}
+
+
+def remove_internal_copies(session, hidden):
+    """Remove old UI copies only when native index, role and full text agree.
+
+    The reader classified these rows from canonical metadata. Tags or matching
+    text alone are never evidence that a user's message should be hidden.
+    Canonical messages and their resume context are not changed.
+    """
+    session['messages'] = [message for message in session['messages']
+        if type(message.get('nativeIndex')) is not int
+        or hidden.get(message['nativeIndex']) != display_identity(
+            session, message['nativeIndex'], message.get('role'), message.get('text', ''))]
+    boundary = session.get('nativeBoundary')
+    if type(boundary) is int and boundary in hidden and hidden[boundary] == session.get('nativeBoundaryId'):
+        # A prior reader could anchor its append cursor on a trailing reminder.
+        # Re-establish it from the last retained, verified native message.
+        session.pop('nativeBoundary', None)
+        session.pop('nativeBoundaryId', None)
 
 
 def merge_web_history(session, incoming):
@@ -350,6 +377,7 @@ class AutomaticHistory:
                     if session is None:
                         return
                     if session.get('status') not in BUSY and not session.get('configurationBusy'):
+                        remove_internal_copies(session, result['hiddenMessages'])
                         if before is not None:
                             if source.get('nativeRevision') != result['revision']:
                                 raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')

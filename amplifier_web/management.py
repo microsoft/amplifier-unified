@@ -498,9 +498,10 @@ class Management:
                 store=SessionStore.for_app(self.service.data_dir,session['workspace'])
                 metadata={**metadata,'parent_id':None,'working_dir':session['workspace'],'bundle_name':session['bundle'],'imported_file':True,'jobs_replayed':False,'preserve_system':True}
                 store.save(session['id'],rows,metadata,preserve_system=True)
-                for row in rows:
-                    text=text_content(row)
-                    if row['role'] in {'user','assistant'} and text:self.service._message(session,row['role'],text,source='import')
+                from .automatic_history import display_message
+                for index,row in enumerate(rows):
+                    visible=display_message(row,index,session)
+                    if visible:self.service._message(session,visible['role'],visible['text'],source='import',nativeIndex=index)
                 self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=session['id']
                 self.service._publish()
         elif action=='history.import':
@@ -516,9 +517,10 @@ class Management:
                     if not Path(workspace).is_dir():raise ValueError('Restore this session’s original workspace before opening it.')
                     session=self.service._new_session({'title':meta.get('name') or meta.get('title') or 'Imported conversation','workspace':workspace,'bundle':(meta.get('bundle_name') or meta.get('bundle') or 'anchors').removeprefix('bundle:')})
                     session['id']=identity;session['status']='stopped'
-                    for row in rows:
-                        if row.get('role') in {'user','assistant'} and isinstance(row.get('content'),str):
-                            self.service._message(session,row['role'],row['content'],source='import')
+                    from .automatic_history import display_message
+                    for index,row in enumerate(rows):
+                        visible=display_message(row,index,session)
+                        if visible:self.service._message(session,visible['role'],visible['text'],source='import',nativeIndex=index)
                     self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=identity
                 self.service._publish()
         elif action=='history.export':

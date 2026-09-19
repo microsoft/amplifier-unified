@@ -27,6 +27,10 @@ def hydrate(home, state, db):
         value = json.loads(path.read_text())
         if value.get('id') != session['id'] or not isinstance(value.get('messages'), list):
             raise ValueError('A saved conversation view is invalid; its files were preserved.')
+        if value.get('nativeProject'):
+            # Reconcile older UI copies with the current display policy on open,
+            # even when the canonical transcript has not changed since restart.
+            value['historyLoaded'] = False
         state['sessions'][index] = value
 
 

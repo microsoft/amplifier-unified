@@ -156,7 +156,8 @@ def complete_tool_exchanges(messages, *, positions=None):
 def _index_visible(messages, visible, display_offset=0):
     """Retain exact anchors; only unindexed legacy web rows need alignment."""
     display_indexes = [index for index, row in enumerate(messages)
-                       if row.get('role') in {'user', 'assistant'} and text_content(row)]
+                       if row.get('role') in {'user', 'assistant'} and text_content(row)
+                       and not (row.get('metadata') or {}).get('ephemeral')]
     cursor = display_indexes[display_offset] if 0 <= display_offset < len(display_indexes) else 0
     for row in visible:
         if type(row.get('nativeIndex')) is int:
@@ -302,6 +303,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             'runtimeSessionId': target_id, 'nativeIdentity': target_id, 'nativeProject': project_slug(source.get('workspace') or Path.cwd()),
             'nativeRevision': [stamp.st_mtime_ns, stamp.st_size], 'historyLoaded': True, 'historyManaged': False,
             'shared': True, 'sharedHistoryOffset': 0, 'sharedHistoryUserTurnOffset': 0,
-            'sharedHistoryTotal': sum(row.get('role') in {'user', 'assistant'} and bool(text_content(row)) for row in messages),
+            'sharedHistoryTotal': sum(row.get('role') in {'user', 'assistant'} and bool(text_content(row))
+                                      and not (row.get('metadata') or {}).get('ephemeral') for row in messages),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") else {})}
