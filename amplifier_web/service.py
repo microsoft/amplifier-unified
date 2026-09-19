@@ -115,7 +115,7 @@ ACTION_DEFINITIONS = {
     "history.import": ("Open a persisted or legacy session",schema({"id":string(200)})),
     "history.export": ("Export runtime transcript and metadata",schema({"sessionId":string(200),"format":{"enum":["json","jsonl"]}},["sessionId"])),
     "history.cleanup": ("Preview or clean old conversation entries",schema({"days":{"type":"integer","minimum":1},"apply":{"type":"boolean"},"purge":{"type":"boolean"}},[])),
-    "maintenance.backup": ("Back up the conversation database",schema()),
+    "maintenance.backup": ("Back up shared session files, app settings, artifacts and receipts",schema()),
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
@@ -179,6 +179,7 @@ class AppService:
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(self.data_dir / "app.sqlite3")
+        (self.data_dir / "app.sqlite3").chmod(0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
@@ -204,6 +205,11 @@ class AppService:
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "light", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        self._view_cache = {}
+        from .session_projection import hydrate
+        hydrate(self.data_dir, self.state, self.db)
+        from .storage_migration import upgrade
+        upgrade(self)
         self.state["voice"] = {"status": "disconnected"}
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
         for session in self.state["sessions"]:
@@ -254,8 +260,12 @@ class AppService:
     def _save(self):
         from .state_storage import normalize_state
         normalize_state(self.state, self.db)
-        self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(self.state),))
+        from .session_projection import persist
+        saved = persist(self.data_dir, self.state, self._view_cache)
+        self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(saved),))
         self.db.commit()
+        from .storage_migration import maintenance
+        maintenance(self)
 
     def _publish(self):
         self.state["revision"] += 1
@@ -779,7 +789,7 @@ class AppService:
             elif kind == 'session.naming.progress':
                 from .naming import read
                 from .host.storage import SessionStore
-                directory=SessionStore(self.data_dir/'sessions').directory(session.get('runtimeSessionId') or session['id'])
+                directory=SessionStore.for_app(self.data_dir,session['workspace']).directory(session.get('runtimeSessionId') or session['id'])
                 directory.mkdir(parents=True,exist_ok=True,mode=0o700)
                 data=read(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))

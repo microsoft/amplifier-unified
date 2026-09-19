@@ -23,7 +23,7 @@ import uuid
 
 from context_intelligence.client import AsyncCIClient, CIClientError
 from context_intelligence.auth import build_auth_strategy
-from context_intelligence.upload import build_event_payload
+from context_intelligence import build_event_payload
 
 STREAMS = {
     'app': 'App actions', 'sessions': 'Session lifecycle', 'workers': 'Worker activity',
@@ -125,10 +125,11 @@ class Diagnostics:
         self.delivery_tasks={}
         self.policy_generation=0;self.configuring=False
         self.instance_id='unified-'+str(uuid.uuid4())
+        self.route_since=time.time()
         self.results={};self._last_summary=None
         self.storage_ready=False
         try:self._initialize_storage()
-        except (OSError,sqlite3.Error):self.storage_error=True
+        except (OSError,sqlite3.Error,ValueError):self.storage_error=True
         self.service.state['diagnostics']={'config':copy.deepcopy(self.config),'streams':[{'id':k,'label':v,'content':k=='conversation'} for k,v in STREAMS.items()],'destinations':[],'local':{'records':None,'storageError':self.storage_error},'results':{}}
 
     def _initialize_storage(self):
@@ -142,7 +143,24 @@ class Diagnostics:
               CREATE TABLE IF NOT EXISTS deliveries(record_id TEXT,destination TEXT,revision TEXT,payload TEXT,status TEXT,attempts INTEGER DEFAULT 0,next_at REAL DEFAULT 0,error TEXT,updated REAL,PRIMARY KEY(record_id,destination));
               CREATE INDEX IF NOT EXISTS delivery_ready ON deliveries(destination,status,next_at);
               CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);
+              CREATE TABLE IF NOT EXISTS captures(path TEXT PRIMARY KEY,offset INTEGER,inode INTEGER);
             ''')
+            # The original database stored another event archive. Export it once
+            # into the shared CI capture, then keep only bounded offset indexes.
+            from .session_files import capture_dir, event_index, append_event
+            indexes = {}
+            for row in db.execute('SELECT id,workspace,session,event,data FROM records'):
+                data = json.loads(row['data'])
+                if '$event' in data:
+                    continue
+                directory = capture_dir(row['workspace'], row['session'])
+                if directory not in indexes:
+                    indexes[directory] = event_index(directory)
+                reference = indexes[directory].get(row['id'])
+                if reference is None:
+                    reference = append_event(row['workspace'], row['session'], row['event'], data)
+                    indexes[directory][row['id']] = reference
+                db.execute('UPDATE records SET data=? WHERE id=?', (json.dumps(reference), row['id']))
         self.path.chmod(0o600)
         self.storage_ready=True
 
@@ -200,7 +218,9 @@ class Diagnostics:
         revisions={d['id']:route_revision(d) for d in cfg['destinations'] if cfg['enabled'] and d['enabled']}
         with self._db() as db:
             for identity,now,stream,session,workspace,event,data,routes in items:
-                db.execute('INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES(?,?,?,?,?,?,?)',(identity,now,stream,session,workspace,event,json.dumps(data)))
+                from .session_files import append_event
+                reference=append_event(workspace,session,event,data)
+                db.execute('INSERT INTO records(id,at,stream,session,workspace,event,data) VALUES(?,?,?,?,?,?,?)',(identity,now,stream,session,workspace,event,json.dumps(reference)))
                 for dest,revision,payload in routes:
                     if revisions.get(dest)!=revision: continue
                     count=db.execute("SELECT count(*) FROM deliveries WHERE destination=? AND status IN ('pending','failed')",(dest,)).fetchone()[0]
@@ -208,6 +228,27 @@ class Diagnostics:
                         db.execute("INSERT INTO counters VALUES('outboxDropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
                         continue
                     db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',(identity,dest,revision,json.dumps(payload),'pending',now))
+            from .capture_index import index_shared
+            sessions=list(self.service.state.get('sessions',[]))
+            scopes=[(s['workspace'],s.get('runtimeSessionId') or s['id']) for s in sessions]
+            scopes.extend((s['workspace'],w['id']) for s in sessions for w in s.get('workers',[]) if w.get('id'))
+            for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg):
+                if not cfg['enabled'] or at<self.route_since:continue
+                # Forward a selected projection of new hook records. Reading
+                # historical CLI captures never backfills any destination.
+                selected=clean({k:v for k,v in data.items() if k in META_KEYS or (stream=='conversation' and k in {'prompt','response','text','content'})})
+                selected.update(session_id=session,event_id=data.get('event_id') or identity,
+                                timestamp=data.get('timestamp') or datetime.fromtimestamp(at,timezone.utc).isoformat())
+                if data.get('parent_id'):selected['parent_id']=data['parent_id']
+                for dest in cfg['destinations']:
+                    if not dest['enabled'] or stream not in dest['streams'] or not fnmatch.fnmatchcase(workspace,dest['workspacePattern']):continue
+                    count=db.execute("SELECT count(*) FROM deliveries WHERE destination=? AND status IN ('pending','failed')",(dest['id'],)).fetchone()[0]
+                    if count>=2000:
+                        db.execute("INSERT INTO counters VALUES('outboxDropped',1) ON CONFLICT(name) DO UPDATE SET value=value+1")
+                        continue
+                    payload=build_event_payload(event,dest['workspace'],selected,workspace if dest['includePaths'] else None)
+                    db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',
+                               (identity,dest['id'],route_revision(dest),json.dumps(payload),'pending',time.time()))
             cutoff=time.time()-cfg['retentionDays']*86400
             obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq NOT IN (SELECT seq FROM records ORDER BY seq DESC LIMIT ?)',(cutoff,cfg['maxRecords']))]
             for identity in obsolete:
@@ -340,6 +381,7 @@ class Diagnostics:
             for task in tasks:task.cancel()
             await asyncio.gather(*tasks,return_exceptions=True)
             self.config=cfg
+            self.route_since=time.time()
             # flush_lock lets any earlier persistence snapshot finish first;
             # this pass then cancels its revoked rows before save is confirmed.
             await self.flush()
@@ -388,7 +430,14 @@ class Diagnostics:
             raise ValueError('Diagnostics storage is unavailable. Your conversations can continue; existing diagnostic files have been preserved.') from None
         items=[];size=0
         for row in rows[:limit]:
-            item=dict(row);item['data']=json.loads(item['data']);size+=len(json.dumps(item))
+            item=dict(row);value=json.loads(item['data'])
+            from .session_files import read_event
+            item['data']=read_event(value)['data'] if '$event' in value else value
+            if item['id'].startswith('capture-'):
+                # Local CLI capture may contain full tool arguments/results.
+                # Inspect only the user's chosen metadata/content projection.
+                item['data']=clean(item['data'] if item['stream']=='conversation' else {k:v for k,v in item['data'].items() if k in META_KEYS})
+            size+=len(json.dumps(item))
             if items and size>24000:break
             items.append(item)
         return {'items':items,'nextBefore':items[-1]['seq'] if items and len(rows)>len(items) else None,'format':'context-intelligence','schemaVersion':'1.0.0'}
@@ -423,6 +472,10 @@ class Diagnostics:
 
     def _runtime_event(self,kind,payload,session):
         if kind in {'message.delta','assistant.delta','transcript.delta','session.naming','session.naming.progress'}:return
+        if kind=='execution.event' and 'contextIntelligence' in session.get('runtimeReport',{}):
+            # Kernel evidence comes from the mounted community hook. Do not
+            # manufacture a second provider/tool event from a UI progress card.
+            return
         data={k:v for k,v in payload.items() if k in META_KEYS}
         root=session.get('runtimeSessionId') or session['id']
         actual=payload.get('sessionId') or root

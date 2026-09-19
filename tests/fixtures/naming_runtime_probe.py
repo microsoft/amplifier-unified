@@ -39,7 +39,7 @@ async def run():
         def publish(e):
             events.append(e)
             if e['type']=='session.naming':persist(home,{'id':'fixture','title':e['name'],'titleSource':'generated','description':e['description']})
-        SessionStore(home/'sessions').save('fixture',await context.get_messages(),{})
+        SessionStore.for_app(home,Path.cwd()).save('fixture',await context.get_messages(),{})
         namer=LiveSessionNaming(coordinator,home,publish)
         assert namer.hook
         for i in range(1,6):
@@ -48,7 +48,7 @@ async def run():
             if namer.pending:await namer.pending
         assert len(calls)==2,len(calls)
         assert calls[0].max_output_tokens==256
-        metadata=SessionStore(home/'sessions').load('fixture')[1]
+        metadata=SessionStore.for_app(home,Path.cwd()).load('fixture')[1]
         assert metadata['name']=='Build an orbit explorer'
         rows=[e['event'] for e in events if e.get('type')=='execution.event' and e['event'].get('phase')=='completed']
         assert len(rows)==2 and all(r['label']=='Session naming' and r['usage']['totalTokens']==65 for r in rows),rows

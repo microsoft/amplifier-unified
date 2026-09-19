@@ -47,8 +47,11 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
   or permission to generate, and does not automatically start a conversation turn.
 
 Server instructions and tool schemas are discoverable under `/smartTools/servers`.
-Operations persist in SQLite, with a small recent index in normal app state and large
-bodies in pageable resources. Failed operations produce the same acknowledgeable
+Small operation receipts persist in SQLite. Full results are retained for at most
+30 days, 200 completed operations and 32 MB (whichever limit comes first), in
+pageable artifact files. Expiry keeps the execution receipt and never replays work.
+Saved canvas artifacts remain reachable independently of result retention; static
+HTML is stored once even when live view context changes. Failed operations produce the same acknowledgeable
 attention indicators used elsewhere in Settings. A request accepted by the host is
 not proof of domain completion: tools may return their own durable operation handles.
 

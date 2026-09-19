@@ -471,7 +471,7 @@ class Management:
             async with self.service.lock:
                 session=self.service._new_session({'title':args.get('title') or 'Imported transcript','workspace':self.service.default_workspace,'bundle':args.get('bundle') or metadata.get('bundle_name') or 'anchors'})
                 session['status']='stopped'
-                store=SessionStore(self.service.data_dir/'sessions')
+                store=SessionStore.for_app(self.service.data_dir,session['workspace'])
                 metadata={**metadata,'parent_id':None,'working_dir':session['workspace'],'bundle_name':session['bundle'],'imported_file':True,'jobs_replayed':False,'preserve_system':True}
                 store.save(session['id'],rows,metadata,preserve_system=True)
                 for row in rows:
@@ -480,8 +480,8 @@ class Management:
                 self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=session['id']
                 self.service._publish()
         elif action=='history.import':
-            identity=args['id'];store=SessionStore(self.service.data_dir/'sessions',legacy_home=Path.home()/'.amplifier')
-            saved=store.load(identity) or store.import_cli(identity)
+            identity=args['id']
+            saved=SessionStore.find(self.service.data_dir,identity,self.service.default_workspace)
             if not saved:raise ValueError('The requested session was not found')
             rows,meta=saved
             async with self.service.lock:
@@ -489,8 +489,8 @@ class Management:
                 if existing:self.service.state['selectedSessionId']=identity
                 else:
                     workspace=meta.get('working_dir') or meta.get('workspace') or self.service.default_workspace
-                    if not Path(workspace).is_dir():workspace=self.service.default_workspace
-                    session=self.service._new_session({'title':meta.get('name') or meta.get('title') or 'Imported conversation','workspace':workspace,'bundle':meta.get('bundle_name') or 'anchors'})
+                    if not Path(workspace).is_dir():raise ValueError('Restore this session’s original workspace before opening it.')
+                    session=self.service._new_session({'title':meta.get('name') or meta.get('title') or 'Imported conversation','workspace':workspace,'bundle':(meta.get('bundle_name') or meta.get('bundle') or 'anchors').removeprefix('bundle:')})
                     session['id']=identity;session['status']='stopped'
                     for row in rows:
                         if row.get('role') in {'user','assistant'} and isinstance(row.get('content'),str):
@@ -498,8 +498,8 @@ class Management:
                     self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=identity
                 self.service._publish()
         elif action=='history.export':
-            session=self.session(args);store=SessionStore(self.service.data_dir/'sessions')
-            saved=store.load(session['id'])
+            session=self.session(args);store=SessionStore.for_app(self.service.data_dir,session['workspace'])
+            saved=store.load(session.get('runtimeSessionId') or session['id'])
             if not saved:raise ValueError('This conversation has no runtime transcript yet')
             rows,metadata=saved
             if args.get('format')=='jsonl':
@@ -518,11 +518,11 @@ class Management:
                         for identity in identities:
                             path=store.directory(identity)
                             if path.exists():shutil.rmtree(path)
-                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Selected old records removed.' if args.get('purge') else 'Conversation list cleaned. Runtime transcripts are retained for recovery.'}
+                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Shared CLI transcripts and event files are retained.'}
                 self.service._publish()
         elif action=='maintenance.backup':
             from .recovery import backup
-            async with self.service.lock:result=backup(self.service)
+            result=await backup(self.service)
             await self.publish(maintenance=result)
         elif action=='maintenance.reset':
             from .recovery import reset
@@ -539,18 +539,14 @@ class Management:
             raise ValueError('Management action is not implemented: '+action)
 
     def history(self,legacy=False):
-        rows=[];store=SessionStore(self.service.data_dir/'sessions')
-        for path in store.base_dir.glob('*/metadata.json'):
+        from .session_files import amplifier_home
+        rows=[]
+        paths=list((amplifier_home()/'projects').glob('*/sessions/*/metadata.json'))
+        seen={path.parent.name for path in paths}
+        paths.extend(path for path in (self.service.data_dir/'sessions').glob('*/metadata.json') if path.parent.name not in seen)
+        for path in paths:
             try:
                 meta=json.loads(path.read_text())
                 rows.append({'id':path.parent.name,'title':meta.get('name') or meta.get('title') or meta.get('bundle_name') or path.parent.name,'workspace':meta.get('working_dir') or meta.get('workspace'),'updatedAt':meta.get('updated_at'),'legacy':False,'parentId':meta.get('parent_id')})
             except (OSError,ValueError):continue
-        if legacy:
-            seen={r['id'] for r in rows}
-            for path in (Path.home()/'.amplifier/projects').glob('*/sessions/*/metadata.json'):
-                if path.parent.name in seen:continue
-                try:
-                    meta=json.loads(path.read_text())
-                    rows.append({'id':path.parent.name,'title':meta.get('name') or meta.get('title') or path.parent.name,'workspace':meta.get('working_dir'),'legacy':True,'parentId':meta.get('parent_id')})
-                except (OSError,ValueError):continue
         return rows

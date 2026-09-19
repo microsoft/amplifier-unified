@@ -11,7 +11,7 @@ const config={enabled:true,retentionDays:30,maxRecords:25000,streams:['updates']
 function state(extra={}){return {view:{settingsSection:'maintenance',settingsExpanded:['diagnostics'],...extra},diagnostics:{config,streams:[{id:'updates',label:'Update diagnostics'},{id:'conversation',label:'Conversation text (content)',content:true}],local:{records:5},destinations:[],results:{}}};}
 test('local capture and content choices expose shared actions without an implicit destination',()=>{
  const html=renderToStaticMarkup(React.createElement(DiagnosticsSettings,{state:state(),act:()=>{}}));
- assert.match(html,/Nothing is sent remotely/);assert.match(html,/Conversation text/);assert.match(html,/5 records/);
+ assert.match(html,/App forwarding starts only after you save an enabled destination/);assert.match(html,/Conversation text/);assert.match(html,/5 records/);
  assert.match(html,/data-action="diagnostics.configure"/);assert.match(html,/data-action="diagnostics.records"/);
  assert.match(html,/data-action="view.update"/);assert.doesNotMatch(html,/type="password"/);
 });

@@ -16,7 +16,10 @@ log=logging.getLogger(__name__)
 class LiveSessionNaming:
     def __init__(self,coordinator,home,publish,completed_inputs=()):
         self.coordinator=coordinator
-        self.directory=Path(home)/'sessions'/coordinator.session_id
+        from .storage import SessionStore
+        workspace=coordinator.config.get("project_dir") or coordinator.config.get("working_dir") or Path.cwd()
+        self.store=SessionStore.for_app(home, workspace)
+        self.directory=self.store.directory(coordinator.session_id)
         self.publish=publish
         self.completed=set(read(self.directory).get('naming_completed_inputs',completed_inputs))
         self.delivered=set()
@@ -38,7 +41,7 @@ class LiveSessionNaming:
                 def _get_session_dir(self,session_id):return adapter.directory
                 def _load_metadata(self,session_dir):
                     from .storage import SessionStore
-                    saved=SessionStore(Path(home)/'sessions').load(coordinator.session_id)
+                    saved=adapter.store.load(coordinator.session_id)
                     return {**(saved[1] if saved else {}),**read(session_dir)}
                 def _save_metadata(self,session_dir,metadata):
                     # Accepted results are persisted by the app event handler, which
