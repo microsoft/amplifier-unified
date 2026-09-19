@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import pytest
 
@@ -96,3 +97,56 @@ def test_explicit_legacy_import_accepts_backup_only_source(tmp_path):
     assert rows[0]['content'] == 'saved backup'
     assert metadata['legacy_import']['jobs_replayed'] is False
     assert not (source / 'transcript.jsonl').exists()
+
+
+@pytest.mark.parametrize('preserve_system',[False,True])
+def test_noop_checkpoint_updates_metadata_without_changing_transcript_activity(tmp_path,preserve_system):
+    store=SessionStore(tmp_path/'sessions')
+    rows=[{'role':'system','content':'instructions'},
+          {'role':'user','content':'Question'},
+          {'role':'assistant','content':'Answer','provider_continuation':{'id':'opaque'}},
+          {'role':'user','content':'Internal reminder','metadata':{'ephemeral':True}}]
+    store.save('root',rows,{},preserve_system=preserve_system)
+    path=store.directory('root')/'transcript.jsonl'
+    os.utime(path,(100,100))
+    original=(path.read_bytes(),path.stat().st_mtime_ns,path.stat().st_ino)
+    store.save('root',rows,{'status':'ready','custom':'preserved'},preserve_system=preserve_system)
+    assert (path.read_bytes(),path.stat().st_mtime_ns,path.stat().st_ino)==original
+    assert not path.with_name('transcript.jsonl.backup').exists()
+    messages,metadata=store.load('root')
+    assert messages==(rows if preserve_system else rows[1:])
+    assert metadata['status']=='ready' and metadata['custom']=='preserved'
+    rows.append({'role':'assistant','content':'Actual new work'})
+    store.save('root',rows,{'status':'completed'},preserve_system=preserve_system)
+    assert path.stat().st_mtime_ns>original[1]
+    assert path.with_name('transcript.jsonl.backup').read_bytes()==original[0]
+    assert store.load('root')[0][-1]['content']=='Actual new work'
+
+
+def test_noop_optimization_still_repairs_corrupt_transcript_from_valid_backup(tmp_path):
+    store=SessionStore(tmp_path/'sessions')
+    rows=[{'role':'user','content':'Saved'}]
+    store.save('root',rows,{})
+    path=store.directory('root')/'transcript.jsonl'
+    backup=path.with_name('transcript.jsonl.backup')
+    backup.write_bytes(path.read_bytes())
+    path.write_text('corrupt current transcript')
+    store.save('root',rows,{'status':'ready'})
+    assert json.loads(path.read_text())==rows[0]
+    assert json.loads(backup.read_text())==rows[0]
+
+
+def test_noop_optimization_does_not_skip_foundation_validation(tmp_path):
+    store=SessionStore(tmp_path/'sessions')
+    store.save('root',[],{})
+    with pytest.raises(ValueError):
+        store.save('root',[{'role':'','content':'invalid'}],{})
+
+
+def test_checkpoint_distinguishes_boolean_and_numeric_continuation_values(tmp_path):
+    store=SessionStore(tmp_path/'sessions')
+    rows=[{'role':'assistant','content':'Saved','continuation':{'value':True}}]
+    store.save('root',rows,{})
+    rows[0]['continuation']['value']=1
+    store.save('root',rows,{})
+    assert type(store.load('root')[0][0]['continuation']['value']) is int

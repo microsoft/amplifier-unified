@@ -17,6 +17,52 @@ test('workspace rail scopes chats to registered workspace and honors fnmatch fil
  await renderAct(async()=>root.unmount());
 });
 
+test('all-chat switch hides the folder explorer without changing its location or new-chat target',async()=>{
+ const state=initial(),calls=[];state.view.navWorkspacePath='/saved/folder';
+ const act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};
+ let root;const render=()=>React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]});
+ await renderAct(async()=>{root=create(render())});
+ const switcher=root.root.findByProps({role:'group','aria-label':'Chat view'});
+ await renderAct(async()=>switcher.findAllByType('button')[1].props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatScope:'all'}}});
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,0);
+ assert.deepEqual(root.root.findAll(node=>node.type==='small'&&node.props.className==='a-nav-chat-workspace').map(node=>node.children.join('')),['/one','/one','/two']);
+ const newChat=root.root.findByProps({'aria-label':'New chat in workspace'});
+ assert.equal(newChat.props.title,'New chat in /one');
+ await renderAct(async()=>newChat.props.onClick());
+ assert.ok(calls.some(call=>call.name==='session.create'&&call.args.workspace==='/one'));
+ assert.equal(state.view.navWorkspacePath,'/saved/folder');
+ await renderAct(async()=>root.root.findByProps({role:'group','aria-label':'Chat view'}).findAllByType('button')[0].props.onClick());
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,1);
+ assert.equal(state.view.navWorkspacePath,'/saved/folder');
+ await renderAct(async()=>root.unmount());
+});
+
+test('pin and unpin use shared actions without selecting chats or rewriting activity',async()=>{
+ const state=initial(),calls=[];state.view.navChatScope='all';state.pinnedSessionIds=['b'];
+ state.sessions[0].recentActivityAt=30;state.sessions[1].recentActivityAt=1;state.sessions[2].recentActivityAt=20;
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ let root;const render=()=>React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]});
+ await renderAct(async()=>{root=create(render())});
+ const rows=()=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']).map(node=>node.props['data-session-id']);
+ assert.deepEqual(rows(),['b','a','c']);
+ assert.equal(root.root.findByProps({'aria-label':'Pinned chats'}).findAll(node=>node.type==='div'&&node.props['data-session-id']).length,1);
+ const unpin=root.root.findByProps({'aria-label':'Unpin Another plan'});
+ assert.equal(unpin.props['aria-pressed'],true);
+ await renderAct(async()=>unpin.props.onClick());
+ assert.deepEqual(calls,[{name:'session.pin',args:{id:'b',pinned:false}}]);
+ state.pinnedSessionIds=[];
+ await renderAct(async()=>root.update(render()));
+ assert.deepEqual(rows(),['a','c','b']);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Pin Other workspace'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'session.pin',args:{id:'c',pinned:true}});
+ assert.deepEqual(state.sessions.map(row=>row.recentActivityAt),[30,1,20]);
+ assert.equal(calls.some(call=>call.name==='session.select'),false);
+ await renderAct(async()=>root.unmount());
+});
+
 test('rail pin, workspace selection, chat selection and drafts all use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
@@ -166,7 +212,7 @@ test('conversation pagination stays bounded and is shared with agents',async()=>
  await renderAct(async()=>{root=create(render())});
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Show more conversations'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatPage:{workspaceId:'one',filter:'',selectedSessionId:'chat-0',index:1}}}});
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatPage:{mode:'workspace',workspaceId:'one',filter:'',selectedSessionId:'chat-0',index:1}}}});
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props.title,'Saved 100');
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);

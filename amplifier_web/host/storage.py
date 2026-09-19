@@ -129,8 +129,25 @@ class SessionStore:
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
         if saved_metadata.get('bundle_name'):
             saved_metadata['bundle'] = saved_metadata['bundle_name']
+        keep_system = preserve_system or bool(saved_metadata.get('preserve_system'))
+        # Preparing a saved session checkpoints its unchanged context. Keep the
+        # transcript's activity timestamp stable for that metadata-only save.
+        # This comparison is local to an actual save; history indexing never
+        # opens transcript bodies. Match Foundation's default role policy and
+        # let its normal save repair missing/corrupt/recovered transcripts.
+        canonical = [row for row in rows if keep_system or not isinstance(row, dict) or row.get('role') not in {'system', 'developer'}]
+        if history.transcript_path.is_file():
+            current = history.load(include_events=False)
+            try:
+                unchanged = (json.dumps(current.messages, sort_keys=True, ensure_ascii=False, allow_nan=False) ==
+                             json.dumps(canonical, sort_keys=True, ensure_ascii=False, allow_nan=False))
+            except (TypeError, ValueError):
+                unchanged = False  # Normal save supplies Foundation validation.
+            if unchanged and not any(item.source == 'transcript' or item.code == 'changed_during_read' for item in current.diagnostics):
+                history.save_metadata(saved_metadata)
+                return
         history.save(rows, saved_metadata,
-                     preserve_system=preserve_system or bool(saved_metadata.get("preserve_system")))
+                     preserve_system=keep_system)
 
     def load(self, session_id):
         """Read native history first, without migrating or writing while browsing."""

@@ -257,6 +257,13 @@ class NativeHistory:
                           + [transcript[1] / 1e9 if transcript else (previous_row or {}).get('updatedAt', 0)])
             created = next((_timestamp(meta.get(key)) for key in ('created', 'created_at', 'started_at')
                             if _timestamp(meta.get(key)) is not None), updated)
+            # Renaming or re-saving metadata must not make an old conversation
+            # recent. The transcript's write is conversation activity; without
+            # it retain the prior activity or an explicit captured event time.
+            recent = (transcript[1] / 1e9 if transcript and transcript[2] else
+                      max([_timestamp(meta.get('last_event_at')) or 0,
+                           (previous_row or {}).get('recentActivityAt', 0)] +
+                          [_timestamp(meta.get(key)) or 0 for key in ('created', 'created_at', 'started_at')]))
             bundle = _text(meta.get('bundle_name')) or _text(meta.get('bundle'))
             if bundle:
                 bundle = bundle.removeprefix('bundle:')
@@ -270,7 +277,7 @@ class NativeHistory:
                 'nativeIdentity': directory.name, 'nativeProject': slug,
                 'name': name, 'title': name, 'description': _text(meta.get('description')) or '',
                 'bundle': bundle, 'parentId': parent, 'sessionKind': kind,
-                'createdAt': created, 'updatedAt': updated, 'turnCount': turns,
+                'createdAt': created, 'updatedAt': updated, 'recentActivityAt': recent, 'turnCount': turns,
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
                 'nameSource': _text(meta.get('name_source')),

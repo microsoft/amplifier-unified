@@ -16,7 +16,7 @@ from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('id', 'title', 'titleSource', 'nativeNameSource', 'description', 'bundle', 'workspace',
-                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt',
+                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
@@ -289,7 +289,7 @@ class AutomaticHistory:
                                         'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
                                         'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False),
-                                        'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0),
+                                        'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
                                         'status': 'idle', 'messages': [], 'workers': [], 'approvals': [],
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
                                         'nativeProject': row['nativeProject'], 'nativeRevision': row.get('transcriptRevision'),
@@ -300,6 +300,10 @@ class AutomaticHistory:
                                         'historyManaged': True, 'historyLoaded': False}
                             state['sessions'].append(previous); existing[key] = previous; changed = True
                         else:
+                            from .chat_navigation import recent_activity
+                            recent = max(recent_activity(previous), row.get('recentActivityAt', 0))
+                            if previous.get('recentActivityAt') != recent:
+                                previous['recentActivityAt'] = recent; changed = True
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],

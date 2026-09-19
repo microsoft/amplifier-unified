@@ -180,7 +180,7 @@ Worker sessions and legacy chats with missing folders, unsupported IDs, or unkno
 bundles remain readable, with an explanation when continuation is unavailable.
 Metadata is cached; unopened histories are indexed without reading transcripts
 or starting a runtime. Navigation renders 100 chats at a time; search covers all
-chats in the workspace. Agents use the same `history.refresh`, `session.select`,
+chats in the selected view. Agents use the same `history.refresh`, `session.select`,
 and `session.history` actions as the interface.
 
 The workspace explorer shows existing folders with top-level chats and the
@@ -190,6 +190,20 @@ Browsing folders leaves the current conversation open. Search accepts full paths
 custom workspace names, and case-insensitive fnmatch patterns. The selected
 workspace's full path remains visible, and unread activity rolls up through its
 parent folders. There is no optional filter for empty or unrelated folders.
+
+Switch between **Workspaces** and **All chats** above the explorer. All chats
+combines top-level conversations from existing workspace folders and shows each
+folder's full path. Both views place pinned chats first, then sort conversations
+by recent activity. Opening, renaming, or pinning a chat does not count as new
+conversation activity. Search matches chat titles, descriptions, workspace names,
+and full paths, including fnmatch patterns such as `*/playground`.
+
+Use a chat's pin button to keep it at the top in either view. Pins and the chosen
+view survive restarts; they are app preferences and do not change the shared
+transcript. **New chat** uses the currently selected workspace in either view.
+Agents can use `session.pin {id, pinned}`, switch views with
+`view.update {patch: {navChatScope: "workspace" | "all"}}`, and read
+`/chatNavigation` for the same ordered, filtered page shown in the sidebar.
 
 **New workspace** accepts an existing folder or a path to create, opens its first
 chat, and makes the workspace immediately visible. Existing folders and chats

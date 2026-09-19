@@ -20,7 +20,8 @@
     "test:panel-browser": "node tests/panel-layout-browser.mjs",
     "prebuild": "node scripts/sync-branding.mjs",
     "predev": "node scripts/sync-branding.mjs",
-    "test:pwa-browser": "node tests/pwa-browser.mjs"
+    "test:pwa-browser": "node tests/pwa-browser.mjs",
+    "test:chat-library-browser": "node tests/chat-library-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

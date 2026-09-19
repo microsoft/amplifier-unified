@@ -54,6 +54,7 @@ ACTION_DEFINITIONS = {
     "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
+    "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
     "session.export": ("Export a conversation", schema({"id": string(100)})),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
@@ -214,6 +215,8 @@ class AppService:
         hydrate(self.data_dir, self.state, self.db)
         from .storage_migration import upgrade
         upgrade(self)
+        from .chat_navigation import initialize as initialize_chat_navigation
+        initialize_chat_navigation(self.state)
         self.state["voice"] = {"status": "disconnected"}
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
         for session in self.state["sessions"]:
@@ -258,9 +261,11 @@ class AppService:
     def get_state(self):
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
+        from .chat_navigation import snapshot as chat_snapshot
         result = copy.deepcopy(self.state)
         result["attention"] = snapshot(self.state)
         result["workspaceExplorer"] = workspace_snapshot(result)
+        result["chatNavigation"] = chat_snapshot(result)
         result.pop("attentionRead", None)
         return result
 
@@ -308,11 +313,14 @@ class AppService:
         workspace = str(Path(args.get("workspace") or self.state["settings"]["workspace"]).expanduser().resolve())
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
-        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or self.state["settings"]["bundle"], "workspace": workspace, "status": "idle", "createdAt": time.time(), "messages": [], "workers": [], "approvals": []}
+        now = time.time()
+        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or self.state["settings"]["bundle"], "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
+        from .chat_navigation import touch
+        touch(session)
         self.diagnostics.record('conversation',{'event':'prompt:submit' if role=='user' else 'prompt:complete','data':{'id':message['id'],'role':role,'prompt' if role=='user' else 'response':text,'inputId':extra.get('inputId')}},session_id=session.get('runtimeSessionId') or session['id'],workspace=session['workspace'])
         return message
 
@@ -492,12 +500,24 @@ class AppService:
                 session.update(title=args['title'].strip(),titleSource='manual')
                 from .naming import persist
                 persist(self.data_dir,session,shared_rename=True)
+            elif action == "session.pin":
+                from .session_navigation import is_top_level
+                session = self._session(args['id']) if args['pinned'] else None
+                if session is not None and not is_top_level(session):
+                    raise AppError('Only top-level chats can be pinned.')
+                pins = self.state.setdefault('pinnedSessionIds', [])
+                if args['pinned'] and args['id'] not in pins:
+                    pins.append(args['id'])
+                elif not args['pinned']:
+                    pins[:] = [identity for identity in pins if identity != args['id']]
+                self.state['view'].pop('navChatPage', None)
             elif action == "session.delete":
                 session = self._session(args["id"])
                 if self.runtime:
                     pending.append((self.runtime.stop, (session["id"],)))
                 self.history.hide_session(session)
                 self.state["sessions"].remove(session)
+                self.state['pinnedSessionIds'] = [identity for identity in self.state.get('pinnedSessionIds', []) if identity != session['id']]
                 if self.state["selectedSessionId"] == session["id"]:
                     from .session_navigation import is_top_level
                     replacement = next((s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == self.state.get('selectedWorkspaceId') or (s.get('workspace') and s.get('workspace') == session.get('workspace')))), None)
@@ -592,6 +612,8 @@ class AppService:
                     raise AppError("The Amplifier runtime is unavailable.")
                 session['historyManaged'] = False
                 input_id = command_id or str(uuid.uuid4())
+                from .chat_navigation import recent_activity
+                previous_activity = recent_activity(session)
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
@@ -599,7 +621,7 @@ class AppService:
                 session["status"] = "working"
                 session.pop("error", None)
                 ensure_turn(session,input_id,text)
-                pending.append((self._send, (copy.deepcopy(session), text, input_id)))
+                pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity)))
             elif action == "conversation.stop":
                 session = self._session()
                 session["status"] = "stopping"
@@ -650,7 +672,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -663,8 +685,9 @@ class AppService:
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
                 from .workspace_navigation import view_patch
+                from .chat_navigation import view_patch as chat_view_patch
                 try:
-                    patch = view_patch(self.state, patch)
+                    patch = view_patch(self.state, chat_view_patch(patch))
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 self.state["view"].update(copy.deepcopy(patch))
@@ -749,7 +772,7 @@ class AppService:
                 from .workspace_navigation import NAV_KEYS
                 for key in NAV_KEYS | {'navWorkspaceBrowseFor', 'navWorkspaceAncestorsOpen'}:
                     self.state['view'].pop(key, None)
-            if not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
+            if action != 'session.pin' and not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
                 owner=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state.get('selectedSessionId'))),{})
                 if owner.get('historyManaged'):
                     owner = {}  # Browsing must not append to the observed CLI capture.
@@ -793,7 +816,7 @@ class AppService:
     async def history_page(self, session_id, before, limit):
         await self.history.load(session_id, before=before, limit=limit)
 
-    async def _send(self, session, text, input_id):
+    async def _send(self, session, text, input_id, previous_activity=None):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .runtime import SessionInUseError
@@ -805,6 +828,8 @@ class AppService:
                 current["messages"] = [
                     row for row in current["messages"] if row.get("inputId") != input_id
                 ]
+                if previous_activity is not None and current.get('recentActivityAt') == session.get('recentActivityAt'):
+                    current['recentActivityAt'] = previous_activity
                 execution = current.get("execution", {})
                 execution["turns"] = [
                     row for row in execution.get("turns", []) if row.get("id") != input_id
@@ -851,6 +876,9 @@ class AppService:
             identity='voice:'+call_id+':'+response_id
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
+            if response_id != 'session' and (existing is None or existing.get('phase') != phase):
+                from .chat_navigation import touch
+                touch(session)
             turn_id=('voice:'+call_id) if response_id=='session' else existing.get('turnId') if existing else tree.get('currentTurnId')
             if not turn_id:turn_id='voice:'+call_id
             if not any(t['id']==turn_id for t in tree.get('turns',[])):
@@ -873,6 +901,8 @@ class AppService:
             except AppError:
                 return
             self.diagnostics.runtime_event(kind,payload,session)
+            from .chat_navigation import runtime_activity
+            runtime_activity(session, kind, payload)
             if kind == 'session.naming':
                 from .naming import automatic,persist
                 name=payload.get('name');description=payload.get('description')
@@ -1038,6 +1068,8 @@ class AppService:
             existing = next((m for m in session["messages"] if m.get("voiceId") == voice_id and m.get("voiceItemId") == item_id), None)
             if existing:
                 existing["text"] = existing["text"] + text if append else text
+                from .chat_navigation import touch
+                touch(session)
             else:
                 self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id)
             self._publish()

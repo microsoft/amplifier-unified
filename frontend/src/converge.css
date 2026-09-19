@@ -514,16 +514,29 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-nav-search{display:flex;align-items:center;gap:7px;padding:0 7px;border:1px solid var(--a-line);border-radius:9px;margin:10px 0;color:var(--a-muted)}
 #amp-one .a-nav-search input{border:0;padding:8px 0;background:transparent}
 #amp-one .a-nav-search svg{width:14px;height:14px}
+#amp-one .a-nav-scope{display:flex;gap:3px;padding:3px;margin:8px 0 12px;border:1px solid var(--a-line);border-radius:10px;background:var(--a-soft);min-width:0}
+#amp-one .a-nav-scope>button{display:inline-flex;align-items:center;justify-content:center;gap:5px;flex:1;min-width:0;padding:7px 4px;border-radius:7px;font-size:11px;white-space:nowrap;color:var(--a-muted)}
+#amp-one .a-nav-scope>button>svg{width:13px;height:13px;flex-shrink:0}
+#amp-one .a-nav-scope>button[aria-pressed="true"]{color:var(--a-accent);background:var(--a-surface);box-shadow:0 1px 4px #18244110}
+#amp-one .a-nav-scope>button:focus-visible{outline:2px solid var(--a-accent);outline-offset:1px}
 #amp-one .a-nav-chats{display:flex;flex-direction:column;gap:3px}
+#amp-one .a-nav-chat-group{min-width:0}
+#amp-one .a-nav-chat-group>.a-nav-chat-group-title{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--a-muted);margin:10px 6px 5px}
 #amp-one .a-nav-chat{display:flex;align-items:center;border-radius:9px;position:relative;min-height:35px}
 #amp-one .a-nav-chat:hover,#amp-one .a-nav-chat:focus-within{background:var(--a-soft)}
 #amp-one .a-nav-chat.is-selected{background:var(--a-tint);color:var(--a-accent)}
 #amp-one .a-nav-chat-select{flex:1;min-width:0;justify-content:flex-start;padding:8px 6px;font-size:12px;text-align:left}
 #amp-one .a-nav-chat-select>span:first-of-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one button.a-nav-chat-select>span.a-nav-chat-label{display:block;flex:1;min-width:0;white-space:normal}
+#amp-one .a-nav-chat-label>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-nav-chat-label>.a-nav-chat-workspace{display:block;overflow-wrap:anywhere;font-size:10px;line-height:1.35;color:var(--a-muted);margin-top:3px;white-space:normal}
 #amp-one .a-nav-chat-select>svg{width:14px;height:14px;color:var(--a-muted)}
 #amp-one .a-nav-chat .a-nav-chat-edit{width:22px;height:30px;display:none;flex-shrink:0}
 #amp-one .a-nav-chat-edit svg{width:12px;height:12px}
 #amp-one .a-nav-chat:hover .a-nav-chat-edit,#amp-one .a-nav-chat:focus-within .a-nav-chat-edit{display:inline-flex}
+#amp-one .a-nav-chat .a-nav-chat-pin.is-pinned{display:inline-flex;color:var(--a-accent)}
+#amp-one .a-nav-chat-select:focus-visible,#amp-one .a-nav-chat-edit:focus-visible{outline:2px solid var(--a-accent);outline-offset:-1px}
+@media(hover:none){#amp-one .a-nav-chat>button.a-nav-chat-edit{display:inline-flex;width:30px;min-height:36px}#amp-one .a-nav-scope>button{min-height:36px}}
 #amp-one .a-nav-chat-rename{gap:3px;padding:3px;flex-wrap:wrap}
 #amp-one .a-nav-chat-rename input{min-width:0;flex:1;padding:6px 7px;font-size:12px}
 #amp-one .a-nav-chat-rename .a-nav-chat-edit{display:inline-flex}

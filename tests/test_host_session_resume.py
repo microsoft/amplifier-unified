@@ -1,6 +1,7 @@
 """Native resume/admission tests use real storage and no provider calls."""
 import copy
 import json
+import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -125,6 +126,25 @@ async def test_native_history_does_not_even_read_corrupt_common_checkpoint(mount
     await h.prepare()
     assert h.context.messages == newer and h.writes == []
     h.held.read.assert_not_called()
+
+
+async def test_preparing_saved_chat_does_not_change_recency_until_actual_context_changes(mounted_host):
+    from amplifier_web.native_history import NativeHistory
+    h=mounted_host
+    workspace=h.home.parent/'workspace'
+    rows=[{'role':'user','content':'Saved question'},{'role':'assistant','content':'Saved answer'}]
+    h.store.save('native-root',rows,{'working_dir':str(workspace),'bundle':'anchors','turn_count':1})
+    os.utime(h.path,(100,100))
+    index=NativeHistory(known_workspaces=[workspace])
+    assert index.scan()['sessions'][0]['recentActivityAt']==100
+    await h.prepare()
+    assert h.path.stat().st_mtime==100
+    assert index.scan()['sessions'][0]['recentActivityAt']==100
+    # A real tool/model turn changes the context and must still update the
+    # canonical transcript, its backup and its navigation activity time.
+    h.context.messages.append({'role':'user','content':'A new question'})
+    await h.capabilities['live.checkpoint']('in_progress')
+    assert index.scan()['sessions'][0]['recentActivityAt']>100
 
 
 @pytest.mark.parametrize("mutation", ["append", "delete", "replace", "symlink"])

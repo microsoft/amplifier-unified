@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE} from '../src/chat-navigation.js';
-const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture'},{id:'other',path:'/other'}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
+const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture',available:true},{id:'other',path:'/other',available:true}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
 
 test('workspace navigation includes only verified folders without discarding registrations',()=>{
  const workspaces=[
@@ -91,4 +91,72 @@ test('legacy forks and edits with native lineage retain independent chat navigat
 test('workspace labels lead with full paths and retain custom names',()=>{
  assert.equal(workspaceLabel({path:'/Users/me/work/project',name:'project'}),'/Users/me/work/project');
  assert.equal(workspaceLabel({path:'/Users/me/work/project',name:'Client work'}),'/Users/me/work/project · Client work');
+});
+
+test('all chats include only roots in existing folders and group pins before activity order',()=>{
+ const state={view:{navChatScope:'all'},selectedWorkspaceId:'missing',pinnedSessionIds:['pin-old','pin-new','worker','missing'],
+  workspaces:[{id:'a',name:'Client work',path:'/work/project',available:true},{id:'b',name:'Personal',path:'/personal/project',available:true},{id:'missing',path:'/gone/project',available:false}],
+  sessions:[
+   {id:'new',workspaceId:'b',recentActivityAt:40},
+   {id:'pin-old',workspaceId:'a',recentActivityAt:1},
+   {id:'equal-one',workspaceId:'a',recentActivityAt:30},
+   {id:'pin-new',workspaceId:'b',recentActivityAt:2},
+   {id:'equal-two',workspace:'/work/project',recentActivityAt:30},
+   {id:'worker',workspaceId:'a',sessionKind:'worker',recentActivityAt:100},
+   {id:'missing',workspaceId:'missing',recentActivityAt:100},
+   {id:'unregistered',workspace:'/elsewhere',recentActivityAt:100},
+  ]};
+ const before=structuredClone(state),page=chatPage(state);
+ assert.deepEqual(page.items.map(row=>row.id),['pin-new','pin-old','new','equal-one','equal-two']);
+ assert.deepEqual(page.items.slice(0,2).map(row=>row.pinned),[true,true]);
+ assert.equal(page.items[0].workspace,'/personal/project');
+ assert.equal(page.scope.mode,'all');assert.equal(page.scope.workspaceId,null);
+ assert.deepEqual(state,before,'navigation must not mutate recency or session records');
+});
+
+test('recent order accepts finite nonnegative activity and ignores metadata-only updates',()=>{
+ const state={view:{},selectedWorkspaceId:'w',workspaces:[{id:'w',path:'/work',available:true}],sessions:[
+  {id:'zero',workspaceId:'w',recentActivityAt:0,createdAt:100},
+  {id:'new',workspaceId:'w',recentActivityAt:9,createdAt:1},
+  {id:'invalid',workspaceId:'w',recentActivityAt:Infinity,createdAt:7},
+  {id:'negative',workspaceId:'w',recentActivityAt:-1,createdAt:6},
+  {id:'old-renamed',workspaceId:'w',createdAt:5,updatedAt:9000},
+  {id:'string',workspaceId:'w',recentActivityAt:'10000',createdAt:4},
+ ]};
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['new','invalid','negative','old-renamed','string','zero']);
+ state.pinnedSessionIds=['old-renamed'];
+ assert.equal(chatPage(state).items[0].id,'old-renamed');
+ state.pinnedSessionIds=[];
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['new','invalid','negative','old-renamed','string','zero']);
+});
+
+test('all-chat search matches full workspace paths and aliases as well as chat metadata',()=>{
+ const state={view:{navChatScope:'all'},workspaces:[{id:'w',path:'/Users/me/work/project',name:'Client website',available:true}],sessions:[{id:'id-unique',workspaceId:'w',title:'Release plan',description:'Ship Tuesday'}]};
+ for(const filter of ['*work/project','client website','release','Tuesday','id-unique']){
+  state.view.navFilter=filter;assert.equal(chatPage(state).total,1,filter);
+ }
+ state.view.navFilter='*personal*';assert.equal(chatPage(state).total,0);
+});
+
+test('all chats open newest page despite an old selection and use scoped bounded paging',()=>{
+ const state=fixture();state.selectedSessionId='chat-4901';
+ state.view.navChatPage={...chatPage(state,state.workspaces[0]).scope,index:49};
+ state.view.navChatScope='all';
+ const first=chatPage(state);
+ assert.equal(first.index,0);assert.equal(first.items.length,100);assert.equal(first.total,5000);
+ state.view.navChatPage={...first.scope,index:2};assert.equal(chatPage(state).items[0].id,'chat-200');
+ state.pinnedSessionIds=['chat-4901'];state.view.navChatPage=null;
+ assert.equal(chatPage(state).items[0].id,'chat-4901');
+});
+
+test('matching server projection wins over partial local summaries and stale scopes fall back',()=>{
+ const state=fixture();state.view.navChatScope='all';
+ const scope=chatPage(state).scope;
+ const projection={scope,items:[{id:'server-only',title:'Authoritative',workspace:'/fixture',pinned:true}],total:5200,index:0,pages:52,start:0,end:100};
+ state.chatNavigation=projection;
+ assert.equal(chatPage(state),projection);
+ state.view.navFilter='Saved chat 4999';
+ assert.equal(chatPage(state).items[0].id,'chat-4999');
+ state.view.navFilter='';state.view.navChatScope='workspace';
+ assert.equal(chatPage(state).items[0].id,'chat-0');
 });

@@ -35,14 +35,15 @@ def overview(state, session_id):
     from .session_navigation import is_top_level
     selected = session_id or state.get('selectedSessionId')
     index = next((i for i,s in enumerate(state.get('sessions', [])) if s['id']==selected), None)
-    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','workspaceExplorer','sharedHistory','canvas','view','attention','voice'] if key in state}
+    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','workspaceExplorer','chatNavigation','pinnedSessionIds','sharedHistory','canvas','view','attention','voice'] if key in state}
     core['canvasArtifacts'] = {'items':[{**{k:r.get(k) for k in ('id','title','kind','messageId','tabOpen')},'$statePath':f'/canvasArtifacts/{i}'} for i,r in list(enumerate(state.get('canvasArtifacts',[]))) if r.get('sessionId')==selected][-20:],'total':sum(r.get('sessionId')==selected for r in state.get('canvasArtifacts',[])),'$statePath':'/canvasArtifacts'}
     core['diagnostics'] = _preview(state.get('diagnostics', {}), '/diagnostics', 1200)
     core['smartTools'] = _preview(state.get('smartTools', {}), '/smartTools', 2000)
     core['session'] = None
     if index is not None:
         session=state['sessions'][index];base=f'/sessions/{index}'
-        core['session']={key:session.get(key) for key in ['id','title','status','bundle','workspace','workspaceId','sessionKind','nativeParentId','historyLoaded','historyReadOnlyReason','sharedHistoryOffset','sharedHistoryUserTurnOffset','sharedHistoryTotal']}
+        core['session']={key:session.get(key) for key in ['id','title','status','bundle','workspace','workspaceId','sessionKind','nativeParentId','historyLoaded','historyReadOnlyReason','sharedHistoryOffset','sharedHistoryUserTurnOffset','sharedHistoryTotal','recentActivityAt']}
+        core['session']['pinned'] = selected in state.get('pinnedSessionIds', [])
         core['session'].update({'$statePath':base,'activity':_preview(session.get('activity',{}),base+'/activity',1500),
             'workers':_preview(session.get('workers',[]),base+'/workers',1500),
             'recentMessages':[_preview(message,_pointer(base+'/messages',i),1000) for i,message in list(enumerate(session.get('messages',[])))[-6:]],
@@ -56,6 +57,7 @@ def overview(state, session_id):
     core['subagentChats'] = {'total':len(children), 'items':[{'id':s['id'],'title':s.get('title'),'$statePath':f'/sessions/{i}'} for i,s in children[:20]]}
     core['_stateAccess'] = {'note':'This overview is scoped to the calling session. Other app state and detailed resources are available by JSON Pointer; pass path, offset, limit and optional revision. Follow nextOffset. Text previews and $resource references are not the complete value.',
         'history':'CLI workspaces and top-level chats are discovered automatically. /workspaceExplorer is the folder navigation shown to the user: only existing workspaces with top-level chats and their ancestor folders appear. Rows with workspaceId can be selected with workspace.select; rows with canBrowse can be opened with view.update {patch:{navWorkspacePath:path}} without switching the conversation. Search all workspace paths or aliases using navWorkspaceFilter (case-insensitive fnmatch or plain text), navigate 1-based pages with navWorkspacePage, and toggle the ancestor menu with navWorkspaceAncestorsOpen. Browsing persists until a different workspace is selected. workspace.create {path,name?} creates or chooses a folder and opens its first chat without starting model work. Missing or empty folders stay in /workspaces; history.refresh rechecks availability. Subagent histories remain in /sessions with sessionKind=worker and parentId; they are omitted from the conversation list. Unloaded transcripts have no message count yet. Use history.refresh, session.select, and session.history {id,before,limit} to refresh or read earlier messages. Respect historyReadOnlyReason before continuing saved worker or legacy sessions.',
+        'chats':'/chatNavigation is the same bounded chat list shown to the user: pins first, then recent conversation activity. Use view.update {patch:{navChatScope:"all"}} for top-level chats across available workspaces or navChatScope:"workspace" for the selected workspace. navFilter searches titles, descriptions, IDs and full workspace paths or names using case-insensitive fnmatch or plain text. Browse pages with navChatPage:{...chatNavigation.scope,index} (zero-based). session.pin {id,pinned:true|false} pins or unpins a root chat; pinnedSessionIds are app preferences and never change its shared transcript. Selecting, renaming or pinning a chat does not make it recent.',
         'revision':state.get('revision'),'sections':[{'name':key,'path':'/'+key} for key in state]}
     return core
 
