@@ -11,11 +11,7 @@ let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{
 state.sessions.push(...Array.from({length:4998},(_,i)=>({...child,sessionKind:'root',parentId:null,nativeParentId:null,id:'summary-'+i,title:'Indexed conversation '+i,historyLoaded:false,historyReadOnlyReason:null})));
 // A previously saved Converge skin must not restore truncation of the full path.
 state.theme={name:'Converge',css:'#amp-one .a-nav-workspace-path>span{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}'};
-state.workspaces.push(
- {id:'other',name:'Fixture project',path:'/Users/fixture/another-parent/fixture',available:true},
- {id:'missing',name:'Old project',path:'/removed/fixture',available:false},
- {id:'unresolved',name:'Unresolved project',path:null,available:false},
-);
+state.workspaceExplorer={path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:1,rows:[{path:'/fixture',name:'fixture',workspaceId:'project',chatCount:4999,canBrowse:false,unread:0}]};
 const calls=[],errors=[];
 let browser,vite;
 try{
@@ -48,25 +44,7 @@ try{
  });
  const started=performance.now();
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
- assert.deepEqual(await page.locator('#nav-workspace option').allTextContents(),['/fixture · Fixture project','/Users/fixture/another-parent/fixture · Fixture project']);
- await page.locator('#nav-workspace').selectOption('other');
- await page.waitForFunction(()=>document.querySelector('.a-nav-workspace-path>span')?.textContent==='/Users/fixture/another-parent/fixture');
- assert.equal(await page.locator('.a-nav-chat').count(),0);
- await page.setViewportSize({width:390,height:844});
- const pathLayout=await page.locator('.a-nav-workspace-path>span').evaluate(el=>({wrap:getComputedStyle(el).whiteSpace,overflow:el.scrollWidth>el.clientWidth}));
- assert.deepEqual(pathLayout,{wrap:'normal',overflow:false});
- await page.setViewportSize({width:1280,height:900});
- await page.locator('#nav-workspace').selectOption('project');
- await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===100);
- state.workspaces[0].available=false;state.revision++;
- await page.evaluate(state=>window.emitFixtureState(state),state);
- await page.waitForFunction(()=>document.querySelector('#nav-workspace').value==='');
- assert.equal(await page.locator('.a-nav-chat').count(),0,'missing current workspace must not show unrelated chats');
- assert.equal(await page.getByRole('button',{name:'New chat in workspace',exact:true}).isDisabled(),true);
- assert.equal(await page.locator('#nav-workspace option[value="project"]').count(),0);
- state.workspaces[0].available=true;state.revision++;
- await page.evaluate(state=>window.emitFixtureState(state),state);
- await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===100);
+ assert.equal(await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).count(),1);
  assert.equal(await page.locator('.a-nav-chat').count(),100);
  assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
  assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);

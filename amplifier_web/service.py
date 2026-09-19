@@ -33,6 +33,7 @@ ACTION_DEFINITIONS = {
     "diagnostics.records": ("Read retained diagnostics by session and stream glob, newest first. Continue using nextBefore. Metadata is the default; conversation text is captured only if explicitly enabled.",schema({"sessionId":string(200),"stream":string(100),"before":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
     "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
     "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200)},["path"])),
+    "workspace.create": ("Create or choose a workspace folder and open its first chat. Existing chats are reused; no model work starts until a message is sent.", schema({"path":{**string(4000),"minLength":1},"name":string(200)},["path"])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
@@ -67,7 +68,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
@@ -255,8 +256,10 @@ class AppService:
 
     def get_state(self):
         from .attention import snapshot
+        from .workspace_navigation import snapshot as workspace_snapshot
         result = copy.deepcopy(self.state)
         result["attention"] = snapshot(self.state)
+        result["workspaceExplorer"] = workspace_snapshot(result)
         result.pop("attentionRead", None)
         return result
 
@@ -409,16 +412,24 @@ class AppService:
                     if removed and len(self.state['workspaces']) > 1:
                         self.history.hide_workspace(removed)
                 workspace_command(self.state, action, args)
-                if action == 'workspace.add':
+                if action in {'workspace.add', 'workspace.create'}:
                     hidden = self.state.get('hiddenNativeWorkspaces', [])
                     from .session_files import project_slug
                     restored = {self.state['selectedWorkspaceId'], uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + project_slug(args['path'])).hex}
                     hidden[:] = [identity for identity in hidden if identity not in restored]
-                if action in {'workspace.select', 'workspace.add', 'workspace.remove'}:
+                if action in {'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}:
                     from .session_navigation import is_top_level
                     workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
                     matches = [s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == workspace['id'] or (workspace.get('path') and s.get('workspace') == workspace['path']))]
                     selected = next((s for s in matches if s['id'] == self.state.get('selectedSessionId')), matches[0] if matches else None)
+                    if action == 'workspace.create':
+                        self.state['view']['draft'] = ''
+                        if selected is None:
+                            from .workspace_canvas import select_session_workspace
+                            selected = self._new_session({})
+                            selected['deferRuntimeUntilInteraction'] = True
+                            select_session_workspace(self.state, selected)
+                            self.state['sessions'].insert(0, selected)
                     self.state['selectedSessionId'] = selected['id'] if selected else None
                     if selected and selected.get('nativeProject'):
                         pending.append((self.history.load, (selected['id'],)))
@@ -638,7 +649,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -647,9 +658,14 @@ class AppService:
                 for key, minimum in (("canvasWidth", 300), ("navWidth", 216)):
                     if key in patch and (type(patch[key]) not in {int, float} or not minimum <= patch[key] <= 16384):
                         raise AppError(f"{key} must be between {minimum} and 16384 pixels.")
-                for key in ("navPinned", "navExpanded", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded"):
+                for key in ("navPinned", "navExpanded", "navWorkspaceAncestorsOpen", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded"):
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
+                from .workspace_navigation import view_patch
+                try:
+                    patch = view_patch(self.state, patch)
+                except ValueError as exc:
+                    raise AppError(str(exc)) from None
                 self.state["view"].update(copy.deepcopy(patch))
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
                 self.feedback.attachment_command(action,args)
@@ -726,6 +742,12 @@ class AppService:
                 fork_artifacts(self.state,source['id'],session)
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
+            if previous_scope[1] != self.state.get('selectedWorkspaceId') or action in {'workspace.select', 'workspace.add', 'workspace.create', 'session.select'}:
+                # An explicit selection reveals its folder, including returning
+                # to a workspace whose old browse scope otherwise still matches.
+                from .workspace_navigation import NAV_KEYS
+                for key in NAV_KEYS | {'navWorkspaceBrowseFor', 'navWorkspaceAncestorsOpen'}:
+                    self.state['view'].pop(key, None)
             if not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
                 owner=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state.get('selectedSessionId'))),{})
                 if owner.get('historyManaged'):

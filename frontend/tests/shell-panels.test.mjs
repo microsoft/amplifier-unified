@@ -7,7 +7,7 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {WorkspaceRail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
-const initial=()=>({view:{navExpanded:true},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
+const initial=()=>({view:{navExpanded:true},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 
 test('workspace rail scopes chats to registered workspace and honors fnmatch filters',async()=>{
  const state=initial();state.view.navFilter='First*';let root;
@@ -22,7 +22,7 @@ test('rail pin, workspace selection, chat selection and drafts all use shared ac
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Pin navigation open'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:true,navExpanded:true}}});
- await renderAct(async()=>root.root.findByProps({id:'nav-workspace'}).props.onChange({target:{value:'two'}}));
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Open chats in /two'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'workspace.select',args:{id:'two'}});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Rename workspace'}).props.onClick());
  assert.deepEqual(calls.at(-1).args.patch.workspaceDraft,{mode:'rename',id:'one',name:'One'});
@@ -119,13 +119,13 @@ test('automatic discovery reports loading/errors and refreshes through the share
 });
 
 test('unresolved native project folders are hidden and cannot start a chat',async()=>{
- const state=initial();state.workspaces=[{id:'native-one',name:'One',path:null,available:false},{id:'native-two',name:'Two',path:null,available:false}];state.selectedWorkspaceId='native-two';
+ const state=initial();state.workspaces=[{id:'native-one',name:'One',path:null,available:false},{id:'native-two',name:'Two',path:null,available:false}];state.selectedWorkspaceId='native-two';state.workspaceExplorer={rows:[],totalWorkspaces:0};
  state.sessions=[{id:'a',title:'Project one chat',workspaceId:'native-one',workspace:null},{id:'b',title:'Project two chat',workspaceId:'native-two',workspace:null}];let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
  const rows=root.root.findAll(node=>node.props.className==='a-nav-chat-select');
  assert.equal(rows.length,0);
- assert.equal(root.root.findAllByType('option').length,1);
- assert.equal(root.root.findByType('option').props.children,'Add a workspace folder');
+ assert.equal(root.root.findAllByProps({'data-action':'workspace.select'}).length,0);
+ assert.match(JSON.stringify(root.toJSON()),/Create a workspace to start a chat/);
  assert.equal(root.root.findByProps({'aria-label':'New chat in workspace'}).props.disabled,true);
  await renderAct(async()=>root.unmount());
 });

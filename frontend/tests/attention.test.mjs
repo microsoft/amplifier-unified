@@ -11,8 +11,8 @@ const {WorkspaceRail}=await server.ssrLoadModule('/src/shell-panels.jsx');
 test.after(()=>server.close());
 const render=(Component,props)=>renderToStaticMarkup(React.createElement(Component,props));
 test('completion badges roll up across workspaces, collapsed navigation, activity and chat rows',()=>{
- const state={view:{},selectedWorkspaceId:'one',workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],sessions:[{id:'a',title:'Finished plan',workspace:'/one'}],attention:{unread:2,settingsUnread:0,sections:{chats:2},sessions:{a:1},workspaces:{one:1,two:1},items:[{id:'completion:a',title:'Response ready',label:'Finished plan',sessionId:'a',fingerprint:'g1'}]}};
- assert.match(render(WorkspaceRail,{state,act:()=>{}}),/\/two · Two · 1 ready/);
+ const state={view:{},selectedWorkspaceId:'one',workspaceExplorer:{rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:1,unread:1,canBrowse:false},{path:'/two',name:'two',workspaceId:'two',chatCount:1,unread:1,canBrowse:false}],totalWorkspaces:2},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],sessions:[{id:'a',title:'Finished plan',workspace:'/one'}],attention:{unread:2,settingsUnread:0,sections:{chats:2},sessions:{a:1},workspaces:{one:1,two:1},items:[{id:'completion:a',title:'Response ready',label:'Finished plan',sessionId:'a',fingerprint:'g1'}]}};
+ assert.match(render(WorkspaceRail,{state,act:()=>{}}),/Open chats in \/two/);
  assert.match(render(WorkspaceRail,{state,act:()=>{}}),/2 unread items/);
  assert.match(render(ActivityPanel,{state,act:()=>{}}),/Finished plan/);
  assert.equal(render(AttentionBadge,{state,settings:true}),'');

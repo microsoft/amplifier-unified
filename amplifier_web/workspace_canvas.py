@@ -82,11 +82,29 @@ def select_session_workspace(state, session):
         state["canvas"]["open"] = False
 
 
+def _create_workspace_folder(raw_path):
+    """Create a requested folder without replacing or removing existing files."""
+    if not raw_path.strip():
+        _error("Enter a folder path for the new workspace.")
+    try:
+        path = Path(raw_path).expanduser().resolve()
+        if path.exists() and not path.is_dir():
+            _error("A file already exists at this path. Choose a folder for the workspace.")
+        path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            _error("The workspace path must be a folder.")
+    except (OSError, RuntimeError, ValueError) as exc:
+        # mkdir can have created parents before failing. Never remove them:
+        # another process may already have started using one of those folders.
+        _error(f"Could not create the workspace folder: {exc}")
+    return path
+
+
 def workspace_command(state, action, args):
     initialize(state)
     rows = state["workspaces"]
-    if action == "workspace.add":
-        path = Path(args["path"]).expanduser().resolve()
+    if action in {"workspace.add", "workspace.create"}:
+        path = _create_workspace_folder(args["path"]) if action == "workspace.create" else Path(args["path"]).expanduser().resolve()
         if not path.is_dir():
             _error("Choose an existing workspace folder.")
         name = args.get("name", "").strip()
@@ -94,8 +112,10 @@ def workspace_command(state, action, args):
         existing = next((w for w in rows if w["id"] == row["id"]), None)
         if not existing:
             rows.append(row)
-        elif name:
-            existing["name"] = name
+        else:
+            existing["available"] = True
+            if name:
+                existing["name"] = name
         state["selectedWorkspaceId"] = row["id"]
         state["settings"]["workspace"] = row["path"]
     else:

@@ -7,6 +7,15 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {ModelControl}=await server.ssrLoadModule('/src/chat-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('a new workspace stays idle until its model controls are explicitly opened',async()=>{
+ const calls=[],session={id:'new-workspace-chat',status:'idle',deferRuntimeUntilInteraction:true};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session,act,ensureSession:async()=>session,working:false}))});
+ assert.equal(calls.length,0);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
+ assert.ok(calls.some(call=>call.name==='runtime.control'&&call.args.operation==='configuration.providers'));
+ await renderAct(async()=>root.unmount());
+});
 test('late catalogs and select-to-text replacement both persist through the shared provider action',async()=>{
  const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}},session={id:'chat',status:'idle'};
  let state={view:{composerModel:{open:true,sessionId:'chat',instance:'openai',model:'first'}},runtimeControl:{chat:{}}},root;

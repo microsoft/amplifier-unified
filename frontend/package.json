@@ -9,6 +9,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:settings-browser": "node tests/settings-browser.mjs",
     "test:chat-browser": "node tests/chat-browser.mjs",
+    "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
     "test:history-browser": "node tests/native-history-browser.mjs",
     "test:canvas-browser": "node tests/canvas-browser.mjs",
     "test:message-browser": "node tests/message-browser.mjs",

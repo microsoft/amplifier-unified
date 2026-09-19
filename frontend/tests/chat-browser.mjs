@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'inherit'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
 const browser=await chromium.launch({headless:true});
 const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
@@ -53,7 +53,7 @@ try{
  await action('canvas.close',{});
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).hover();
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
- await page.locator('#nav-workspace').waitFor();
+ await page.locator('.a-workspace-explorer').waitFor();
  await page.getByRole('searchbox',{name:'Filter conversations'}).fill('Settings*');
  assert.equal(await page.locator('.a-nav-chat').count(),1);
  await page.getByRole('searchbox',{name:'Filter conversations'}).fill('no-match*');
