@@ -144,7 +144,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=b3bdab2adcc2a8fe477aca64c20b77528a95e1df#b3bdab2adcc2a8fe477aca64c20b77528a95e1df" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=b6116a6ef79a1803742c1ba73df944e59cd6c95d#b6116a6ef79a1803742c1ba73df944e59cd6c95d" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "pyyaml" },
@@ -182,7 +182,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/bkrabach/amplifier-bundle-context-intelligence?rev=79a6162253c7f8c66e5d2af7e9c8ffcdf38865dd" },
     { name = "amplifier-core", specifier = "==1.6.1" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=b3bdab2adcc2a8fe477aca64c20b77528a95e1df" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=b6116a6ef79a1803742c1ba73df944e59cd6c95d" },
     { name = "cryptography", specifier = ">=44,<46" },
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },

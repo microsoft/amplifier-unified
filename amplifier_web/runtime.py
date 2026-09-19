@@ -48,6 +48,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind == 'runtime.ownership':
+        return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs') if key in event}}
     if kind == "execution.event":
@@ -240,6 +242,11 @@ class RuntimeManager:
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
                         "report": data.get("report", {})})
+                elif data.get("type") == "runtime.ownership":
+                    row['yielded'] = data.get('status') == 'yielded'
+                    row['yielding'] = data.get('status') in {'yielding', 'yield-failed'}
+                    await row['emit']('runtime.ownership', {'sessionId': sid,
+                        **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
                     failure = _worker_error(data)
                     error = str(failure)
@@ -299,6 +306,33 @@ class RuntimeManager:
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
         return await self._request(session["id"], "send", text=text, input_id=input_id, attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+
+    async def takeover(self, session, emit, expected_owner=None, timeout=30):
+        """One deliberate request; a competing successor is never asked to yield."""
+        from amplifier_foundation.session import SharedSessionStore, request_release
+        row = self.workers.get(session['id'])
+        if row and row.get('yielding'):
+            raise RuntimeError('The owner has not finished safe shutdown. Ownership is retained.')
+        if row and row.get('yielded'):
+            await self.stop(session['id'])
+        try:
+            await self.start(session, emit)
+            await self._request(session['id'], 'resume')
+            return
+        except SessionInUseError as busy:
+            if expected_owner and expected_owner.get('acquisition_id') != busy.owner.get('acquisition_id'):
+                raise
+            store = SharedSessionStore(session['workspace'],
+                session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
+            result = await request_release(store, expected_owner=busy.owner, request_id=uuid.uuid4().hex,
+                requester_app='Amplifier Unified', timeout=timeout)
+            # Attempt the real acquisition even if the final reply was lost.
+            try:
+                await self.start(session, emit)
+                await self._request(session['id'], 'resume')
+            except SessionInUseError as current:
+                current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
+                raise current from None
 
     async def approval(self, session_id, approval_id, decision):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)

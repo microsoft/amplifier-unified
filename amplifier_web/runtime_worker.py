@@ -53,6 +53,11 @@ class Worker:
         self.command_lock = asyncio.Lock()
         self.start_config = None
         self.remounting = False
+        if __package__:
+            from .ownership import WorkerOwnership
+        else:
+            from ownership import WorkerOwnership
+        self.ownership = WorkerOwnership(self, lambda data: publish(data))
 
     async def ask(self, prompt, options):
         identity = str(uuid.uuid4())
@@ -248,6 +253,7 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            await self.ownership.register()
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
             self.parked_history_stamp = self.history_stamp()
@@ -281,7 +287,7 @@ class Worker:
         if self.naming and self.naming.pending and not self.naming.pending.done():
             await self.naming.pending
         async with self.command_lock:
-            if self.parked or self.shared_handle is None:
+            if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
             loop = self.session.coordinator.get("orchestrator")
             if (self.approvals or self.bridges or self.runtime.queued_inputs
@@ -345,6 +351,7 @@ class Worker:
         self.shared_handle = handle
         self.activation = self.activation_gate.activate()
         self.parked = False
+        await self.ownership.register()
         publish({"type": "runtime.reactivated", "session_id": self.runtime.session_id,
                  "reused": True})
 
@@ -373,7 +380,7 @@ class Worker:
         return self.activation_gate.bind(self.activation)
 
     def executed(self, task):
-        if self.remounting:
+        if self.remounting or self.ownership.yielding:
             return
         if not task.cancelled():
             error = task.exception()
@@ -385,11 +392,14 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
-        if op not in {"send", "control", "worker.steer", "worker.stop", "approval"}:
+        if op not in {"send", "resume", "control", "worker.steer", "worker.stop", "approval"}:
             await self._command_serial(data)
             return
         try:
             async with self.command_lock:
+                if self.ownership.yielding:
+                    from amplifier_foundation.session import SessionBusyError
+                    raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
                 try:
@@ -420,7 +430,11 @@ class Worker:
                     else:
                         future.set_result(data.get("result"))
                 return
-            if op == "approval":
+            if op == "resume":
+                if not self.session or not self.execution or self.execution.done():
+                    raise RuntimeError('The session has not finished loading successfully.')
+                result = {"accepted": True}
+            elif op == "approval":
                 future, options = self.approvals[data["approval_id"]]
                 if future.done() or data["decision"] not in options:
                     raise ValueError("Approval expired or decision is not offered")
@@ -503,6 +517,8 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
+            if self.ownership.registration:
+                await self.ownership.registration.close()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
                     task.cancel()

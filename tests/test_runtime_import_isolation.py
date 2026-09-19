@@ -17,7 +17,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint):
     package.mkdir(parents=True)
     runtime = tmp_path / "runtime-site-packages"
     runtime.mkdir()
-    for name in (entrypoint, "runtime_protocol.py", "__init__.py", "runtime_bootstrap.py"):
+    for name in (entrypoint, "runtime_protocol.py", "ownership.py", "__init__.py", "runtime_bootstrap.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     (outer / "host_only_dependency.py").write_text("HOST_ONLY = True\n")

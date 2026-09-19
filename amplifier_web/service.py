@@ -53,6 +53,7 @@ ACTION_DEFINITIONS = {
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
+    "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
@@ -433,11 +434,11 @@ class AppService:
             raise AppError(exc.message) from exc
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
-            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
+            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
-                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'configuration.inspect', 'configuration.apply'} else None))
+                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
@@ -461,6 +462,8 @@ class AppService:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
                 checked = self._session(checked_session)
+                if action not in {'session.takeover', 'session.fork', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
+                    raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409)
                 if checked.get('nativeProject'):
                     reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
                     if reason:
@@ -469,7 +472,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -589,6 +592,15 @@ class AppService:
                 session.update(title=args['title'].strip(),titleSource='manual')
                 from .naming import persist
                 persist(self.data_dir,session,shared_rename=True)
+            elif action == 'session.takeover':
+                session = self._session(args['id'])
+                if not self.runtime:
+                    raise AppError('The Amplifier runtime is unavailable.')
+                if session.get('ownership', {}).get('status') in {'taking-over', 'yielding', 'yield-failed'}:
+                    raise AppError('An ownership change is already in progress.', 409)
+                session['ownership'] = {'status': 'taking-over'}
+                session.pop('error', None)
+                pending.append((self._takeover, (copy.deepcopy(session),)))
             elif action == "session.pin":
                 from .session_navigation import is_top_level
                 session = self._session(args['id']) if args['pinned'] else None
@@ -960,6 +972,8 @@ class AppService:
                     )
                 current.update(status="error", error=str(exc))
                 current["lockOwner"] = exc.owner
+                if current.get('ownership', {}).get('status') not in {'yielding', 'yielded', 'yield-failed'}:
+                    current['ownership'] = {'status': 'blocked', 'source': exc.owner.get('app', 'another application')}
                 self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
                     json.dumps({"accepted": False, "error": str(exc), "status": 409}), input_id))
                 self._publish()
@@ -1014,6 +1028,27 @@ class AppService:
                     if turn['id']==turn_id:turn.update(phase='completed',endedAt=time.time())
             self._publish()
 
+    async def _takeover(self, session):
+        from .runtime import SessionInUseError
+        try:
+            await self.runtime.takeover(session, self.on_runtime_event, session.get('lockOwner'))
+            await self.history.load(session['id'])
+            async with self.lock:
+                current = self._session(session['id'])
+                current.pop('lockOwner', None)
+                current.pop('error', None)
+                current['ownership'] = {'status': 'available'}
+                current['status'] = 'ready'
+                self._publish()
+        except Exception as exc:
+            async with self.lock:
+                current = self._session(session['id'])
+                if isinstance(exc, SessionInUseError):
+                    current['lockOwner'] = exc.owner
+                current['ownership'] = {'status': 'blocked', 'source': current.get('lockOwner', {}).get('app', 'another application')}
+                current['error'] = str(exc)
+                self._publish()
+
     async def on_runtime_event(self, kind, payload):
         async with self.lock:
             try:
@@ -1039,6 +1074,12 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+            elif kind == 'runtime.ownership':
+                session['ownership'] = {key: payload[key] for key in ('status', 'source', 'detail') if key in payload}
+                session['status'] = 'read-only'
+                session.pop('lockOwner', None)
+                if payload.get('status') == 'yielded':
+                    finish_execution(session, 'interrupted')
             elif kind == "runtime.status":
                 # Provider requests/retries describe current work; only lifecycle
                 # events or accepted input can start work. Late/background notices
@@ -1136,6 +1177,7 @@ class AppService:
         async with self.lock:
             try:session=self._session(identity)
             except AppError:return
+            if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
             if session.get('historyManaged') or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
             if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
             session['configurationBusy']=True

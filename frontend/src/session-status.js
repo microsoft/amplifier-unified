@@ -1,6 +1,9 @@
 /** Human-readable runtime status; only server-reported progress is displayed. */
+import {ownershipState} from './ownership.js';
 export function sessionStatus(session) {
   if (!session) return {label:'Call it. Text it. Chat with it.',detail:'',busy:false};
+  const ownership=ownershipState(session);
+  if(ownership.blocked)return {label:ownership.label,detail:ownership.detail,busy:false};
   const progress=session.progress;
   const detail=typeof progress==='string'?progress:progress?.message||progress?.detail||progress?.description||'';
   switch(session.status){
