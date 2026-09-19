@@ -23,4 +23,4 @@ See docs/CLI-PARITY.md and docs/UPDATES.md for detailed capability and update bo
 
 Browser visual automation is unavailable due to its administrator-policy verification failure. Real microphone/playback and provider account sign-in were not exercised. Voice transport tests use controlled protocol fixtures. Native notification replies, device sync and STT/agent/TTS fallback remain future work as requested.
 
-The command amplifier-unified coexists with the unrelated amplifier-web tool. Data stays in ~/.amplifier-unified. A reviewed loop-live patch is vendored; an upstream contribution is prepared in docs/loop-live-upstream.
+The command amplifier-unified coexists with the unrelated amplifier-web tool. Data stays in ~/.amplifier-unified. The loop-live implementation is pinned upstream; see docs/loop-live-upstream.

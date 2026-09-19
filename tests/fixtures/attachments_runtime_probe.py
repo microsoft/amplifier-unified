@@ -9,7 +9,6 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'amplifier_web/runtime_deps/vendor/loop-live'))
 from amplifier_core.models import ProviderInfo
 from amplifier_core.message_models import ChatResponse, TextBlock, Usage
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver

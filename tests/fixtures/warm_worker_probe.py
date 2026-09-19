@@ -59,6 +59,7 @@ Reply with the fixture response.
 """
     )
     os.environ.update(
+        AMPLIFIER_HOME=str(root / "amplifier-home"),
         AMPLIFIER_WEB_HOME=str(root / "home"),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
@@ -83,9 +84,12 @@ Reply with the fixture response.
     warm_started = time.monotonic()
     await worker.command({"op": "send", "id": "two-request", "input_id": "two", "text": "two"})
     for _ in range(200):
-        if len([event for event in events if event.get("type") == "assistant.message"]) == 2:
+        if worker.parked and any(event.get("type") == "generation.finished"
+                                 and "two" in event.get("input_ids", []) for event in events):
             break
         await asyncio.sleep(0.02)
+    assert worker.parked and any(event.get("type") == "generation.finished"
+                                 and "two" in event.get("input_ids", []) for event in events), events
     warm_seconds = time.monotonic() - warm_started
     from amplifier_foundation.session.history import SessionHistoryStore
     from amplifier_web.session_files import sessions_dir

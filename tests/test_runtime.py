@@ -77,33 +77,6 @@ class NormalizationTests(unittest.TestCase):
 
 
 class WorkerActivityTests(unittest.TestCase):
-    def test_inbox_completion_carries_producer_activation_not_loop_startup(self):
-        import importlib.util
-        path = Path(__file__).parents[1] / "amplifier_web/runtime_deps/vendor/loop-live/amplifier_module_loop_live/runtime.py"
-        spec = importlib.util.spec_from_file_location("warm_runtime_fixture", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-            gate = ActivationGate()
-            runtime = module.Runtime("fixture")
-            runtime.capture_activation = gate.current
-            first = gate.activate()
-            runtime.inbox.put_nowait(("bundle_turn", ("old", None)))
-            gate.release(first)
-            second = gate.activate()
-            runtime.inbox.put_nowait(("bundle_turn", ("new", None)))
-            old, current = runtime.inbox.get_nowait(), runtime.inbox.get_nowait()
-            self.assertIs(old.activation, first)
-            self.assertIs(current.activation, second)
-            with self.assertRaisesRegex(RuntimeError, "released or superseded"):
-                gate.bind(old.activation)
-            gate.bind(current.activation)
-            gate.check_current()
-            self.assertEqual(tuple(current), ("bundle_turn", ("new", None)))
-        finally:
-            sys.modules.pop(spec.name, None)
-
     def test_activation_gate_rejects_a_callback_from_before_park(self):
         gate = ActivationGate()
         first = gate.activate()

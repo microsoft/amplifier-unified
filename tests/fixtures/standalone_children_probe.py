@@ -3,13 +3,15 @@ import asyncio
 from dataclasses import dataclass
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 
 repo = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo))
-sys.path.insert(0, str(repo.parent / "repos/amplifier-foundation/modules/tool-delegate"))
+foundation = Path(os.environ.get("WARM_FOUNDATION_PATH", repo.parent / "repos/amplifier-foundation"))
+sys.path.insert(0, str(foundation / "modules/tool-delegate"))
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
 from amplifier_module_loop_live.runtime import Runtime
 from amplifier_web.host.children import install_children, child_plan, StandaloneHostAdapter

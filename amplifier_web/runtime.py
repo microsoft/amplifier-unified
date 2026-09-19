@@ -129,19 +129,9 @@ class RuntimeManager:
         generation = release if release is not None else active_release(home).get("current")
         if generation:
             digest.update(generation.encode())
-        vendor = manifest.parent / "vendor"
-        files = sorted(path for path in vendor.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
-        for path in files:
-            digest.update(str(path.relative_to(vendor)).encode())
-            digest.update(path.read_bytes())
         cache = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")) / "runtime" / digest.hexdigest()[:16]
         cache.mkdir(parents=True, exist_ok=True)
         (cache / "pyproject.toml").write_bytes(content)
-        for source in files:
-            target = cache / "vendor" / source.relative_to(vendor)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists() or target.read_bytes() != source.read_bytes():
-                shutil.copy2(source, target)
         return [uv, "run", "--project", str(cache), "--python", "3.13", "python", str(worker)]
 
     async def start(self, session: dict, emit: Emitter):

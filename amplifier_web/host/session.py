@@ -12,8 +12,7 @@ import stat
 from .config import expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
-VENDORED_LOOP = Path(__file__).resolve().parents[1] / "runtime_deps" / "vendor" / "loop-live"
-LOOP_SOURCE = str(VENDORED_LOOP) if (VENDORED_LOOP / "pyproject.toml").exists() else "git+https://github.com/bkrabach/amplifier-module-loop-live@bb9f5966d285ee4a93f4d84309aacf4bd9a09b5a"
+LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@3ceb44ee6fb0476461c9b03c4a3e76e866f2f9b1"
 
 
 def redact(value):

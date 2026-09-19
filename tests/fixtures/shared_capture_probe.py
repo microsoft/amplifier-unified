@@ -9,7 +9,7 @@ import tempfile
 
 repo = Path(__file__).resolve().parents[2]
 ci = Path(sys.argv[1]).resolve()
-sys.path[:0] = [str(repo), str(ci), str(repo / 'amplifier_web/runtime_deps/vendor/loop-live')]
+sys.path[:0] = [str(repo), str(ci)]
 
 from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
 from amplifier_foundation.session.store import load_transcript

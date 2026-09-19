@@ -1,5 +1,18 @@
-Prepared upstream change against bkrabach/amplifier-module-loop-live bb9f5966d285ee4a93f4d84309aacf4bd9a09b5a.
+# Upstream loop-live
 
-This patch adds portable, identified manager-turn completion, distinct delivered and accepted inputs, and active-job metadata. Core tests use fixtures (28 passed); no voice provider claim follows from these tests. The application packages the modified core source in runtime_deps/vendor/loop-live until an upstream reviewed commit can replace it.
+Unified uses `bkrabach/amplifier-module-loop-live` version 0.2.0, pinned to
+`3ceb44ee6fb0476461c9b03c4a3e76e866f2f9b1` in both the isolated runtime and bundle overlay.
+The implementation is no longer copied into this repository.
 
-Apply with git apply identified-generation-completion.patch in that base checkout. No push or pull request has been created.
+[Upstream PR](https://github.com/bkrabach/amplifier-module-loop-live/pull/1)
+promotes generation completion/input correlation and optional host ownership
+with idle parking. Its tests also protect duplicate input receipts across
+ownership changes and explicit failure for invalid admission tokens.
+
+The upstream repository owns the generation/ownership contracts and portable
+tests. Unified retains real Core/Foundation integration probes for shared
+history, warm workers, attachments, canvas, and delegation. The host still
+chooses storage, locking, approvals, and when a parked session must reload.
+
+To update the dependency, change both immutable pins together and run those
+probes; do not reintroduce a private copy of the orchestrator.

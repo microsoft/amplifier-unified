@@ -21,8 +21,10 @@ def test_actual_worker_parks_and_reuses_with_real_shared_state(tmp_path):
     result = subprocess.run(
         [uv, "run", "--project", str(ROOT / "amplifier_web/runtime_deps"),
          "--with", foundation, "python", str(ROOT / "tests/fixtures/warm_worker_probe.py"), str(tmp_path)],
-        cwd=ROOT, text=True, capture_output=True, timeout=180, check=True,
+        cwd=ROOT, text=True, capture_output=True, timeout=180,
+        env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(tmp_path / "runtime-env")},
     )
+    assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
     assert evidence["same_mounted_session"] is True
     assert evidence["two_authoritative_turns"] is True
