@@ -19,13 +19,21 @@ def remember(state, db):
     if 'messageId' not in canvas:
         canvas['messageId'] = next((m['id'] for m in reversed(session.get('messages', [])) if m.get('role')=='user' and m.get('id')), None)
     canvas.setdefault('createdAt', time.time())
-    body = {key:canvas[key] for key in ('content','surface','mcp') if key in canvas}
-    serialized = json.dumps(body, ensure_ascii=False)
-    identity = hashlib.sha256(serialized.encode()).hexdigest()
-    db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (identity,serialized))
+    reference=canvas.get('contentResource')
+    if not reference:
+        body = {key:canvas[key] for key in ('content','surface','mcp') if key in canvas}
+        serialized = json.dumps(body, ensure_ascii=False)
+        identity = hashlib.sha256(serialized.encode()).hexdigest()
+        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (identity,serialized))
+        reference={'$resource':identity, 'bytes':len(serialized.encode())}
+        if canvas.get('kind') in {'html','babylon'} and len(canvas.get('content','').encode())>1_000_000:
+            # The immutable snapshot stays in the artifact store, not SSE, action
+            # receipts, the agent context, or every subsequent state write.
+            canvas['contentResource']=reference
+            canvas.pop('content',None)
     previous = next((r for r in rows if r['id']==canvas['id']), None)
-    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView') if key in canvas}
-    record['body'] = {'$resource':identity, 'bytes':len(serialized.encode())}
+    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource') if key in canvas}
+    record['body'] = copy.deepcopy(reference)
     record['tabOpen'] = previous.get('tabOpen', True) if previous else True
     if previous:
         previous.update(record)
@@ -42,7 +50,7 @@ def load(state, db, identity, *, open_panel=True):
     row = next((r for r in state.get('canvasArtifacts',[]) if r['id']==identity and scope(state,r)), None)
     if not row:
         raise AppError('This artifact belongs to another chat or is no longer available.')
-    canvas = {**copy.deepcopy(row), **resource(db,row['body']['$resource']), 'open':open_panel, 'renderReports':{}}
+    canvas = {**copy.deepcopy(row), **({} if row.get('contentResource') else resource(db,row['body']['$resource'])), 'open':open_panel, 'renderReports':{}}
     canvas.pop('body',None)
     canvas.pop('tabOpen',None)
     row['tabOpen'] = True

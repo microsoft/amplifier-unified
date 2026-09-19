@@ -88,8 +88,13 @@ state overview rather than repeating the entire app state. `canvas.show` accepts
 | `a2ui` | Declarative component snapshot, described below |
 
 Use `content` or a UTF-8 `path` inside the selected workspace. Symlinks may not
-escape that folder. Text is bounded to 1 MB, images to 5 MB and diagrams to 50,000
-characters. Graphviz runs in a terminable browser worker with a 15 second timeout;
+escape that folder. Inline content and ordinary text files are bounded to 1 MB,
+images to 5 MB and diagrams to 50,000 characters. HTML and Babylon.js **files**
+may be up to 20 MB (20,000,000 bytes). HTML over 1 MB is saved separately in the
+artifact store and fetched only by the preview, source viewer, copy, or download.
+It keeps the same opaque sandbox and does not inflate regular app-state updates.
+For larger pages or apps with linked assets, serve them from a web server and use
+a reachable HTTPS URL, or open the file separately in your browser. Graphviz runs in a terminable browser worker with a 15 second timeout;
 Mermaid limits graph size. Both libraries are bundled: no CDN or Graphviz install
 is needed. Graph SVG is sanitized and displayed as an inert image.
 
@@ -99,7 +104,7 @@ data filtering use `canvas.view` and are visible to the agent. Copy/download use
 for agent and user actions. Clipboard availability depends on browser permissions.
 Graph layout defaults can be overridden by authored DOT attributes.
 
-`canvas.renderReports` records pending, ready or error for each preview/diagram
+`canvas.renderReports` records pending, ready, unverified or error for each preview/diagram
 fence. The agent must distinguish a submitted artifact from a browser-confirmed
 render. Replaced artifacts ignore late reports. Reports are display evidence, not
 proof of correctness. A browser must be connected to render the content.
@@ -167,7 +172,8 @@ persisted equally. Each publication is a separate snapshot. File changes are
 not watched; publish the path again to save a newer snapshot.
 
 `canvasArtifacts` contains metadata and `$resource` body references. Only the
-active `canvas` body is included in ordinary browser state; the agent overview
+active `canvas` body is included in ordinary browser state, except HTML over 1 MB,
+which carries a `contentResource` reference instead; the agent overview
 contains a bounded current-chat index. `get_state` can page a saved body, for
 example `/canvasArtifacts/0/body/content`. `canvas.select {id}` reopens a saved
 item, `canvas.tabClose {id}` closes only its tab, and `canvas.reopen` opens the
@@ -196,8 +202,21 @@ inaccessible. Unlike authored HTML previews, it can load external website assets
 it cannot report document contents or controls through `canvas.snapshot`.
 
 Reload is a shared `canvas.view` control. `canvas.openExternal {id}` requests a
-regular browser tab (browser popup permissions may apply). Frame navigation
-reports do not prove embedding was allowed or that the app succeeded. Some sites
+regular browser tab (browser popup permissions may apply). **Open in browser**
+and **Preview help** stay visible even with collapsed canvas controls. Help is a
+shared `canvas.view {id, patch: {help: true}}` control.
+
+An HTTPS host detects and explains blocked HTTP embeds before loading them
+(loopback addresses have browsers' secure-context exception). Prefer a reachable
+HTTPS URL or open the HTTP URL in a separate tab. A loopback address names the
+viewing device, not necessarily the machine running Amplifier; remote users
+should use the service host's LAN or Tailnet address. The app warns about this.
+
+Frame navigation reports are `unverified`: an iframe load event does not prove
+embedding was allowed or that the app succeeded. Cross-origin browser security
+prevents reliably distinguishing every network, authentication, or frame-policy
+failure; an unresponsive or blank preview always retains the external fallback.
+Some sites
 block frames, and storage/cookie/API-dependent apps may need the external browser.
 No embedding restrictions are bypassed or proxied. See the
 [iframe sandbox reference](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe).

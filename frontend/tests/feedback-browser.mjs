@@ -26,7 +26,7 @@ feedback.github_api=github_api
 feedback.shutil.which=lambda name:'/fixture/gh'
 async def create_issue(title, body):
  calls.append({'title':title,'body':body})
- await asyncio.sleep(.15)
+ await asyncio.sleep(1.5)
  return feedback.ISSUES_URL+'/42'
 feedback.create_issue=create_issue
 async def main():
@@ -86,8 +86,10 @@ try{
  assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
  await page.setViewportSize({width:1280,height:900});
  await page.getByRole('dialog').getByRole('button',{name:'Send feedback',exact:true}).click();
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByText('Feedback received — sending in the background.',{exact:true}).waitFor();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
- assert.equal(await page.locator('.a-feedback .a-check-result.success').count(),1);
+ assert.equal(await page.locator('.a-feedback-notice .a-check-result.success').count(),1);
  assert.equal(await page.getByRole('link',{name:'View issue'}).getAttribute('href'),'https://github.com/bkrabach/amplifier-unified/issues/42');
  await page.screenshot({path:'/tmp/amplifier-feedback-desktop.png'});
  const saved=await page.evaluate(()=>window.amplifier.getState().view.feedbackDraft.pending);
@@ -96,7 +98,6 @@ try{
  assert.equal(calls.uploads.filter(call=>call.endpoint.endsWith('/git/blobs')).length,3);
  assert.match(calls.calls[0].body,/picked-image\.png/);assert.match(calls.calls[0].body,/pasted-image\.png/);assert.match(calls.calls[0].body,/dropped\.txt/);assert.doesNotMatch(calls.calls[0].body,/agent\.txt/);
  assert.equal(saved.attachmentIds.length,3);
- await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/amplifier-feedback-narrow.png'});

@@ -301,13 +301,35 @@ authored HTML previews retain their existing bounded document/control bridge.
 
 ## Install the web app
 
+### Ready for you
+
+The **Activity** bell lists completed chats and other items awaiting review.
+Completion badges appear on each chat, its workspace, the collapsed navigation
+icon, and Activity. They survive reconnects and restarts. A focused browser marks
+a response read after the end of its chat is visible; a hidden tab, a scrolled-back
+reader, a modal, or a focused canvas keeps the marker. Selecting a chat alone does
+not acknowledge it. **Mark reviewed** is also available explicitly.
+
+Agents see the same `/attention` items and per-session/workspace counts, open
+Activity with `view.update {patch: {panel: "activity"}}`, and acknowledge with
+`attention.read`. Pass both `ids` and the observed `fingerprints` map to avoid
+clearing a newer completion. A marker records a finished manager response with
+no delegated jobs outstanding, not partial text or a worker's intermediate result.
+New markers apply to completions received after this upgrade; historical chats
+are not all marked unread retroactively.
+
 ### Send feedback
 
 Use **Send feedback** in the app header to submit a bug report, idea, or question
 as an issue in the private `bkrabach/amplifier-unified` repository. The host uses
 its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
 access. Review the title and details, then send. The result includes a link to
-the created issue. No label configuration is required.
+the created issue. No label configuration is required. After durable acceptance,
+the dialog closes and a small notice confirms that sending continues in the
+background. The notice changes to success, failure, or an uncertain outcome;
+results also remain in **Activity** and the feedback **Submissions** list. Opening
+other views does not cancel delivery. Mark a result reviewed to dismiss its notice.
+You can start a new draft while an accepted submission finishes.
 
 Use **Add files or images**, drop files on the feedback form, or paste an image.
 Previews show the included files; remove any you do not want to send. Staging is
