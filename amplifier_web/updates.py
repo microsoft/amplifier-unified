@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import time
+import tomllib
 from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
@@ -101,19 +102,38 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
     return CommandOutput(stdout.decode(errors='replace').strip(),command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
 
 
+# Content identity of the reviewed wiki-weaver hook, NOT a dependency/revision pin.
+# Unknown hook implementations remain protected until separately reviewed.
+_WIKI_VERSION_HOOK_SHA256 = 'd0733aa7fecaadf307fdeb42dd202c4fec1a8255e56b24bb23777cbd003620f3'
+_WIKI_VERSION_HEADER = b'''"""Single source of truth for the wiki-weaver package version.
+
+Kept as a leaf module with no imports so that any submodule can safely
+import __version__ without risk of triggering a circular import through
+the wiki_weaver package __init__.
+
+This value is baked in at wheel-build time by the git-version hatchling
+build hook (see hatch_build.py at the repo root) -- it is the commit date
++ short SHA of the exact commit this wheel was built from, not the build
+date. Do not hand-edit; it is overwritten on the next build.
+"""
+
+'''
+
+
 async def cache_changes(root):
     """Return protected changes and proven cache artifacts, without editing files.
 
     Imported caches used to flatten symlinks, and some upstreams track generated
-    bytecode. Only their unstaged, exactly verified forms may be restored later,
+    bytecode. Wiki-weaver's reviewed build hook also bakes a version into source.
+    Only unstaged, exactly verified generated forms may be restored later,
     inside an isolated staging copy. Untracked files are never removed.
     """
     root = Path(root).resolve()
-    records = (await process('git','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
+    records = (await process('git','--no-optional-locks','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
     protected, artifacts = [], []
 
-    async def head_entry(path):
-        value = await process('git','--literal-pathspecs','ls-tree','-z','HEAD','--',path,cwd=root,timeout=10,raw=True)
+    async def head_entry(path, revision='HEAD'):
+        value = await process('git','--literal-pathspecs','ls-tree','-z',revision,'--',path,cwd=root,timeout=10,raw=True)
         entries = value.split(b'\0')
         if len(entries)!=2 or not entries[0]:return None
         metadata, name = entries[0].split(b'\t',1)
@@ -132,6 +152,46 @@ async def cache_changes(root):
     def bytecode_header(value):
         return len(value)>=16 and value[2:4]==b'\r\n' and int.from_bytes(value[4:8],'little')&~3==0
 
+    async def wiki_generated_version():
+        # Never execute/import a cached hook or evaluate Python source. Verify its
+        # exact reviewed bytes and reproduce only that implementation's output.
+        version_path = 'wiki_weaver/_version.py'
+        originals = {}
+        try:
+            captured = await process('git','rev-parse','--verify','HEAD^{commit}',cwd=root,timeout=10,raw=True)
+            if not re.fullmatch(rb'(?:[0-9a-f]{40}|[0-9a-f]{64})\n',captured):return False
+            revision = captured[:-1].decode('ascii')
+            for name in (version_path, 'hatch_build.py', 'pyproject.toml'):
+                entry = await head_entry(name, revision)
+                if not entry or entry[0] not in {'100644','100755'} or not regular(name,entry[0]):return False
+                mode, identity = entry
+                indexed = await process('git','--literal-pathspecs','ls-files','--stage','-z','--',name,cwd=root,timeout=10,raw=True)
+                if indexed != f'{mode} {identity} 0\t{name}\0'.encode():return False
+                original = await process('git','cat-file','blob',identity,cwd=root,timeout=10,raw=True)
+                if name != version_path and (root/name).read_bytes() != original:return False
+                originals[name] = original
+            if hashlib.sha256(originals['hatch_build.py']).hexdigest() != _WIKI_VERSION_HOOK_SHA256:return False
+            project = tomllib.loads(originals['pyproject.toml'].decode('utf-8'))
+            if project['project']['name'] != 'wiki-weaver':return False
+            if project['build-system'] != {'requires':['hatchling'], 'build-backend':'hatchling.build'}:return False
+            if project['tool']['hatch']['build']['hooks']['custom'] != {'path':'hatch_build.py'}:return False
+            original = originals[version_path]
+            if not original.startswith(_WIKI_VERSION_HEADER):return False
+            if not re.fullmatch(rb'__version__ = "[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9a-f]{4,64}"\n',original[len(_WIKI_VERSION_HEADER):]):return False
+            # Match the hook's actual Git semantics (including core.abbrev), not
+            # an assumed seven-character prefix or a wall-clock/author date.
+            # Bind all awaited reads to one commit; a moving HEAD cannot mix
+            # one commit's tree/date with another commit's abbreviation.
+            date = await process('git','log','-1','--format=%cd','--date=format:%Y.%m.%d',revision,cwd=root,timeout=10,raw=True)
+            sha = await process('git','rev-parse','--short',revision,cwd=root,timeout=10,raw=True)
+            if not re.fullmatch(rb'[0-9]{4}\.[0-9]{2}\.[0-9]{2}\n',date):return False
+            if not re.fullmatch(rb'[0-9a-f]{4,64}\n',sha) or not captured[:-1].startswith(sha[:-1]):return False
+            expected = _WIKI_VERSION_HEADER + b'__version__ = "' + date[:-1] + b'-' + sha[:-1] + b'"\n'
+            if (root/version_path).read_bytes() != expected:return False
+            return await process('git','rev-parse','--verify','HEAD^{commit}',cwd=root,timeout=10,raw=True) == captured
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, TimeoutError):
+            return False
+
     index = 0
     while index<len(records):
         record=records[index];index+=1
@@ -141,6 +201,10 @@ async def cache_changes(root):
         if 'R' in change or 'C' in change:index+=1
         if change not in {' M',' T'}:
             protected.append(path);continue
+        if path=='wiki_weaver/_version.py':
+            generated=change==' M' and await wiki_generated_version()
+            (artifacts if generated else protected).append(path)
+            continue
         entry=await head_entry(path)
         if not entry or not regular(path):
             protected.append(path);continue
