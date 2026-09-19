@@ -9,6 +9,7 @@ update activation, persisted receipts, and readiness reconciliation are real.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import shutil
 import os
@@ -26,6 +27,32 @@ CMD [\"/sbin/init\"]
 """
 
 
+def wait_for_systemd(docker, name, *, timeout=60):
+    """The container can be running before systemd exposes its D-Bus socket."""
+    deadline = time.monotonic() + timeout
+    last_probe = 'No response from systemd yet'
+    while time.monotonic() < deadline:
+        try:
+            probe = docker("exec", name, "systemctl", "show", "--property=SystemState", "--value",
+                           check=False, capture_output=True, text=True, timeout=5)
+            status = probe.stdout.strip()
+            if probe.returncode == 0 and status in {"running", "degraded"}:
+                return
+            last_probe = f"exit {probe.returncode}: {(probe.stderr or probe.stdout).strip()[-1000:]}"
+        except subprocess.TimeoutExpired:
+            last_probe = 'systemctl probe timed out'
+        # An unavailable bus is transient; an exited PID 1 will never recover.
+        state = docker("inspect", "--format", "{{json .State}}", name,
+                       check=False, capture_output=True, text=True, timeout=5)
+        if state.returncode != 0:
+            raise RuntimeError("Cannot inspect disposable systemd container: " + state.stderr.strip())
+        container = json.loads(state.stdout)
+        if container.get('Status') in {'exited', 'dead'} or container.get('OOMKilled'):
+            raise RuntimeError("Disposable systemd container stopped during boot: " + json.dumps(container))
+        time.sleep(.5)
+    raise RuntimeError("Disposable systemd manager did not become ready: " + last_probe)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--docker", default=shutil.which("docker"), help="Docker executable")
@@ -35,22 +62,15 @@ def main():
     root = Path(__file__).resolve().parents[1]
     name = "amplifier-update-test-" + uuid.uuid4().hex[:12]
 
-    def docker(*command, **kwargs):
-        return subprocess.run([args.docker, *command], check=True, **kwargs)
+    def docker(*command, check=True, **kwargs):
+        return subprocess.run([args.docker, *command], check=check, **kwargs)
 
     docker("build", "-t", IMAGE, "-", input=DOCKERFILE, text=True)
     docker("run", "-d", "--name", name, "--privileged", "--cgroupns=private",
            "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
            "--mount", f"type=bind,source={root},target=/src,readonly", IMAGE)
     try:
-        for _ in range(60):
-            status = docker("exec", name, "systemctl", "show", "--property=SystemState", "--value",
-                            capture_output=True, text=True).stdout.strip()
-            if status in {"running", "degraded"}:
-                break
-            time.sleep(.5)
-        else:
-            raise RuntimeError("Disposable systemd manager did not boot")
+        wait_for_systemd(docker, name)
         docker("exec", name, "useradd", "-m", "-u", "1234", "updater")
         docker("exec", name, "loginctl", "enable-linger", "updater")
         docker("exec", name, "systemctl", "start", "user@1234.service")
@@ -68,6 +88,13 @@ def main():
                "--env", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1234/bus", name,
                "/opt/test/bin/python", "/src/tests/fixtures/systemd_update_service.py", "exercise")
     except BaseException:
+        # These work even if PID 1 exited before journald or D-Bus came up. State
+        # only, not full inspect (which can contain environment variables).
+        subprocess.run([args.docker, "inspect", "--format", "{{json .State}}", name], check=False)
+        subprocess.run([args.docker, "logs", "--tail", "120", name], check=False)
+        subprocess.run([args.docker, "exec", name, "/usr/local/bin/python", "-c",
+                        "from pathlib import Path; print(Path('/proc/1/cgroup').read_text()); "
+                        "print(''.join(line for line in Path('/proc/1/mountinfo').read_text().splitlines(True) if ' - cgroup' in line))"], check=False)
         subprocess.run([args.docker, "exec", name, "journalctl", "--no-pager", "-n", "120",
                         "_SYSTEMD_USER_UNIT=amplifier-unified.service", "+", "_SYSTEMD_UNIT=user@1234.service"], check=False)
         raise
