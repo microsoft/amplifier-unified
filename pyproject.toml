@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
     "amplifier-core==1.6.1",
-    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@b6116a6ef79a1803742c1ba73df944e59cd6c95d",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@695f875c0908f45f8dc78b1fcde80ecddebffd7c",
     "aiohttp>=3.12,<4",
     "cryptography>=44,<46",
     "python-pam>=2.0.2,<3",
