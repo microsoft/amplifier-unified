@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createPendingView} from '../src/pending-view.js';
+
+test('navigation paints without changing the authoritative snapshot or session data',()=>{
+ const pending=createPendingView(),state={revision:1,view:{panel:null},sessions:[{id:'chat',messages:[]}]};
+ const token=pending.add({panel:'settings'}),shown=pending.apply(state);
+ assert.equal(shown.view.panel,'settings');assert.equal(state.view.panel,null);
+ assert.equal(shown.sessions,state.sessions);assert.equal(shown.revision,1);
+ pending.settle(token);assert.equal(pending.apply(state),state);
+});
+
+test('acknowledging an older navigation keeps a newer choice and unrelated pending fields',()=>{
+ const pending=createPendingView(),state={view:{panel:null,settingsSection:'setup'}};
+ const open=pending.add({panel:'settings'}),section=pending.add({settingsSection:'maintenance'}),close=pending.add({panel:null});
+ pending.settle(open);
+ const acknowledged={...state,view:{...state.view,panel:'settings'}};
+ assert.deepEqual(pending.apply(acknowledged).view,{panel:null,settingsSection:'maintenance'});
+ pending.settle(section);pending.settle(close);
+ const final={view:{panel:null,settingsSection:'maintenance'}};assert.equal(pending.apply(final),final);
+});
+
+test('failed older patches roll back only themselves, including repeated values',()=>{
+ const pending=createPendingView(),state={view:{panel:null,settingsSection:'setup'}};
+ const first=pending.add({panel:'settings',settingsSection:'maintenance'}),second=pending.add({panel:'settings'});
+ pending.settle(first);
+ assert.deepEqual(pending.apply(state).view,{panel:'settings',settingsSection:'setup'});
+ pending.settle(second);assert.equal(pending.apply(state),state);
+});
+
+test('SSE updates keep pending intent while preserving newer shared data',()=>{
+ const pending=createPendingView(),token=pending.add({panel:'settings'});
+ const streamed={revision:8,view:{panel:'activity',draft:'Agent draft'},sessions:[{id:'chat',streaming:'New response'}]};
+ assert.deepEqual(pending.apply(streamed).view,{panel:'settings',draft:'Agent draft'});
+ assert.equal(pending.apply(streamed).sessions,streamed.sessions);
+ pending.settle(token);assert.equal(pending.apply(streamed),streamed,'a rejected action returns to the latest shared state');
+});
+
+test('matching server values do not acknowledge a still-queued later request',()=>{
+ const pending=createPendingView(),older=pending.add({panel:null}),later=pending.add({panel:'settings'});
+ assert.equal(pending.apply({view:{panel:'settings'}}).view.panel,'settings');
+ pending.settle(older);
+ assert.equal(pending.apply({view:{panel:null}}).view.panel,'settings');
+ pending.settle(later);assert.equal(pending.apply({view:{panel:null}}).view.panel,null);
+});

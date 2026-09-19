@@ -160,3 +160,32 @@ test('matching server projection wins over partial local summaries and stale sco
  state.view.navFilter='';state.view.navChatScope='workspace';
  assert.equal(chatPage(state).items[0].id,'chat-0');
 });
+
+test('bounded headers retain complete counts and selected choices from their own projection',()=>{
+ const state=fixture(),projection={items:[{id:'selected-off-page',title:'Selected'}],total:5000};
+ state.sessions=[];state.headerChatNavigation=projection;state.library={bounded:true};
+ assert.equal(headerChatChoices(state),projection);
+});
+
+test('bounded navigation waits for the real page after optimistic search, scope, or page changes',()=>{
+ const state=fixture(),first=chatPage(state);state.chatNavigation=first;state.library={bounded:true};state.sessions=state.sessions.slice(0,100);
+ assert.equal(chatPage(state),first);
+ state.view.navChatPage={...first.scope,index:1};
+ assert.equal(chatPage(state).pending,true);assert.deepEqual(chatPage(state).items,[]);
+ state.chatNavigation={...first,index:1,start:100,end:200,items:[{id:'from-next-page'}]};
+ assert.equal(chatPage(state),state.chatNavigation);
+ state.view.navFilter='outside the published page';assert.equal(chatPage(state).pending,true);
+ state.view.navFilter='';state.view.navChatScope='all';assert.equal(chatPage(state).pending,true);
+});
+
+test('subagent projection keeps complete counts and waits for changed searches and pages',async()=>{
+ const {subagentPage,subagentCount}=await import('../src/chat-navigation.js');
+ const parent={id:'root',subagentCount:123},projection={items:[{id:'first'}],total:123,unfilteredTotal:123,index:0,pages:3,start:0,end:50,scope:{sessionId:'root',filter:''}};
+ const state={library:{bounded:true},sessions:[parent],view:{},subagentNavigation:projection};
+ assert.equal(subagentCount(state,parent),123);assert.equal(subagentPage(state,parent),projection);
+ state.view.subagentHistory={sessionId:'root',filter:'research',index:0};assert.equal(subagentPage(state,parent).pending,true);
+ state.subagentNavigation={...projection,scope:{sessionId:'root',filter:'research'},total:60,unfilteredTotal:123,pages:2};
+ assert.equal(subagentPage(state,parent),state.subagentNavigation);assert.equal(subagentCount(state,parent),123);
+ state.view.subagentHistory.index=1;assert.equal(subagentPage(state,parent).pending,true);
+ const other={id:'different-root',subagentCount:5};assert.equal(subagentCount(state,other),5,'a previously browsed parent cannot hide the current parent’s workers');
+});

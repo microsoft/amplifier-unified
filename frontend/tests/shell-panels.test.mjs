@@ -101,6 +101,16 @@ test('registration removal requires explicit confirm and preserves unrelated cha
  await renderAct(async()=>root.unmount());
 });
 
+test('bounded workspace registrations use the full catalog count for removal availability',async()=>{
+ const state=initial();state.workspaces=state.workspaces.slice(0,1);state.library={bounded:true,workspaceCount:3000};let root;
+ const render=()=>React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})});
+ await renderAct(async()=>{root=create(render())});
+ assert.equal(root.root.findByProps({'aria-label':'Remove workspace registration'}).props.disabled,false);
+ state.library.workspaceCount=1;await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByProps({'aria-label':'Remove workspace registration'}).props.disabled,true);
+ await renderAct(async()=>root.unmount());
+});
+
 test('A2UI button records exactly the declared action while text stays inert',async()=>{
  const calls=[],surface={surfaceId:'plan',root:'root',components:[{id:'root',component:{Column:{children:{explicitList:['intro','button']}}}},{id:'intro',component:{Text:{text:{literalString:'<script>window.evil=true</script>'}}}},{id:'button',component:{Button:{child:'label',action:{name:'review'}}}},{id:'label',component:{Text:{text:{literalString:'Review plan'}}}}]};let root;
  await renderAct(async()=>{root=create(React.createElement(A2UISurface,{surface,act:async(name,args)=>calls.push({name,args})}))});

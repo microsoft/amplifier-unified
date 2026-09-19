@@ -62,8 +62,14 @@ async def run(args, *, config=None):
                                                     server_config=config))
             await runner.setup(); site = web.TCPSite(runner, "127.0.0.1", 0); await site.start()
             port = site._server.sockets[0].getsockname()[1]; base = f"http://127.0.0.1:{port}"
-        async def state():
-            async with client.get(base+'/api/state') as response:return await response.json()
+        async def state(identity=None):
+            # A browser may switch chats while this terminal command is running.
+            # Ask for its explicit target without changing the shared selection.
+            async with client.get(base+'/api/state', params={'sessionId':identity} if identity else {}) as response:
+                payload = await response.json()
+                if response.status >= 400:
+                    raise RuntimeError(payload.get('error', 'Cannot read the target conversation'))
+                return payload
         async def dispatch(action,values):
             identity=str(uuid.uuid4())
             async with client.post(base+'/api/actions',json={'action':action,'args':values,'id':identity}) as response:
@@ -80,12 +86,12 @@ async def run(args, *, config=None):
                     print('Allow this operation? [y/N] ',end='',file=sys.stderr,flush=True)
                     answer=await asyncio.to_thread(sys.stdin.readline)
                     decision='allow' if answer.strip().lower() in {'y','yes'} else 'deny'
-                await dispatch('approval.respond',{'id':approval['id'],'decision':decision})
+                await dispatch('approval.respond',{'sessionId':identity,'id':approval['id'],'decision':decision})
 
         async def control(identity,operation,values):
             receipt=await dispatch('runtime.control',{'sessionId':identity,'operation':operation,'args':values})
             while True:
-                snapshot=await state();management=snapshot.get('managementResults',{}).get(receipt['commandId'],{})
+                snapshot=await state(identity);management=snapshot.get('managementResults',{}).get(receipt['commandId'],{})
                 await answer_approvals(snapshot,identity)
                 if management.get('phase')=='error':raise RuntimeError(management.get('error'))
                 value=snapshot.get('runtimeControl',{}).get(identity,{}).get(operation)
@@ -95,9 +101,12 @@ async def run(args, *, config=None):
             snapshot=await state()
             identity=getattr(args,'resume',None)
             if args.command=='continue' and not identity:
-                roots=[s for s in snapshot['sessions'] if is_top_level(s)]
-                selected=snapshot.get('selectedSessionId')
-                identity=next((s['id'] for s in roots if s['id']==selected),roots[0]['id'] if roots else None)
+                if snapshot.get('library', {}).get('bounded'):
+                    identity = snapshot['library']['continueSessionId']
+                else:
+                    roots=[s for s in snapshot['sessions'] if is_top_level(s)]
+                    selected=snapshot.get('selectedSessionId')
+                    identity=next((s['id'] for s in roots if s['id']==selected),roots[0]['id'] if roots else None)
             if identity:await dispatch('session.select',{'id':identity})
             else:
                 result=await dispatch('session.create',{'title':getattr(args,'prompt','')[:70] or 'Terminal task','workspace':args.workspace,'bundle':getattr(args,'bundle',None) or snapshot['settings']['bundle']})
@@ -112,11 +121,11 @@ async def run(args, *, config=None):
             if not prompt and not sys.stdin.isatty():prompt=sys.stdin.read()
             if not prompt.strip():raise ValueError('Provide a prompt or pipe text into this command')
             receipt=await dispatch('conversation.send',{'sessionId':identity,'text':prompt,'via':'chat'})
-            submitted=receipt['state']['sessions'];session=next(s for s in submitted if s['id']==identity)
+            submitted=(await state(identity))['sessions'];session=next(s for s in submitted if s['id']==identity)
             baseline=next(i+1 for i,m in enumerate(session['messages']) if m.get('inputId')==receipt['commandId'])
             async with asyncio.timeout(args.timeout):
                 while True:
-                    snapshot=await state();session=next(s for s in snapshot['sessions'] if s['id']==identity)
+                    snapshot=await state(identity);session=next(s for s in snapshot['sessions'] if s['id']==identity)
                     await answer_approvals(snapshot,identity)
                     if session['status']=='error':raise RuntimeError(session.get('error','Execution failed'))
                     if session['status'] in {'stopped','interrupted'}:raise RuntimeError('Execution stopped before completion')

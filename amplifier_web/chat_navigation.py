@@ -54,10 +54,10 @@ def runtime_activity(session, kind, payload):
 
 
 def initialize(state):
-    roots = {row['id'] for row in state.get('sessions', []) if is_top_level(row)}
+    workers = {row['id'] for row in state.get('sessions', []) if not is_top_level(row)}
     pins = state.get('pinnedSessionIds', [])
     state['pinnedSessionIds'] = list(dict.fromkeys(identity for identity in pins
-        if isinstance(identity, str) and identity in roots)) if isinstance(pins, list) else []
+        if isinstance(identity, str) and identity and identity not in workers)) if isinstance(pins, list) else []
     if state.setdefault('view', {}).get('navChatScope') not in ('workspace', 'all'):
         state['view']['navChatScope'] = 'workspace'
     for session in state.get('sessions', []):
@@ -65,6 +65,16 @@ def initialize(state):
 
 
 def view_patch(patch):
+    if 'subagentHistory' in patch:
+        value = patch['subagentHistory']
+        if not isinstance(value, dict) or set(value) - {'sessionId', 'filter', 'index'}:
+            raise ValueError('Invalid worker history page.')
+        if 'sessionId' in value and (not isinstance(value['sessionId'], str) or not 1 <= len(value['sessionId']) <= 200):
+            raise ValueError('Choose a conversation for worker history.')
+        if 'filter' in value and (not isinstance(value['filter'], str) or len(value['filter']) > 500):
+            raise ValueError('Worker history search must be text of at most 500 characters.')
+        if 'index' in value and (type(value['index']) is not int or not 0 <= value['index'] <= 1_000_000):
+            raise ValueError('Worker history page index must be a nonnegative integer.')
     if 'navChatScope' in patch and patch['navChatScope'] not in ('workspace', 'all'):
         raise ValueError('navChatScope must be workspace or all.')
     if 'navFilter' in patch and (not isinstance(patch['navFilter'], str) or len(patch['navFilter']) > 500):

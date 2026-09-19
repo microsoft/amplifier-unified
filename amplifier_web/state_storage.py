@@ -10,6 +10,8 @@ def normalize_state(state, db):
     controls=state.get('runtimeControl', {})
     from .execution import anchor_turns
     for session in state.get('sessions', []):
+        if session.get('historyManaged') and not session.get('historyLoaded'):
+            continue
         anchor_turns(session)
         sid=session['id'];runtime=controls.get(sid,{})
         config=session.get('configuration') or legacy.get(sid) or runtime.get('configuration.inspect')

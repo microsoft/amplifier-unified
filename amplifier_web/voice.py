@@ -92,7 +92,7 @@ class VoiceCall:
         self.delegate_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
         self.close_result: dict | None = None
-        session = next((row for row in self.service.get_state().get("sessions", []) if row.get("id") == session_id), {})
+        session = next((row for row in self.service.state.get("sessions", []) if row.get("id") == session_id), {})
         self.seen_generations = {row.get("generation_id") for row in session.get("generations", []) if row.get("event") == "generation.finished"}
         self.delivered_generations: set[str] = set()
         self.realtime_responding = False
@@ -103,7 +103,7 @@ class VoiceCall:
 
     async def create(self, sdp: str, provider: str) -> dict:
         self.provider = provider
-        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + compact_context(self.service.get_state(), self.session_id), "audio": {"output": {"voice": "marin"}}}
+        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + compact_context(self.service.state, self.session_id), "audio": {"output": {"voice": "marin"}}}
         if provider == "live":
             config.update(delegation={"type": "client"}, store=False)
             data, _, _ = await self.manager.request("POST", "/live/sessions", json={"session": config, "transport": {"type": "webrtc", "sdp": sdp}})
@@ -258,7 +258,7 @@ class VoiceCall:
     async def execute(self, text: str, did: str) -> Any:
         if self.closing or self.closed:
             raise VoiceError("The call is ending; no new work was submitted.")
-        state = self.service.get_state()
+        state = self.service.state
         session = next((s for s in state.get("sessions", []) if s.get("id") == self.session_id), {})
         history = [{"role": m.get("role"), "text": m.get("text", "")} for m in session.get("messages", []) if m.get("via") == "call"][-12:]
         reference = json.dumps(history, ensure_ascii=False)
@@ -276,7 +276,9 @@ class VoiceCall:
 
     async def observe(self) -> None:
         queue = self.service.subscribe()
-        snapshot = self.service.get_state()
+        import copy
+        snapshot = {'view': copy.deepcopy(self.service.state.get('view', {})),
+                    'sessions': [copy.deepcopy(row) for row in self.service.state.get('sessions', []) if row.get('id') == self.session_id]}
         last = compact_context(snapshot, self.session_id)
         try:
             # The call can take seconds to negotiate. Catch completions that
@@ -453,7 +455,7 @@ class VoiceService:
                 raise VoiceError("A call is already active. End it before starting another.", 409, "call_active")
             if self.http is None:
                 self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-            state = self.service.get_state()
+            state = self.service.state
             session_id = session_id or state.get("selectedSessionId") or state.get("activeSessionId") or state.get("session", {}).get("id")
             if not session_id or not any(s.get("id") == session_id for s in state.get("sessions", [])):
                 raise VoiceError("Create or select a conversation before calling.", 409, "no_session")
@@ -504,7 +506,7 @@ def setup_routes(app: web.Application) -> VoiceService:
     app["voice_service"] = manager
 
     async def config(request: web.Request) -> web.Response:
-        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.get_state().get("settings", {}).get("preferredVoice", MODELS["live"]), "fallbackModel": MODELS["realtime"], "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
+        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "fallbackModel": MODELS["realtime"], "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
 
     async def connect(request: web.Request) -> web.Response:
         try:

@@ -40,10 +40,13 @@ export function chatPage(state,workspace){
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
  const projection=state.chatNavigation;
- if(projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value))return projection;
+ const saved=view.navChatPage,matches=saved&&Object.entries(scope).every(([key,value])=>saved[key]===value);
+ const requestedIndex=matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
+ if(projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
+ // A bounded snapshot cannot answer a different search or page locally. The
+ // control updates immediately, while the shared action fetches its real rows.
+ if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
  const chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,chat.workspace,chat.workspaceName]);
- const saved=view.navChatPage;
- const matches=saved&&Object.entries(scope).every(([key,value])=>saved[key]===value);
  const inferred=mode==='all'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/CHAT_PAGE_SIZE);
  const requested=matches&&Number.isSafeInteger(saved.index)?saved.index:inferred;
  const pages=Math.max(1,Math.ceil(chats.length/CHAT_PAGE_SIZE)),index=Math.max(0,Math.min(pages-1,requested));
@@ -52,8 +55,25 @@ export function chatPage(state,workspace){
 }
 export function headerChatChoices(state){
  if(!state)return {items:[],total:0};
+ if(Array.isArray(state.headerChatNavigation?.items))return state.headerChatNavigation;
  const workspace=state.workspaces?.find(row=>row.id===state.selectedWorkspaceId),selected=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const chats=orderedChats(state,workspace),items=chats.slice(0,CHAT_PAGE_SIZE);
  if(selected&&isTopLevelChat(selected)&&!items.some(row=>row.id===selected.id))items.splice(Math.max(0,CHAT_PAGE_SIZE-1),1,selected);
  return {items,total:chats.length};
+}
+
+export function subagentCount(state,parent){
+ if(Number.isSafeInteger(parent?.subagentCount)&&parent.subagentCount>=0)return parent.subagentCount;
+ const projection=state.subagentNavigation;
+ if(parent&&projection?.scope?.sessionId===parent.id&&Number.isSafeInteger(projection.unfilteredTotal))return projection.unfilteredTotal;
+ return directSubagentChats(state.sessions,parent).length;
+}
+export function subagentPage(state,parent){
+ const saved=state.view?.subagentHistory||{},filter=saved.filter||'',scope={sessionId:parent?.id,filter},projection=state.subagentNavigation;
+ const requested=Number.isSafeInteger(saved.index)?saved.index:0;
+ if(projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&projection.index===Math.max(0,Math.min(projection.pages-1,requested)))return projection;
+ if(state.library?.bounded)return {items:[],total:0,unfilteredTotal:subagentCount(state,parent),index:0,pages:1,start:0,end:0,scope,pending:true};
+ const children=directSubagentChats(state.sessions,parent),rows=filterList(children,filter,row=>[row.title,row.description,row.id,row.nativeIdentity]);
+ const pages=Math.max(1,Math.ceil(rows.length/50)),index=Math.max(0,Math.min(pages-1,requested)),start=index*50,end=Math.min(rows.length,start+50);
+ return {items:rows.slice(start,end),total:rows.length,unfilteredTotal:children.length,index,pages,start,end,scope};
 }

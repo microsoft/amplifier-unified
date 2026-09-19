@@ -10,6 +10,8 @@ import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react
 import {createRoot} from 'react-dom/client';
 import {Bug,Phone,MessageCircle,Bell,ArrowUp,Plus,Palette,ScanEye,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
+import {createPendingView} from './pending-view';
+import {messageTextForCopy} from './message-copy';
 import {VoiceClient} from './voice';
 import {sessionStatus} from './session-status';
 import {Markdown} from './markdown';
@@ -19,7 +21,7 @@ import {MaintenanceSettings} from './maintenance';
 import {RuntimeSettings} from './runtime-settings';
 import {BundleSettings,SettingsNavigation,ModuleSettings} from './bundles';
 import {ProviderSettings,RoutingSettings} from './setup';
-import {notificationBody,desktopNotificationsEnabled} from './notifications';
+import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
 import {TurnTimeline} from './timeline';
 import {executionData,turnPlacements} from './timeline-data';
 import {liveActivity} from './activity';
@@ -38,7 +40,7 @@ const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?v
 const initialSetup={title:'A new conversation',bundle:'anchors',workspace:''};
 function App(){
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Converge'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(new Map());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView());
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -48,7 +50,7 @@ function App(){
     if(effect.type==='download')download(effect.filename||'amplifier-export.json',effect.content??effect.data,effect.mimeType||effect.mime||'application/json');
     if(effect.type==='message.copy'){
      let status='ready',message='Copied Markdown';
-     try{const entry=latest.current?.sessions?.find(s=>s.id===effect.sessionId)?.messages?.find(m=>m.id===effect.messageId);if(!entry)throw Error('Message no longer available');await navigator.clipboard.writeText(entry.text||'')}
+     try{await navigator.clipboard.writeText(await messageTextForCopy(latest.current,effect,request))}
      catch(error){status='error';message='Could not copy: '+error.message}
      await request('/api/actions',{method:'POST',body:{action:'message.copyResult',args:{requestId:effect.requestId,status,message}}});
     }
@@ -69,22 +71,26 @@ function App(){
  const acceptState=useCallback(next=>{
   if(!next||typeof next!=='object')return;
   if(latest.current && next.revision<latest.current.revision)return;
-  if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const s of next.sessions||[])for(const m of s.messages||[])lastNotify.current.add(m.id)}
+  if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
   else effectHandler.current(next.deviceCommands);
   const previousSession=latest.current?.sessions?.find(s=>s.id===latest.current.selectedSessionId),nextSession=next.sessions?.find(s=>s.id===next.selectedSessionId);
   if(previousSession?.id===nextSession?.id&&Number(nextSession?.sharedHistoryOffset)<Number(previousSession?.sharedHistoryOffset)&&messagesPane.current){
    const pane=messagesPane.current,top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
-  latest.current=next;const rendered={...next,view:{...next.view}};for(const [key,value]of pendingView.current){if(JSON.stringify(next.view?.[key])===JSON.stringify(value))pendingView.current.delete(key);else rendered.view[key]=value}setState(rendered);stateListeners.current.forEach(fn=>fn(next));
+  latest.current=next;setState(pendingView.current.apply(next));stateListeners.current.forEach(fn=>fn(next));
  },[]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  if(action==='view.update')for(const [key,value]of Object.entries(args.patch||{}))pendingView.current.set(key,value);
+  const pending=action==='view.update'?pendingView.current.add(args.patch||{}):null;
+  if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
   const execute=async()=>{
    const result=await request('/api/actions',{method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
-   if(result.state)acceptState(result.state);handleEffects(result.effects);return result;
+   if(pending)pendingView.current.settle(pending);
+   if(result.state)acceptState(result.state);
+   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
+   handleEffects(result.effects);return result;
   };
-  const promise=commandQueue.current.then(execute,execute).catch(error=>{if(action==='view.update'){for(const [key,value]of Object.entries(args.patch||{}))if(JSON.stringify(pendingView.current.get(key))===JSON.stringify(value))pendingView.current.delete(key);if(latest.current)acceptState(latest.current)}throw error});commandQueue.current=promise.catch(()=>{});return promise;
+  const promise=commandQueue.current.then(execute,execute).catch(error=>{if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error});commandQueue.current=promise.catch(()=>{});return promise;
  },[acceptState,handleEffects]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(e.message)),[dispatch]);
  const publishView=useCallback(()=>{if(latest.current)request('/api/view',{method:'POST',body:{...visibleView(root.current,clientId),voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'}}).catch(()=>{});},[]);
@@ -112,12 +118,12 @@ function App(){
  useEffect(()=>{const resize=()=>resizeComposer(composerRef.current);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
  useEffect(()=>{
   if(!state)return;
-  for(const s of state.sessions||[])for(const m of s.messages||[]){
-   if(m.role!=='assistant'||m.via!=='text'||lastNotify.current.has(m.id))continue;
+  for(const m of notificationMessages(state)){
+   if(lastNotify.current.has(m.id))continue;
    lastNotify.current.add(m.id);
-   if(desktopNotificationsEnabled(state.notificationSettings) && connected && 'Notification'in window && Notification.permission==='granted' && (document.hidden||s.id!==state.selectedSessionId)){
+   if(desktopNotificationsEnabled(state.notificationSettings) && connected && 'Notification'in window && Notification.permission==='granted' && (document.hidden||m.sessionId!==state.selectedSessionId)){
     const notice=new Notification('Amplifier',{body:notificationBody(m,state.notificationSettings),icon:logo,tag:m.id});
-    notice.onclick=()=>{window.focus();act('session.select',{id:s.id});act('view.update',{patch:{mode:'text'}})};
+    notice.onclick=()=>{window.focus();act('session.select',{id:m.sessionId});act('view.update',{patch:{mode:'text'}})};
    }
   }
  },[state,connected,act]);
@@ -138,10 +144,10 @@ function App(){
   window.addEventListener('keydown',handler);
   return()=>{window.removeEventListener('keydown',handler);if(previous?.isConnected)previous.focus()};
  },[panel,act]);
- function editDraft(value){setDraft(value);lastDraft.current=value;pendingView.current.set('draft',value);clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>act('view.update',{patch:{draft:value}}),220)}
+ function editDraft(value){setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value});if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value}})},220)}
  async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>result.state.sessions.find(row=>row.id===result.state.selectedSessionId)).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=ensureSession();uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{const current=await target;for(const file of files)await dispatch('attachment.add',{sessionId:current.id,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
- async function send(e){e?.preventDefault();if((!draft.trim()&&!session?.draftAttachments?.length)||uploadCount.current||busy||historyPending||executionUnavailable)return;const submittedText=draft;chatScroll.current?.reveal();clearTimeout(draftTimer.current);setError('');setBusy(true);try{const current=await ensureSession();await dispatch('conversation.send',{sessionId:current.id,text:submittedText,attachmentIds:(current.draftAttachments||[]).map(file=>file.id),via:mode==='text'?'text':'chat'});if(lastDraft.current===submittedText&&latest.current.selectedSessionId===current.id){setDraft('');lastDraft.current='';await dispatch('view.update',{patch:{draft:''}})}}catch(e){setError(e.message)}finally{setBusy(false)}}
+ async function send(e){e?.preventDefault();if((!draft.trim()&&!session?.draftAttachments?.length)||uploadCount.current||busy||historyPending||executionUnavailable)return;const submittedText=draft;chatScroll.current?.reveal();clearTimeout(draftTimer.current);setError('');setBusy(true);try{const current=await ensureSession();await dispatch('conversation.send',{sessionId:current.id,text:submittedText,attachmentIds:(current.draftAttachments||[]).map(file=>file.id),via:mode==='text'?'text':'chat'});if(lastDraft.current===submittedText&&latest.current.selectedSessionId===current.id){pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;setDraft('');lastDraft.current='';await dispatch('view.update',{patch:{draft:''}})}}catch(e){setError(e.message)}finally{setBusy(false)}}
  async function create(e){e.preventDefault();setBusy(true);try{await dispatch('session.create',setup);await dispatch('view.update',{patch:{panel:null}})}catch(e){setError(e.message)}finally{setBusy(false)}}
  async function startCall(){setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){setError(e.message)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');

@@ -22,8 +22,11 @@ export function ActivityPanel({state,act}){
 
 // Viewing the end of a chat in a focused tab acknowledges that exact completion.
 // Selection alone (by an agent, another device, or a hidden tab) never does.
+export function completionToRead(state){
+ return state?.attention?.items?.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
+}
 export function useReadCompletion(state,act,pane){
- const item=state?.attention?.items?.find(i=>i.sessionId===state.selectedSessionId&&!i.read);
+ const item=completionToRead(state);
  const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused;
  React.useEffect(()=>{
   if(!item||blocked||!pane.current)return;
