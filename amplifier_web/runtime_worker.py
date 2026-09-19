@@ -165,11 +165,12 @@ class Worker:
             # Module activators run uv pip separately from the host project.
             # Preserve an explicitly supplied user override if there is one.
             os.environ.setdefault("UV_OVERRIDE", str(Path(__file__).with_name("runtime_deps") / "compatibility.txt"))
-            # The worker runs in a separate dependency environment; make the
-            # installed application package available without importing its UI.
-            package_root = str(Path(__file__).resolve().parent.parent)
-            if package_root not in sys.path:
-                sys.path.insert(0, package_root)
+            # Load only app code, never the outer host's site-packages metadata.
+            if __package__:
+                from .runtime_bootstrap import bootstrap_app_package
+            else:
+                from runtime_bootstrap import bootstrap_app_package
+            bootstrap_app_package()
             from amplifier_web.host.config import app_home
             from amplifier_web.host.session import prepare_manager
             from amplifier_web.execution_events import ExecutionEvents

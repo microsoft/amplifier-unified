@@ -2,9 +2,12 @@
 import asyncio
 import importlib.util
 import json
-from pathlib import Path
 import sys
-sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
+if __package__:
+    from .runtime_bootstrap import bootstrap_app_package
+else:
+    from runtime_bootstrap import bootstrap_app_package
+bootstrap_app_package()
 from amplifier_web.update_diagnostics import exception_type,PROBE_PREFIX
 
 async def main():
