@@ -27,8 +27,10 @@ second host does not create another runtime history. A busy owner rejects new wo
 
 `unified/view.json` contains web presentation: displayed messages, activity cards,
 voice presentation and draft/UI associations. It is not the model's runtime
-context. Reopen shared history after CLI use to refresh the displayed projection;
-the next worker activation always reads Foundation's latest shared checkpoint.
+context. CLI projects and chats appear automatically in the workspace sidebar.
+Browsing them reads a page of their native transcript without starting a worker;
+the displayed history refreshes after CLI changes. The next worker activation
+always reads Foundation's latest shared checkpoint.
 
 App settings, command IDs, operation receipts and indexes remain in the app data
 directory. Immutable canvas/result bodies live in `artifacts/<sha256>.json`, with
@@ -48,9 +50,18 @@ can take several minutes for this one-time offline migration.
 
 Normal backups run file copying and compression in a background thread. They
 include app configuration (including credentials), artifacts, operation/index
-state, and the shared root/worker sessions known to this app, including explicitly relocated CI captures. They do not collect
-unrelated CLI conversations or external Smart Tool work directories. Backups are
-private but unencrypted. Shared session files survive app conversation cleanup.
+state, and shared root/worker sessions used by this app, including explicitly
+relocated CI captures. Automatically discovered CLI entries are a rebuildable
+index: listing or viewing them does not expand backups, scan their Context
+Intelligence event files, or run legacy canvas migration. Existing app drafts,
+canvas artifacts and indexed diagnostic records remain part of app storage and
+backup. Backups do not collect unrelated CLI conversations or external Smart
+Tool work directories. Backups are
+private but unencrypted. Shared session files survive app conversation cleanup. Removing a chat or resetting
+app conversations hides the currently listed chats from automatic discovery; it
+does not delete their CLI history. Newly created CLI chats can still appear.
+Resetting app settings creates workspace overrides only for workspaces used by
+the app, never for unresolved or untouched indexed CLI projects.
 
 Do not run pre-0.8 against the migrated database. To roll back, stop Unified,
 preserve the post-migration app directory and shared files, restore the retained

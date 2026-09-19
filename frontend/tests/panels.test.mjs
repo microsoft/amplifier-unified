@@ -80,3 +80,17 @@ test('provider model results and metadata choices are visible even after other m
  state.setup.operations['providers.models:openai']={phase:'error',error:'Provider check timed out. Please retry.'};
  assert.match(renderToStaticMarkup(React.createElement(ProviderSettings,{state,act})),/Provider check timed out/);
 });
+
+
+test('native CLI history is automatic and stale sharing settings fall back to maintenance menu',()=>{
+ const state={view:{settingsSection:'maintenance',settingsExpanded:['shared-history']},sessions:[{id:'native',title:'CLI chat'}],selectedSessionId:'native'};
+ const menu=renderToStaticMarkup(React.createElement(MaintenanceSettings,{state,act}));
+ assert.match(menu,/Conversation history/);
+ assert.doesNotMatch(menu,/Same-chat CLI and web|Browse shared conversations/);
+ state.view.settingsExpanded=['history'];
+ const history=renderToStaticMarkup(React.createElement(MaintenanceSettings,{state,act}));
+ assert.match(history,/CLI projects and conversations appear automatically/);
+ assert.match(history,/data-action="history.export"/);
+ assert.match(history,/data-action="history.importFile"/);
+ assert.doesNotMatch(history,/data-action="history.import"|Browse saved conversations/);
+});

@@ -81,6 +81,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service._publish()
     from .management import Management
     service.management = Management(service)
+    service.history.start()
     if preload_providers:
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager

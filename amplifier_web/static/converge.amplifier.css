@@ -682,3 +682,21 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 /* Routine MCP polling must never insert a row above the live tool UI. */
 #amp-one.a-chat-shell .a-canvas-panel[data-controls="false"] .a-mcp-status[data-phase="working"]{display:none}
+
+/* Native CLI history shares the same workspace navigation and chat surface. */
+#amp-one .a-nav-conversations{align-items:center}
+#amp-one .a-nav-conversations>.a-icon{margin-left:auto;width:24px;height:24px}
+#amp-one .a-nav-conversations>.a-icon svg{width:13px;height:13px}
+#amp-one .a-nav-history-status{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--a-muted);margin:8px 3px}
+#amp-one .a-nav-history-status.a-danger{color:var(--a-danger)}
+#amp-one .a-nav-history-status svg{width:14px;height:14px;flex-shrink:0}
+#amp-one .a-session-history{display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--a-muted);font-size:12px}
+#amp-one .a-session-history p,#amp-one .a-session-history-error{display:flex;align-items:center;justify-content:center;gap:8px;margin:0}
+#amp-one .a-session-history svg{width:15px;height:15px;flex-shrink:0}
+#amp-one .a-session-history-error{flex-wrap:wrap;color:var(--a-danger)}
+#amp-one .a-session-history button{font-size:12px}
+
+#amp-one .a-nav-pagination{display:flex;flex-direction:column;gap:4px;padding:8px 4px;color:var(--a-muted);font-size:10px}
+#amp-one .a-nav-pagination>div{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#amp-one .a-nav-pagination button{display:inline-flex;align-items:center;gap:3px;font-size:11px}
+#amp-one .a-nav-pagination button svg{width:12px;height:12px}

@@ -42,39 +42,47 @@ def _backup_files(data_dir, session_paths):
         config=data_dir/'diagnostics/config.json'
         if config.exists():output.add(config,arcname='diagnostics/config.json')
     archive.chmod(0o600)
-    return {'backup':str(archive),'phase':'ready','detail':'Private backup includes shared session files, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
+    return {'backup':str(archive),'phase':'ready','detail':'Private backup includes app-owned shared session files, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
 
 
 async def backup(service):
-    async with service.lock:
-        if getattr(service,'backup_in_progress',False):raise ValueError('A backup is already running.')
-        service.backup_in_progress=True
-        service.state['maintenance']={'phase':'backing-up','detail':'Creating a private backup in the background.'}
-        service._publish()
-        from .host.storage import SessionStore
-        from .session_files import capture_dir
-        paths=set()
-        def include(workspace, identity):
-            path=SessionStore.for_app(service.data_dir,workspace).directory(identity)
-            name='shared-projects/'+path.parent.parent.name+'/sessions/'+path.name
-            paths.add((path,name))
-            capture=capture_dir(workspace,identity)
-            if capture != path/'context-intelligence':
-                paths.add((capture,'relocated-captures/'+path.parent.parent.name+'/sessions/'+identity+'/context-intelligence'))
-        for s in service.state['sessions']:
-            include(s['workspace'],s.get('runtimeSessionId') or s['id'])
-        # Include the recorded worker sessions, without backing up unrelated CLI projects.
-        for s in service.state['sessions']:
-            for worker in s.get('workers',[]):
-                if worker.get('id'):include(s['workspace'],worker['id'])
+    started=False
     try:
+        async with service.lock:
+            if getattr(service,'backup_in_progress',False):raise ValueError('A backup is already running.')
+            service.backup_in_progress=True
+            started=True
+            service.state['maintenance']={'phase':'backing-up','detail':'Creating a private backup in the background.'}
+            service._publish()
+            from .session_files import capture_dir, sessions_dir, validate_id
+            paths=set()
+            def include(workspace, identity):
+                try:validate_id(identity)
+                except ValueError:return
+                # Resolve without SessionStore construction: backup must not
+                # create directories merely because a project was registered.
+                path=sessions_dir(workspace)/identity
+                if path.is_symlink():raise ValueError('Session directories cannot be symbolic links')
+                name='shared-projects/'+path.parent.parent.name+'/sessions/'+path.name
+                paths.add((path,name))
+                capture=capture_dir(workspace,identity)
+                if capture != path/'context-intelligence':
+                    paths.add((capture,'relocated-captures/'+path.parent.parent.name+'/sessions/'+identity+'/context-intelligence'))
+            # The rebuildable navigation index can describe thousands of CLI
+            # sessions. Only sessions used by this app expand the backup scope.
+            sessions=[s for s in service.state['sessions']
+                      if not s.get('historyManaged') and s.get('workspace')]
+            for session in sessions:
+                include(session['workspace'],session.get('runtimeSessionId') or session['id'])
+                for worker in session.get('workers',[]):
+                    if worker.get('id'):include(session['workspace'],worker['id'])
         task=asyncio.create_task(asyncio.to_thread(_backup_files,service.data_dir,paths))
         try:return await asyncio.shield(task)
         except asyncio.CancelledError:
             await task
             raise
     finally:
-        service.backup_in_progress=False
+        if started:service.backup_in_progress=False
 
 async def reset(manager,args):
     service=manager.service
@@ -103,19 +111,22 @@ async def reset(manager,args):
                     target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
                     shutil.move(str(path),str(target))
             if 'conversations' in parts:
+                for session in service.state['sessions']:
+                    service.history.hide_session(session)
                 service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
                 service.db.execute('DELETE FROM commands')
             if 'settings' in parts:
                 from .host.config import write_private
                 write_private(service.data_dir/'config/settings.yaml','_migration: {version: 1, reset: true}\n')
                 import hashlib
-                for workspace in {service.default_workspace,*[s['workspace'] for s in service.state['sessions']]}:
+                for workspace in {service.default_workspace,*[s['workspace'] for s in service.state['sessions'] if not s.get('historyManaged') and s.get('workspace')]}:
                     key=hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()[:20]
                     write_private(service.data_dir/'config/workspaces'/(key+'.yaml'),'{}\n')
                 service.state['settings'].update(bundle='anchors',preferredVoice='gpt-live-1',fallbackVoice='gpt-realtime-2.1',updates={'autoCheck':True,'autoInstall':False,'intervalHours':24})
                 service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
                 service.state['notificationSettings']=manager.notifications.public()
-                for session in service.state['sessions']:session['configurationPending']=True
+                for session in service.state['sessions']:
+                    if not session.get('historyManaged'):session['configurationPending']=True
             if 'cache' in parts:
                 service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
                 service.update_manager.inventory=[]

@@ -204,7 +204,24 @@ class Diagnostics:
         if len(json.dumps(data))>48000:
             self.dropped+=1;return
         now=time.time();identity=str(uuid.uuid4())
-        data.update({'session_id':session_id or data.get('rootSessionId') or data.get('sessionId') or self.instance_id,
+        capture_session=session_id or data.get('rootSessionId') or data.get('sessionId') or self.instance_id
+        # Merely listing or viewing a CLI chat does not enroll its capture in
+        # app diagnostics. Keep that action in the app's own stream instead.
+        owner=next((s for s in self.service.state.get('sessions', [])
+                    if capture_session in {s.get('id'), s.get('runtimeSessionId'), s.get('nativeIdentity')}
+                    and (not workspace or s.get('workspace') == workspace)), None)
+        from .session_files import validate_id
+        try:
+            validate_id(capture_session)
+            valid_identity=True
+        except ValueError:
+            valid_identity=False
+        if (owner and owner.get('historyManaged')) or not valid_identity:
+            data.setdefault('runtimeSessionId', capture_session)
+            if owner:data.setdefault('appSessionId', owner['id'])
+            capture_session=self.instance_id
+            workspace=self.service.default_workspace
+        data.update({'session_id':capture_session,
                      'timestamp':datetime.fromtimestamp(now,timezone.utc).isoformat(),
                      'event_id':identity,'stream':stream,'app':'amplifier-unified'})
         if parent_id: data['parent_id']=parent_id
@@ -229,9 +246,19 @@ class Diagnostics:
                         continue
                     db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',(identity,dest,revision,json.dumps(payload),'pending',now))
             from .capture_index import index_shared
-            sessions=list(self.service.state.get('sessions',[]))
-            scopes=[(s['workspace'],s.get('runtimeSessionId') or s['id']) for s in sessions]
-            scopes.extend((s['workspace'],w['id']) for s in sessions for w in s.get('workers',[]) if w.get('id'))
+            # Navigation contains all CLI projects, including unresolved and
+            # read-only workers. Discovery is not consent to scan their captures.
+            sessions=[s for s in list(self.service.state.get('sessions', []))
+                      if not s.get('historyManaged') and s.get('workspace')]
+            scopes=[]
+            from .session_files import validate_id
+            for session in sessions:
+                identities=[session.get('runtimeSessionId') or session['id'],
+                            *(worker.get('id') for worker in session.get('workers', []))]
+                for capture_session in identities:
+                    try:validate_id(capture_session)
+                    except ValueError:continue
+                    scopes.append((session['workspace'], capture_session))
             for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg):
                 if not cfg['enabled'] or at<self.route_since:continue
                 # Forward a selected projection of new hook records. Reading

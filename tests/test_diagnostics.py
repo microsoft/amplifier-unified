@@ -352,3 +352,40 @@ async def test_changed_destination_discards_late_test_success_or_failure(service
 def test_malformed_runtime_metadata_cannot_break_main_event_handler(service):
     service.diagnostics.runtime_event('execution.event',{'kind':'llm','usage':'not a mapping'}, {'id':'fixture','workspace':service.default_workspace})
     assert service.diagnostics.dropped==1
+
+
+async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnostics(service, tmp_path, monkeypatch):
+    from amplifier_web import capture_index
+    from amplifier_web.session_files import amplifier_home
+    await service.dispatch('session.create', {})
+    owned=service._session()
+    owned['workers']=[{'id':'owned-worker'}, {'id':'legacy:worker'}]
+    historical_workspace=str(tmp_path/'unavailable-cli-folder')
+    native=[{'id':f'index-{i}','runtimeSessionId':f'root:worker-{i}',
+             'nativeIdentity':f'root:worker-{i}','nativeProject':'historical-project',
+             'workspace':None if i%2 else historical_workspace,'historyManaged':True,
+             'status':'idle','messages':[],'workers':[]} for i in range(5000)]
+    service.state['sessions'].extend(native)
+    indexed=[]
+    def index_shared(db, scopes, config):
+        indexed.extend(scopes)
+        return []
+    monkeypatch.setattr(capture_index,'index_shared',index_shared)
+    native_root=amplifier_home()/'projects'/'historical-project'
+    assert not native_root.exists()
+    collector=service.diagnostics
+    collector.record('sessions',{'event':'app:view','data':{'action':'session.select'}},
+                     session_id='root:worker-1',workspace=None)
+    # An otherwise valid root identity is also observational when index-only.
+    native[0]['runtimeSessionId']=native[0]['nativeIdentity']='historical-root'
+    collector.record('sessions',{'event':'app:view','data':{'action':'session.select'}},
+                     session_id='historical-root',workspace=historical_workspace)
+    await collector.flush()
+    assert not collector.storage_error
+    assert set(indexed)=={(owned['workspace'],owned['id']),(owned['workspace'],'owned-worker')}
+    rows=[r for r in collector.read()['items'] if r['event']=='app:view']
+    assert len(rows)==2
+    assert {r['session'] for r in rows}=={collector.instance_id}
+    assert {r['data']['runtimeSessionId'] for r in rows}=={'root:worker-1','historical-root'}
+    assert not native_root.exists()
+    assert not (tmp_path/'unavailable-cli-folder').exists()

@@ -17,6 +17,9 @@ def hydrate(home, state, db):
         from .state_storage import resource
         canvas.update(resource(db, reference['$resource']))
     for index, session in enumerate(state.get('sessions', [])):
+        if session.pop('$native', False):
+            session.update(messages=[], workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)
+            continue
         if not session.get('$view'):
             continue
         path = view_path(home, session)
@@ -48,6 +51,10 @@ def persist(home, state, cache):
         result['canvas']['$body'] = artifact['body']
     result['sessions'] = []
     for session in state.get('sessions', []):
+        if session.get('historyManaged'):
+            from .automatic_history import INDEX_FIELDS
+            result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True})
+            continue
         path = view_path(home, session)
         text = json.dumps(session, ensure_ascii=False)
         if cache.get(str(path)) != text:

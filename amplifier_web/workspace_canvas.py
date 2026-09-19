@@ -37,7 +37,7 @@ def _registration(path, name=None):
 def initialize(state):
     if "workspaces" not in state:
         paths = [state["settings"]["workspace"]] + [s["workspace"] for s in state["sessions"]]
-        state["workspaces"] = list({_registration(path)["id"]: _registration(path) for path in paths}.values())
+        state["workspaces"] = list({_registration(path)["id"]: _registration(path) for path in paths if path}.values())
     if state.get("selectedWorkspaceId") not in {w["id"] for w in state["workspaces"]}:
         state["selectedWorkspaceId"] = next((w["id"] for w in state["workspaces"] if w["path"] == state["settings"]["workspace"]), state["workspaces"][0]["id"] if state["workspaces"] else None)
     state.setdefault("canvas", {"open": False, "events": []})
@@ -47,12 +47,26 @@ def initialize(state):
 def select_session_workspace(state, session):
     """Keep a conversation reachable in navigation without changing its folder."""
     initialize(state)
-    row = _registration(session["workspace"])
+    row = next((w for w in state['workspaces'] if w['id'] == session.get('workspaceId')), None)
+    if row is None:
+        if session.get('workspace'):
+            row = _registration(session['workspace'])
+        elif session.get('nativeProject') and session.get('workspaceId'):
+            row = {'id': session['workspaceId'], 'name': session['nativeProject'], 'path': None,
+                   'nativeProject': session['nativeProject'], 'available': False}
+        else:
+            _error('This chat has no workspace registration.')
+    hidden = state.get('hiddenNativeWorkspaces', [])
+    restored = {row['id']}
+    if row.get('nativeProject'):
+        restored.add(uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + row['nativeProject']).hex)
+    hidden[:] = [identity for identity in hidden if identity not in restored]
     if not any(item["id"] == row["id"] for item in state["workspaces"]):
         state["workspaces"].append(row)
     changed = state["selectedWorkspaceId"] != row["id"]
     state["selectedWorkspaceId"] = row["id"]
-    state["settings"]["workspace"] = row["path"]
+    if row.get('path'):
+        state["settings"]["workspace"] = row["path"]
     if changed:
         state["canvas"]["open"] = False
 
@@ -88,10 +102,12 @@ def workspace_command(state, action, args):
             rows.remove(row)
             if state["selectedWorkspaceId"] == row["id"]:
                 state["selectedWorkspaceId"] = rows[0]["id"]
-                state["settings"]["workspace"] = rows[0]["path"]
+                if rows[0].get("path"):
+                    state["settings"]["workspace"] = rows[0]["path"]
         elif action == "workspace.select":
             state["selectedWorkspaceId"] = row["id"]
-            state["settings"]["workspace"] = row["path"]
+            if row.get('path'):
+                state["settings"]["workspace"] = row["path"]
     # Close the old workspace's preview; conversation histories are untouched.
     if action != "workspace.rename":
         state["canvas"]["open"] = False

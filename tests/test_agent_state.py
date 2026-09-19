@@ -47,3 +47,13 @@ async def test_configuration_deduplication_and_on_demand_provenance_survive_rest
     app=AppService(tmp_path,workspace=tmp_path)
     assert (await app.app_bridge('get_state',{'path':path},sid))['value']==provenance['agents'][99]['include_paths'][0]
     await app.close()
+
+
+def test_native_history_overview_explains_lazy_messages_and_agent_controls():
+    state={'revision':1,'selectedSessionId':'native','sharedHistory':{'loading':False,'projectCount':1,'sessionCount':1},
+           'sessions':[{'id':'native','historyLoaded':False,'messages':[],'workspaceId':'project','historyReadOnlyReason':'Saved worker'}]}
+    result=read_state(state,{})
+    assert result['conversations'][0]['messageCount'] is None
+    assert result['session']['historyReadOnlyReason']=='Saved worker'
+    assert result['sharedHistory']['sessionCount']==1
+    assert 'session.history' in result['_stateAccess']['history']

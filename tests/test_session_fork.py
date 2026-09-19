@@ -217,3 +217,102 @@ def test_edit_failed_first_submission_with_empty_checkpoint(tmp_path):
     src={**source(),'messages':[{'id':'failed','role':'user','text':'Never delivered'}]}
     result=fork_session(tmp_path,src,'retry',before_message_id='failed')
     assert result['messages']==[] and store.load('retry')[0]==[]
+
+
+def test_native_paged_repeated_turns_fork_at_actual_native_index(tmp_path):
+    workspace = tmp_path / 'workspace'; workspace.mkdir()
+    store = SessionStore.for_app(tmp_path, workspace)
+    rows = [{'role': 'user', 'content': 'repeat'} if i % 2 == 0 else {'role': 'assistant', 'content': f'Answer {i//2}'} for i in range(210)]
+    store.save('native-source', rows, {'bundle': 'anchors'}, preserve_system=True)
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    item = {'id': 'ui-alias', 'runtimeSessionId': 'native-source', 'nativeIdentity': 'native-source',
+            'nativeProject': project_slug(workspace), 'workspace': str(workspace), 'bundle': 'anchors',
+            'status': 'idle', 'sharedHistoryUserTurnOffset': 100}
+    item['nativeRevision'] = revision(item)
+    item['messages'] = [display_message(row, index, item) for index, row in enumerate(rows) if index >= 200]
+    result = fork_session(tmp_path, item, 'fork-page', turn=102)
+    saved, meta = store.load('fork-page')
+    assert saved == rows[:204]
+    assert meta['fork']['through_user_turn'] == 102
+    assert len(result['messages']) == 204
+    assert result['sharedHistoryOffset'] == result['sharedHistoryUserTurnOffset'] == 0
+    assert [row['id'] for row in result['messages'][-4:]] == [row['id'] for row in item['messages'][:4]]
+    assert [row['nativeIndex'] for row in result['messages']] == list(range(204))
+    edited = fork_session(tmp_path, item, 'edit-page', before_message_id=item['messages'][4]['id'])
+    assert store.load('edit-page')[0] == rows[:204]
+    assert len(edited['messages']) == 204
+    # The new fork can immediately fork or edit its formerly unloaded prefix.
+    branch = {**item, **result, 'id': 'fork-page'}
+    earlier = fork_session(tmp_path, branch, 'fork-earlier-prefix', turn=2)
+    assert store.load('fork-earlier-prefix')[0] == rows[:4]
+    assert len(earlier['messages']) == 4
+    fork_session(tmp_path, branch, 'edit-earlier-prefix', before_message_id=result['messages'][2]['id'])
+    assert store.load('edit-earlier-prefix')[0] == rows[:2]
+    store.save('native-source', rows[2:], {'bundle': 'anchors'}, preserve_system=True)
+    with pytest.raises(ValueError, match='changed'):
+        fork_session(tmp_path, item, 'stale-page', turn=102)
+    assert not store.directory('stale-page').exists()
+
+
+def test_fork_rebases_native_indexes_after_reference_removal_and_receipt_insertion(tmp_path):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    workspace = tmp_path / 'workspace'; workspace.mkdir()
+    store = SessionStore.for_app(tmp_path, workspace)
+    rows = [
+        {'role': 'system', 'content': 'Instructions'},
+        {'role': 'user', 'content': 'First'},
+        {'role': 'user', 'content': 'Old reference one', 'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'user', 'content': 'Old reference two', 'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'assistant', 'content': 'Starting a tool', 'tool_calls': [{'id': 'unfinished', 'name': 'bash'}]},
+        {'role': 'user', 'content': 'repeat'},
+        {'role': 'assistant', 'content': 'First repeated answer'},
+        {'role': 'user', 'content': 'repeat'},
+        {'role': 'assistant', 'content': 'Second repeated answer'},
+    ]
+    store.save('native-source', rows, {'bundle': 'anchors'}, preserve_system=True)
+    item = {'id': 'ui-alias', 'runtimeSessionId': 'native-source', 'nativeIdentity': 'native-source',
+            'nativeProject': project_slug(workspace), 'workspace': str(workspace), 'bundle': 'anchors', 'status': 'idle'}
+    item['nativeRevision'] = revision(item)
+    item['messages'] = [display_message(rows[index], index, item) for index in (1, 4, 5, 6, 7, 8)]
+    item['messages'][2]['attachments'] = [{'id': 'preserved-attachment', 'name': 'file.txt'}]
+    voice = {'id': 'voice-only', 'role': 'assistant', 'text': 'A spoken aside', 'via': 'call', 'voiceId': 'old-call'}
+    item['messages'].insert(4, voice)
+    original = copy.deepcopy(item)
+    result = fork_session(tmp_path, item, 'rebased-fork')
+    native, metadata = store.load('rebased-fork')
+    assert native[3]['role'] == 'tool'
+    assert json.loads(native[3]['content'])['status'] == 'interrupted'
+    assert [row['nativeIndex'] for row in result['messages'] if 'nativeIndex' in row] == [1, 2, 4, 5, 6, 7]
+    assert [row['id'] for row in result['messages']] == [row['id'] for row in item['messages']]
+    assert result['messages'][2]['attachments'] == item['messages'][2]['attachments']
+    assert result['messages'][4] == voice
+    assert item == original
+    assert 'Old reference one' not in json.dumps(native)
+    assert 'Old reference two' not in json.dumps(native)
+    again = {**item, **result, 'id': 'rebased-fork'}
+    fork_session(tmp_path, again, 'rebased-again', turn=2)
+    twice, _ = store.load('rebased-again')
+    assert twice[:6] == native[:6]
+    assert 'Second repeated answer' not in json.dumps(twice)
+    assert store.load('native-source')[0] == rows
+
+
+def test_paged_fork_at_first_visible_edit_retains_full_earlier_chat(tmp_path):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    workspace = tmp_path / 'workspace'; workspace.mkdir()
+    store = SessionStore.for_app(tmp_path, workspace)
+    rows = [{'role': 'user' if i % 2 == 0 else 'assistant', 'content': f'Message {i}'} for i in range(220)]
+    store.save('native-source', rows, {'bundle': 'anchors'}, preserve_system=True)
+    item = {'id': 'ui-alias', 'runtimeSessionId': 'native-source', 'nativeIdentity': 'native-source',
+            'nativeProject': project_slug(workspace), 'workspace': str(workspace), 'bundle': 'anchors',
+            'status': 'idle', 'sharedHistoryOffset': 120, 'sharedHistoryUserTurnOffset': 60}
+    item['nativeRevision'] = revision(item)
+    item['messages'] = [display_message(row, index, item) for index, row in enumerate(rows) if index >= 120]
+    result = fork_session(tmp_path, item, 'edit-first-visible', before_message_id=item['messages'][0]['id'])
+    assert store.load('edit-first-visible')[0] == rows[:120]
+    assert [row['text'] for row in result['messages']] == [f'Message {index}' for index in range(120)]
+    assert result['sharedHistoryOffset'] == result['sharedHistoryUserTurnOffset'] == 0
+    assert result['forkTranscript']['turn'] == 60
