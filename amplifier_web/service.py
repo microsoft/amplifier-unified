@@ -345,6 +345,25 @@ class AppService:
             if self._progress_publish_task is asyncio.current_task():
                 self._progress_publish_task = None
 
+    async def _flush_pending_progress(self):
+        """Publish pending runtime mutations before revision-sensitive access.
+
+        A coalesced update already changed internal state. Externally observed
+        reads and compare-and-set commands must first give it a durable revision.
+        Internal synchronous readers remain available to code owning the state.
+        """
+        task = getattr(self, '_progress_publish_task', None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self._progress_publish_task is task:
+                self._progress_publish_task = None
+        async with self.lock:
+            if getattr(self, '_progress_dirty', False):
+                self._publish()
+                return True
+        return False
+
     def subscribe(self):
         queue = asyncio.Queue(maxsize=4)
         self.queues.add(queue)
@@ -416,6 +435,10 @@ class AppService:
         fingerprint = hashlib.sha256(json.dumps([action, args, origin], sort_keys=True).encode()).hexdigest()
         pending = []
         async with self.lock:
+            # Flush and compare under the same lock: a queued runtime event
+            # must not mutate progress between a read barrier and CAS admission.
+            if expected_revision is not None and getattr(self, '_progress_dirty', False):
+                self._publish()
             if command_id:
                 previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()
                 if previous:
@@ -1099,6 +1122,7 @@ class AppService:
 
     async def app_bridge(self, operation, args, session_id):
         if operation in {"get_state", "state.get"}:
+            await self._flush_pending_progress()
             from .agent_state import read_state
             return read_state(self.state_context(), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
@@ -1113,6 +1137,7 @@ class AppService:
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
+            await self._flush_pending_progress()
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}
         raise AppError("Unknown app bridge operation.")
 
