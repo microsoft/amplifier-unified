@@ -20,21 +20,37 @@ async function command(action,args,signal){
  throw new Error('No completion received. Inspect Smart Tools activity before retrying.');
 }
 
+async function callTool(canvasId,params,signal){
+ const id=crypto.randomUUID(),deadline=Date.now()+310000;
+ let op=await request(`/api/canvas/${encodeURIComponent(canvasId)}/tools/call`,{method:'POST',body:{id,name:params.name,arguments:params.arguments||{}},signal});
+ // A long-running call may outlive the HTTP wait. Inspect the same receipt;
+ // never retry the mutation if the connection itself was lost.
+ while(['pending','running','queued'].includes(op.status)){
+  if(signal?.aborted||Date.now()>=deadline)throw new Error('No completion received. Inspect Smart Tools activity before retrying; input was not replayed.');
+  await new Promise(resolve=>setTimeout(resolve,350));
+  op=await request(`/api/smart-tools/operations/${encodeURIComponent(id)}`,{signal});
+ }
+ if(op.status==='completed'||op.result?.isError)return op.result;
+ throw new Error(op.error||'Tool work was interrupted; it was not replayed.');
+}
+
 export function McpAppViewer({canvas,act}){
  const frame=useRef(null),current=useRef(canvas),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
  current.current=canvas;
  useEffect(()=>{
-  const controller=new AbortController();let bridge,live=true,initialized=false;
-  const report=(phase,text)=>{if(!live)return;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
+  const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='';
+  const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   const start=async()=>{
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
     {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
     {hostContext:{theme:document.querySelector('#amp-one')?.dataset.scheme==='dark'?'dark':'light',displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language}});
    bridge.oncalltool=async params=>{
-    report('working',`Running ${params.name}…`);
     try{
-     const result=await command('smartTools.appCall',{canvasId:canvas.id,name:params.name,arguments:params.arguments||{}},controller.signal);
-     report(result?.isError?'error':'ready',result?.isError?'The tool reported an error. See its result below.':'Tool view connected');
+     const result=await callTool(canvas.id,params,controller.signal);
+     // The tool owns its progress UI. Routine calls (including typing) must
+     // not toggle host controls or publish a render report on every batch.
+     if(result?.isError)report('error','The tool reported an error. See its result below.');
+     else report('ready','Tool view connected');
      return result;
     }catch(error){report('error',error.message);throw error}
    };

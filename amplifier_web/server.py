@@ -89,6 +89,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if background_updates:
         service.update_manager.task = asyncio.create_task(service.update_manager.loop())
     streams = set()
+    call_waiters = set()
 
     async def state(request):
         session_id = request.query.get('sessionId')
@@ -225,6 +226,29 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)
 
+    async def smart_canvas_call(request):
+        # The same admitted action, visibility checks and durable receipt as
+        # app_control, returned immediately on completion instead of browser polling.
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise AppError('A tool request must be a JSON object.')
+        identity = payload.get('id')
+        if not isinstance(identity, str) or not 1 <= len(identity) <= 100:
+            raise AppError('A stable request ID is required.')
+        waiter = asyncio.current_task()
+        call_waiters.add(waiter)
+        try:
+            accepted = await service.dispatch('smartTools.appCall', {
+                'canvasId': request.match_info['identity'],
+                'name': payload.get('name'), 'arguments': payload.get('arguments', {}),
+            }, command_id=identity, origin='ui')
+            operation = await service.wait_smart_tool(accepted['operationId'])
+            return web.json_response(operation, headers={'Cache-Control': 'no-store'})
+        finally:
+            call_waiters.discard(waiter)
+
+    app.router.add_post('/api/canvas/{identity}/tools/call', smart_canvas_call)
+
     async def smart_canvas_resource(request):
         try:
             result = await service.smart_canvas.resource(
@@ -276,9 +300,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         app.router.add_static("/", static, show_index=False)
 
     async def shutdown(app):
-        for task in list(streams):
+        waiting = list(streams | call_waiters)
+        for task in waiting:
             task.cancel()
-        await asyncio.gather(*list(streams), return_exceptions=True)
+        await asyncio.gather(*waiting, return_exceptions=True)
 
     app.on_shutdown.append(shutdown)
 

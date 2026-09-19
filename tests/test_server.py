@@ -37,6 +37,38 @@ async def test_frontend_has_real_stylesheet_asset(authenticated_client, tmp_path
         assert len(await css.text()) > 10000
 
 
+async def test_canvas_call_returns_original_result_and_preserves_fences(authenticated_client, tmp_path):
+    from test_smart_canvas import Tools
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    await service.smart_tools.close()
+    service.smart_tools = Tools(service)
+    client = await authenticated_client(app)
+    await service.dispatch('session.create', {'title': 'Interactive tool'})
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+    cid = service.state['canvas']['id']
+    url = f'/api/canvas/{cid}/tools/call'
+    payload = {'id': 'live-input-once', 'name': 'read', 'arguments': {}}
+    forbidden = await client.post(url, headers={'Origin': 'https://untrusted.example'}, json=payload)
+    assert forbidden.status == 403
+    response = await client.post(url, json=payload)
+    assert response.status == 200
+    operation = await response.json()
+    assert operation['status'] == 'completed'
+    assert operation['result']['structuredContent'] == {'count': 1}
+    assert 'state' not in operation
+    repeated = await (await client.post(url, json=payload)).json()
+    assert repeated == operation
+    assert len(service.state['smartTools']['operations']) == 1
+    mismatch = await client.post(url, json={**payload, 'arguments': {'different': True}})
+    assert mismatch.status == 409
+    denied = await (await client.post(url, json={'id': 'not-granted', 'name': 'ungranted'})).json()
+    assert denied['status'] == 'failed'
+    await service.dispatch('canvas.close')
+    closed = await client.post(url, json={**payload, 'id': 'closed-view'})
+    assert closed.status == 409
+
+
 async def test_open_event_stream_does_not_delay_host_shutdown(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
     client = await authenticated_client(app)
@@ -45,6 +77,36 @@ async def test_open_event_stream_does_not_delay_host_shutdown(authenticated_clie
     await asyncio.wait_for(app.shutdown(), 1)
     assert not app["service"].queues
     response.close()
+
+
+async def test_slow_canvas_call_does_not_delay_host_shutdown(authenticated_client, tmp_path):
+    import pytest
+    from aiohttp import ClientConnectionError
+    from test_smart_canvas import Tools
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    await service.smart_tools.close()
+    service.smart_tools = Tools(service)
+    entered, gate = asyncio.Event(), asyncio.Event()
+    original = service.smart_tools.command
+    async def delayed(*args, **kwargs):
+        entered.set()
+        await gate.wait()
+        return await original(*args, **kwargs)
+    service.smart_tools.command = delayed
+    client = await authenticated_client(app)
+    await service.dispatch('session.create', {'title': 'Interactive tool'})
+    await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
+    cid = service.state['canvas']['id']
+    request = asyncio.create_task(client.post(f'/api/canvas/{cid}/tools/call', json={'id': 'slow-call', 'name': 'read'}))
+    await asyncio.wait_for(entered.wait(), 1)
+    await asyncio.wait_for(app.shutdown(), 1)
+    with pytest.raises(ClientConnectionError):
+        await request
+    # Cancelling the HTTP waiter must not cancel or replay an admitted write.
+    assert not service.smart_tool_requests['slow-call'].done()
+    gate.set()
+    assert (await service.wait_smart_tool('slow-call'))['status'] == 'completed'
 
 
 async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_path):

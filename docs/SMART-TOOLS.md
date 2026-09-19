@@ -47,6 +47,12 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
   or permission to generate, and does not automatically start a conversation turn.
 
 Server instructions and tool schemas are discoverable under `/smartTools/servers`.
+Interactive views use a scoped HTTP wait for their normal `smartTools.appCall`
+action, so completed calls return immediately without a browser polling delay.
+The same admission, tool visibility, retained receipt and request-ID deduplication
+apply. Closing the HTTP request never cancels or replays an admitted tool call.
+Routine tool interaction does not toggle the host's rendering indicator; the
+tool owns its progress controls, while errors remain visible in the host.
 Small operation receipts persist in SQLite. Full results are retained for at most
 30 days, 200 completed operations and 32 MB (whichever limit comes first), in
 pageable artifact files. Expiry keeps the execution receipt and never replays work.
