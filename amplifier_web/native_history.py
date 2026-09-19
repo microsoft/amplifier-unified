@@ -146,6 +146,42 @@ class NativeHistory:
         self._files[path] = (signature, value, failed)
         return value
 
+    def _native_metadata(self, directory, issues, project):
+        """Canonical parsing/backup recovery belongs to Foundation."""
+        from amplifier_foundation.session.history import SessionHistoryStore
+        path = directory / 'metadata.json'
+        previous = self._files.get(path)
+        try:
+            stamps = []
+            for candidate in (path, directory / 'metadata.json.backup'):
+                try:
+                    stamp = _signature(candidate)
+                    if stamp[2] > _MAX_METADATA:
+                        raise ValueError('Shared metadata is too large')
+                    stamps.append(stamp)
+                except FileNotFoundError:
+                    stamps.append(None)
+            if not any(stamps) and previous:
+                return previous[1]
+            signature = tuple(stamps)
+            if previous and previous[0] == signature:
+                if previous[2]:
+                    issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': directory.name})
+                return previous[1]
+            self._reads += 1
+            reader = SessionHistoryStore(directory, session_id=directory.name)
+            value = _small_metadata(reader.load_metadata())
+            failed = False
+            if reader.diagnostics:
+                issues.append({'kind': 'recovered', 'nativeProject': project, 'nativeIdentity': directory.name})
+        except (OSError, ValueError, RecursionError):
+            failed = True
+            signature = locals().get('signature')
+            value = previous[1] if previous else {}
+            issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': directory.name})
+        self._files[path] = (signature, value, failed)
+        return value
+
     @staticmethod
     def _directories(directory):
         with os.scandir(directory) as entries:
@@ -189,7 +225,7 @@ class NativeHistory:
         for directory in directories:
             # CLI worker IDs can contain ':' and '_'. All existing basenames
             # are safe to index; root execution has a narrower ID contract.
-            native = self._read(directory / 'metadata.json', issues, slug, directory.name)
+            native = self._native_metadata(directory, issues, slug)
             capture = self._read(directory / 'context-intelligence' / 'metadata.json', issues, slug, directory.name)
             naming = self._read(directory / 'naming.json', issues, slug, directory.name)
             meta = {**capture, **native}
@@ -202,7 +238,10 @@ class NativeHistory:
             try:
                 transcript = _signature(directory / 'transcript.jsonl')
             except FileNotFoundError:
-                transcript = None
+                try:
+                    transcript = _signature(directory / 'transcript.jsonl.backup')
+                except (OSError, ValueError):
+                    transcript = None
             except (OSError, ValueError):
                 transcript = None
                 issues.append({'kind': 'unreadable', 'nativeProject': slug, 'nativeIdentity': directory.name})

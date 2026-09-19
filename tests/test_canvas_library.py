@@ -89,7 +89,10 @@ async def test_old_successful_inline_artifacts_are_recovered_without_replaying_t
     for n in range(3):
         calls.append({'id':str(n),'tool':'app_control','arguments':{'operation':'dispatch','args':{'action':'canvas.show','args':{'kind':'markdown','title':f'Visual {n}','content':f'# {n}'}}}})
         receipts.append({'role':'tool','tool_call_id':str(n),'content':json.dumps({'output':{'accepted':n<2}})})
-    SessionStore(app.data_dir/'sessions').save(session['id'],[{'role':'user','content':'Create some diagrams'},{'role':'assistant','tool_calls':calls},*receipts],{})
+    legacy = app.data_dir/'sessions'/session['id']
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy/'checkpoint.json').write_text(json.dumps({'version':1,'messages':[
+        {'role':'user','content':'Create some diagrams'},{'role':'assistant','tool_calls':calls},*receipts],'metadata':{}}))
     app.state.pop('canvasLibraryMigration');app._save()
     restored=AppService(app.data_dir,workspace=app.default_workspace)
     try:

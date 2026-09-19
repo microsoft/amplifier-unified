@@ -11,6 +11,7 @@ import time
 import uuid
 
 from .session_files import amplifier_home, project_slug
+from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
@@ -40,15 +41,21 @@ def directory(session):
 
 
 def revision(session):
-    try:
-        info = (directory(session) / 'transcript.jsonl').stat()
-        return [info.st_mtime_ns, info.st_size]
-    except OSError:
-        return None
+    for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
+        try:
+            info = (directory(session) / name).stat()
+            return [info.st_mtime_ns, info.st_size]
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+    return None
 
 
 def display_message(row, index, session):
     if not isinstance(row, dict) or row.get('role') not in {'user', 'assistant'}:
+        return None
+    if (row.get('metadata') or {}).get('ephemeral'):
         return None
     text = text_content(row)
     if not text:
@@ -62,31 +69,38 @@ def display_message(row, index, session):
 
 def read_transcript(session, *, before=None, limit=100):
     """Read a display page, or a full view for ordered web-history merging."""
-    path = directory(session) / 'transcript.jsonl'
+    from .native_activity import activity_page
+    root = directory(session)
+    native_id = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
+    # Relocation is CI policy, independent of transcript storage. It also works
+    # for read-only historical child IDs that cannot start a new manager.
+    import os
+    raw_root = os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', '').strip()
+    event_root = Path(raw_root).expanduser() if raw_root and '${' not in raw_root else None
+    events = (event_root / session['nativeProject'] / 'sessions' / native_id /
+              'context-intelligence' / 'events.jsonl') if event_root is not None and event_root.is_absolute() else None
+    reader = SessionHistoryStore(root, events_path=events, session_id=native_id)
     start = revision(session)
+    history = reader.load(include_events=False)
     rows = deque(maxlen=limit)
-    total = users = index = 0
-    with path.open(encoding='utf-8') as stream:
-        for line in stream:
-            if not line.strip():
-                continue
-            # An interrupted append may leave a partial final line. Do not
-            # publish a partial replacement of a previously visible chat.
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError('The saved transcript contains an invalid entry.')
-            row = display_message(value, index, session)
-            index += 1
-            if row is None:
-                continue
-            if before is None or total < before:
-                rows.append((total, users, row))
-            total += 1
-            users += row['role'] == 'user'
-    if revision(session) != start:
+    total = users = 0
+    for index, value in enumerate(history.messages):
+        row = display_message(value, index, session)
+        if row is None:
+            continue
+        if before is None or total < before:
+            rows.append((total, users, row))
+        total += 1
+        users += row['role'] == 'user'
+    if revision(session) != start or any(d.code == 'changed_during_read' for d in history.diagnostics):
         raise ValueError('The CLI is saving this chat. Its history will refresh shortly.')
-    return {'messages': [row[2] for row in rows], 'offset': rows[0][0] if rows else 0,
-            'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start}
+    visible = [row[2] for row in rows]
+    activity = activity_page(reader, history.messages, visible)
+    activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
+                               for d in history.diagnostics] + activity['diagnostics']
+    return {'messages': visible, 'offset': rows[0][0] if rows else 0,
+            'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start,
+            'activity': activity}
 
 
 def merge_web_history(session, incoming):
@@ -350,6 +364,8 @@ class AutomaticHistory:
                             # Preserve web-owned message IDs, execution anchors,
                             # voice-only bubbles, attachments and draft state.
                             merge_web_history(session, result['messages'])
+                        from .native_activity import apply_activity
+                        apply_activity(session, result['activity'], append=before is not None)
                         offset = source.get('sharedHistoryOffset', 0)
                         user_offset = source.get('sharedHistoryUserTurnOffset', 0)
                         if session.get('historyManaged') or (before is not None and result['offset'] <= offset):

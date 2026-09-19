@@ -1,7 +1,7 @@
 """One read-only shared-session request in the isolated runtime.
 
-The HTTP host never imports Foundation.  This small JSON-lines process is its
-only path to enumerate or display Foundation's common checkpoint schema.
+Native transcript/metadata are authoritative; old common checkpoints are an
+explicit fallback only. Browsing never acquires a lock or rewrites history.
 """
 from __future__ import annotations
 
@@ -37,11 +37,16 @@ def query(request):
         raise ValueError("workspace must be a directory.")
     from amplifier_foundation.session.shared_state import SharedSessionStore
 
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web.session_files import sessions_dir, validate_id
+    root = sessions_dir(workspace)
     operation = request.get("op")
     if operation == "list":
+        native = {path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()
+                  and any((path / name).is_file() for name in ("transcript.jsonl", "transcript.jsonl.backup"))} if root.exists() else set()
         return {"items": [
             {"id": identity, "workspace": str(workspace), "shared": True}
-            for identity in SharedSessionStore.list_ids(workspace)
+            for identity in sorted(native | set(SharedSessionStore.list_ids(workspace)))
         ]}
     if operation not in {"view", "open"}:
         raise ValueError("The shared-state operation is unsupported.")
@@ -53,14 +58,21 @@ def query(request):
         raise ValueError("offset must be a non-negative integer.")
     if type(limit) is not int or not 1 <= limit <= MAX_MESSAGES:
         raise ValueError("limit must be an integer from 1 through 100.")
-    checkpoint = SharedSessionStore(workspace, identity).read()
+    validate_id(identity)
+    history = SessionHistoryStore(root / identity, session_id=identity)
+    if any((root / identity / name).exists() for name in ("transcript.jsonl", "transcript.jsonl.backup")):
+        value = history.load(include_events=False)
+        checkpoint = {"messages": value.messages, "metadata": value.metadata,
+                      "bundle": value.metadata.get("bundle_name") or value.metadata.get("bundle")}
+    else:
+        checkpoint = SharedSessionStore(workspace, identity).read()
     if checkpoint is None:
         raise ValueError("The shared session was not found.")
     messages = [
         {"role": row["role"], "text": text_content(row)}
         for row in checkpoint["messages"]
         if isinstance(row, dict) and row.get("role") in {"user", "assistant"}
-        and text_content(row)
+        and not (row.get("metadata") or {}).get("ephemeral") and text_content(row)
     ]
     if operation == "open":
         offset = max(0, len(messages) - limit)

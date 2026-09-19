@@ -14,7 +14,8 @@ def test_checkpoint_roundtrip_keeps_transcript_and_removes_credentials(tmp_path)
     assert rows == messages[1:]
     assert metadata["parent_id"] == "root"
     assert metadata["config"] == {"model": "chosen-model"}
-    assert (tmp_path / "sessions/child-123/checkpoint.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "sessions/child-123/transcript.jsonl").stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "sessions/child-123/checkpoint.json").exists()
     assert not any("do-not-save" in p.read_text() for p in (tmp_path / "sessions/child-123").iterdir())
 
 
@@ -66,3 +67,32 @@ async def test_approval_preserves_user_decision_and_rejects_invented_choice():
         return "approve-all-forever"
     with pytest.raises(ValueError):
         await Approvals(None, bad).request_approval("apply?", ["allow", "deny"])
+
+
+def test_find_prefers_native_backup_over_private_legacy_and_deduplicates_paths(tmp_path):
+    from amplifier_web.session_files import sessions_dir
+    root = sessions_dir(tmp_path) / 'fixture'
+    root.mkdir(parents=True)
+    backup = root / 'transcript.jsonl.backup'
+    backup.write_text('{"role":"user","content":"native backup"}\n')
+    legacy = SessionStore(tmp_path / 'app/sessions')
+    legacy.directory('fixture').mkdir()
+    (legacy.directory('fixture') / 'checkpoint.json').write_text(json.dumps({'version': 1,
+        'messages': [{'role': 'user', 'content': 'stale private'}], 'metadata': {}}))
+    rows, _ = SessionStore.find(tmp_path / 'app', 'fixture', tmp_path)
+    assert rows[0]['content'] == 'native backup'
+    assert not (root / 'transcript.jsonl').exists()
+    (root / 'transcript.jsonl').write_bytes(backup.read_bytes())
+    assert SessionStore.find(tmp_path / 'app', 'fixture', tmp_path)[0] == rows
+
+
+def test_explicit_legacy_import_accepts_backup_only_source(tmp_path):
+    source = tmp_path / 'legacy/sessions/fixture'
+    source.mkdir(parents=True)
+    backup = source / 'transcript.jsonl.backup'
+    backup.write_text('{"role":"user","content":"saved backup"}\n')
+    store = SessionStore(tmp_path / 'own', legacy_home=tmp_path / 'legacy')
+    rows, metadata = store.import_cli('fixture')
+    assert rows[0]['content'] == 'saved backup'
+    assert metadata['legacy_import']['jobs_replayed'] is False
+    assert not (source / 'transcript.jsonl').exists()

@@ -169,3 +169,23 @@ async def test_queued_mount_changes_can_be_cancelled(app):
     await app.management.perform('configuration.cancel',{'id':session['id']})
     assert not app.management.queued_path(session['id']).exists()
     assert 'pendingConfiguration' not in session
+
+
+async def test_native_export_uses_backup_without_repair_or_execution(app):
+    from unittest.mock import AsyncMock
+    from amplifier_web.session_files import project_slug
+    session = app._session()
+    store = SessionStore.for_app(app.data_dir, session['workspace'])
+    rows = [{'role': 'user', 'content': 'fixture export'}, {'role': 'assistant', 'content': 'answer'}]
+    store.save(session['id'], rows, {'bundle': 'anchors'})
+    directory = store.directory(session['id'])
+    (directory / 'transcript.jsonl').rename(directory / 'transcript.jsonl.backup')
+    session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=session['id'])
+    before = (directory / 'transcript.jsonl.backup').read_bytes()
+    app.management.download = AsyncMock()
+    await app.management.perform('history.export', {'id': session['id'], 'format': 'json'})
+    exported = json.loads(app.management.download.call_args.args[1])
+    assert exported['messages'] == rows
+    assert not (directory / 'transcript.jsonl').exists()
+    assert (directory / 'transcript.jsonl.backup').read_bytes() == before
+    assert any(row['code'] == 'recovered_backup' for row in app.state['historyDiagnostics'])

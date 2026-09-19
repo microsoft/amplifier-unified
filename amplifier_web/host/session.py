@@ -63,11 +63,11 @@ def repair_interrupted_receipts(messages):
 
 
 class NativeTranscriptConflict(RuntimeError):
-    """An older host changed the native projection outside the shared lock."""
+    """An older host changed native history outside the shared lock."""
 
 
 class _NativeTranscriptGuard:
-    """Fail closed when the CLI projection diverges from admitted history.
+    """Fail closed when native history changes after admission.
 
     Foundation's lock coordinates participating hosts. Older CLI releases do
     not use it, so their native file must also be checked before each write.
@@ -76,11 +76,12 @@ class _NativeTranscriptGuard:
     def __init__(self, path):
         self.path = Path(path)
         self.stamp = self._stamp()
+        self.companion_stamps = self._companions()
 
     @staticmethod
     def conflict():
         return NativeTranscriptConflict(
-            "The native CLI transcript changed outside this session's shared checkpoint. "
+            "The native CLI transcript changed outside this session's shared lock. "
             "Both histories were preserved. Resolve the conflicting transcript before continuing this session.")
 
     def _stamp(self):
@@ -92,25 +93,26 @@ class _NativeTranscriptGuard:
             raise NativeTranscriptConflict("The native CLI transcript is not a regular file; it was not changed.")
         return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
-    def check(self):
-        if self._stamp() != self.stamp:
-            raise self.conflict()
+    def _companions(self):
+        values = []
+        for name in ('transcript.jsonl.backup',):
+            path = self.path.with_name(name)
+            try:
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise NativeTranscriptConflict('Native session history must use regular files; nothing was changed.')
+                values.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            except FileNotFoundError:
+                values.append(None)
+        return tuple(values)
 
-    def admit(self, messages, *, preserve_system=False):
-        """Accept either the full checkpoint or its documented CLI projection."""
-        if self.stamp is None:
-            self.check()
-            return
-        with self.path.open(encoding="utf-8") as stream:
-            rows = [json.loads(line) for line in stream if line.strip()]
-        self.check()
-        projection = messages if preserve_system else [
-            row for row in messages if row.get("role") not in {"system", "developer"}]
-        if rows != messages and rows != projection:
+    def check(self):
+        if self._stamp() != self.stamp or self._companions() != self.companion_stamps:
             raise self.conflict()
 
     def saved(self):
         self.stamp = self._stamp()
+        self.companion_stamps = self._companions()
 
 
 class SelectedProvider:
@@ -313,41 +315,41 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
     runtime = runtime or Runtime()
-    def shared_value(name, default=None):
-        if shared_snapshot is None:
-            return default
-        if isinstance(shared_snapshot, dict):
-            return shared_snapshot.get(name, default)
-        return getattr(shared_snapshot, name, default)
-
-    shared_messages = shared_value("messages")
-    shared_metadata = shared_value("metadata", {})
-    if shared_snapshot is not None and (not isinstance(shared_messages, list) or not isinstance(shared_metadata, dict)):
-        raise ValueError("The shared session checkpoint is malformed.")
     store = SessionStore.for_app(config.home, config.workspace)
-    # A missing native projection can be regenerated from a shared checkpoint.
-    # Do not first migrate an older private checkpoint over that authority.
-    if shared_snapshot is None:
-        store._migrate(runtime.session_id)
+    # Native history is authoritative, including an intentionally empty file.
+    # A common checkpoint is read only for an explicitly legacy-only session;
+    # a stale or corrupt checkpoint cannot prevent opening valid native history.
     native_guard = _NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
-    if shared_snapshot is not None:
-        native_guard.admit(shared_messages, preserve_system=bool(shared_metadata.get("preserve_system")))
-        saved = shared_messages, shared_metadata
-    else:
-        saved = store.load(runtime.session_id) if resume else None
-        if resume and saved is None and shared_handle is None:
-            saved = store.import_cli(runtime.session_id, workspace=config.workspace)
-        native_guard.check()
-
-    shared_bundle = shared_value("bundle")
-    if isinstance(shared_bundle, str):
-        # Legacy host projections used a display prefix.  Authority uses a
-        # portable Foundation bundle reference, so never let that projection
-        # override a shared checkpoint.
-        shared_bundle = shared_bundle.removeprefix("bundle:")
-    if shared_bundle is not None and (not isinstance(shared_bundle, str) or not shared_bundle.strip()):
-        raise ValueError("The shared session checkpoint has no resolvable bundle.")
-    chosen = shared_bundle or bundle or config.active_bundle
+    saved = store.load(runtime.session_id) if resume else None
+    history_source = "native" if saved is not None else "new"
+    if resume and saved is None:
+        if shared_snapshot is None and shared_handle is not None:
+            shared_snapshot = shared_handle.read()
+        if shared_snapshot is not None:
+            def legacy_value(name, default=None):
+                return shared_snapshot.get(name, default) if isinstance(shared_snapshot, dict) else getattr(shared_snapshot, name, default)
+            messages, metadata = legacy_value("messages"), legacy_value("metadata", {})
+            if not isinstance(messages, list) or not isinstance(metadata, dict):
+                raise ValueError("The legacy shared session checkpoint is malformed.")
+            saved = messages, {**metadata, "bundle": legacy_value("bundle")}
+            history_source = "legacy-checkpoint"
+        else:
+            store._migrate(runtime.session_id)
+            # Migration intentionally writes once; take its stamp before the
+            # read so a concurrent older CLI write cannot become our baseline.
+            native_guard.saved()
+            saved = store.load(runtime.session_id)
+            if saved is None and shared_handle is None:
+                saved = store.import_cli(runtime.session_id, workspace=config.workspace)
+            if saved is not None:
+                history_source = "native"
+    native_guard.check()
+    saved_bundle = (saved[1].get("bundle_name") or saved[1].get("bundle")) if saved else None
+    if isinstance(saved_bundle, str):
+        saved_bundle = saved_bundle.removeprefix("bundle:")
+    if saved_bundle is not None and (not isinstance(saved_bundle, str) or not saved_bundle.strip()):
+        raise ValueError("The saved session has no resolvable bundle.")
+    chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
@@ -418,7 +420,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             jobs.close()
             raise RuntimeError("Existing job evidence requires explicit resume")
         messages, recovered = jobs.recover(messages or [])
-    if messages is not None and shared_snapshot is None:
+    if messages is not None:
         messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None
@@ -478,14 +480,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             held = shared_handle_getter() if shared_handle_getter else shared_handle
             native_guard.check()
             if held is not None:
-                # The held capability validates PID/ownership before the
-                # atomic replace.  Its full context beats this host's native
-                # projection on every subsequent mount.
-                held.write(transcript, bundle=bundle_identity, metadata={
-                    **{key: value for key, value in metadata.items() if key != "config"}, "status": status,
-                    "last_updated": datetime.now(UTC).isoformat(),
-                    "turn_count": sum(row.get("role") == "user" for row in transcript),
-                })
+                # Cross-host ownership remains Foundation's responsibility;
+                # native transcript/metadata are the only newly written history.
+                held.check()
             store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
@@ -508,10 +505,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         # Stamp only explicit, local bundle resources actually consumed by this
         # mount. Registry caches and reports are intentionally excluded because
         # they are rewritten by normal preparation.
-        # Native CLI versions without common checkpoint support can write while
-        # parked. Include their transcript so the worker remounts and rechecks
-        # authority before it admits another input or control mutation.
-        config_inputs = [str(native_guard.path)]
+        # Native history has its own worker stamp; these are additional mount
+        # inputs, separate from files changed by normal saves.
+        config_inputs = []
         for reference in (chosen, *config.app_bundles):
             path = Path(reference).expanduser()
             if not path.is_absolute():
@@ -530,6 +526,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
             "module_load_failures": failures}
         report["config_inputs"] = config_inputs
+        report["history_source"] = history_source
         write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
         registry.save()
         return session, runtime, report

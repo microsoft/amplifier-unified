@@ -13,6 +13,8 @@ import re
 import tempfile
 import time
 
+from amplifier_foundation.session.history import SessionHistoryStore
+
 _SECRET_KEYS = {"api_key", "apikey", "access_token", "refresh_token", "secret", "password", "authorization", "client_secret"}
 
 
@@ -44,15 +46,16 @@ class SessionStore:
         """Locate a native session without making another host-owned copy."""
         from ..session_files import amplifier_home, validate_id
         validate_id(identity)
-        candidates = list((amplifier_home() / 'projects').glob(f'*/sessions/{identity}/transcript.jsonl'))
+        candidates = sorted({path.parent for name in ('transcript.jsonl', 'transcript.jsonl.backup')
+                             for path in (amplifier_home() / 'projects').glob(f'*/sessions/{identity}/{name}')})
         if len(candidates) > 1:
             raise ValueError('This session ID exists in more than one workspace. Open it through shared workspace history.')
         if candidates:
-            return cls(candidates[0].parent.parent, shared=True, legacy_home=amplifier_home()).load(identity)
+            return cls(candidates[0].parent, shared=True, legacy_home=amplifier_home()).load(identity)
         legacy = cls(Path(home) / 'sessions').load(identity)
         if legacy:
             workspace = legacy[1].get('working_dir') or default_workspace
-            return cls.for_app(home, workspace).load(identity)
+            return cls.for_app(home, workspace).load(identity) or legacy
         return None
 
     def _migrate(self, session_id):
@@ -65,7 +68,7 @@ class SessionStore:
             return
         directory = self.directory(session_id)
         source = self.previous / session_id
-        if (directory / 'transcript.jsonl').exists() or not (source / 'checkpoint.json').is_file():
+        if self.has_transcript(session_id) or not (source / 'checkpoint.json').is_file():
             return
         old = SessionStore(self.previous).load(session_id)
         if old is None:
@@ -76,7 +79,7 @@ class SessionStore:
         from filelock import FileLock
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         with FileLock(str(directory / '.unified-migration.lock')):
-            if (directory / 'transcript.jsonl').exists():
+            if self.has_transcript(session_id):
                 return
             self.save(session_id, *old, preserve_system=True)
             # Job evidence is never replayed, and process ownership is not copied.
@@ -108,50 +111,47 @@ class SessionStore:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def save(self, session_id, messages, metadata, *, preserve_system=False):
+    def history(self, session_id, *, events_path=None):
+        return SessionHistoryStore(self.directory(session_id), events_path=events_path,
+                                   session_id=session_id)
+
+    def has_transcript(self, session_id):
         directory = self.directory(session_id)
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return any((directory / name).exists() for name in
+                   ("transcript.jsonl", "transcript.jsonl.backup"))
+
+    def save(self, session_id, messages, metadata, *, preserve_system=False):
+        history = self.history(session_id)
         rows = [copy.deepcopy(m if isinstance(m, dict) else m.model_dump()) for m in messages]
-        # Regenerate system instructions from the bundle on resume.
-        if not preserve_system and not (metadata or {}).get("preserve_system"):
-            rows = [m for m in rows if m.get("role") not in {"system", "developer"}]
         from ..naming import read
-        existing = directory / 'metadata.json'
-        previous = json.loads(existing.read_text()) if existing.exists() else {}
-        saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {}),**read(directory)})
+        previous = history.load_metadata()
+        saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {}), **read(history.session_dir)})
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
         if saved_metadata.get('bundle_name'):
             saved_metadata['bundle'] = saved_metadata['bundle_name']
-        payload = {"version": 1, "messages": rows, "metadata": saved_metadata}
-        # Legacy stores used one private authority file. Shared stores project
-        # the Foundation checkpoint to the CLI's native transcript/metadata.
-        if not self.shared:
-            self._atomic(directory / "checkpoint.json", json.dumps(payload, ensure_ascii=False, default=str))
-        self._atomic(directory / "transcript.jsonl", "".join(json.dumps(m, ensure_ascii=False, default=str) + "\n" for m in rows))
-        self._atomic(directory / "metadata.json", json.dumps(saved_metadata, ensure_ascii=False, indent=2, default=str))
+        history.save(rows, saved_metadata,
+                     preserve_system=preserve_system or bool(saved_metadata.get("preserve_system")))
 
     def load(self, session_id):
-        if self.shared:
-            self._migrate(session_id)
-            directory = self.directory(session_id)
-            path = directory / 'transcript.jsonl'
-            if not path.exists():
-                return None
-            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
-            if any(not isinstance(row, dict) for row in rows):
-                raise ValueError('Malformed session transcript')
-            metadata = directory / 'metadata.json'
-            value = json.loads(metadata.read_text()) if metadata.exists() else {}
-            from ..naming import read
-            return rows, {**value, **read(directory)}
-        path = self.directory(session_id) / "checkpoint.json"
+        """Read native history first, without migrating or writing while browsing."""
+        directory = self.directory(session_id)
+        from ..naming import read
+        if self.has_transcript(session_id):
+            value = self.history(session_id).load(include_events=False)
+            if any(item.code == 'changed_during_read' for item in value.diagnostics):
+                raise ValueError('The saved session changed while it was being read.')
+            return value.messages, {**value.metadata, **read(directory)}
+        # Explicit legacy fallback only: once a native transcript exists, even
+        # an empty one, this private file can never override it.
+        path = directory / "checkpoint.json"
         if not path.exists():
             return None
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("version") != 1 or not isinstance(payload.get("messages"), list) or not isinstance(payload.get("metadata"), dict):
             raise ValueError("Unsupported or corrupted session checkpoint")
-        from ..naming import read
-        return payload["messages"], {**payload["metadata"],**read(path.parent)}
+        if any(not isinstance(row, dict) or not isinstance(row.get("role"), str) for row in payload["messages"]):
+            raise ValueError("Malformed legacy session checkpoint")
+        return payload["messages"], {**payload["metadata"], **read(directory)}
 
     def import_cli(self, session_id, workspace=None):
         """Copy one selected legacy transcript. Never execute or mutate source records."""
@@ -177,13 +177,10 @@ class SessionStore:
                 continue
             seen.add(source)
             transcript = source / "transcript.jsonl"
-            if not transcript.is_file():
+            if not transcript.is_file() and not transcript.with_suffix(".jsonl.backup").is_file():
                 continue
-            rows = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines() if line.strip()]
-            if any(not isinstance(row, dict) for row in rows):
-                raise ValueError("Legacy transcript contains a malformed message")
-            metadata_path = source / "metadata.json"
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+            history = SessionHistoryStore(source, session_id=session_id).load(include_events=False)
+            rows, metadata = history.messages, history.metadata
             # Checkpoints are conversation evidence only. Pending/unfinished tool
             # calls remain historical; loop-live receives no imported job tasks.
             metadata["legacy_import"] = {"source": str(source), "imported_at": time.time(), "read_only_source": True, "jobs_replayed": False}

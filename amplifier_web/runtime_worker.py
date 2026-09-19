@@ -47,7 +47,7 @@ class Worker:
         self.activation_gate = None
         self.activation = None
         self.parked = False
-        self.parked_checkpoint_stamp = None
+        self.parked_history_stamp = None
         self.parked_config_stamp = None
         self.config_inputs = ()
         self.command_lock = asyncio.Lock()
@@ -183,8 +183,8 @@ class Worker:
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
             self.workspace = workspace
             self.start_config = dict(config)
-            # This import happens only in the runtime subprocess.  The outer
-            # HTTP application intentionally stays independent of Foundation.
+            # Execution locking lives in the isolated runtime. The outer host
+            # uses the same Foundation native-history reader for navigation.
             if self.shared_store is None:
                 from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
                 self.shared_store = SharedSessionStore(workspace, config["id"])
@@ -195,7 +195,6 @@ class Worker:
                     self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
-            shared_snapshot = await asyncio.to_thread(self.shared_handle.read)
             # Always allow loading the saved transcript when one exists; the
             # adapter marks interrupted jobs as evidence, never replays them.
             report_directory = self.home / "runtime-reports" / config["id"]
@@ -205,14 +204,14 @@ class Worker:
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
-                shared_snapshot=shared_snapshot, write_guard=self.activation_gate.check_current)
+                write_guard=self.activation_gate.check_current)
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
-            # The common checkpoint owns shared-root state.  Local controls are
-            # a native projection and must not override a CLI/web shared mount.
-            if shared_snapshot is None:
+            # Preserve app controls on native mounts. A legacy common snapshot
+            # retains its previous restoration policy during one-time recovery.
+            if report.get("history_source") != "legacy-checkpoint":
                 await self.controls.restore()
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
@@ -251,7 +250,7 @@ class Worker:
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
             self.execution = asyncio.create_task(self.session.execute(""))
             self.execution.add_done_callback(self.executed)
-            self.parked_checkpoint_stamp = self.shared_handle.stamp()
+            self.parked_history_stamp = self.history_stamp()
             self.parked_config_stamp = configuration_stamp(
                 workspace, config["id"], self.home, self.shared_store_stamp,
                 extra_paths=self.config_inputs)
@@ -296,7 +295,7 @@ class Worker:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint("completed")
-                self.parked_checkpoint_stamp = self.shared_handle.stamp()
+                self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
                     self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
@@ -309,6 +308,13 @@ class Worker:
                 self.activation_gate.reset(token)
         publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
 
+    def history_stamp(self):
+        """Cheap native invalidation; never parse events or consult checkpoints."""
+        from amplifier_web.session_files import sessions_dir
+        directory = sessions_dir(self.workspace) / self.runtime.session_id
+        return tuple(self.shared_store_stamp(directory / name) for name in
+                     ("transcript.jsonl", "transcript.jsonl.backup", "metadata.json", "metadata.json.backup"))
+
     async def acquire_for_mutation(self):
         """Acquire after a parked loop wakes, before it can accept an input."""
 
@@ -316,17 +322,22 @@ class Worker:
             return
         handle = await asyncio.to_thread(
             self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
-        checkpoint_stamp = handle.stamp()
-        from amplifier_web.shared_state import configuration_stamp
-        config_stamp = configuration_stamp(
-            self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
-            extra_paths=self.config_inputs)
-        if self.parked_checkpoint_stamp is not None and checkpoint_stamp is None:
+        try:
+            history_stamp = self.history_stamp()
+            from amplifier_web.shared_state import configuration_stamp
+            config_stamp = configuration_stamp(
+                self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
+                extra_paths=self.config_inputs)
+        except BaseException:
+            await asyncio.to_thread(handle.release)
+            raise
+        if (self.parked_history_stamp and any(self.parked_history_stamp[:2])
+                and not any(history_stamp[:2])):
             await asyncio.to_thread(handle.release)
             raise RuntimeError(
-                "The shared session checkpoint disappeared while this runtime was "
-                "parked. Its previous context will not be replaced with local history.")
-        if checkpoint_stamp != self.parked_checkpoint_stamp or config_stamp != self.parked_config_stamp:
+                "The native session transcript and its backup disappeared while this runtime was "
+                "parked. Its previous context will not be replaced with legacy history.")
+        if history_stamp != self.parked_history_stamp or config_stamp != self.parked_config_stamp:
             self.shared_handle = handle
             self.parked = False
             await self.remount()

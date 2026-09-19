@@ -19,9 +19,14 @@ def test_project_paths_and_transcripts_share_cli_changes_without_checkpoint_copy
     assert project_slug(workspace) == str(workspace.resolve()).replace('/', '-')
     home = tmp_path / 'app'
     old = SessionStore(home / 'sessions')
-    old.save('root', [{'role': 'user', 'content': 'old'}], {'working_dir': str(workspace), 'hook_metadata': {'keep': True}})
+    old.directory('root').mkdir()
+    (old.directory('root') / 'checkpoint.json').write_text(json.dumps({'version': 1,
+        'messages': [{'role': 'user', 'content': 'old'}],
+        'metadata': {'working_dir': str(workspace), 'hook_metadata': {'keep': True}}}))
     original = (old.directory('root') / 'checkpoint.json').read_bytes()
     shared = SessionStore.for_app(home, workspace)
+    assert shared.load('root') is None
+    shared._migrate('root')
     assert shared.load('root')[0][0]['content'] == 'old'
     assert shared.directory('root') == sessions_dir(workspace) / 'root'
     assert not (shared.directory('root') / 'checkpoint.json').exists()

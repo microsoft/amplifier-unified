@@ -1,7 +1,7 @@
 """CLI-compatible paths and Context Intelligence's public JSONL disk contract.
 
-No dependency on a host application. Foundation still owns execution locking and
-the atomic full-context checkpoint; these are its native, shared session files.
+No dependency on a host application. Foundation owns execution locking and the native history reader/writer; these
+remain the existing shared session files.
 """
 from __future__ import annotations
 

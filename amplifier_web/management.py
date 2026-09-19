@@ -526,9 +526,10 @@ class Management:
             if session.get('nativeProject'):
                 from .automatic_history import directory
                 path=directory(session)
-                rows=[json.loads(line) for line in (path/'transcript.jsonl').read_text().splitlines() if line.strip()]
-                metadata=json.loads((path/'metadata.json').read_text()) if (path/'metadata.json').is_file() else {}
-                saved=(rows,metadata)
+                from amplifier_foundation.session.history import SessionHistoryStore
+                history=SessionHistoryStore(path).load(include_events=False)
+                saved=(history.messages,history.metadata)
+                await self.publish(historyDiagnostics=[{'code':d.code,'source':d.source,'line':d.line,'severity':d.severity} for d in history.diagnostics])
             else:
                 store=SessionStore.for_app(self.service.data_dir,session['workspace'])
                 saved=store.load(session.get('runtimeSessionId') or session['id'])
@@ -575,12 +576,14 @@ class Management:
     def history(self,legacy=False):
         from .session_files import amplifier_home
         rows=[]
-        paths=list((amplifier_home()/'projects').glob('*/sessions/*/metadata.json'))
+        from amplifier_foundation.session.history import SessionHistoryStore
+        paths=sorted({path.parent/'metadata.json' for name in ('metadata.json','metadata.json.backup')
+                      for path in (amplifier_home()/'projects').glob('*/sessions/*/'+name)})
         seen={path.parent.name for path in paths}
         paths.extend(path for path in (self.service.data_dir/'sessions').glob('*/metadata.json') if path.parent.name not in seen)
         for path in paths:
             try:
-                meta=json.loads(path.read_text())
+                meta=SessionHistoryStore(path.parent).load_metadata()
                 rows.append({'id':path.parent.name,'title':meta.get('name') or meta.get('title') or meta.get('bundle_name') or path.parent.name,'workspace':meta.get('working_dir') or meta.get('workspace'),'updatedAt':meta.get('updated_at'),'legacy':False,'parentId':meta.get('parent_id')})
             except (OSError,ValueError):continue
         return rows
