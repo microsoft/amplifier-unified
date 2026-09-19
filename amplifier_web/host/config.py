@@ -213,6 +213,14 @@ def load_config(workspace, *, home=None, legacy_home=None):
             project["_workspace"] = str(workspace)
             write_private(project_snapshot, yaml.safe_dump(project, sort_keys=False))
     _load_keys(home / "config" / "keys.env")
+    return read_config(workspace, home=home)
+
+
+def read_config(workspace, *, home=None):
+    """Read existing settings without migration, key loading, locks or writes."""
+    home = Path(home or app_home()).expanduser().resolve()
+    workspace = Path(workspace).expanduser().resolve(strict=True)
+    project_snapshot = workspace_snapshot_path(workspace, home)
     global_settings = read_yaml(home / "config" / "settings.yaml")
     settings = merge(global_settings, read_yaml(project_snapshot))
     # The app's own workspace file is live configuration; imported legacy files

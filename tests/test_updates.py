@@ -14,10 +14,16 @@ def git(path,*args):
     return subprocess.check_output(['git',*args],cwd=path,text=True,stderr=subprocess.DEVNULL).strip()
 
 @pytest.fixture
-async def app(tmp_path,monkeypatch):
-    from amplifier_web import app_updates
+async def app(tmp_path,monkeypatch,repo):
+    from amplifier_web import app_updates,updates
     async def check():return {"id":"application","label":"Amplifier Unified","status":"current"}
     monkeypatch.setattr(app_updates,"check",check)
+    original=updates.process
+    async def process(*args,**kwargs):
+        if 'fetch' in args:
+            args=tuple(str(repo[0]) if arg=='https://example.invalid/repo' else arg for arg in args)
+        return await original(*args,**kwargs)
+    monkeypatch.setattr(updates,'process',process)
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
     await service.dispatch('session.create',{'bundle':'anchors-amp-dev'})
     service.update_manager=UpdateManager(service)
@@ -40,7 +46,7 @@ async def prepare(app,repo):
     (root/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url':'https://example.invalid/repo','ref':'main','commit':old}))
     (app.data_dir/'config').mkdir();(app.data_dir/'config/settings.yaml').write_text('{}')
     manager=app.update_manager
-    manager.inventory=[{'id':'repo','path':'cache/repository','url':str(remote),'label':'Fixture','current':old,'latest':new,'ref':'main','eligible':True,'status':'update'}]
+    manager.inventory=[{'id':'repo','path':'cache/repository','url':'https://example.invalid/repo','label':'Fixture','current':old,'latest':new,'ref':'main','eligible':True,'status':'update'}]
     return manager,root
 
 async def test_stage_activate_and_rollback_preserve_original_cache(app,repo):
