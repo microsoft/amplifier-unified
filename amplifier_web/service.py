@@ -14,6 +14,7 @@ import uuid
 from jsonschema import validate, ValidationError
 import tinycss2
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution
+from .updates import work_paused
 
 
 def string(limit=16000):
@@ -371,7 +372,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if self.state.get("updates",{}).get("phase") == "activating" and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -527,7 +528,7 @@ class AppService:
                     raise AppError('Wait for configuration changes to finish.',409)
                 if not self.runtime:
                     raise AppError('The Amplifier runtime is unavailable.')
-                if self.state.get('updates',{}).get('phase')=='activating':
+                if work_paused(self.state):
                     raise AppError('An update is activating. Please retry in a moment.',409)
                 session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
                 from .session_store import fork_session
@@ -1050,7 +1051,7 @@ class AppService:
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
         async with self.lock:
-            if self.state.get("updates",{}).get("phase") == "activating":
+            if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
             session = self._session(session_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)

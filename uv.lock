@@ -123,7 +123,7 @@ client = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.9.3"
+version = "0.9.4"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

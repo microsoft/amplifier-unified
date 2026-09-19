@@ -118,6 +118,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         authorization = request.headers.get("Authorization", "")
         if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], app["control_token"]):
             response["dataIdentity"] = data_identity(service.data_dir)
+            response.update({key: service.update_manager.running_identity[key] for key in ('revision', 'instanceId')})
             response["runtime"] = service.get_state()["runtime"]
         return web.json_response(response)
 
@@ -272,6 +273,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         await asyncio.gather(*list(streams), return_exceptions=True)
 
     app.on_shutdown.append(shutdown)
+
+    async def confirm_started(app):
+        from .update_readiness import wait_for_readiness, recovery_candidate
+        if recovery_candidate(service.update_manager):
+            service.update_manager.readiness_task = asyncio.create_task(
+                wait_for_readiness(service.update_manager, app['control_token']))
+
+    app.on_startup.append(confirm_started)
 
     async def cleanup(app):
         await service.close()

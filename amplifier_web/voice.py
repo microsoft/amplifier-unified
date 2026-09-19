@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
+from .updates import work_paused
 
 API = "https://api.openai.com/v1"
 MODELS = {"live": "gpt-live-1", "realtime": "gpt-realtime-2.1"}
@@ -462,7 +463,7 @@ class VoiceService:
             # under the same lock used by update activation before any provider
             # request can start; activation then sees the connecting status.
             async with self.service.lock:
-                if self.service.state.get("updates", {}).get("phase") == "activating":
+                if work_paused(self.service.state):
                     raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
                 call = VoiceCall(self, session_id)
                 self.call = call

@@ -92,6 +92,8 @@ class UpdateDiagnostics:
         if isinstance(facts.get('commandId'),str) and re.fullmatch(r'[a-f0-9]{32}',facts['commandId']):event['commandId']=facts['commandId']
         for key in ('expectedVersion','observedVersion'):
             if isinstance(facts.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',facts[key]):event[key]=facts[key]
+        for key in ('expectedRevision','observedRevision'):
+            if isinstance(facts.get(key),str) and re.fullmatch(r'[a-f0-9]{40}',facts[key]):event[key]=facts[key]
         if isinstance(facts.get('probe'),dict):
             probe=probe_record(PROBE_PREFIX+json.dumps(facts['probe']))
             if probe:event['probe']=probe

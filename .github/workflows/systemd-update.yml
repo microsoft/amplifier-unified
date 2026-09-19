@@ -1,0 +1,24 @@
+name: Managed update handoff
+on:
+  pull_request:
+    paths:
+      - 'amplifier_web/**'
+      - 'tests/fixtures/systemd_update_service.py'
+      - 'scripts/test_systemd_update.py'
+      - '.github/workflows/systemd-update.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  systemd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Exercise restart and readiness inside a disposable systemd user service
+        run: python scripts/test_systemd_update.py

@@ -69,14 +69,21 @@ async def test_framed_probe_accepts_warnings_and_reports_actual_mismatch(tmp_pat
     await service.close()
 
 
-async def test_restart_success_clears_current_failure_and_preserves_history(tmp_path):
+async def test_restart_success_clears_current_failure_and_preserves_history(tmp_path,monkeypatch):
     from amplifier_web import __version__
+    from amplifier_web.auth import data_identity
+    identity={'version':__version__,'revision':'a'*40,'instanceId':'c'*32}
+    monkeypatch.setattr('amplifier_web.update_readiness.running_identity',lambda:dict(identity))
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     failure={'phase':'replacement-probe','status':'failed'}
     service.state['updates']={'error':'prior failure','diagnostics':{'lastFailure':failure,'events':[failure]},
         'pendingRestart':{'version':__version__,'revision':'a'*40,'attemptId':'b'*32}}
     manager=UpdateManager(service);service.update_manager=manager
     updates=service.state['updates']
+    assert updates['error']=='prior failure' and updates['phase']=='activating'
+    assert updates['diagnostics']['lastFailure']==failure
+    assert await manager.confirm_readiness({'ok':True,'app':'amplifier-unified',
+        'dataIdentity':data_identity(tmp_path),**identity})
     assert updates['error'] is None and 'lastFailure' not in updates['diagnostics']
     assert updates['diagnostics']['events'][0]==failure
     assert updates['diagnostics']['latest']['phase']=='restart-ack'
@@ -123,7 +130,8 @@ async def test_restart_helper_failure_keeps_host_and_distinguishes_installed_pac
     failure=service.state['updates']['diagnostics']['lastFailure']
     assert failure['phase']=='restart-helper' and failure['errorType']=='PermissionError'
     assert 'installed' in service.state['updates']['error']
-    assert service.state['updates']['pendingRestart'] is None
+    assert service.state['updates']['phase']=='activating'
+    assert service.state['updates']['pendingRestart']['version']=='99.0.0'
     assert 'sensitive' not in json.dumps(service.state['updates'])
     await service.close()
 
