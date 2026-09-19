@@ -169,7 +169,7 @@ top-level sessions listed as chats. Independent forks stay in the chat list;
 subagent histories are available through **Session details → Subagent history**
 on their parent conversation. Select a resumable root chat to continue it; there
 is no import or sharing option to configure. The list refreshes every 15 seconds in the background,
-and the refresh button beside **Conversations** checks immediately. Opening a
+and the refresh button beside the chat list checks immediately. Opening a
 chat creates only a browser view of the same root ID. It does not duplicate the
 runtime transcript. The view starts with the latest 100 visible messages;
 **Load earlier messages** reveals older history. Execution restores the complete
@@ -181,6 +181,23 @@ Metadata is cached; unopened histories are indexed without reading transcripts
 or starting a runtime. Navigation renders 100 chats at a time; search covers all
 chats in the workspace. Agents use the same `history.refresh`, `session.select`,
 and `session.history` actions as the interface.
+
+The workspace explorer shows existing folders with top-level chats and the
+ancestor folders needed to reach them. Click a workspace name to select its
+chats; a chevron appears only when that folder contains deeper workspaces.
+Browsing folders leaves the current conversation open. Search accepts full paths,
+custom workspace names, and case-insensitive fnmatch patterns. The selected
+workspace's full path remains visible, and unread activity rolls up through its
+parent folders. There is no optional filter for empty or unrelated folders.
+
+**New workspace** accepts an existing folder or a path to create, opens its first
+chat, and makes the workspace immediately visible. Existing folders and chats
+are reused. Creating a workspace does not start a runtime or model call; its
+first chat initializes when you send a message or explicitly open model controls.
+Agents have the same `workspace.create` and `workspace.select` actions. Their
+state includes `/workspaceExplorer`; `view.update` accepts `navWorkspacePath`,
+`navWorkspaceFilter`, `navWorkspacePage` (1-based), and
+`navWorkspaceAncestorsOpen` for the same browsing controls.
 
 CLI keeps the writer lock until exit. Web releases automatically after accepted
 work, delegated jobs, approvals, and saving settle, even if the page stays open.
@@ -266,8 +283,8 @@ session tools. Attachments persist with conversation history in private app
 storage. Removing a draft attachment detaches it without deleting historical
 files.
 
-The left rail expands on hover; its sidebar icon toggles whether it stays pinned. It manages existing workspace
-folders and their conversations. Drag either pane divider to resize; chat can
+The left rail expands on hover; its sidebar icon toggles whether it stays pinned. It explores workspace
+folders and their conversations and can create new workspaces. Drag either pane divider to resize; chat can
 shrink to 360 pixels. The canvas focus button fills the app frame without reloading
 its content. Its compact header reveals viewer controls on hover or click, with
 a pin to keep them open. The right canvas has an adjustable width and

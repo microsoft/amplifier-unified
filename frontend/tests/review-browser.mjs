@@ -29,7 +29,7 @@ try{
  await page.waitForFunction(id=>window.amplifier.getState().attention.sessions[id]===1,first);
  await page.reload();await page.waitForFunction(id=>window.amplifier?.getState().attention?.sessions?.[id]===1,first);
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
- assert.match(await page.locator('#nav-workspace').textContent(),/1 ready/);
+ assert.equal(await page.locator('.a-workspace-row .a-attention-badge').getAttribute('aria-label'),'1 unread items');
  await page.getByRole('button',{name:'Activity',exact:true}).click();
  await page.getByRole('button',{name:'Response ready Settings test',exact:true}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-completion-inbox.png'});

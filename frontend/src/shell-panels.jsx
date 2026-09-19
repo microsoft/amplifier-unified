@@ -1,10 +1,11 @@
 import {CanvasTabs,SavedArtifacts,BrowserAddress,BrowserPreview,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {CanvasViewer} from './canvas-viewer';
 import {McpAppViewer} from './mcp-app-viewer';
 import {PaneResizer,usePanelLayout} from './panel-layout';
-import {chatPage,visibleWorkspaces,workspaceLabel} from './chat-navigation';
+import {chatPage,visibleWorkspaces} from './chat-navigation';
+import {WorkspaceExplorer} from './workspace-explorer';
 import {AttentionBadge} from './attention';
 import {PathField} from './settings-ui';
 
@@ -36,35 +37,50 @@ export function ChatRename({chat,act,cancel}){
 export function WorkspaceRail({state,session,act,selectSession,newSession}){
  const layout=usePanelLayout(state,act);
  const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};
- const form=useRef(null),draftRef=useRef(draft);
+ const form=useRef(null),draftRef=useRef(draft),submitting=useRef(false);
+ const [saving,setSaving]=useState(false),[formError,setFormError]=useState('');
  useEffect(()=>{draftRef.current=draft},[draft]);
  const history=state.sharedHistory||{},refreshing=!!(history.loading||history.refreshing);
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const chats=chatPage(workspace?state:{...state,sessions:[]},workspace);
  const changePage=index=>patch(act,{navChatPage:{...chats.scope,index}});
- const setDraft=value=>{draftRef.current=value;patch(act,{workspaceDraft:value})};
+ const setDraft=value=>{draftRef.current=value;setFormError('');patch(act,{workspaceDraft:value})};
  const updateDraft=value=>setDraft({...draft,...value});
  const expand=value=>{if(!pinned&&!!view.navExpanded!==value)patch(act,{navExpanded:value})};
  const choose=id=>{(selectSession||((id)=>act('session.select',{id})))(id);if(!pinned)patch(act,{navExpanded:false})};
  const add=()=>{(newSession||((path)=>act('session.create',{workspace:path})))(workspace?.path);if(!pinned)patch(act,{navExpanded:false})};
- const submit=async e=>{e.preventDefault();let result;if(draft.mode==='add')result=await act('workspace.add',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});else if(draft.mode==='rename')result=await act('workspace.rename',{id:draft.id,name:draft.name||''});else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});if(result?.accepted!==false&&result)setDraft({})};
+ const submit=async e=>{
+  e.preventDefault();if(submitting.current)return;submitting.current=true;setSaving(true);setFormError('');
+  try{
+   let result;
+   if(draft.mode==='add')result=await act('workspace.create',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});
+   else if(draft.mode==='rename')result=await act('workspace.rename',{id:draft.id,name:draft.name||''});
+   else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});
+   else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});
+   else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});
+   if(result&&result.accepted!==false)setDraft({});
+   else setFormError(result?.error||'Could not save. Check the folder or name and try again.');
+  }catch(error){setFormError(error.message||'Could not save. Please try again.')}
+  finally{submitting.current=false;setSaving(false)}
+ };
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
  return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!draftRef.current.mode)expand(false)}}>
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label={pinned?'Unpin navigation':'Pin navigation open'} title={pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>patch(act,{navPinned:!pinned,navExpanded:!pinned})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button><strong className="a-nav-reveal">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.create" disabled={!workspace} aria-label="New chat in workspace" title={!workspace?'Choose an existing workspace folder':'New chat'}><Plus/><span className="a-nav-reveal">New chat</span></button>
-   <button className="a-nav-main" type="button" onClick={()=>{expand(true);setDraft(draft.mode==='add'?{}:{mode:'add',path:'',name:''})}} data-action="view.update" aria-label="Add workspace" title="Add workspace"><FolderOpen/><span className="a-nav-reveal">Add workspace</span></button>
+   <button className="a-nav-main" type="button" onClick={()=>{expand(true);setDraft(draft.mode==='add'?{}:{mode:'add',path:'',name:''})}} data-action="view.update" aria-label="New workspace" title="New workspace"><FolderPlus/><span className="a-nav-reveal">New workspace</span></button>
    <div className="a-nav-content a-nav-reveal">
-    <label className="a-nav-eyebrow" htmlFor="nav-workspace">Workspace</label><select id="nav-workspace" value={workspace?.id||''} title={workspace?.path} data-action="workspace.select" onChange={e=>act('workspace.select',{id:e.target.value})}>{!workspace&&<option value="" disabled>{workspaces.length?'Choose a workspace':'Add a workspace folder'}</option>}{workspaces.map(w=><option key={w.id} value={w.id}>{workspaceLabel(w)}{state.attention?.workspaces?.[w.id]?` · ${state.attention.workspaces[w.id]} ready`:''}</option>)}</select>
-    {workspace&&<div className="a-nav-workspace-path"><span className="a-workspace-full-path" title={workspace.path||'Project folder unavailable'}>{workspace.path||'Project folder unavailable'}</span><button type="button" className="a-icon" aria-label="Rename workspace" data-action="view.update" onClick={()=>setDraft({mode:'rename',id:workspace.id,name:workspace.name})}><Pencil/></button><button type="button" className="a-icon" aria-label="Remove workspace registration" disabled={workspaces.length<2} data-action="view.update" onClick={()=>setDraft({mode:'remove',id:workspace.id,name:workspace.name})}><Trash2/></button></div>}
-    {draft.mode&&draft.mode!=='chat-rename'&&<form ref={form} className="a-nav-form" onSubmit={submit}>
-     <div className="a-nav-form-title"><strong>{draft.mode==='add'?'Add workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':draft.mode==='remove'?'Remove workspace?':'Remove chat?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
-     {draft.mode==='add'&&<><label htmlFor="nav-workspace-path">Folder</label><PathField id="nav-workspace-path" value={draft.path||''} onChange={path=>updateDraft({path})} directory state={state} act={act} placeholder="~/Projects/my-project"/></>}
+    {draft.mode&&draft.mode!=='chat-rename'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
+     <div className="a-nav-form-title"><strong>{draft.mode==='add'?'New workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':draft.mode==='remove'?'Remove workspace?':'Remove chat?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
+     {draft.mode==='add'&&<><p>Choose an existing folder, or enter a path to create one. Your first chat opens here.</p><label htmlFor="nav-workspace-path">Folder</label><PathField id="nav-workspace-path" value={draft.path||''} onChange={path=>updateDraft({path})} directory state={state} act={act} placeholder="~/Projects/my-project"/></>}
      {['add','rename','chat-rename'].includes(draft.mode)?<><label htmlFor="nav-workspace-name">{draft.mode==='add'?'Name (optional)':'Name'}</label><input id="nav-workspace-name" value={draft.name||''} required={draft.mode!=='add'} data-action="view.update" onChange={e=>updateDraft({name:e.target.value})}/></>:<p>{draft.mode==='remove'?`Remove ${draft.name} from this list? Its files and chats will stay on disk.`:`Remove ${draft.name} from this list? Its shared history stays on disk. Any work in progress in this app will stop.`}</p>}
-     <button type="submit" className={['remove','chat-delete'].includes(draft.mode)?'a-soft a-danger':'a-primary'} data-action={draft.mode==='add'?'workspace.add':draft.mode==='rename'?'workspace.rename':draft.mode==='remove'?'workspace.remove':draft.mode==='chat-delete'?'session.delete':'session.rename'}>{draft.mode==='add'?'Add workspace':draft.mode==='remove'?'Remove registration':draft.mode==='chat-delete'?'Remove chat':'Save name'}</button>
+     <button type="submit" disabled={saving||(draft.mode==='add'&&!draft.path?.trim())} className={['remove','chat-delete'].includes(draft.mode)?'a-soft a-danger':'a-primary'} data-action={draft.mode==='add'?'workspace.create':draft.mode==='rename'?'workspace.rename':draft.mode==='remove'?'workspace.remove':draft.mode==='chat-delete'?'session.delete':'session.rename'}>{saving?'Saving…':draft.mode==='add'?'Create workspace':draft.mode==='remove'?'Remove registration':draft.mode==='chat-delete'?'Remove chat':'Save name'}</button>
+     {formError&&<p role="alert" className="a-danger">{formError}</p>}
     </form>}
+    <WorkspaceExplorer state={state} act={act}/>
+    {workspace&&<div className="a-nav-workspace-path"><span className="a-workspace-full-path" title={workspace.path||'Project folder unavailable'}>{workspace.path||'Project folder unavailable'}</span><button type="button" className="a-icon" aria-label="Rename workspace" data-action="view.update" onClick={()=>setDraft({mode:'rename',id:workspace.id,name:workspace.name})}><Pencil/></button><button type="button" className="a-icon" aria-label="Remove workspace registration" disabled={workspaces.length<2} data-action="view.update" onClick={()=>setDraft({mode:'remove',id:workspace.id,name:workspace.name})}><Trash2/></button></div>}
     <div className="a-nav-search"><Search/><input aria-label="Filter conversations" type="search" value={view.navFilter||''} placeholder="Find chats · * ? patterns" data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
-    <div className="a-nav-eyebrow a-nav-conversations">Conversations <span>{chats.total}</span><button type="button" className="a-icon" aria-label="Refresh workspaces and chats" title="CLI projects and chats appear automatically. Refresh now." data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button></div>
+    <div className="a-nav-eyebrow a-nav-conversations"><span className="a-nav-chat-heading">{workspace?`Chats in ${workspace.name}`:'Conversations'}</span> <span>{chats.total}</span><button type="button" className="a-icon" aria-label="Refresh workspaces and chats" title="CLI projects and chats appear automatically. Refresh now." data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button></div>
     {history.loading&&<p className="a-nav-history-status" role="status"><LoaderCircle className="a-progress-spinner"/>Finding projects and chats…</p>}
     {history.error&&<p className="a-nav-history-status a-danger" role="alert"><AlertCircle/><span>{history.error}</span></p>}
     <div className="a-nav-chats">{chats.items.map(chat=>draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename key={chat.id} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} key={chat.id}><button className="a-nav-chat-select" type="button" data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} title={[chat.title,chat.description].filter(Boolean).join(' — ')} onClick={()=>choose(chat.id)}><MessageCircle/><span>{chat.title||'Untitled conversation'}</span><AttentionBadge state={state} count={state.attention?.sessions?.[chat.id]||0}/>{['running','working','starting'].includes(chat.status)&&<span className="a-nav-busy" aria-label="Working"/>}</button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Rename ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>{expand(true);setDraft({mode:'chat-rename',id:chat.id,name:chat.title||''})}}><Pencil/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Remove ${chat.title||'conversation'} from list`} data-action="view.update" onClick={()=>{expand(true);setDraft({mode:'chat-delete',id:chat.id,name:chat.title||'conversation'})}}><Trash2/></button></div>)}{!chats.total&&!history.loading&&<p className="a-nav-empty">{!workspace?'Choose a workspace to see its conversations.':view.navFilter?'No matching chats.':'Your conversations will appear here.'}</p>}</div>
