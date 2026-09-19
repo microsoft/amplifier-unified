@@ -94,6 +94,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         session_id = request.query.get('sessionId')
         if session_id is not None and (not session_id or len(session_id) > 200):
             raise AppError("Choose a valid conversation ID.")
+        await service._flush_pending_progress()
         return web.json_response(service.browser_state(session_id=session_id))
 
     async def state_detail(request):
@@ -102,6 +103,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for key in ("offset", "limit", "revision"):
             if key in request.query:
                 args[key] = int(request.query[key])
+        await service._flush_pending_progress()
         return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource))
 
     async def actions(request):
@@ -148,10 +150,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def events(request):
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         await response.prepare(request)
-        queue = service.subscribe()
+        queue = None
         task = asyncio.current_task()
         streams.add(task)
         try:
+            await service._flush_pending_progress()
+            queue = service.subscribe()
             snapshot = service.browser_state()
             while True:
                 await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
@@ -163,7 +167,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             pass
         finally:
             streams.discard(task)
-            service.unsubscribe(queue)
+            if queue is not None:
+                service.unsubscribe(queue)
         return response
 
     async def attachment(request):
