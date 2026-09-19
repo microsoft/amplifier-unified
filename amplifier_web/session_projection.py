@@ -1,5 +1,6 @@
 """Persist Unified's presentation beside, never instead of, shared transcripts."""
 import json
+import uuid
 from pathlib import Path
 
 from .host.storage import SessionStore
@@ -54,10 +55,21 @@ def persist(home, state, cache):
         result['canvas'] = {key: value for key, value in canvas.items() if key not in {'content', 'surface'}}
         result['canvas']['$body'] = artifact['body']
     result['sessions'] = []
+    retained = set(state.get('pinnedSessionIds', [])) | {state.get('selectedSessionId')}
     for session in state.get('sessions', []):
         if session.get('historyManaged'):
             from .automatic_history import INDEX_FIELDS
-            result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True})
+            # Rebuild native catalog rows from their source. Persist only local
+            # presentation overrides and startup selection/pin references.
+            native_id = session.get('_catalogId') or uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-session:{session.get('nativeProject')}/{session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']}").hex
+            revision = session.get('nativeRevision') or [0]
+            baseline = session.get('_catalogRecentAt', revision[0] / 1e9)
+            customized = (session['id'] in retained or session['id'] != native_id
+                or session.get('titleSource') not in {None, 'native'}
+                or bool(session.get('draftAttachments'))
+                or session.get('recentActivityAt', 0) > baseline)
+            if customized:
+                result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True})
             continue
         path = view_path(home, session)
         # Native event activity is a lazy view, never another persisted event

@@ -91,7 +91,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     streams = set()
 
     async def state(request):
-        return web.json_response(service.get_state())
+        session_id = request.query.get('sessionId')
+        if session_id is not None and (not session_id or len(session_id) > 200):
+            raise AppError("Choose a valid conversation ID.")
+        return web.json_response(service.browser_state(session_id=session_id))
 
     async def state_detail(request):
         from .agent_state import read_state
@@ -99,7 +102,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for key in ("offset", "limit", "revision"):
             if key in request.query:
                 args[key] = int(request.query[key])
-        return web.json_response(read_state(service.get_state(), args, resolve=service.state_resource))
+        return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource))
 
     async def actions(request):
         if request.method == "GET":
@@ -119,7 +122,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], app["control_token"]):
             response["dataIdentity"] = data_identity(service.data_dir)
             response.update({key: service.update_manager.running_identity[key] for key in ('revision', 'instanceId')})
-            response["runtime"] = service.get_state()["runtime"]
+            response["runtime"] = dict(service.state["runtime"])
         return web.json_response(response)
 
     async def certificate(request):
@@ -149,7 +152,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         task = asyncio.current_task()
         streams.add(task)
         try:
-            snapshot = service.get_state()
+            snapshot = service.browser_state()
             while True:
                 await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
                 try:

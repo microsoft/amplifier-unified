@@ -332,6 +332,8 @@ class AutomaticHistory:
                                 previous['nativeRevision'] = row.get('transcriptRevision')
                             elif 'nativeRevision' not in previous:
                                 previous['nativeRevision'] = row.get('transcriptRevision')
+                        previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
+                        previous['_catalogId'] = row['id']
                     # Parent identities belong to their native project. UI IDs
                     # are aliases and can differ even when a web root predated
                     # automatic discovery or another project reused the ID.

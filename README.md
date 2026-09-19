@@ -239,7 +239,35 @@ task's activation token; a persistent inbox loop's startup token expires on park
 Runtime admission also runs outside the HTTP app state lock, because its progress
 callbacks need that lock.
 
-`GET /api/state` exposes shared session/application state and attached device snapshots. `GET /api/actions` lists action schemas. `POST /api/actions` accepts `{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control tool use the same handlers. `GET /api/events` streams state updates. State includes `attention.items`, unread counts, and section/page destinations. `attention.read` accepts item IDs to acknowledge review; it does not dismiss the underlying update or issue. Changed facts become unread again, and acknowledgements survive restarts. SQLite stores app settings, accepted command IDs and indexes; conversation transcripts and Context Intelligence events use the community session files. Interrupted work is marked rather than silently replayed.
+`GET /api/state` exposes the browser's current session/application view. Library
+lists are paged on the server, so a settings change does not download every saved
+chat. Selected and active conversations retain their live details. The complete
+catalog and device observations remain available to agents and API clients via
+`GET /api/state/detail?path=/sessions&offset=0&limit=50`; follow `nextOffset` and
+use the returned revision when reading subsequent pages. JSON Pointer indexes
+refer to that complete catalog, not positions in the browser's filtered arrays.
+Terminal integrations can request `/api/state?sessionId=<id>` to retain one
+explicit conversation's live details while the browser browses another chat;
+this read does not change the shared selection.
+
+`GET /api/actions` lists action schemas. `POST /api/actions` accepts
+`{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control
+tool use the same handlers. `GET /api/events` streams the same bounded browser
+view. Menus respond locally while their shared actions are confirmed; rejected
+view changes roll back without discarding newer choices. State includes
+`attention.items`, unread counts, and section/page destinations. `attention.read`
+accepts item IDs to acknowledge review; it does not dismiss the underlying update
+or issue. Changed facts become unread again, and acknowledgements survive
+restarts. SQLite stores app settings, accepted command IDs and presentation
+overrides. The native history catalog is rebuilt from community session files;
+routine UI saves do not rewrite the entire discovered catalog. Conversation
+transcripts and Context Intelligence events stay in those community files.
+Interrupted work is marked rather than silently replayed.
+
+For a reproducible large-library benchmark, see the
+[performance fixture](tests/fixtures/library-performance.md). It measures real
+HTTP actions, state size, SSE traffic and settings click latency using disposable
+history, without starting model work or reading personal conversations.
 
 Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
 

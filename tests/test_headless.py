@@ -52,6 +52,72 @@ async def test_explicit_target_not_changed_by_selected_conversation(tmp_path):
     assert service._session(target)['messages'][0]['text']=='Targeted'
     await service.close()
 
+
+async def test_headless_result_survives_browser_switching_to_another_chat(aiohttp_server, tmp_path, capsys):
+    class SwitchingRuntime(Runtime):
+        async def send(self, session, text, input_id, emit):
+            await app['service'].dispatch('session.select', {'id': other})
+            await super().send(session, text, input_id, emit)
+
+    runtime = SwitchingRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Terminal target'})
+    target = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Browser conversation'})
+    other = service._session()['id']
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     resume=target, command='run', prompt='Keep working here', bundle=None,
+                     provider=None, model=None, max_tokens=None, timeout=3, output_format='json')
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['sessionId'] == target
+    assert result['response'] == 'Test transport result'
+    assert service.state['selectedSessionId'] == other
+    public = next(row for row in service.browser_state()['sessions'] if row['id'] == target)
+    assert public['messages'] == []  # Browser summaries intentionally omit inactive messages.
+    assert not service._session(other)['messages']
+
+
+async def test_headless_approval_stays_scoped_when_browser_switches(aiohttp_server, tmp_path, capsys, monkeypatch):
+    import io
+    from amplifier_web.service import AppError
+
+    class ApprovalRuntime(Runtime):
+        async def send(self, session, text, input_id, emit):
+            self.admitted = (session, text, input_id, emit)
+            await service.dispatch('session.select', {'id': other})
+            await emit('approval.requested', {'sessionId': session['id'], 'id': 'permission', 'prompt': 'Allow target tool?'})
+            with pytest.raises(AppError, match='answered by the user'):
+                await service.dispatch('approval.respond', {'sessionId': session['id'], 'id': 'permission', 'decision': 'allow'}, origin='agent')
+
+        async def approval(self, session_id, approval_id, decision):
+            self.response = (session_id, approval_id, decision)
+            await super().send(*self.admitted)
+
+    runtime = ApprovalRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Terminal target'})
+    target = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Browser conversation'})
+    other = service._session()['id']
+    await service.on_runtime_event('approval.requested', {'sessionId': other, 'id': 'permission', 'prompt': 'A different pending permission'})
+    server = await aiohttp_server(app)
+    monkeypatch.setattr('sys.stdin', io.StringIO(''))
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     resume=target, command='run', prompt='Need a tool', bundle=None,
+                     provider=None, model=None, max_tokens=None, timeout=3, output_format='json')
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['response'] == 'Test transport result'
+    assert runtime.response == (target, 'permission', 'deny')
+    assert service._session(target)['approvals'][0]['status'] == 'deny'
+    assert service._session(other)['approvals'][0]['status'] == 'pending'
+    assert service.state['selectedSessionId'] == other
+
 async def test_management_result_correlates_exact_command(tmp_path):
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
@@ -73,6 +139,29 @@ async def test_existing_host_refuses_another_data_directory(aiohttp_server, tmp_
             await _existing_host(client,[str(server.make_url('')).rstrip('/')],data_identity(tmp_path/'wanted'))
 
 
+async def test_headless_continue_uses_catalog_when_browser_page_is_empty(aiohttp_server, tmp_path, capsys):
+    runtime = Runtime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=runtime, voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Saved independent chat'})
+    target = service._session()['id']
+    empty = tmp_path / 'empty-workspace'
+    empty.mkdir()
+    service.state['workspaces'].append({'id': 'empty', 'name': 'Empty', 'path': str(empty), 'available': True})
+    service.state.update(selectedWorkspaceId='empty', selectedSessionId=None)
+    service.state['view'].update(navChatScope='workspace', navFilter='no matching titles')
+    service._publish()
+    assert service.browser_state()['sessions'] == []
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     resume=None, command='continue', prompt='Continue the saved chat', bundle=None,
+                     provider=None, model=None, max_tokens=None, timeout=3, output_format='json')
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['sessionId'] == target
+    assert len(service.state['sessions']) == 1
+
+
 @pytest.mark.parametrize('selected_kind', ['worker', 'root', 'none'])
 async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, tmp_path, capsys, selected_kind):
     runtime = Runtime()
@@ -88,6 +177,7 @@ async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, t
     worker.update(sessionKind='worker', parentId=recent_root, nativeParentId=recent_root)
     assert service.state['sessions'][0]['id'] == worker['id']
     service.state['selectedSessionId'] = {'worker': worker['id'], 'root': older_root, 'none': None}[selected_kind]
+    service._publish()
     server = await aiohttp_server(app)
     args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,
                      command='continue', prompt='Continue the chat', bundle=None, provider=None, model=None,

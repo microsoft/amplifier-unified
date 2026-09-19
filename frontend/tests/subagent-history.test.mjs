@@ -44,3 +44,22 @@ test('failed subagent selection keeps the drilldown open and no children needs n
  assert.deepEqual(calls,[{name:'session.select',args:{id:'child'}}]);
  await renderAct(async()=>root.unmount());
 });
+
+test('bounded subagent drilldown uses server totals and waits for off-page results',async()=>{
+ const parent={id:'root',title:'Project',subagentCount:123},state={library:{bounded:true},view:{},sessions:[parent],subagentNavigation:{items:[{id:'remote-worker',title:'Remote worker'}],total:123,unfilteredTotal:123,index:0,pages:3,start:0,end:50,scope:{sessionId:'root',filter:''}}};
+ const calls=[],act=async(name,args)=>{calls.push({name,args});Object.assign(state.view,args.patch);return {accepted:true}};let root;
+ await renderAct(async()=>{root=create(React.createElement(SubagentHistoryButton,{state,session:parent,act}))});
+ assert.match(JSON.stringify(root.toJSON()),/123/);
+ const render=()=>React.createElement(SubagentHistory,{state,session:parent,act});
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAllByProps({'data-action':'session.select'}).length,1);
+ await renderAct(async()=>root.root.findAllByType('button').find(node=>node.children.includes('More subagents')).props.onClick());
+ assert.equal(calls.at(-1).args.patch.subagentHistory.index,1);
+ await renderAct(async()=>root.update(render()));
+ assert.match(JSON.stringify(root.toJSON()),/Loading subagent conversations/);
+ assert.equal(root.root.findAllByProps({'data-action':'session.select'}).length,0);
+ state.subagentNavigation={...state.subagentNavigation,items:[{id:'next-worker',title:'Next worker'}],index:1,start:50,end:100};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByProps({'data-action':'session.select'}).props.title,'next-worker');
+ await renderAct(async()=>root.unmount());
+});

@@ -659,6 +659,9 @@ async def test_worker_histories_remain_available_but_counts_only_include_root_ch
     assert app._session(rows['uuid-worker']['id'])['messages'][0]['text'] == 'Saved CLI question'
     await app.close()
     restored = app_factory()
+    # Uncustomized native catalog summaries are rebuilt rather than saved in
+    # app state on every view change. Classification must survive discovery.
+    await restored.history.refresh()
     assert restored._session(rows['uuid-worker']['id'])['sessionKind'] == 'worker'
     assert restored._session(rows['cli-fork']['id'])['sessionKind'] == 'root'
     assert restored._session(rows['uuid-worker']['id'])['historyLoaded'] is False

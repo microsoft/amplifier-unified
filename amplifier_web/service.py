@@ -68,7 +68,7 @@ ACTION_DEFINITIONS = {
     "worker.spawn": ("Start a worker lane for heavier work", schema({"instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"id": string(100)})),
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
-    "approval.respond": ("Respond to an Amplifier permission request", schema({"id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}})),
+    "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
@@ -258,21 +258,43 @@ class AppService:
                 return path.read_text()
         return "/* Converge uses the app's bundled default styling. */"
 
-    def get_state(self):
+    def state_context(self):
+        """Read-only full catalog with derived, bounded navigation projections."""
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
-        from .chat_navigation import snapshot as chat_snapshot
-        result = copy.deepcopy(self.state)
+        from .browser_state import navigation
+        result = dict(self.state)
+        result.update(navigation(self.state))
         result["attention"] = snapshot(self.state)
         result["workspaceExplorer"] = workspace_snapshot(result)
-        result["chatNavigation"] = chat_snapshot(result)
         result.pop("attentionRead", None)
         return result
+
+    def get_state(self):
+        # Explicit full reads remain compatible; browser hot paths use pages.
+        return copy.deepcopy(self.state_context())
+
+    def browser_state(self, session_id=None):
+        cached = getattr(self, '_browser_snapshot', None)
+        if cached is None or cached['revision'] != self.state['revision']:
+            from .browser_state import snapshot
+            context = self.state_context()
+            derived = {key: context[key] for key in ('attention', 'workspaceExplorer',
+                'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
+            self._browser_snapshot = snapshot(self.state, derived)
+        if session_id is not None:
+            self._session(session_id)
+            from .browser_state import snapshot
+            derived = {key: self._browser_snapshot[key] for key in ('attention', 'workspaceExplorer',
+                'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
+            return snapshot(self.state, derived, session_id=session_id)
+        return self._browser_snapshot
 
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
     def _save(self):
+        self._browser_snapshot = None
         from .state_storage import normalize_state
         normalize_state(self.state, self.db)
         from .session_projection import persist
@@ -283,13 +305,45 @@ class AppService:
         maintenance(self)
 
     def _publish(self):
-        self.state["revision"] += 1
-        self._save()
-        snapshot = self.get_state()
+        task = getattr(self, '_progress_publish_task', None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+            self._progress_publish_task = None
+        previous = self.state["revision"]
+        self.state["revision"] = previous + 1
+        try:
+            self._save()
+        except Exception:
+            self.state["revision"] = previous
+            self._browser_snapshot = None
+            raise
+        snapshot = self.browser_state()
         for queue in self.queues:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
+        self._progress_dirty = False
+        self._progress_publish_error = None
+
+    def _publish_progress(self):
+        """Batch stream/progress updates; final responses and approvals flush now."""
+        self._progress_dirty = True
+        if getattr(self, '_progress_publish_task', None) is None:
+            self._progress_publish_task = self._task(self._flush_progress())
+
+    async def _flush_progress(self):
+        try:
+            await asyncio.sleep(.25)
+            async with self.lock:
+                if self._progress_dirty and not self.closed:
+                    try:
+                        self._publish()
+                    except Exception as exc:
+                        # Retain dirty data for the next transition or shutdown.
+                        self._progress_publish_error = str(exc)
+        finally:
+            if self._progress_publish_task is asyncio.current_task():
+                self._progress_publish_task = None
 
     def subscribe(self):
         queue = asyncio.Queue(maxsize=4)
@@ -367,7 +421,7 @@ class AppService:
                 if previous:
                     if previous[0] != fingerprint:
                         raise AppError("This command ID was already used with different contents.", 409)
-                    return {**json.loads(previous[1]), "state": self.get_state(), "duplicate": True}
+                    return {**json.loads(previous[1]), "state": self.browser_state(), "duplicate": True}
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
@@ -650,7 +704,7 @@ class AppService:
                 call_args = (session["id"], args["id"]) + ((args["text"],) if action == "worker.steer" else ())
                 pending.append((method, call_args))
             elif action == "approval.respond":
-                session = self._session()
+                session = self._session(args.get("sessionId"))
                 approval = next((a for a in session["approvals"] if a["id"] == args["id"] and a.get("status") == "pending"), None)
                 if not approval:
                     raise AppError("This permission request is no longer pending.", 409)
@@ -793,7 +847,7 @@ class AppService:
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             self._publish()
-            result = {**receipt, "state": self.get_state()}
+            result = {**receipt, "state": self.browser_state()}
         for fn, values in pending:
             if action == "conversation.send" and fn == self._send:
                 # Runtime progress callbacks acquire self.lock. Admission must
@@ -804,7 +858,7 @@ class AppService:
                 if action.startswith("smartTools."):
                     self.smart_tool_tasks.add(task)
                     task.add_done_callback(self.smart_tool_tasks.discard)
-        return {**result, "state": self.get_state()}
+        return {**result, "state": self.browser_state()}
 
     async def _guard(self, fn, args):
         try:
@@ -1004,7 +1058,13 @@ class AppService:
                     activity["lastEvent"] = {"tool": payload.get("tool"), "phase": payload.get("phase"), "at": event["at"]}
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
-            self._publish()
+            progress = kind == 'assistant.delta' or (
+                kind == 'runtime.status' and payload.get('activityOnly')) or (
+                kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
+            if progress:
+                self._publish_progress()
+            else:
+                self._publish()
 
     async def refresh_configuration(self,identity):
         async with self.lock:
@@ -1040,7 +1100,7 @@ class AppService:
     async def app_bridge(self, operation, args, session_id):
         if operation in {"get_state", "state.get"}:
             from .agent_state import read_state
-            return read_state(self.get_state(), args, session_id=session_id, resolve=self.state_resource)
+            return read_state(self.state_context(), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
             actions = self.get_actions()
             prefix = args.get('prefix', '')
@@ -1053,12 +1113,13 @@ class AppService:
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
-            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(result['state'], {}, session_id=session_id, resolve=self.state_resource)}
+            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}
         raise AppError("Unknown app bridge operation.")
 
     async def update_device(self, payload):
         client_id = str(payload.get("clientId") or "browser")[:100]
         self.state["devices"][client_id] = {**payload, "updatedAt": time.time()}
+        self._browser_snapshot = None
         # View snapshots are observational and don't invalidate command revisions.
         self._save()
 
@@ -1151,5 +1212,8 @@ class AppService:
         if self.management:
             await self.management.provider_catalog.close()
         await self.diagnostics.close()
-        self._save()
+        if getattr(self, '_progress_dirty', False):
+            self._publish()
+        else:
+            self._save()
         self.db.close()
