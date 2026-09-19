@@ -177,6 +177,14 @@ class Management:
     def session(self,args):
         return copy.deepcopy(self.service._session(args.get('sessionId')))
 
+    def configuration_session(self, args):
+        identity = args.get('sessionId') or self.service.state.get('selectedSessionId')
+        session = self.session({'sessionId': identity}) if identity else {}
+        if session.get('nativeProject') and args.get('scope', 'global') != 'global':
+            if not session.get('workspace') or not Path(session['workspace']).is_dir():
+                raise ValueError('Choose an existing workspace before changing project or local settings.')
+        return {**session, 'workspace': session.get('workspace') or self.service.state['settings'].get('workspace') or self.service.default_workspace}
+
     def configuration_idle(self,session):
         return session['status'] in {'idle','ready','stopped','interrupted','error'} and not session.get('configurationBusy') and not any(w.get('status') in {'running','working','starting','queued'} or w.get('persistent') and w.get('status')=='idle' for w in session.get('workers',[]))
 
@@ -207,8 +215,20 @@ class Management:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
     async def ensure_runtime(self,session):
+        if session.get('nativeProject'):
+            if session.get('historyReadOnlyReason'):
+                raise ValueError(session['historyReadOnlyReason'])
+            if not session.get('workspace') or not Path(session['workspace']).is_dir():
+                raise ValueError('Restore this project folder before continuing its chat.')
         if not self.service.runtime:raise ValueError('Amplifier runtime is unavailable')
         if self.service.state.get('updates',{}).get('phase')=='activating':raise ValueError('An update is activating; retry shortly')
+        # Explicitly using runtime controls makes this a web-owned presentation.
+        if session.get('historyManaged') and not session.get('historyLoaded'):
+            await self.service.history.ensure_loaded(session['id'])
+        async with self.service.lock:
+            current = self.service._session(session['id'])
+            current['historyManaged'] = False
+            session.update(copy.deepcopy(current))
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def invalidate_configuration(self):
@@ -217,10 +237,12 @@ class Management:
         if workspace:self.background(self.warm_providers(SetupManager(self.service.data_dir,catalog=self.provider_catalog),workspace))
         async with self.service.lock:
             for session in self.service.state['sessions']:
-                session['configurationPending']=True
+                if not session.get('historyManaged'):
+                    session['configurationPending']=True
             self.service._publish()
         for session in list(self.service.state['sessions']):
-            await self.service.refresh_configuration(session['id'])
+            if not session.get('historyManaged'):
+                await self.service.refresh_configuration(session['id'])
 
     async def perform(self,action,args,command_id=None):
         if action=='locations.list':
@@ -243,7 +265,7 @@ class Management:
             await self.publish(locationListing={'controlId':args['controlId'],'path':str(path),'parent':str(path.parent),'entries':entries[:300],'truncated':len(entries)>300})
         elif action.startswith(('modules.','sources.')):
             from .registry import RegistryManager
-            session=self.session(args) if self.service.state['sessions'] else {'workspace':self.service.default_workspace}
+            session=self.configuration_session(args)
             result=await RegistryManager(self.service.data_dir,store=self.settings).perform(action,{**args,'workspace':session['workspace']})
             async with self.service.lock:
                 self.service.state.setdefault('registry',{}).update(result)
@@ -251,7 +273,7 @@ class Management:
             if action.endswith(('.save','.remove')):await self.invalidate_configuration()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
-            session=self.session(args) if self.service.state['sessions'] else {'workspace':self.service.default_workspace}
+            session=self.configuration_session(args)
             async def runtime_operation(operation,values):
                 current=self.session(args)
                 await self.ensure_runtime(current)
@@ -301,7 +323,7 @@ class Management:
                 effective=await self.service.runtime.control(session['id'],'configuration.inspect',{})
                 resources=await self.service.runtime.control(session['id'],'configuration.exportResources',{})
                 kwargs={'effective_config':effective.get('plan',{}),'root_bundle':session['bundle'],'resources':resources}
-            workspace=self.session(args)['workspace'] if self.service.state['sessions'] else self.service.default_workspace
+            workspace=self.configuration_session(args)['workspace']
             result=await manager.perform(action,{**args,'workspace':workspace},**kwargs)
             values={}
             if 'bundles' in result:values['bundles']=result['bundles']
@@ -402,12 +424,12 @@ class Management:
         elif action=='notifications.save':
             await self.publish(notificationSettings=self.notifications.save(args['patch']))
         elif action=='permissions.get':
-            session=self.session(args);scope=args.get('scope','global')
+            session=self.configuration_session(args);scope=args.get('scope','global')
             config=self.settings.read(session['workspace'],scope)
             values=config.get('overrides',{}).get('tool-filesystem',{}).get('config',{})
             await self.publish(permissions={'scope':scope,'allowed':values.get('allowed_write_paths',[]),'denied':values.get('denied_write_paths',[])})
         elif action=='permissions.save':
-            session=self.session(args);scope=args.get('scope','global')
+            session=self.configuration_session(args);scope=args.get('scope','global')
             allowed=[str(Path(p).expanduser().resolve()) for p in args.get('allowed',[])]
             denied=[str(Path(p).expanduser().resolve()) for p in args.get('denied',[])]
             def edit(config):
@@ -439,8 +461,9 @@ class Management:
                     session.update(status='idle', bundle=result['bundle'], messages=[],
                                    shared=True, sharedHistoryOffset=result['offset'],
                                    sharedHistoryTotal=result['totalMessages'])
-                    for row in result['messages']:
-                        self.service._message(session, row['role'], row['text'], source='shared')
+                    for index, row in enumerate(result['messages'], result['offset']):
+                        session['messages'].append({'id': uuid.uuid5(uuid.NAMESPACE_URL, f"shared:{result['workspace']}:{result['id']}:{index}").hex,
+                            'role': row['role'], 'text': row['text'], 'via': 'chat', 'source': 'shared', 'createdAt': session['createdAt']})
                 self.service.state['selectedSessionId'] = session['id']
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.service.state, session)
@@ -498,8 +521,16 @@ class Management:
                     self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=identity
                 self.service._publish()
         elif action=='history.export':
-            session=self.session(args);store=SessionStore.for_app(self.service.data_dir,session['workspace'])
-            saved=store.load(session.get('runtimeSessionId') or session['id'])
+            session=self.session(args)
+            if session.get('nativeProject'):
+                from .automatic_history import directory
+                path=directory(session)
+                rows=[json.loads(line) for line in (path/'transcript.jsonl').read_text().splitlines() if line.strip()]
+                metadata=json.loads((path/'metadata.json').read_text()) if (path/'metadata.json').is_file() else {}
+                saved=(rows,metadata)
+            else:
+                store=SessionStore.for_app(self.service.data_dir,session['workspace'])
+                saved=store.load(session.get('runtimeSessionId') or session['id'])
             if not saved:raise ValueError('This conversation has no runtime transcript yet')
             rows,metadata=saved
             if args.get('format')=='jsonl':
@@ -508,9 +539,11 @@ class Management:
         elif action=='history.cleanup':
             cutoff=time.time()-args.get('days',30)*86400
             async with self.service.lock:
-                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
+                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
                 if args.get('apply'):
                     identities={s['id'] for s in eligible}
+                    for session in eligible:
+                        self.service.history.hide_session(session)
                     self.service.state['sessions']=[s for s in self.service.state['sessions'] if s['id'] not in identities]
                     if args.get('purge'):
                         import shutil

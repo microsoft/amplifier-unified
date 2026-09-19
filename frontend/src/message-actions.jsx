@@ -4,7 +4,7 @@ import {Markdown} from './markdown';
 import {AttachmentStrip} from './chat-controls';
 
 export function completedTurnEnds(session){
- const messages=session?.messages||[],ends=new Map();let turn=0;
+ const messages=session?.messages||[],ends=new Map();let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
  for(let i=0;i<messages.length;i++){
   if(messages[i].role!=='user')continue;
   turn++;
@@ -21,7 +21,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null);
  useEffect(()=>{if(!editing){pendingText.current=null;return}if(pendingText.current===null||edit.text===pendingText.current){setText(edit.text||'');pendingText.current=null}},[editing,edit?.text]);
  const copy=state.view?.messageCopy,copied=copy?.sessionId===session.id&&copy?.messageId===m.id?copy:null;
- const blocked=working||session.configurationBusy;
+ const blocked=working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason;
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const submit=async e=>{e.preventDefault();if(saving||blocked||!text.trim())return;setSaving(true);try{await act('message.edit',{sessionId:session.id,messageId:m.id,text})}finally{setSaving(false)}};
  return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id}>
@@ -34,7 +34,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   </form>:m.role==='user'?<p>{m.text}</p>:<Markdown text={m.text|| (working?'…':'')}/>}
   {!editing&&<div className="a-message-actions">
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>{copied?.status==='ready'?<Check/>:<Copy/>}</button>
-   {m.role==='user'&&<button type="button" className="a-icon" title={blocked?'Wait for the current work to finish':'Edit message'} aria-label="Edit message" disabled={blocked} data-action="view.update" onClick={()=>patch({sessionId:session.id,messageId:m.id,text:m.text})}><Pencil/></button>}
+   {m.role==='user'&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={blocked} data-action="view.update" onClick={()=>patch({sessionId:session.id,messageId:m.id,text:m.text})}><Pencil/></button>}
    {forkTurn&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}
@@ -42,5 +42,5 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  </article>;
 }
 export function ForkTurn({session,turn,act,working}){
- return <button type="button" className="a-icon" title={working?'Wait for the current work to finish':'Fork a new chat from here'} aria-label={`Fork conversation after turn ${turn}`} disabled={working||session.configurationBusy} data-action="session.fork" onClick={()=>act('session.fork',{id:session.id,turn})}><GitBranch/></button>;
+ return <button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':working?'Wait for the current work to finish':'Fork a new chat from here')} aria-label={`Fork conversation after turn ${turn}`} disabled={working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason} data-action="session.fork" onClick={()=>act('session.fork',{id:session.id,turn})}><GitBranch/></button>;
 }

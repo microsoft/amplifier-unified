@@ -4,7 +4,7 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {WorkspaceRail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkspaceRail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const initial=()=>({view:{navExpanded:true},workspaces:[{id:'one',name:'One',path:'/one'},{id:'two',name:'Two',path:'/two'}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
@@ -100,5 +100,73 @@ test('rename preserves failed text, prevents duplicate submission, and reflects 
  chat={...chat,title:'Agent supplied title'};
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findByType('input').props.value,'Agent supplied title');
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('automatic discovery reports loading/errors and refreshes through the shared action',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>calls.push({name,args});state.sharedHistory={loading:true};let root;
+ const render=()=>React.createElement(WorkspaceRail,{state,act});
+ await renderAct(async()=>{root=create(render())});
+ assert.match(JSON.stringify(root.toJSON()),/Finding projects and chats/);
+ assert.equal(root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.disabled,true);
+ state.sharedHistory={error:'One project could not be read.'};
+ await renderAct(async()=>root.update(render()));
+ assert.match(root.root.findByProps({role:'alert'}).children[1].children.join(''),/could not be read/);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'history.refresh',args:{}});
+ await renderAct(async()=>root.unmount());
+});
+
+test('unresolved native project folders stay separate and cannot start a chat',async()=>{
+ const state=initial();state.workspaces=[{id:'native-one',name:'One',path:null,available:false},{id:'native-two',name:'Two',path:null,available:false}];state.selectedWorkspaceId='native-two';
+ state.sessions=[{id:'a',title:'Project one chat',workspaceId:'native-one',workspace:null},{id:'b',title:'Project two chat',workspaceId:'native-two',workspace:null}];let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+ const rows=root.root.findAll(node=>node.props.className==='a-nav-chat-select');
+ assert.equal(rows.length,1);assert.equal(rows[0].props.title,'Project two chat');
+ assert.equal(root.root.findByProps({'aria-label':'New chat in workspace'}).props.disabled,true);
+ await renderAct(async()=>root.unmount());
+});
+
+test('native history paging, failures and unavailable workspaces have visible shared controls',async()=>{
+ const calls=[],act=async(name,args)=>calls.push({name,args});let loadingOlder=0;
+ let session={id:'native-chat',historyLoaded:false,historyLoading:true,sharedHistoryOffset:80};let root;
+ const render=()=>React.createElement(SessionHistoryControls,{session,act,onLoadEarlier:()=>loadingOlder++});
+ await renderAct(async()=>{root=create(render())});
+ assert.match(JSON.stringify(root.toJSON()),/Loading conversation/);
+ assert.equal(root.root.findByProps({'data-action':'session.history'}).props.disabled,true);
+ session={...session,historyLoaded:true,historyLoading:false};
+ await renderAct(async()=>root.update(render()));
+ await renderAct(async()=>root.root.findByProps({'data-action':'session.history'}).props.onClick());
+ assert.equal(loadingOlder,1);assert.deepEqual(calls.at(-1),{name:'session.history',args:{id:'native-chat',before:80,limit:100}});
+ session={...session,historyError:'The transcript could not be read.',workspaceAvailable:false};
+ await renderAct(async()=>root.update(render()));
+ assert.match(JSON.stringify(root.toJSON()),/read its saved chats/);
+ assert.equal(root.root.findAllByProps({role:'alert'}).length,1);
+ await renderAct(async()=>root.root.findByProps({'data-action':'session.select'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'session.select',args:{id:'native-chat'}});
+ await renderAct(async()=>root.unmount());
+});
+
+test('remove chat confirmation preserves shared history explicitly',async()=>{
+ const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};state.view.workspaceDraft={mode:'chat-delete',id:'a',name:'First plan'};let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ assert.match(JSON.stringify(root.toJSON()),/shared history stays on disk/);
+ await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+ assert.deepEqual(calls[0],{name:'session.delete',args:{id:'a'}});
+ await renderAct(async()=>root.unmount());
+});
+
+test('conversation pagination stays bounded and is shared with agents',async()=>{
+ const state=initial();state.selectedSessionId='chat-0';state.sessions=Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved '+i,workspace:'/one'}));
+ const calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')Object.assign(state.view,args.patch);return {accepted:true}};let root;
+ const render=()=>React.createElement(WorkspaceRail,{state,act});
+ await renderAct(async()=>{root=create(render())});
+ assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Show more conversations'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatPage:{workspaceId:'one',filter:'',selectedSessionId:'chat-0',index:1}}}});
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props.title,'Saved 100');
+ assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
  await renderAct(async()=>root.unmount());
 });

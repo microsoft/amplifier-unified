@@ -147,3 +147,20 @@ async def test_large_html_snapshot_stays_out_of_state_and_survives_file_deletion
         assert 'content' not in restored.state['canvas']
         assert raw_source(restored.state['canvas'],restored.db)==body
     finally:await restored.close()
+
+
+async def test_legacy_canvas_recovery_never_reads_index_only_native_sessions(app, tmp_path, monkeypatch):
+    from amplifier_web.canvas_library import recover_legacy
+    await app.dispatch('canvas.show',{'kind':'text','title':'Existing artifact','content':'Keep the app snapshot'})
+    saved=copy.deepcopy(app.state['canvasArtifacts'])
+    app.state['sessions']=[
+        {'id':'native-alias','workspace':None,'runtimeSessionId':'root:worker','historyManaged':True,'messages':[]},
+        {'id':'native-known','workspace':str(tmp_path/'historical'),'runtimeSessionId':'old-root','historyManaged':True,'messages':[]}]
+    app.state.pop('canvasLibraryMigration',None)
+    def forbidden(*args,**kwargs):raise AssertionError('Native history was opened for canvas migration')
+    with monkeypatch.context() as patch:
+        patch.setattr(SessionStore,'for_app',forbidden)
+        recover_legacy(app.state,app.db,app.data_dir)
+    assert app.state['canvasLibraryMigration']['recovered']==0
+    assert app.state['canvasArtifacts']==saved
+    assert not (tmp_path/'historical').exists()

@@ -109,6 +109,8 @@ ACTION_DEFINITIONS = {
     "permissions.get": ("Inspect scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]}},[])),
     "permissions.save": ("Save scoped file-access settings",schema({"sessionId":string(200),"scope":{"enum":["global","project","local"]},"allowed":{"type":"array","items":string(4000)},"denied":{"type":"array","items":string(4000)}},["allowed","denied"])),
     "history.list": ("Browse persisted and optionally legacy sessions",schema({"legacy":{"type":"boolean"}},[])),
+    "history.refresh": ("Refresh automatically discovered CLI workspaces and chats without mounting or replaying sessions", schema()),
+    "session.history": ("Refresh saved chat text, or load earlier messages before an offset. This never starts an Amplifier runtime.", schema({"id":string(200),"before":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},["id"])),
     "history.shared.list": ("List common shared sessions for a workspace without mounting a worker",schema({"workspace":string(4000)},[])),
     "history.shared.view": ("View common shared session history without mounting a worker",schema({"id":string(200),"workspace":string(4000),"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},["id","workspace"])),
     "history.shared.open": ("Open the same shared conversation without copying its runtime history",schema({"id":string(200),"workspace":string(4000)},["id","workspace"])),
@@ -232,12 +234,16 @@ class AppService:
         recover_legacy(self.state,self.db,self.data_dir)
         from .naming import automatic,persist
         for session in self.state['sessions']:
+            if session.get('historyManaged'):
+                continue
             session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
             persist(self.data_dir,session)
         from .feedback import Feedback
         self.feedback = Feedback(self)
         from .diagnostics import Diagnostics
         self.diagnostics = Diagnostics(self)
+        from .automatic_history import AutomaticHistory
+        self.history = AutomaticHistory(self)
         self._save()
 
     def default_theme(self):
@@ -292,6 +298,9 @@ class AppService:
         raise AppError("Select or create a conversation first.", 404)
 
     def _new_session(self, args):
+        selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
+        if not args.get('workspace') and selected.get('available') is False:
+            raise AppError('This project folder is unavailable. Choose an existing workspace to start work.')
         workspace = str(Path(args.get("workspace") or self.state["settings"]["workspace"]).expanduser().resolve())
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
@@ -327,6 +336,17 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        checked_session = None
+        implicit_session = False
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
+            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
+            if sid:
+                checked_session = sid
+                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'configuration.inspect', 'configuration.apply'} else None))
+                try:
+                    await self.history.ensure_loaded(sid)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256(json.dumps([action, args, origin], sort_keys=True).encode()).hexdigest()
         pending = []
         async with self.lock:
@@ -336,6 +356,16 @@ class AppService:
                     if previous[0] != fingerprint:
                         raise AppError("This command ID was already used with different contents.", 409)
                     return {**json.loads(previous[1]), "state": self.get_state(), "duplicate": True}
+            if checked_session:
+                if implicit_session and self.state.get('selectedSessionId') != checked_session:
+                    raise AppError('The selected chat changed. Retry in the intended chat.', 409)
+                checked = self._session(checked_session)
+                if checked.get('nativeProject'):
+                    reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
+                    if reason:
+                        raise AppError(reason, 409)
+                    if not checked.get('workspace') or not Path(checked['workspace']).is_dir():
+                        raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
             if self.state.get("updates",{}).get("phase") == "activating" and (action in {"conversation.send","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
@@ -365,9 +395,32 @@ class AppService:
             elif action.startswith('diagnostics.'):
                 try:diagnostic_result=await self.diagnostics.command(action,args)
                 except ValueError as exc:raise AppError(str(exc)) from None
+            elif action == 'history.refresh':
+                self.state['sharedHistory'].update(loading=True, error=None)
+                pending.append((self.history.refresh, ()))
+            elif action == 'session.history':
+                session = self._session(args['id'])
+                if session.get('nativeProject'):
+                    pending.append((self.history_page, (session['id'], args.get('before'), args.get('limit', 100))))
             elif action.startswith("workspace."):
                 from .workspace_canvas import workspace_command
+                if action == 'workspace.remove':
+                    removed = next((w for w in self.state['workspaces'] if w['id'] == args['id']), None)
+                    if removed and len(self.state['workspaces']) > 1:
+                        self.history.hide_workspace(removed)
                 workspace_command(self.state, action, args)
+                if action == 'workspace.add':
+                    hidden = self.state.get('hiddenNativeWorkspaces', [])
+                    from .session_files import project_slug
+                    restored = {self.state['selectedWorkspaceId'], uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + project_slug(args['path'])).hex}
+                    hidden[:] = [identity for identity in hidden if identity not in restored]
+                if action in {'workspace.select', 'workspace.add', 'workspace.remove'}:
+                    workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
+                    matches = [s for s in self.state['sessions'] if s.get('workspaceId') == workspace['id'] or (workspace.get('path') and s.get('workspace') == workspace['path'])]
+                    selected = next((s for s in matches if s['id'] == self.state.get('selectedSessionId')), matches[0] if matches else None)
+                    self.state['selectedSessionId'] = selected['id'] if selected else None
+                    if selected and selected.get('nativeProject'):
+                        pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
                 if action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
@@ -417,20 +470,26 @@ class AppService:
                 select_session_workspace(self.state, session)
                 self.state["selectedSessionId"] = session["id"]
                 self.state["view"]["draft"] = ""
+                if session.get('nativeProject'):
+                    pending.append((self.history.load, (session['id'],)))
             elif action == "session.rename":
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
                 session=self._session(args['id'])
                 session.update(title=args['title'].strip(),titleSource='manual')
                 from .naming import persist
-                persist(self.data_dir,session)
+                persist(self.data_dir,session,shared_rename=True)
             elif action == "session.delete":
                 session = self._session(args["id"])
                 if self.runtime:
                     pending.append((self.runtime.stop, (session["id"],)))
+                self.history.hide_session(session)
                 self.state["sessions"].remove(session)
                 if self.state["selectedSessionId"] == session["id"]:
-                    self.state["selectedSessionId"] = self.state["sessions"][0]["id"] if self.state["sessions"] else None
+                    replacement = next((s for s in self.state['sessions'] if s.get('workspaceId') == self.state.get('selectedWorkspaceId') or (s.get('workspace') and s.get('workspace') == session.get('workspace'))), None)
+                    self.state['selectedSessionId'] = replacement['id'] if replacement else None
+                    if replacement and replacement.get('nativeProject'):
+                        pending.append((self.history.load, (replacement['id'],)))
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -517,6 +576,7 @@ class AppService:
                 text=text or 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
+                session['historyManaged'] = False
                 input_id = command_id or str(uuid.uuid4())
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
@@ -535,6 +595,9 @@ class AppService:
                 text = args["instruction"].strip()
                 if not text:
                     raise AppError("Describe the worker's task.")
+                if not self.runtime:
+                    raise AppError('The Amplifier runtime is unavailable.')
+                session['historyManaged'] = False
                 instruction = "Delegate the following task to a background worker lane using your delegation tool. Keep the main conversation available. Task: " + text
                 if args.get("bundle"):
                     instruction += "\nRequested worker bundle: " + args["bundle"]
@@ -573,7 +636,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -645,6 +708,7 @@ class AppService:
                     session = self._session()
                     if self.voice_service and not self.voice_service.api_key:
                         raise AppError("Set OPENAI_API_KEY in the terminal environment to enable calls.")
+                    session["historyManaged"] = False
                     self.state["voice"].update({"status": "connecting", "sessionId": session["id"]})
                     call_args["sessionId"] = session["id"]
                 elif action == "call.mute":
@@ -662,6 +726,8 @@ class AppService:
                 restore(self.state,self.db,open_panel=previous_open)
             if not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
                 owner=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state.get('selectedSessionId'))),{})
+                if owner.get('historyManaged'):
+                    owner = {}  # Browsing must not append to the observed CLI capture.
                 stream='canvas' if action.startswith('canvas.') else 'smartTools' if action.startswith('smartTools.') else 'sessions' if action.startswith('session.') else 'workers' if action.startswith('worker.') else 'app'
                 self.diagnostics.record(stream,{'event':'app:action','data':{'action':action,'origin':origin,'commandId':command_id,'sessionId':owner.get('id'),'runtimeSessionId':owner.get('runtimeSessionId'),'artifactId':self.state.get('canvas',{}).get('id') if stream=='canvas' else None}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
             self.state["events"].append({"id": command_id, "action": action, "origin": origin, "at": time.time()})
@@ -698,6 +764,9 @@ class AppService:
         except Exception as exc:
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc)})
+
+    async def history_page(self, session_id, before, limit):
+        await self.history.load(session_id, before=before, limit=limit)
 
     async def _send(self, session, text, input_id):
         if not self.runtime:
@@ -886,7 +955,7 @@ class AppService:
         async with self.lock:
             try:session=self._session(identity)
             except AppError:return
-            if not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
+            if session.get('historyManaged') or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
             if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
             session['configurationBusy']=True
             self._publish()
@@ -1010,6 +1079,7 @@ class AppService:
 
     async def close(self):
         self.closed = True
+        await self.history.close()
         if self.update_manager:
             await self.update_manager.close()
         if self.management and self.management.setup_manager:

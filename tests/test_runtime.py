@@ -19,12 +19,15 @@ import json,sys
 for line in sys.stdin:
     data=json.loads(line); op=data['op']
     if op=='start':
+        root=data['session']['id']
         if data['session']['id']=='slow':
             print(json.dumps({'type':'runtime.progress','phase':'bundle-preparation','detail':'Loading configured modules.'}),flush=True)
         else:
-            print(json.dumps({'type':'runtime.ready','report':{'resumed':True}}),flush=True)
+            print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root}}),flush=True)
     elif op=='send':
         print(json.dumps({'type':'input.delivered','input_id':data['input_id']}),flush=True)
+        for identity in (root,root+'-child'):
+            print(json.dumps({'type':'execution.event','event':{'id':identity+'-call','kind':'llm','phase':'completed','sessionId':identity,'rootSessionId':root}}),flush=True)
         print(json.dumps({'op':'bridge','id':'bridge1','operation':'get_state','args':{}}),flush=True)
         print(json.dumps({'op':'reply','id':data['id'],'result':{'accepted':True}}),flush=True)
     elif op=='bridge.result':
@@ -153,14 +156,17 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     worker.activation_gate = ActivationGate()
     first = worker.activation_gate.activate()
     worker.activation = first
-    worker.config_inputs = ()
+    native = tmp_path / "transcript.jsonl"
+    native.write_text('{"role":"user","content":"before checkpoint"}\n')
+    worker.config_inputs = (str(native),)
     worker.parked_checkpoint_stamp = worker.shared_handle.write(
         [{"role": "user", "content": "first"}], bundle="anchors", metadata={"fixture": True})
     worker.parked_config_stamp = configuration_stamp(
-        workspace, "warm-session", worker.home, shared.file_stamp)
+        workspace, "warm-session", worker.home, shared.file_stamp, extra_paths=worker.config_inputs)
     checkpoint_calls = []
     async def checkpoint(status):
         checkpoint_calls.append(status)
+        native.write_text('{"role":"user","content":"own completed checkpoint"}\n')
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
         get=lambda name: None,
         get_capability=lambda name: (
@@ -179,6 +185,56 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     with pytest.raises(RuntimeError, match="released or superseded"):
         worker.activation_gate.check(first)
     worker.shared_handle.release()
+
+
+@pytest.mark.asyncio
+async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(tmp_path):
+    shared = pytest.importorskip("amplifier_foundation.session.shared_state")
+    from amplifier_web.host.session import _NativeTranscriptGuard, NativeTranscriptConflict
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    worker = Worker()
+    worker.workspace, worker.home = workspace, tmp_path / "home"
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
+                                     inbox=asyncio.Queue(), generation=None)
+    worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
+    worker.shared_store_stamp = shared.file_stamp
+    worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    messages = [{"role": "user", "content": "first"}]
+    worker.shared_handle.write(messages, bundle="anchors", metadata={"fixture": True})
+    native = tmp_path / "transcript.jsonl"
+    native.write_text(json.dumps(messages[0]) + "\n")
+    worker.config_inputs = (str(native),)
+    checkpoint_calls, remount_calls = [], []
+    async def checkpoint(status):
+        checkpoint_calls.append(status)
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        get=lambda name: None,
+        get_capability=lambda name: checkpoint if name == "live.checkpoint" else None))
+    async def remount():
+        remount_calls.append(worker.shared_handle.read())
+        _NativeTranscriptGuard(native).admit(messages)
+    worker.remount = remount
+    try:
+        with patch("amplifier_web.runtime_worker.publish"):
+            await worker.park(activation=worker.activation)
+            native.write_text(native.read_text() + '{"role":"assistant","content":"new CLI turn"}\n')
+            after_cli = native.read_bytes()
+            with pytest.raises(NativeTranscriptConflict):
+                await worker.acquire_for_mutation()
+        assert len(remount_calls) == 1
+        assert remount_calls[0]["messages"] == messages
+        assert checkpoint_calls == ["completed"]
+        assert worker.runtime.inbox.empty()
+        assert native.read_bytes() == after_cli
+        assert worker.shared_handle.read()["messages"] == messages
+    finally:
+        if worker.shared_handle:
+            worker.shared_handle.release()
 
 
 class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
@@ -251,6 +307,27 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         message=next(p for k,p in self.events if k=='assistant.message')
         self.assertEqual(message['text'],'7')
         self.assertEqual(message['inputId'],'input-1')
+
+    async def test_native_identity_restores_worker_but_ui_bridge_and_root_events_use_app_alias(self):
+        self.session.update(runtimeSessionId='native-root', nativeIdentity='older-native-alias')
+        await self.manager.send(self.session, 'continue native history', 'input-1', self.emit)
+        await asyncio.wait_for(self.received.wait(), 3)
+        self.assertEqual(list(self.manager.workers), ['fixture-session'])
+        ready = next(p for k,p in self.events if k == 'runtime.status' and p['status'] == 'ready')
+        self.assertEqual(ready['report']['session_id'], 'native-root')
+        self.assertEqual(ready['sessionId'], 'fixture-session')
+        self.assertEqual(self.bridges, [('get_state', {}, 'fixture-session')])
+        root, child = [p for k,p in self.events if k == 'execution.event']
+        self.assertEqual((root['sessionId'], root['rootSessionId']), ('fixture-session', 'fixture-session'))
+        self.assertEqual((child['sessionId'], child['rootSessionId']), ('native-root-child', 'fixture-session'))
+        message = next(p for k,p in self.events if k == 'assistant.message')
+        self.assertEqual(message['sessionId'], 'fixture-session')
+
+    async def test_native_identity_alias_is_used_when_runtime_id_is_not_set(self):
+        self.session['nativeIdentity'] = 'native-root'
+        await self.manager.start(self.session, self.emit)
+        ready = next(p for k,p in self.events if k == 'runtime.status' and p['status'] == 'ready')
+        self.assertEqual(ready['report']['session_id'], 'native-root')
 
     async def test_parallel_start_reuses_single_worker(self):
         await asyncio.gather(*(self.manager.start(self.session,self.emit) for _ in range(4)))

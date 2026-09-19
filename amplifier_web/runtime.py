@@ -168,6 +168,8 @@ class RuntimeManager:
             # The worker restores normal history from its checkpoint. Sending the
             # browser's execution logs, catalogs and attachment history is redundant.
             config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
+            config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+            row['runtime_id'] = config['id']
             if session.get('forkContext'):
                 config['messages'] = session.get('messages', [])
             try:
@@ -258,6 +260,11 @@ class RuntimeManager:
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
                     await row["emit"](data["type"], {**data, "sessionId": sid})
                 else:
+                    if data.get('type') == 'execution.event' and isinstance(data.get('event'), dict):
+                        data = {**data, 'event': dict(data['event'])}
+                        for key in ('sessionId', 'rootSessionId'):
+                            if data['event'].get(key) == row.get('runtime_id'):
+                                data['event'][key] = sid
                     if data.get("type") == "input.delivered":
                         row["inputId"] = data.get("input_id")
                     normalized = normalize_event(data, sid, row["inputId"])

@@ -157,18 +157,28 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ## Shared control and appearance
 
-### Same chat in CLI and web
+### Automatic CLI workspaces and chats
 
-Unified 0.7 pins the Foundation `session.shared_state` API. CLI participation
+Unified pins the Foundation `session.shared_state` API. CLI participation
 requires the upgraded shared-root adapter; restart older CLI processes after
 updating. Native Windows CLI persistence remains available, but shared-session
 locking is supported only on POSIX local filesystems.
 
-Use **Settings → Maintenance → Same-chat CLI and web → Browse shared
-conversations → Open same chat** for the selected workspace. Opening creates
-only a browser view of the same root ID; it does not import or duplicate the
-runtime transcript. The preview shows up to the latest 100 visible messages.
-Execution restores the complete common context, including tool results.
+CLI projects appear automatically as workspaces in the sidebar, with their
+sessions listed as chats. Select a resumable root chat to continue it; there
+is no import or sharing option to configure. The list refreshes every 15 seconds in the background,
+and the refresh button beside **Conversations** checks immediately. Opening a
+chat creates only a browser view of the same root ID. It does not duplicate the
+runtime transcript. The view starts with the latest 100 visible messages;
+**Load earlier messages** reveals older history. Execution restores the complete
+common context, including tool results. Removing a workspace or chat from the
+list keeps its shared files on disk and leaves it hidden from later discovery.
+Worker sessions and legacy chats with missing folders, unsupported IDs, or unknown
+bundles remain readable, with an explanation when continuation is unavailable.
+Metadata is cached; unopened histories are indexed without reading transcripts
+or starting a runtime. Navigation renders 100 chats at a time; search covers all
+chats in the workspace. Agents use the same `history.refresh`, `session.select`,
+and `session.history` actions as the interface.
 
 CLI keeps the writer lock until exit. Web releases automatically after accepted
 work, delegated jobs, approvals, and saving settle, even if the page stays open.

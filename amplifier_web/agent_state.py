@@ -34,14 +34,14 @@ def _preview(value, path, budget=2500, depth=0):
 def overview(state, session_id):
     selected = session_id or state.get('selectedSessionId')
     index = next((i for i,s in enumerate(state.get('sessions', [])) if s['id']==selected), None)
-    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','canvas','view','attention','voice'] if key in state}
+    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','sharedHistory','canvas','view','attention','voice'] if key in state}
     core['canvasArtifacts'] = {'items':[{**{k:r.get(k) for k in ('id','title','kind','messageId','tabOpen')},'$statePath':f'/canvasArtifacts/{i}'} for i,r in list(enumerate(state.get('canvasArtifacts',[]))) if r.get('sessionId')==selected][-20:],'total':sum(r.get('sessionId')==selected for r in state.get('canvasArtifacts',[])),'$statePath':'/canvasArtifacts'}
     core['diagnostics'] = _preview(state.get('diagnostics', {}), '/diagnostics', 1200)
     core['smartTools'] = _preview(state.get('smartTools', {}), '/smartTools', 2000)
     core['session'] = None
     if index is not None:
         session=state['sessions'][index];base=f'/sessions/{index}'
-        core['session']={key:session.get(key) for key in ['id','title','status','bundle','workspace']}
+        core['session']={key:session.get(key) for key in ['id','title','status','bundle','workspace','workspaceId','historyLoaded','historyReadOnlyReason','sharedHistoryOffset','sharedHistoryUserTurnOffset','sharedHistoryTotal']}
         core['session'].update({'$statePath':base,'activity':_preview(session.get('activity',{}),base+'/activity',1500),
             'workers':_preview(session.get('workers',[]),base+'/workers',1500),
             'recentMessages':[_preview(message,_pointer(base+'/messages',i),1000) for i,message in list(enumerate(session.get('messages',[])))[-6:]],
@@ -50,8 +50,9 @@ def overview(state, session_id):
     if state.get('devices'):
         device_id,device=max(state['devices'].items(),key=lambda pair:pair[1].get('updatedAt',0))
         core['visibleUI']=_preview(device,_pointer('/devices',device_id),4000)
-    core['conversations'] = [{'id':s['id'],'title':s.get('title'),'status':s.get('status'),'messageCount':len(s.get('messages',[])),'$statePath':f'/sessions/{i}'} for i,s in enumerate(state.get('sessions',[])[:50])]
+    core['conversations'] = [{'id':s['id'],'title':s.get('title'),'status':s.get('status'),'messageCount':s.get('sharedHistoryTotal',len(s.get('messages',[])) if s.get('historyLoaded',True) else None),'historyLoaded':s.get('historyLoaded',True),'workspaceId':s.get('workspaceId'),'$statePath':f'/sessions/{i}'} for i,s in enumerate(state.get('sessions',[])[:50])]
     core['_stateAccess'] = {'note':'This overview is scoped to the calling session. Other app state and detailed resources are available by JSON Pointer; pass path, offset, limit and optional revision. Follow nextOffset. Text previews and $resource references are not the complete value.',
+        'history':'CLI workspaces and chats are discovered automatically. Unloaded transcripts have no message count yet. Use history.refresh, session.select, and session.history {id,before,limit} to refresh or read earlier messages. Respect historyReadOnlyReason before continuing saved worker or legacy sessions.',
         'revision':state.get('revision'),'sections':[{'name':key,'path':'/'+key} for key in state]}
     return core
 

@@ -7,6 +7,8 @@ PLACEHOLDERS={'New conversation','A new conversation','Untitled conversation'}
 
 
 def automatic(session):
+    if session.get('titleSource') == 'native' and session.get('nativeNameSource') == 'manual':
+        return False
     if 'titleSource' in session:
         return session['titleSource']!='manual'
     first=next((m.get('text','') for m in session.get('messages',[]) if m.get('role')=='user'),'')
@@ -21,9 +23,13 @@ def read(directory):
         return {}
 
 
-def persist(home,session):
+def persist(home,session, *, shared_rename=False):
     from .host.storage import SessionStore
-    directory=SessionStore.for_app(home, session.get('workspace') or Path.cwd()).directory(session.get('runtimeSessionId') or session['id'])
+    if session.get('nativeProject'):
+        from .automatic_history import directory as native_directory
+        directory = native_directory(session)
+    else:
+        directory=SessionStore.for_app(home, session.get('workspace') or Path.cwd()).directory(session.get('runtimeSessionId') or session['id'])
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     value=read(directory)
     value.update(name_source=session.get('titleSource','manual'))
@@ -31,3 +37,8 @@ def persist(home,session):
         value['name']=session['title']
     if session.get('description'):value['description']=session['description']
     SessionStore._atomic(directory/'naming.json',json.dumps(value))
+    if shared_rename and (directory/'metadata.json').is_file():
+        # Match CLI's explicit metadata rename; opening history never calls this.
+        metadata=json.loads((directory/'metadata.json').read_text())
+        metadata.update({key:value[key] for key in ('name','name_source') if key in value})
+        SessionStore._atomic(directory/'metadata.json',json.dumps(metadata,ensure_ascii=False,indent=2))

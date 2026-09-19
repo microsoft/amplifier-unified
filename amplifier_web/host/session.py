@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import stat
 
 from .config import expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
@@ -59,6 +60,57 @@ def repair_interrupted_receipts(messages):
                 "call_id": receipt["call_id"], "outcome": "unconfirmed", "effects": "not_rolled_back",
                 "instruction": "This receipt was imported from a stopped host. Inspect actual state; do not automatically repeat the operation."})
     return result
+
+
+class NativeTranscriptConflict(RuntimeError):
+    """An older host changed the native projection outside the shared lock."""
+
+
+class _NativeTranscriptGuard:
+    """Fail closed when the CLI projection diverges from admitted history.
+
+    Foundation's lock coordinates participating hosts. Older CLI releases do
+    not use it, so their native file must also be checked before each write.
+    This is conflict detection, not a lock over non-cooperating processes.
+    """
+    def __init__(self, path):
+        self.path = Path(path)
+        self.stamp = self._stamp()
+
+    @staticmethod
+    def conflict():
+        return NativeTranscriptConflict(
+            "The native CLI transcript changed outside this session's shared checkpoint. "
+            "Both histories were preserved. Resolve the conflicting transcript before continuing this session.")
+
+    def _stamp(self):
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            raise NativeTranscriptConflict("The native CLI transcript is not a regular file; it was not changed.")
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def check(self):
+        if self._stamp() != self.stamp:
+            raise self.conflict()
+
+    def admit(self, messages, *, preserve_system=False):
+        """Accept either the full checkpoint or its documented CLI projection."""
+        if self.stamp is None:
+            self.check()
+            return
+        with self.path.open(encoding="utf-8") as stream:
+            rows = [json.loads(line) for line in stream if line.strip()]
+        self.check()
+        projection = messages if preserve_system else [
+            row for row in messages if row.get("role") not in {"system", "developer"}]
+        if rows != messages and rows != projection:
+            raise self.conflict()
+
+    def saved(self):
+        self.stamp = self._stamp()
 
 
 class SelectedProvider:
@@ -268,6 +320,25 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             return shared_snapshot.get(name, default)
         return getattr(shared_snapshot, name, default)
 
+    shared_messages = shared_value("messages")
+    shared_metadata = shared_value("metadata", {})
+    if shared_snapshot is not None and (not isinstance(shared_messages, list) or not isinstance(shared_metadata, dict)):
+        raise ValueError("The shared session checkpoint is malformed.")
+    store = SessionStore.for_app(config.home, config.workspace)
+    # A missing native projection can be regenerated from a shared checkpoint.
+    # Do not first migrate an older private checkpoint over that authority.
+    if shared_snapshot is None:
+        store._migrate(runtime.session_id)
+    native_guard = _NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
+    if shared_snapshot is not None:
+        native_guard.admit(shared_messages, preserve_system=bool(shared_metadata.get("preserve_system")))
+        saved = shared_messages, shared_metadata
+    else:
+        saved = store.load(runtime.session_id) if resume else None
+        if resume and saved is None and shared_handle is None:
+            saved = store.import_cli(runtime.session_id, workspace=config.workspace)
+        native_guard.check()
+
     shared_bundle = shared_value("bundle")
     if isinstance(shared_bundle, str):
         # Legacy host projections used a display prefix.  Authority uses a
@@ -339,16 +410,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
         project_slug=project_slug(config.workspace),
         bundle_name=chosen, project_dir=str(config.workspace), project_name=config.workspace.name)
-    store = SessionStore.for_app(config.home, config.workspace)
-    store._migrate(runtime.session_id)
-    shared_messages = shared_value("messages")
-    shared_metadata = shared_value("metadata", {})
-    if shared_snapshot is not None and (not isinstance(shared_messages, list) or not isinstance(shared_metadata, dict)):
-        raise ValueError("The shared session checkpoint is malformed.")
-    saved = ((shared_messages, shared_metadata) if shared_snapshot is not None
-             else store.load(runtime.session_id) if resume else None)
-    if resume and saved is None and shared_handle is None:
-        saved = store.import_cli(runtime.session_id, workspace=config.workspace)
     messages = saved[0] if saved else None
     jobs = JobStore(store.base_dir / runtime.session_id / "live-jobs")
     recovered = []
@@ -357,7 +418,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             jobs.close()
             raise RuntimeError("Existing job evidence requires explicit resume")
         messages, recovered = jobs.recover(messages or [])
-    if messages is not None and shared_handle is None:
+    if messages is not None and shared_snapshot is None:
         messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None
@@ -415,6 +476,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 persist_controls()
             transcript = await coordinator.get("context").get_messages()
             held = shared_handle_getter() if shared_handle_getter else shared_handle
+            native_guard.check()
             if held is not None:
                 # The held capability validates PID/ownership before the
                 # atomic replace.  Its full context beats this host's native
@@ -427,6 +489,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
+            native_guard.saved()
         coordinator.register_capability("live.checkpoint", checkpoint)
         async def checkpoint_hook(event, data):
             if data.get("session_id", runtime.session_id) == runtime.session_id:
@@ -445,7 +508,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         # Stamp only explicit, local bundle resources actually consumed by this
         # mount. Registry caches and reports are intentionally excluded because
         # they are rewritten by normal preparation.
-        config_inputs = []
+        # Native CLI versions without common checkpoint support can write while
+        # parked. Include their transcript so the worker remounts and rechecks
+        # authority before it admits another input or control mutation.
+        config_inputs = [str(native_guard.path)]
         for reference in (chosen, *config.app_bundles):
             path = Path(reference).expanduser()
             if not path.is_absolute():

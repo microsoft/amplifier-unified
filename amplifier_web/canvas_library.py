@@ -116,6 +116,8 @@ def recover_legacy(state, db, home):
     remember(state,db)
     recovered=0
     for session in state.get('sessions',[]):
+        if session.get('historyManaged') or not session.get('workspace'):
+            continue
         try:
             store=SessionStore.for_app(home,session['workspace'])
             store._migrate(session.get('runtimeSessionId') or session['id'])

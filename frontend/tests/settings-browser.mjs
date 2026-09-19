@@ -2,7 +2,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8957/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
 const browser=await chromium.launch({headless:true});
 const page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -40,8 +40,10 @@ try{
  assert.equal((await state()).setup.matrix.roles.general.candidates[0].model,'fixture-alternative');
  await page.evaluate(()=>window.amplifier.dispatch('theme.apply',{name:'Existing skin',css:'#amp-one .a-overlay{padding:24px;border-radius:22px} @media(max-width:760px){#amp-one .a-settings-overlay .a-dialog.wide{width:100%;height:100dvh;border-radius:0}} #amp-one .a-dialog label{display:block;flex-direction:column} #amp-one .a-dialog{max-height:90dvh;border-radius:24px;padding:26px} #amp-one .a-dialog.wide{width:min(860px,100%)}'}));
  await page.getByRole('button',{name:'Maintenance',exact:true}).click();
- await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).click();
- await page.getByRole('button',{name:'Browse shared conversations',exact:true}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).count(),0);
+ await page.getByRole('button',{name:'Conversation history',exact:true}).click();
+ await page.getByText(/Your CLI projects and conversations appear automatically/).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Browse saved conversations',exact:true}).count(),0);
  await page.getByRole('button',{name:'Back to Maintenance',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),'1');
  assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').innerText(),'1');

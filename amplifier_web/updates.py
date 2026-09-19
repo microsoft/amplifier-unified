@@ -383,7 +383,10 @@ class UpdateManager:
         command=RuntimeManager()._command(release=release)
         command[-1]=str(Path(__file__).with_name('update_probe.py'))
         state=self.service.get_state()
-        configs={(s['workspace'],s['bundle']) for s in state['sessions']}
+        # Browsing historical CLI projects does not opt their old bundles into
+        # this application's update validation or mount missing workspaces.
+        configs={(s['workspace'],s['bundle']) for s in state['sessions']
+                 if not s.get('historyManaged') and s.get('workspace') and s.get('bundle')}
         configs.add((state['settings']['workspace'],state['settings']['bundle']))
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_UNIFIED_RELEASE':'',
             'UV_OVERRIDE':str(Path(__file__).parent/'runtime_deps/compatibility.txt')}
