@@ -71,3 +71,30 @@ async def test_existing_host_refuses_another_data_directory(aiohttp_server, tmp_
     async with aiohttp.ClientSession() as client:
         with pytest.raises(ValueError,match='different or older host'):
             await _existing_host(client,[str(server.make_url('')).rstrip('/')],data_identity(tmp_path/'wanted'))
+
+
+@pytest.mark.parametrize('selected_kind', ['worker', 'root', 'none'])
+async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, tmp_path, capsys, selected_kind):
+    runtime = Runtime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=runtime, voice=False,
+                           background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Older independent chat'})
+    older_root = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Recent independent chat'})
+    recent_root = service._session()['id']
+    await service.dispatch('session.create', {'title': 'Saved subagent'})
+    worker = service._session()
+    worker.update(sessionKind='worker', parentId=recent_root, nativeParentId=recent_root)
+    assert service.state['sessions'][0]['id'] == worker['id']
+    service.state['selectedSessionId'] = {'worker': worker['id'], 'root': older_root, 'none': None}[selected_kind]
+    server = await aiohttp_server(app)
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,
+                     command='continue', prompt='Continue the chat', bundle=None, provider=None, model=None,
+                     max_tokens=None, timeout=5, output_format='json')
+    assert await run(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    expected = older_root if selected_kind == 'root' else recent_root
+    assert result['sessionId'] == expected
+    assert runtime.sent == [(expected, 'Continue the chat', service._session(expected)['messages'][0]['inputId'])]
+    assert worker['messages'] == []

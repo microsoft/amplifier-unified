@@ -542,3 +542,55 @@ async def test_native_manual_title_source_refreshes_without_overriding_web_renam
     await app.close()
     restored = app_factory()
     assert restored._session(row['id'])['nativeNameSource'] == 'manual'
+
+
+async def test_worker_histories_remain_available_but_counts_only_include_root_chats(tmp_path, app_factory):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'root-chat', metadata={'parent_id': None})
+    native_session(workspace, 'uuid-worker', metadata={'parent_session_id': 'root-chat'})
+    native_session(workspace, 'cli-fork', metadata={'parent_id': 'root-chat', 'forked_from_turn': 1, 'forked_at': '2026-01-01T00:00:00Z'})
+    app = app_factory()
+    await app.history.refresh()
+    rows = {row['nativeIdentity']: row for row in native_rows(app)}
+    assert rows['root-chat']['sessionKind'] == 'root'
+    assert rows['cli-fork']['sessionKind'] == 'root'
+    assert rows['uuid-worker']['sessionKind'] == 'worker'
+    assert rows['uuid-worker']['parentId'] == rows['root-chat']['id']
+    assert rows['cli-fork']['parentId'] == rows['root-chat']['id']
+    assert rows['cli-fork']['historyReadOnlyReason'] is None
+    assert app.state['sharedHistory']['sessionCount'] == 2
+    assert app.state['sharedHistory']['workerSessionCount'] == 1
+    registration = next(row for row in app.state['workspaces'] if row.get('path') == str(workspace))
+    assert registration['sessionCount'] == 2
+    assert registration['workerSessionCount'] == 1
+    await app.history.load(rows['uuid-worker']['id'])
+    assert app._session(rows['uuid-worker']['id'])['messages'][0]['text'] == 'Saved CLI question'
+    await app.close()
+    restored = app_factory()
+    assert restored._session(rows['uuid-worker']['id'])['sessionKind'] == 'worker'
+    assert restored._session(rows['cli-fork']['id'])['sessionKind'] == 'root'
+    assert restored._session(rows['uuid-worker']['id'])['historyLoaded'] is False
+
+
+async def test_existing_index_classification_refreshes_without_using_ui_fork_parent(tmp_path, app_factory):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'web-fork', metadata={'parent_id': None})
+    worker_directory = native_session(workspace, 'unclassified-worker')
+    app = app_factory()
+    await app.history.refresh()
+    fork_row = next(row for row in native_rows(app) if row['nativeIdentity'] == 'web-fork')
+    worker_row = next(row for row in native_rows(app) if row['nativeIdentity'] == 'unclassified-worker')
+    fork_state = app._session(fork_row['id'])
+    fork_state.update(historyManaged=False, parentId='ui-fork-lineage', forkTranscript={'sourceSessionId': 'old-root'})
+    worker_state = app._session(worker_row['id'])
+    worker_state.pop('sessionKind')  # An index saved by the previous app version.
+    metadata_path = worker_directory / 'metadata.json'
+    metadata = json.loads(metadata_path.read_text()); metadata['parent_id'] = 'web-fork'
+    metadata_path.write_text(json.dumps(metadata))
+    await app.close()
+    restored = app_factory()
+    await restored.history.refresh()
+    assert restored._session(worker_row['id'])['sessionKind'] == 'worker'
+    assert restored._session(worker_row['id'])['parentId'] == fork_row['id']
+    assert restored._session(fork_row['id'])['sessionKind'] == 'root'
+    assert restored._session(fork_row['id'])['parentId'] == 'ui-fork-lineage'

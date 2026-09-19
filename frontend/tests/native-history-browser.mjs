@@ -5,10 +5,10 @@ import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 
 const message=i=>({id:`native-${i}`,role:i%2?'assistant':'user',text:`History ${i}\n\n${'A useful saved paragraph. '.repeat(30)}`,createdAt:i+1});
-const session={id:'native-chat',title:'Native project chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,sharedHistoryOffset:20,sharedHistoryUserTurnOffset:10,messages:Array.from({length:20},(_,i)=>message(i+20))};
-const child={id:'child-chat',title:'Saved worker',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:false,messages:[],historyReadOnlyReason:'This is a saved worker conversation. Open its parent chat to continue.'};
+const session={id:'native-chat',sessionKind:'root',title:'Native project chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,sharedHistoryOffset:20,sharedHistoryUserTurnOffset:10,messages:Array.from({length:20},(_,i)=>message(i+20))};
+const child={id:'child-chat',sessionKind:'worker',parentId:'native-chat',nativeParentId:'native-chat',title:'Saved worker',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:false,messages:[],historyReadOnlyReason:'This is a saved worker conversation. Open its parent chat to continue.'};
 let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true},sessions:[session,child],workspaces:[{id:'project',name:'Fixture project',path:'/fixture',available:true}],selectedSessionId:session.id,selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
-state.sessions.push(...Array.from({length:4998},(_,i)=>({...child,id:'summary-'+i,title:'Indexed conversation '+i,historyLoaded:false,historyReadOnlyReason:null})));
+state.sessions.push(...Array.from({length:4998},(_,i)=>({...child,sessionKind:'root',parentId:null,nativeParentId:null,id:'summary-'+i,title:'Indexed conversation '+i,historyLoaded:false,historyReadOnlyReason:null})));
 const calls=[],errors=[];
 let browser,vite;
 try{
@@ -41,6 +41,8 @@ try{
  const started=performance.now();
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  assert.equal(await page.locator('.a-nav-chat').count(),100);
+ assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
+ assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);
  assert.ok(await page.locator('.a-session-select option').count()<=101);
  const domNodes=await page.locator('*').count();assert.ok(domNodes<5000,`${domNodes} DOM nodes for summary-only chats`);
  const input=page.getByRole('textbox',{name:'Message Amplifier'}),draftStarted=performance.now();
@@ -73,7 +75,10 @@ try{
  assert.equal(await page.getByRole('button',{name:'Load earlier messages',exact:true}).count(),0);
  await page.getByRole('button',{name:'Refresh workspaces and chats',exact:true}).click();
  assert.ok(calls.some(call=>call.action==='history.refresh'));
- await page.evaluate(()=>window.amplifier.dispatch('session.select',{id:'child-chat'}));
+ await page.getByRole('button',{name:'Session details',exact:true}).click();
+ await page.getByRole('button',{name:'Subagent history (1)',exact:true}).click();
+ await page.getByRole('heading',{name:'Subagent history',exact:true}).waitFor();
+ await page.getByRole('button',{name:'Saved worker',exact:true}).click();
  await page.getByText('Loading conversation…',{exact:true}).waitFor();
  assert.equal(await page.getByRole('heading',{name:'What shall we work on?'}).count(),0);
  child.historyLoading=false;child.historyLoaded=true;child.messages=[message(1)];state.revision++;
@@ -83,6 +88,10 @@ try{
  assert.equal(await page.getByRole('button',{name:'Model and reasoning settings'}).isDisabled(),true);
  assert.equal(await page.getByRole('button',{name:'Start voice call'}).isDisabled(),true);
  assert.equal(calls.some(call=>call.action==='runtime.control'),false);
+ assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);
+ await page.getByText('Subagent conversation',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Open parent chat',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='native-chat');
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByRole('button',{name:'Maintenance',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).count(),0);

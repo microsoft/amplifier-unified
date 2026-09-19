@@ -18,7 +18,7 @@ INDEX_FIELDS = ('id', 'title', 'titleSource', 'nativeNameSource', 'description',
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
-                'historyManaged', 'historyReadOnlyReason', 'draftAttachments')
+                'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
 
 
 def identity(project, session):
@@ -202,7 +202,7 @@ class AutomaticHistory:
                             previous = workspaces[row['id']]
                             changed = True
                         else:
-                            for key in ('nativeProject', 'available', 'sessionCount'):
+                            for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
                                 if key in row and previous.get(key) != row[key]:
                                     previous[key] = row[key]; changed = True
                         for old in unresolved:
@@ -216,7 +216,7 @@ class AutomaticHistory:
                                     if old['name'] not in aliases:
                                         aliases.append(old['name'])
                             for key, value in old.items():
-                                if key not in {'id', 'name', 'nativeProject', 'path', 'available', 'sessionCount'}:
+                                if key not in {'id', 'name', 'nativeProject', 'path', 'available', 'sessionCount', 'workerSessionCount'}:
                                     previous.setdefault(key, copy.deepcopy(value))
                             if state.get('selectedWorkspaceId') == old['id']:
                                 state['selectedWorkspaceId'] = row['id']
@@ -246,6 +246,7 @@ class AutomaticHistory:
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
                                         'nativeProject': row['nativeProject'], 'nativeRevision': row.get('transcriptRevision'),
                                         'parentId': row.get('parentId'), 'nativeParentId': row.get('parentId'), 'turnCount': row.get('turnCount'),
+                                        'sessionKind': row['sessionKind'],
                                         'description': row.get('description', ''), 'shared': True,
                                         'historyReadOnlyReason': row.get('readOnlyReason'),
                                         'historyManaged': True, 'historyLoaded': False}
@@ -253,6 +254,7 @@ class AutomaticHistory:
                         else:
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'workspaceId': row['workspaceId'],
+                                                    'sessionKind': row['sessionKind'],
                                                     'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
@@ -291,7 +293,9 @@ class AutomaticHistory:
                             if session.get(key_name) != value:
                                 session[key_name] = value; changed = True
                     state['sharedHistory'].update(loading=False, error=None,
-                        projectCount=len(snapshot['workspaces']), sessionCount=len(snapshot['sessions']))
+                        projectCount=len(snapshot['workspaces']),
+                        sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
+                        workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']))
                     self.last_scan = snapshot
                     if changed:
                         self.service._publish()

@@ -25,7 +25,7 @@ _FIELDS = (
     'name', 'title', 'description', 'name_source', 'bundle', 'bundle_name',
     'parent_id', 'parent_session_id', 'agent_name', 'created', 'created_at', 'started_at', 'updated_at',
     'last_updated', 'last_event_at', 'ended_at', 'turn_count', 'working_dir',
-    'cwd', 'project_dir', 'workspace', 'model', 'status',
+    'cwd', 'project_dir', 'workspace', 'model', 'status', 'forked_from_turn', 'forked_at',
 )
 
 
@@ -56,6 +56,12 @@ def _small_metadata(value):
     if not isinstance(value, dict):
         raise ValueError('Shared metadata must be an object')
     result = {key: value[key] for key in _FIELDS if isinstance(value.get(key), (str, int, float))}
+    for key in ('parent_id', 'parent_session_id'):
+        if key in value and value[key] is None:
+            result[key] = None  # Explicit root identity must survive compaction.
+    fork = value.get('fork')
+    if isinstance(fork, dict) and _text(fork.get('source_session_id')) and type(fork.get('through_user_turn')) is int:
+        result['_independent_fork'] = True
     # Some CLI versions only persisted the session cwd inside its config.
     config = value.get('config')
     if isinstance(config, dict):
@@ -63,6 +69,31 @@ def _small_metadata(value):
             if not result.get(key) and isinstance(config.get(key), str):
                 result[key] = config[key]
     return result
+
+
+def classify_session(identity, *metadata_sources):
+    """Distinguish runtime children from independent roots and fork lineage.
+
+    Foundation CLI forks are independent roots with parent_id plus the documented
+    forked_from_turn/forked_at fields. Other native parent identities indicate
+    runtime children. Explicit native root metadata wins over stale CI metadata.
+    Only missing lineage falls back to app-cli's is_top_level_session convention
+    (child IDs contain '_'); span IDs are never mistaken for full parent IDs.
+    """
+    for metadata in metadata_sources:
+        parent_keys = [key for key in ('parent_id', 'parent_session_id')
+                       if key in metadata and (metadata[key] is None or isinstance(metadata[key], str))]
+        parent_key = next((key for key in parent_keys if _text(metadata[key])),
+                          parent_keys[0] if parent_keys else None)
+        parent = _text(metadata.get(parent_key)) if parent_key else None
+        forked = (metadata.get('_independent_fork') is True or
+                  (type(metadata.get('forked_from_turn')) is int and metadata['forked_from_turn'] >= 0
+                   and bool(_text(metadata.get('forked_at')))))
+        if forked:
+            return 'root', parent
+        if parent_key is not None:
+            return ('worker' if parent else 'root'), parent
+    return ('worker' if '_' in identity else 'root'), None
 
 
 class NativeHistory:
@@ -194,11 +225,12 @@ class NativeHistory:
                     bundle = None
             name = (_text(meta.get('name')) or _text(meta.get('title'))
                     or _text(meta.get('agent_name')) or f'Conversation {directory.name[:8]}')
+            kind, parent = classify_session(directory.name, native, capture)
             rows.append({
                 'id': uuid.uuid5(uuid.NAMESPACE_URL, f'amplifier-session:{slug}/{directory.name}').hex,
                 'nativeIdentity': directory.name, 'nativeProject': slug,
                 'name': name, 'title': name, 'description': _text(meta.get('description')) or '',
-                'bundle': bundle, 'parentId': _text(meta.get('parent_id')) or _text(meta.get('parent_session_id')),
+                'bundle': bundle, 'parentId': parent, 'sessionKind': kind,
                 'createdAt': created, 'updatedAt': updated, 'turnCount': turns,
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
@@ -213,12 +245,14 @@ class NativeHistory:
         workspace = {
             'id': workspace_id, 'nativeProject': slug, 'path': path,
             'name': (Path(path).name or path) if path else slug,
-            'available': bool(path and Path(path).is_dir()), 'sessionCount': len(rows),
+            'available': bool(path and Path(path).is_dir()),
+            'sessionCount': sum(row['sessionKind'] == 'root' for row in rows),
+            'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in rows),
         }
         for row in rows:
             row.update(workspace=path, workspaceId=workspace_id)
             reason = None
-            if row['parentId']:
+            if row['sessionKind'] == 'worker':
                 reason = 'Worker sessions are read-only; continuing them as root chats would lose their worker configuration.'
             elif not re.fullmatch(r'[A-Za-z0-9-]{1,128}', row['nativeIdentity']):
                 reason = 'This legacy session identifier is not supported for shared root execution.'
@@ -266,4 +300,6 @@ class NativeHistory:
             sessions = [row for project in self._projects.values() for row in project['sessions']]
             sessions.sort(key=lambda row: (row['updatedAt'], row['id']), reverse=True)
             return copy.deepcopy({'workspaces': workspaces, 'sessions': sessions,
+                                  'sessionCount': sum(row['sessionKind'] == 'root' for row in sessions),
+                                  'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in sessions),
                                   'issues': issues, 'metadataReads': self._reads})

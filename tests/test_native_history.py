@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import uuid
 
+import pytest
+
 from amplifier_web.native_history import NativeHistory
 from amplifier_web.session_files import project_slug
 
@@ -47,7 +49,8 @@ def test_native_projects_are_workspaces_and_children_are_sessions(tmp_path, monk
     assert registration['path'] == str(workspace)
     assert registration['name'] == workspace.name
     assert registration['available'] is True
-    assert registration['sessionCount'] == 2
+    assert registration['sessionCount'] == 1
+    assert registration['workerSessionCount'] == 1
     rows = {row['nativeIdentity']: row for row in result['sessions']}
     assert rows['root']['title'] == 'Saved title'
     assert rows['root']['description'] == 'A summary'
@@ -55,10 +58,12 @@ def test_native_projects_are_workspaces_and_children_are_sessions(tmp_path, monk
     assert rows['root']['createdAt'] == 1767268800
     assert rows['root']['turnCount'] == 3
     assert rows['root']['canResume'] is True
+    assert rows['root']['sessionKind'] == 'root'
     assert rows['root_agent']['parentId'] == 'root'
     assert rows['root_agent']['workspace'] == str(workspace)
     assert rows['root_agent']['title'] == 'research'
     assert rows['root_agent']['canResume'] is False
+    assert rows['root_agent']['sessionKind'] == 'worker'
     monkeypatch.setattr(Path, 'open', original_open)
     after = {path: (path.stat().st_mtime_ns, path.read_bytes()) for path in home.rglob('*') if path.is_file()}
     assert before == after
@@ -249,3 +254,51 @@ def test_legacy_and_worker_ids_are_visible_but_cannot_resume_as_root(tmp_path):
     assert rows['root_foundation:explorer']['canResume'] is False
     assert rows['old-profile']['canResume'] is False
     assert 'bundle' in rows['old-profile']['readOnlyReason']
+
+
+@pytest.mark.parametrize(('identity', 'metadata', 'capture', 'kind', 'parent'), [
+    ('uuid-child', {'parent_id': 'root'}, {}, 'worker', 'root'),
+    ('uuid-child', {'parent_session_id': 'root'}, {}, 'worker', 'root'),
+    ('uuid-child', {'parent_id': None, 'parent_session_id': 'root'}, {}, 'worker', 'root'),
+    ('uuid-root', {'parent_id': None}, {'parent_id': 'stale-child-parent'}, 'root', None),
+    ('custom_root_id', {'parent_id': ''}, {}, 'root', None),
+    ('uuid-child', {}, {'parent_id': 'root'}, 'worker', 'root'),
+    ('older-parent_agent', {}, {}, 'worker', None),
+    ('1234567890abcdef-fedcba0987654321_researcher', {}, {}, 'worker', None),
+    ('uuid-root', {}, {}, 'root', None),
+    ('named-fork', {'parent_id': 'root', 'forked_from_turn': 3, 'forked_at': '2026-01-01T00:00:00Z'}, {}, 'root', 'root'),
+    ('fork_with_underscore', {'parent_id': 'root', 'forked_from_turn': 3, 'forked_at': '2026-01-01T00:00:00Z'}, {}, 'root', 'root'),
+    ('unified-fork', {'parent_id': None, 'fork': {'source_session_id': 'root', 'through_user_turn': 2}}, {}, 'root', None),
+])
+def test_worker_classification_respects_metadata_and_independent_fork_roots(tmp_path, identity, metadata, capture, kind, parent):
+    home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
+    workspace.mkdir()
+    directory = session(home, workspace, identity, {'working_dir': str(workspace), 'bundle': 'anchors', **metadata})
+    if capture:
+        write_json(directory / 'context-intelligence' / 'metadata.json', {'working_dir': str(workspace), **capture})
+    result = NativeHistory(home).scan()
+    row = result['sessions'][0]
+    assert row['sessionKind'] == kind
+    assert row['parentId'] == parent
+    assert result['sessionCount'] == (1 if kind == 'root' else 0)
+    assert result['workerSessionCount'] == (1 if kind == 'worker' else 0)
+    assert result['workspaces'][0]['sessionCount'] == result['sessionCount']
+    assert result['workspaces'][0]['workerSessionCount'] == result['workerSessionCount']
+    if kind == 'worker':
+        assert row['canResume'] is False
+        assert 'Worker sessions' in row['readOnlyReason']
+    elif '_' not in identity:
+        assert row['canResume'] is True
+
+
+def test_explicit_root_metadata_refreshes_previous_worker_classification(tmp_path):
+    home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
+    workspace.mkdir()
+    directory = session(home, workspace, 'named-root', {'working_dir': str(workspace), 'bundle': 'anchors', 'parent_id': 'old-parent'})
+    history = NativeHistory(home)
+    assert history.scan()['sessions'][0]['sessionKind'] == 'worker'
+    write_json(directory / 'metadata.json', {'working_dir': str(workspace), 'bundle': 'anchors', 'parent_id': None})
+    refreshed = history.scan()
+    assert refreshed['sessions'][0]['sessionKind'] == 'root'
+    assert refreshed['sessions'][0]['parentId'] is None
+    assert refreshed['sessions'][0]['canResume'] is True

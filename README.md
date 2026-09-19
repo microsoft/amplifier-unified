@@ -165,7 +165,9 @@ updating. Native Windows CLI persistence remains available, but shared-session
 locking is supported only on POSIX local filesystems.
 
 CLI projects appear automatically as workspaces in the sidebar, with their
-sessions listed as chats. Select a resumable root chat to continue it; there
+top-level sessions listed as chats. Independent forks stay in the chat list;
+subagent histories are available through **Session details → Subagent history**
+on their parent conversation. Select a resumable root chat to continue it; there
 is no import or sharing option to configure. The list refreshes every 15 seconds in the background,
 and the refresh button beside **Conversations** checks immediately. Opening a
 chat creates only a browser view of the same root ID. It does not duplicate the
