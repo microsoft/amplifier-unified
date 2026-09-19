@@ -51,6 +51,10 @@ Interactive views use a scoped HTTP wait for their normal `smartTools.appCall`
 action, so completed calls return immediately without a browser polling delay.
 The same admission, tool visibility, retained receipt and request-ID deduplication
 apply. Closing the HTTP request never cancels or replays an admitted tool call.
+Interactive calls commit admission and operation receipts immediately, while batching
+full application-view persistence and broadcasts. Explicit state reads and revision
+checks flush pending view updates; a crash preserves completed receipts and marks
+unfinished work interrupted rather than replaying it.
 Routine tool interaction does not toggle the host's rendering indicator; the
 tool owns its progress controls, while errors remain visible in the host.
 Small operation receipts persist in SQLite. Full results are retained for at most

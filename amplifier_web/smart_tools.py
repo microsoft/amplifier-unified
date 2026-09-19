@@ -219,15 +219,23 @@ class SmartToolsManager:
         for server in state["servers"]:
             server["status"] = "disconnected"
         for operation in state["operations"]:
-            if operation.get("status") in {"running", "queued"}:
-                operation.update(status="interrupted", error="The app restarted. Work was not replayed.", updatedAt=time.time())
-            self.persist_operation(operation)
+            # The receipt may be newer than the last coalesced app snapshot.
+            # Import legacy overview-only records, never overwrite a durable result.
+            if not service.db.execute("SELECT 1 FROM smart_tool_operations WHERE id=?", (operation['id'],)).fetchone():
+                self.persist_operation(operation)
         # Interrupted operations can outlive the bounded overview in app state.
         for identity, value in service.db.execute("SELECT id,value FROM smart_tool_operations WHERE json_extract(value,'$.status') IN ('running','queued')").fetchall():
             operation = json.loads(value)
             if operation.get("status") in {"running", "queued"}:
                 operation.update(status="interrupted", error="The app restarted. Work was not replayed.", updatedAt=time.time())
                 self.persist_operation(operation)
+        state['operations'] = [json.loads(row[0]) for row in reversed(service.db.execute(
+            "SELECT value FROM smart_tool_operations ORDER BY json_extract(value,'$.updatedAt') DESC, rowid DESC LIMIT 50"
+        ).fetchall())]
+        inspected = state.get('inspectedOperation', {})
+        row = service.db.execute('SELECT value FROM smart_tool_operations WHERE id=?', (inspected.get('id'),)).fetchone()
+        if row:
+            state['inspectedOperation'] = json.loads(row[0])
         service.db.commit()
 
     def persist_operation(self, operation):
@@ -235,8 +243,11 @@ class SmartToolsManager:
         overview = self._overview(operation)
         self.service.db.execute("INSERT OR REPLACE INTO smart_tool_operations VALUES (?, ?)", (operation["id"], json.dumps(overview)))
         operation.update(overview)
-        from .storage_migration import trim_operations
-        trim_operations(self.service.db, self.service.state)
+        # In-flight records are excluded from result retention. Enforce the
+        # completed-result budget once a result/outcome can actually change it.
+        if operation.get('status') not in {'queued', 'running'}:
+            from .storage_migration import trim_operations
+            trim_operations(self.service.db, self.service.state)
 
     def _overview(self, operation):
         overview = copy.deepcopy(operation)
@@ -283,10 +294,13 @@ class SmartToolsManager:
             raise ValueError("This Smart Tool connection is no longer registered.")
         return row
 
-    async def _change(self, callback):
+    async def _change(self, callback, *, defer_publish=False):
         async with self.service.lock:
             result = callback(self.state)
-            self.service._publish()
+            if defer_publish:
+                self.service._publish_smart_tool_update(defer_publish=True)
+            else:
+                self.service._publish()
             return copy.deepcopy(result)
 
     def _redact(self, value):
@@ -307,7 +321,7 @@ class SmartToolsManager:
             return item
         return clean(value)
 
-    async def command(self, action, args, command_id, origin="ui"):
+    async def command(self, action, args, command_id, origin="ui", *, defer_publish=False):
         args = copy.deepcopy(args)
         operation = {
             "id": command_id, "action": action, "origin": origin,
@@ -323,12 +337,13 @@ class SmartToolsManager:
                 args.setdefault("_configuration", operation["configuration"])
         def add(state):
             # Do not lose an in-flight operation when trimming older results.
-            if self.operation(command_id) is not None:
+            previous = self.operation(command_id)
+            if previous is not None and not (defer_publish and previous.get('action') == 'smartTools.appCall' and previous.get('status') == 'queued'):
                 raise ValueError("This Smart Tool command already has a receipt.")
-            state["operations"] = [row for row in state["operations"] if row.get("status") == "running"] + [row for row in state["operations"] if row.get("status") != "running"][-49:]
+            state["operations"] = [row for row in state["operations"] if row['id'] != command_id and row.get("status") in {'running', 'queued'}] + [row for row in state["operations"] if row['id'] != command_id and row.get("status") not in {'running', 'queued'}][-49:]
             state["operations"].append(operation)
             self.persist_operation(operation)
-        await self._change(add)
+        await self._change(add, defer_publish=defer_publish)
         def finish(**values):
             operation.update(**values, updatedAt=time.time())
             self.persist_operation(operation)
@@ -339,14 +354,14 @@ class SmartToolsManager:
             result = self._redact(_bounded(await self.execute(action, args, origin=origin)))
             is_error = isinstance(result, dict) and result.get("isError") is True
             error = " ".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")[:1500] if is_error else None
-            await self._change(lambda _: finish(status="failed" if is_error else "completed", result=result, error=error))
+            await self._change(lambda _: finish(status="failed" if is_error else "completed", result=result, error=error), defer_publish=defer_publish)
             return result
         except asyncio.CancelledError:
-            await self._change(lambda _: finish(status="interrupted", error="The request was interrupted. Work was not replayed."))
+            await self._change(lambda _: finish(status="interrupted", error="The request was interrupted. Work was not replayed."), defer_publish=defer_publish)
             raise
         except Exception as exc:
             error = self._redact(str(exc))[:1500]
-            await self._change(lambda _: finish(status="failed", error=error))
+            await self._change(lambda _: finish(status="failed", error=error), defer_publish=defer_publish)
             return None
 
     async def execute(self, action, args, origin="ui"):

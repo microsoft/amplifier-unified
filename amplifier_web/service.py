@@ -332,6 +332,14 @@ class AppService:
         if getattr(self, '_progress_publish_task', None) is None:
             self._progress_publish_task = self._task(self._flush_progress())
 
+    def _publish_smart_tool_update(self, *, defer_publish=False):
+        """Commit tool receipts before effects/results, batching only the UI snapshot."""
+        if defer_publish:
+            self.db.commit()
+            self._publish_progress()
+        else:
+            self._publish()
+
     async def _flush_progress(self):
         try:
             await asyncio.sleep(.25)
@@ -412,8 +420,9 @@ class AppService:
         task.add_done_callback(self.tasks.discard)
         return task
 
-    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None):
+    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True):
         args = args or {}
+        defer_publish = action == 'smartTools.appCall' and not include_state
         if action.startswith("smartTools."):
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
@@ -445,7 +454,9 @@ class AppService:
                 if previous:
                     if previous[0] != fingerprint:
                         raise AppError("This command ID was already used with different contents.", 409)
-                    return {**json.loads(previous[1]), "state": self.browser_state(), "duplicate": True}
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._publish()
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
@@ -870,21 +881,30 @@ class AppService:
                 receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
-            self._publish()
-            result = {**receipt, "state": self.browser_state()}
+            if defer_publish:
+                # Admission and the queued receipt commit together. If the host
+                # exits before starting the task, restart can mark it interrupted.
+                queued = {'id': command_id, 'action': action, 'origin': 'app',
+                          'target': {'canvasId': args['canvasId'], 'name': args['name']},
+                          'status': 'queued', 'createdAt': time.time(), 'updatedAt': time.time()}
+                self.state['smartTools']['operations'].append(queued)
+                self.smart_tools.persist_operation(queued)
+            self._publish_smart_tool_update(defer_publish=defer_publish)
+            result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
             if action == "conversation.send" and fn == self._send:
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 await fn(*values)
             else:
-                task = self._task(self._guard(fn, values))
+                kwargs = {'defer_publish': True} if defer_publish else {}
+                task = self._task(self._guard(fn, values, kwargs))
                 if action.startswith("smartTools."):
                     self.smart_tool_tasks.add(task)
                     task.add_done_callback(self.smart_tool_tasks.discard)
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
-        return {**result, "state": self.browser_state()}
+        return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def wait_smart_tool(self, identity, timeout=300):
         """Wait for the original admitted operation; disconnect never replays it."""
@@ -896,10 +916,20 @@ class AppService:
                 pass
         return self.smart_tools.operation(identity) or {'id': identity, 'status': 'pending'}
 
-    async def _guard(self, fn, args):
+    async def _guard(self, fn, args, kwargs=None):
         try:
-            await fn(*args)
+            await fn(*args, **(kwargs or {}))
         except Exception as exc:
+            if (kwargs or {}).get('defer_publish'):
+                # A failure outside the manager's effect/result handler must not
+                # leave an accepted interactive call polling a queued receipt.
+                async with self.lock:
+                    operation = self.smart_tools.operation(args[2])
+                    if operation and operation.get('status') in {'queued', 'running'}:
+                        operation.update(status='interrupted', updatedAt=time.time(),
+                                         error='No verified tool outcome was recorded. Work was not replayed.')
+                        self.smart_tools.persist_operation(operation)
+                        self._publish_smart_tool_update(defer_publish=True)
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
             await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc)})
 
