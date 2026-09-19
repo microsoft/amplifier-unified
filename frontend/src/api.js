@@ -5,7 +5,7 @@ export async function request(path, options = {}) {
   const res=await fetch(path,{...options,body,headers,credentials:'same-origin'});
   const content=await res.text(); let data;
   try { data=content?JSON.parse(content):{}; } catch { throw new Error(`The server returned an unexpected response (${res.status}).`); }
-  if(!res.ok || data.accepted===false) throw new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${res.status})`);
+  if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${res.status})`),{code:data.code,state:data.state});
   return data;
 }
 export function download(filename, content, type='application/json') {

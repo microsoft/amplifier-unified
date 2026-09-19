@@ -30,3 +30,19 @@ For cross-host development verification, install local Foundation and CLI
 overrides and the configured live-loop package into an isolated test virtualenv,
 then run `tests/test_session_handoff.py`. Its reciprocal lifecycle fixture uses
 real Foundation locks and native history without calling a model provider.
+
+## Released UI
+
+The takeover interface ships in stable release **0.10.8** and later. Release
+0.10.7 predates the ownership integration even though subsequent source commits
+retained that version until the new release was prepared.
+
+An ownership conflict has one conversation-scoped notice with **Continue here**;
+it does not create a setup failure or repeated Settings attention items. Saved
+legacy lock errors are converted on restart without clearing unrelated failures.
+
+The owning process must also support Foundation release requests. Update the
+CLI and restart any older CLI session once to register its release handler.
+Unified explains when the current owner has no handler; after that owner exits,
+Continue here can acquire the released lock normally. Updating packages alone
+cannot add a handler to a process that is already running.

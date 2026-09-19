@@ -23,7 +23,8 @@
     "test:pwa-browser": "node tests/pwa-browser.mjs",
     "test:chat-library-browser": "node tests/chat-library-browser.mjs",
     "test:library-performance": "node tests/library-performance-browser.mjs",
-    "test:pending-view-browser": "node tests/pending-view-browser.mjs"
+    "test:pending-view-browser": "node tests/pending-view-browser.mjs",
+    "test:ownership-browser": "node tests/ownership-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

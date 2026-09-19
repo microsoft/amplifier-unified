@@ -2,7 +2,7 @@
 export function ownershipState(session) {
   const state=session?.ownership, source=state?.source||session?.lockOwner?.app||'another application';
   switch(state?.status){
-    case 'blocked': return {blocked:true,canTakeover:true,label:`In use by ${source}`,detail:'Continue here to request this session. Your draft is kept.'};
+    case 'blocked': return {blocked:true,canTakeover:true,label:`In use by ${source}`,detail:state.detail||(state.supportsTakeover===false?'This running interface does not support takeover requests. Close it, then choose Continue here. Update the CLI before reopening it to enable future takeovers.':'Continue here to request this session. Your draft is kept.')};
     case 'yielded': return {blocked:true,canTakeover:true,label:`Continued in ${source}`,detail:'This view stays connected. Choose Continue here when you want to resume.'};
     case 'yielding': return {blocked:true,canTakeover:false,label:`Moving to ${source}`,detail:'Finishing current work and saving the session…'};
     case 'taking-over': return {blocked:true,canTakeover:false,label:'Taking over…',detail:'Waiting for the current owner to finish, then loading your session.'};
@@ -10,3 +10,6 @@ export function ownershipState(session) {
     default:return {blocked:false,canTakeover:false};
   }
 }
+
+// Ownership conflicts already have a conversation-scoped action and notice.
+export function actionErrorMessage(error){return error.code==='session_busy'?'':error.message}

@@ -42,7 +42,12 @@ async def boundaries(request, handler):
         _set_response_headers(exc, request.path)
         raise
     except AppError as exc:
-        return _set_response_headers(web.json_response({"error": str(exc), "accepted": False}, status=exc.status), request.path)
+        payload = {"error": str(exc), "accepted": False}
+        if exc.code:
+            payload['code'] = exc.code
+        if exc.code == 'session_busy':
+            payload['state'] = request.app['service'].browser_state()
+        return _set_response_headers(web.json_response(payload, status=exc.status), request.path)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
         return _set_response_headers(web.json_response({"error": "Invalid request: " + str(exc), "accepted": False}, status=400), request.path)
     return _set_response_headers(response, request.path)
