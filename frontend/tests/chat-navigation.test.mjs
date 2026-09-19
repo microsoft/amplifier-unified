@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatPage,headerChatChoices,workspaceChats,CHAT_PAGE_SIZE} from '../src/chat-navigation.js';
+import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE} from '../src/chat-navigation.js';
 const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture'},{id:'other',path:'/other'}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
+
+test('workspace navigation includes only verified folders without discarding registrations',()=>{
+ const workspaces=[
+  {id:'a',name:'project',path:'/Users/me/work/project',available:true},
+  {id:'b',name:'project',path:'/Users/me/personal/project',available:true},
+  {id:'missing',path:'/old/project',available:false},
+  {id:'unknown',path:null,available:false},
+  {id:'unchecked',path:'/unchecked/project'},
+ ];
+ assert.deepEqual(visibleWorkspaces({workspaces}).map(w=>w.id),['a','b']);
+ assert.equal(workspaces.length,5);
+ workspaces[2].available=true;
+ assert.deepEqual(visibleWorkspaces({workspaces}).map(w=>w.id),['a','b','missing']);
+});
 
 test('large navigation lists use bounded pages while keeping all chats searchable',()=>{
  const state=fixture(),workspace=state.workspaces[0],first=chatPage(state,workspace);
@@ -72,4 +86,9 @@ test('legacy forks and edits with native lineage retain independent chat navigat
  assert.equal(isTopLevelChat({nativeParentId:'parent',editOrigin:{turn:1}}),true);
  assert.equal(isTopLevelChat({nativeParentId:'parent',forkTranscript:[]}),false);
  assert.equal(isTopLevelChat({sessionKind:'worker',nativeParentId:'parent',forkTranscript:[{}],editOrigin:{turn:1}}),false,'explicit worker classification wins');
+});
+
+test('workspace labels lead with full paths and retain custom names',()=>{
+ assert.equal(workspaceLabel({path:'/Users/me/work/project',name:'project'}),'/Users/me/work/project');
+ assert.equal(workspaceLabel({path:'/Users/me/work/project',name:'Client work'}),'/Users/me/work/project · Client work');
 });

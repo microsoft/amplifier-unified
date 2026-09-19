@@ -472,7 +472,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-nav-content input,#amp-one .a-nav-content select,#amp-one .a-canvas-file-form input,#amp-one .a-canvas-file-form select{width:100%;min-width:0;border:1px solid var(--a-line);background:var(--a-surface);padding:7px 8px;border-radius:8px;font-size:12px}
 #amp-one .a-nav-eyebrow{display:flex!important;gap:6px;font-size:10px;font-weight:600;color:var(--a-muted);letter-spacing:.4px;margin:10px 2px 7px}
 #amp-one .a-nav-workspace-path{display:flex;gap:3px;align-items:center;margin:4px 0 9px;color:var(--a-muted)}
-#amp-one .a-nav-workspace-path>span{font-size:10px;min-width:0;flex:1;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+#amp-one .a-nav-workspace-path>.a-workspace-full-path{font-size:11px;min-width:0;flex:1;white-space:normal;overflow-wrap:anywhere;overflow:visible;text-overflow:clip}
 #amp-one .a-nav-workspace-path .a-icon{width:25px;height:27px}
 #amp-one .a-nav-workspace-path svg{width:13px;height:13px}
 #amp-one .a-nav-search{display:flex;align-items:center;gap:7px;padding:0 7px;border:1px solid var(--a-line);border-radius:9px;margin:10px 0;color:var(--a-muted)}

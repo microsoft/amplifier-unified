@@ -1,6 +1,13 @@
 import {filterList} from './list-filter.js';
 
 export const CHAT_PAGE_SIZE=100;
+export function visibleWorkspaces(state){
+ return (state.workspaces||[]).filter(workspace=>workspace.available===true&&!!workspace.path);
+}
+export function workspaceLabel(workspace){
+ const path=workspace.path||'',leaf=path.split(/[\\/]/).filter(Boolean).at(-1);
+ return path+(workspace.name&&workspace.name!==leaf?` · ${workspace.name}`:'');
+}
 export function isTopLevelChat(chat){
  if(chat?.sessionKind==='root')return true;
  if(chat?.sessionKind==='worker')return false;

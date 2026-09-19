@@ -92,6 +92,30 @@ async def finish_actions(app):
         await asyncio.wait_for(asyncio.gather(*list(app.tasks)), timeout=5)
 
 
+async def test_workspace_availability_tracks_real_folders_without_removing_history(tmp_path, app_factory):
+    native = tmp_path / 'cli' / 'same-name'
+    saved = native_session(native, 'cli-root')
+    app = app_factory(workspace=tmp_path / 'web' / 'same-name')
+    web = Path(app.state['settings']['workspace'])
+    original_files = files_snapshot(saved)
+    await app.history.refresh()
+    assert all(row['available'] for row in app.state['workspaces'])
+    before = [(row['id'], row['path']) for row in app.state['workspaces']]
+    native.rmdir()
+    web.rmdir()
+    web.write_text('A file is not a workspace directory')
+    await app.history.refresh()
+    assert not any(row['available'] for row in app.state['workspaces'])
+    assert [(row['id'], row['path']) for row in app.state['workspaces']] == before
+    assert len(native_rows(app)) == 1
+    native.mkdir()
+    web.unlink()
+    web.mkdir()
+    await app.history.refresh()
+    assert all(row['available'] for row in app.state['workspaces'])
+    assert files_snapshot(saved) == original_files
+
+
 async def select(app, identity):
     await app.dispatch('session.select', {'id': identity})
     await finish_actions(app)

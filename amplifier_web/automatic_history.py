@@ -177,6 +177,8 @@ class AutomaticHistory:
         async with self.lock:
             try:
                 known = copy.deepcopy(self.service.state['workspaces'])
+                from .workspace_canvas import refresh_workspace_availability
+                await asyncio.to_thread(refresh_workspace_availability, known)
                 snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known)
                 if self.service.closed:
                     return
@@ -185,6 +187,11 @@ class AutomaticHistory:
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
+                    for row in known:
+                        previous = workspaces.get(row['id'])
+                        if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
+                            previous['available'] = row['available']
+                            changed = True
                     for row in snapshot['workspaces']:
                         unresolved_id = uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
                         if row.get('path') and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
