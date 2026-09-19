@@ -7,6 +7,7 @@ import sys
 import uuid
 import aiohttp
 from aiohttp import web
+from .session_navigation import is_top_level
 
 
 def _connection_context(data_dir: Path, config: dict) -> ssl.SSLContext | None:
@@ -93,7 +94,10 @@ async def run(args, *, config=None):
         try:
             snapshot=await state()
             identity=getattr(args,'resume',None)
-            if args.command=='continue' and not identity:identity=snapshot.get('selectedSessionId') or next((s['id'] for s in snapshot['sessions']),None)
+            if args.command=='continue' and not identity:
+                roots=[s for s in snapshot['sessions'] if is_top_level(s)]
+                selected=snapshot.get('selectedSessionId')
+                identity=next((s['id'] for s in roots if s['id']==selected),roots[0]['id'] if roots else None)
             if identity:await dispatch('session.select',{'id':identity})
             else:
                 result=await dispatch('session.create',{'title':getattr(args,'prompt','')[:70] or 'Terminal task','workspace':args.workspace,'bundle':getattr(args,'bundle',None) or snapshot['settings']['bundle']})

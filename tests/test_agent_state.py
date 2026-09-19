@@ -57,3 +57,17 @@ def test_native_history_overview_explains_lazy_messages_and_agent_controls():
     assert result['session']['historyReadOnlyReason']=='Saved worker'
     assert result['sharedHistory']['sessionCount']==1
     assert 'session.history' in result['_stateAccess']['history']
+
+
+def test_conversation_overview_hides_subagents_but_exposes_parent_drilldown():
+    state={'revision':1,'selectedSessionId':'root','sessions':[
+        {'id':'worker','sessionKind':'worker','parentId':'root'},
+        {'id':'root','sessionKind':'root'},
+        {'id':'fork','sessionKind':'root','parentId':'root','nativeParentId':'root'},
+        {'id':'legacy-fork','parentId':'root','forkTranscript':{'sourceSessionId':'root'}},
+    ]}
+    result=read_state(state,{})
+    assert [row['id'] for row in result['conversations']]==['root','fork','legacy-fork']
+    assert result['conversations'][0]['$statePath']=='/sessions/1'
+    assert result['subagentChats']=={'total':1,'items':[{'id':'worker','title':None,'$statePath':'/sessions/0'}]}
+    assert read_state(state,{'path':'/sessions/0'})['items']

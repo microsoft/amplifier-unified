@@ -144,3 +144,23 @@ async def test_settings_changes_do_not_mount_or_republish_thousands_of_indexed_c
     assert refreshed==[]
     assert app.state['revision']==revision+1
     assert not any(s.get('configurationPending') for s in app.state['sessions'])
+
+
+async def test_workspace_and_delete_choose_roots_without_hiding_explicit_worker_history(tmp_path, app_factory):
+    native_session(tmp_path/'first', 'root')
+    native_session(tmp_path/'first', 'root-child', metadata={'parent_id':'root'})
+    app=app_factory(); await app.history.refresh()
+    root=next(s for s in native_rows(app) if s['nativeIdentity']=='root')
+    child=next(s for s in native_rows(app) if s['nativeIdentity']=='root-child')
+    # Works with the pre-upgrade index too, before the next classification scan.
+    app._session(child['id'])['nativeParentId']='root'
+    app.state['sessions'].sort(key=lambda s:s['id']!=child['id'])
+    await app.dispatch('workspace.select',{'id':root['workspaceId']}); await finish_actions(app)
+    assert app.state['selectedSessionId']==root['id']
+    await select(app,child['id'])
+    assert app._session()['id']==child['id'] and app._session()['messages']
+    await app.dispatch('workspace.select',{'id':root['workspaceId']}); await finish_actions(app)
+    assert app.state['selectedSessionId']==root['id']
+    await app.dispatch('session.delete',{'id':root['id']}); await finish_actions(app)
+    assert app.state['selectedSessionId'] is None
+    assert app._session(child['id'])['messages']

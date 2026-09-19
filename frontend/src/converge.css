@@ -700,3 +700,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-nav-pagination>div{display:flex;align-items:center;justify-content:space-between;gap:8px}
 #amp-one .a-nav-pagination button{display:inline-flex;align-items:center;gap:3px;font-size:11px}
 #amp-one .a-nav-pagination button svg{width:12px;height:12px}
+
+#amp-one .a-subagent-history-list{display:grid;gap:6px}
+#amp-one .a-subagent-history-list>button{justify-content:flex-start;text-align:left;min-width:0}
+#amp-one .a-subagent-history-list>button>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

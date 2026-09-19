@@ -27,7 +27,9 @@ second host does not create another runtime history. A busy owner rejects new wo
 
 `unified/view.json` contains web presentation: displayed messages, activity cards,
 voice presentation and draft/UI associations. It is not the model's runtime
-context. CLI projects and chats appear automatically in the workspace sidebar.
+context. CLI projects and top-level chats appear automatically in the workspace
+sidebar. Worker histories stay in the same native files and remain accessible
+through their parent conversation; independent forks are top-level chats.
 Browsing them reads a page of their native transcript without starting a worker;
 the displayed history refreshes after CLI changes. The next worker activation
 always reads Foundation's latest shared checkpoint.
