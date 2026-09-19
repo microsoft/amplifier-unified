@@ -25,16 +25,10 @@ class SessionInUseError(RuntimeError):
 
     def __init__(self, owner=None):
         self.owner = owner if isinstance(owner, dict) else {}
-        details = ", ".join(
-            f"{key}: {self.owner[key]}"
-            for key in ("app", "hostname", "host", "user", "pid",
-                        "process_start_identity", "process_start", "acquired_at", "tty", "service")
-            if self.owner.get(key) is not None
-        )
+        from .session_ownership import owner_label
         super().__init__(
-            "This conversation is in use"
-            + (f" ({details})" if details else " by another process")
-            + ". Finish and exit that interface, then retry. Your draft has been kept."
+            f"This conversation is in use by {owner_label(self.owner)}. "
+            "Use the conversation's Continue here action. Your draft has been kept."
         )
 
 
@@ -253,7 +247,10 @@ class RuntimeManager:
                     reported_error = error
                     if not row["ready"].done():
                         row["ready"].set_exception(failure)
-                    await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
+                    if isinstance(failure, SessionInUseError):
+                        await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
+                    else:
+                        await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
                     await row["emit"](data["type"], {**data, "sessionId": sid})
                 else:

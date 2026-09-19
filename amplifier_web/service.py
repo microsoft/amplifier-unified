@@ -141,9 +141,10 @@ ACTION_DEFINITIONS = {
 
 
 class AppError(Exception):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, *, code=None):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def validate_theme(css):
@@ -221,7 +222,9 @@ class AppService:
         initialize_chat_navigation(self.state)
         self.state["voice"] = {"status": "disconnected"}
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
+        from .session_ownership import restore
         for session in self.state["sessions"]:
+            restore(session)
             session["configurationBusy"]=False
             if session["status"] in {"working", "starting", "ready", "stopping"}:
                 session["status"] = "interrupted"
@@ -463,7 +466,7 @@ class AppService:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
                 checked = self._session(checked_session)
                 if action not in {'session.takeover', 'session.fork', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
-                    raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409)
+                    raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
                 if checked.get('nativeProject'):
                     reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
                     if reason:
@@ -943,6 +946,12 @@ class AppService:
                         self.smart_tools.persist_operation(operation)
                         self._publish_smart_tool_update(defer_publish=True)
             sid = args[0].get("id") if args and isinstance(args[0], dict) else args[0] if args else None
+            if isinstance(exc, AppError) and exc.code == 'session_busy':
+                return  # The rejected admission already published its ownership state.
+            from .runtime import SessionInUseError
+            if isinstance(exc, SessionInUseError):
+                await self.on_runtime_event('runtime.ownership', {'sessionId': sid, 'status': 'blocked', 'owner': exc.owner})
+                return
             await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc)})
 
     async def history_page(self, session_id, before, limit):
@@ -970,14 +979,12 @@ class AppService:
                     execution["currentTurnId"] = (
                         execution["turns"][-1]["id"] if execution["turns"] else None
                     )
-                current.update(status="error", error=str(exc))
-                current["lockOwner"] = exc.owner
-                if current.get('ownership', {}).get('status') not in {'yielding', 'yielded', 'yield-failed'}:
-                    current['ownership'] = {'status': 'blocked', 'source': exc.owner.get('app', 'another application')}
+                from .session_ownership import blocked
+                blocked(current, exc.owner)
                 self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
-                    json.dumps({"accepted": False, "error": str(exc), "status": 409}), input_id))
+                    json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
                 self._publish()
-            raise AppError(str(exc), 409) from exc
+            raise AppError(str(exc), 409, code="session_busy") from exc
         async with self.lock:
             current = self._session(session["id"])
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
@@ -1044,9 +1051,11 @@ class AppService:
             async with self.lock:
                 current = self._session(session['id'])
                 if isinstance(exc, SessionInUseError):
-                    current['lockOwner'] = exc.owner
-                current['ownership'] = {'status': 'blocked', 'source': current.get('lockOwner', {}).get('app', 'another application')}
-                current['error'] = str(exc)
+                    from .session_ownership import blocked
+                    blocked(current, exc.owner, detail=str(exc))
+                else:
+                    current['ownership'] = {'status': 'available'}
+                    current.update(status='error', error=str(exc))
                 self._publish()
 
     async def on_runtime_event(self, kind, payload):
@@ -1075,9 +1084,13 @@ class AppService:
             elif kind == "execution.event":
                 ingest_execution(session,payload)
             elif kind == 'runtime.ownership':
-                session['ownership'] = {key: payload[key] for key in ('status', 'source', 'detail') if key in payload}
-                session['status'] = 'read-only'
-                session.pop('lockOwner', None)
+                if payload.get('status') == 'blocked':
+                    from .session_ownership import blocked
+                    blocked(session, payload.get('owner') or {}, keep_pending=True)
+                else:
+                    session['ownership'] = {key: payload[key] for key in ('status', 'source', 'detail') if key in payload}
+                    session['status'] = 'read-only'
+                    session.pop('lockOwner', None)
                 if payload.get('status') == 'yielded':
                     finish_execution(session, 'interrupted')
             elif kind == "runtime.status":
@@ -1290,6 +1303,8 @@ class AppService:
                                 ("text", "generation_id", "input_ids", "active_job_ids", "disposition")}
                         if event["event"] in {"generation.failed", "generation.detached"}:
                             raise AppError("The Amplifier turn ended without a completed response.")
+                    if session["status"] == "read-only":
+                        raise AppError("This conversation is in use elsewhere. Choose Continue here to resume.", 409, code="session_busy")
                     if session["status"] in {"error", "stopped", "interrupted"}:
                         raise AppError(session.get("error", "Execution ended before the response completed."))
                     await queue.get()
