@@ -21,11 +21,11 @@ def remember(state, db):
     canvas.setdefault('createdAt', time.time())
     reference=canvas.get('contentResource')
     if not reference:
-        body = {key:canvas[key] for key in ('content','surface','mcp') if key in canvas}
-        serialized = json.dumps(body, ensure_ascii=False)
-        identity = hashlib.sha256(serialized.encode()).hexdigest()
-        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (identity,serialized))
-        reference={'$resource':identity, 'bytes':len(serialized.encode())}
+        # Connection/context/operation IDs change on every poll; they must never
+        # become part of the static HTML content identity.
+        body = {key:canvas[key] for key in ('content','surface') if key in canvas}
+        from .resource_files import put
+        reference=put(db,body)
         if canvas.get('kind') in {'html','babylon'} and len(canvas.get('content','').encode())>1_000_000:
             # The immutable snapshot stays in the artifact store, not SSE, action
             # receipts, the agent context, or every subsequent state write.
@@ -33,6 +33,9 @@ def remember(state, db):
             canvas.pop('content',None)
     previous = next((r for r in rows if r['id']==canvas['id']), None)
     record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource') if key in canvas}
+    if 'mcp' in canvas:
+        from .resource_files import put
+        record['mcpState'] = put(db, canvas['mcp'])
     record['body'] = copy.deepcopy(reference)
     record['tabOpen'] = previous.get('tabOpen', True) if previous else True
     if previous:
@@ -53,6 +56,9 @@ def load(state, db, identity, *, open_panel=True):
     canvas = {**copy.deepcopy(row), **({} if row.get('contentResource') else resource(db,row['body']['$resource'])), 'open':open_panel, 'renderReports':{}}
     canvas.pop('body',None)
     canvas.pop('tabOpen',None)
+    mcp_state = canvas.pop('mcpState', None)
+    if mcp_state:
+        canvas['mcp'] = resource(db,mcp_state['$resource'])
     row['tabOpen'] = True
     row['lastViewedAt'] = time.time()
     state['canvas'] = canvas
@@ -108,11 +114,12 @@ def recover_legacy(state, db, home):
     from .session_store import text_content
     from .workspace_canvas import canvas_command
     remember(state,db)
-    store=SessionStore(home / 'sessions')
     recovered=0
     for session in state.get('sessions',[]):
         try:
-            path=store.directory(session.get('runtimeSessionId') or session['id']) / 'checkpoint.json'
+            store=SessionStore.for_app(home,session['workspace'])
+            store._migrate(session.get('runtimeSessionId') or session['id'])
+            path=store.directory(session.get('runtimeSessionId') or session['id']) / 'transcript.jsonl'
             if not path.is_file() or path.stat().st_size>64_000_000:continue
             saved=store.load(session.get('runtimeSessionId') or session['id'])
             if not saved:continue

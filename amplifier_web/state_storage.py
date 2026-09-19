@@ -19,9 +19,8 @@ def normalize_state(state, db):
         if isinstance(provenance,dict) and '$resource' not in provenance:
             text=json.dumps(provenance,ensure_ascii=False)
             if len(text)>16000:
-                identity=hashlib.sha256(text.encode()).hexdigest()
-                db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)',(identity,text))
-                config['provenance']={'$resource':identity,'bytes':len(text.encode()),'summary':{key:len(value) if isinstance(value,(list,dict)) else 1 for key,value in provenance.items()}}
+                from .resource_files import put
+                config['provenance']={**put(db,provenance),'summary':{key:len(value) if isinstance(value,(list,dict)) else 1 for key,value in provenance.items()}}
         session['configuration']=config
         for op in ['configuration.inspect','configuration.apply','configuration.toggle']:
             result=runtime.get(op)
@@ -35,4 +34,5 @@ def resource(db, identity):
     row=db.execute('SELECT value FROM state_resources WHERE id=?',(identity,)).fetchone()
     if not row:
         raise ValueError('State resource is unavailable.')
-    return json.loads(row[0])
+    from .resource_files import resolve
+    return resolve(db, identity, json.loads(row[0]))

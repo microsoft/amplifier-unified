@@ -11,20 +11,70 @@ import uuid
 
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
 
-def backup(service):
-    folder=service.data_dir/'backups'/uuid.uuid4().hex
+def _backup_files(data_dir, session_paths):
+    folder=data_dir/'backups'/uuid.uuid4().hex
     folder.mkdir(parents=True,mode=0o700)
     database=folder/'app.sqlite3'
-    with sqlite3.connect(database) as target:service.db.backup(target)
+    # This thread owns its connections; never use the event-loop connection here.
+    with sqlite3.connect(f"file:{data_dir / 'app.sqlite3'}?mode=ro",uri=True) as source, sqlite3.connect(database) as target:
+        # Hold one WAL read snapshot. Frequent UI writes must not restart a
+        # multi-GB incremental backup indefinitely.
+        source.execute('BEGIN')
+        source.execute('SELECT id FROM state LIMIT 1').fetchone()
+        source.backup(target,pages=256)
     database.chmod(0o600)
     archive=folder/'private-state.tar.gz'
     with tarfile.open(archive,'w:gz') as output:
         output.add(database,arcname='app.sqlite3')
-        for name in ('config','routing','bundles','sessions','smart-tools/work'):
-            path=service.data_dir/name
+        for name in ('config','routing','bundles','sessions','artifacts','smart-tools/work'):
+            path=data_dir/name
             if path.exists():output.add(path,arcname=name,recursive=True)
+        for path, name in session_paths:
+            if path.exists():output.add(path,arcname=name,recursive=True)
+        for name in ('events.sqlite3','index.sqlite3'):
+            original=data_dir/'diagnostics'/name
+            if original.exists():
+                snapshot=folder/name
+                with sqlite3.connect(f"file:{original}?mode=ro",uri=True) as source, sqlite3.connect(snapshot) as target:
+                    source.backup(target,pages=256)
+                snapshot.chmod(0o600)
+                output.add(snapshot,arcname='diagnostics/'+name)
+        config=data_dir/'diagnostics/config.json'
+        if config.exists():output.add(config,arcname='diagnostics/config.json')
     archive.chmod(0o600)
-    return {'backup':str(archive),'detail':'Private backup includes conversations, configuration and saved credentials. Keep it private; it is not encrypted.'}
+    return {'backup':str(archive),'phase':'ready','detail':'Private backup includes shared session files, artifacts, configuration and saved credentials. Keep it private; it is not encrypted.'}
+
+
+async def backup(service):
+    async with service.lock:
+        if getattr(service,'backup_in_progress',False):raise ValueError('A backup is already running.')
+        service.backup_in_progress=True
+        service.state['maintenance']={'phase':'backing-up','detail':'Creating a private backup in the background.'}
+        service._publish()
+        from .host.storage import SessionStore
+        from .session_files import capture_dir
+        paths=set()
+        def include(workspace, identity):
+            path=SessionStore.for_app(service.data_dir,workspace).directory(identity)
+            name='shared-projects/'+path.parent.parent.name+'/sessions/'+path.name
+            paths.add((path,name))
+            capture=capture_dir(workspace,identity)
+            if capture != path/'context-intelligence':
+                paths.add((capture,'relocated-captures/'+path.parent.parent.name+'/sessions/'+identity+'/context-intelligence'))
+        for s in service.state['sessions']:
+            include(s['workspace'],s.get('runtimeSessionId') or s['id'])
+        # Include the recorded worker sessions, without backing up unrelated CLI projects.
+        for s in service.state['sessions']:
+            for worker in s.get('workers',[]):
+                if worker.get('id'):include(s['workspace'],worker['id'])
+    try:
+        task=asyncio.create_task(asyncio.to_thread(_backup_files,service.data_dir,paths))
+        try:return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+    finally:
+        service.backup_in_progress=False
 
 async def reset(manager,args):
     service=manager.service
@@ -42,8 +92,8 @@ async def reset(manager,args):
     try:
         await service.runtime.close()
         if manager.setup_manager:await manager.setup_manager.close();manager.setup_manager=None
+        result=await backup(service)
         async with service.lock:
-            result=backup(service)
             retained=service.data_dir/'backups'/('reset-'+uuid.uuid4().hex)
             retained.mkdir(mode=0o700)
             for name in targets:

@@ -88,7 +88,7 @@ async def test_transcript_file_import_keeps_tool_evidence_without_execution(app)
     rows=[{'role':'user','content':'Inspect'}, {'role':'assistant','content':'','tool_calls':[{'id':'call','function':{'name':'bash','arguments':'{}'}}]}, {'role':'tool','tool_call_id':'call','content':'done'}, {'role':'assistant','content':'Finished'}]
     await app.management.perform('history.importFile',{'content':json.dumps({'messages':rows,'metadata':{'bundle_name':'anchors'}}),'format':'json'})
     session=app._session()
-    saved=SessionStore(app.data_dir/'sessions').load(session['id'])
+    saved=SessionStore.for_app(app.data_dir,session['workspace']).load(session['id'])
     assert saved[0]==rows and session['status']=='stopped'
     assert saved[1]['jobs_replayed'] is False
     assert [m['text'] for m in session['messages']]==['Inspect','Finished']

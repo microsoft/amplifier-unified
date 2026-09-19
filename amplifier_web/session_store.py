@@ -151,10 +151,11 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     if source.get("status") in {"starting","working","stopping"}:
         raise ValueError("Wait for the conversation to finish before forking its transcript")
     home = Path(home)
-    store = SessionStore(home / "sessions")
+    store = SessionStore.for_app(home, source.get("workspace") or Path.cwd())
     source_id = source.get("runtimeSessionId") or source["id"]
-    source_dir, target_dir = store.directory(source_id), store.directory(target_id)
-    if target_dir.exists():
+    source_dir = home / "sessions" / source_id
+    target_dir = home / "sessions" / target_id
+    if target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists():
         raise ValueError("Fork target already exists")
     saved = store.load(source_id)
     if saved is None:

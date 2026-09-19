@@ -11,31 +11,43 @@ endpoint; no server plugin or Unified-specific endpoint is required.
 
 ## Local capture and correlation
 
-Metadata is captured locally by default. Streams cover app actions, sessions,
-workers, tools, model/token/cost calls, canvas activity, Smart Tool operations and
-update diagnostics. App chat IDs, runtime session IDs, parent session IDs, turn IDs,
-tool-call IDs, operation IDs and update-attempt IDs correlate the records. Model
-usage uses the server's standard provider/LLM event names and usage fields.
+Ordinary session capture uses the community `hook-context-intelligence`, mounted
+through Foundation, just like a CLI bundle. It writes the same
+`~/.amplifier/projects/<slug>/sessions/<id>/context-intelligence/events.jsonl`
+and metadata contract. The orchestrator emits prompt submission; the host supplies
+prompt completion at each final turn. The native transcript remains beside that
+capture as `transcript.jsonl`. Foundation still owns the shared execution lock and
+atomic full-context checkpoint. See [storage](STORAGE.md).
 
-Conversation text is a separate **opt-in** stream. Metadata does not include
-prompts, model reasoning, tool arguments/results, rendered HTML, attachments,
-provider configuration or raw command output. Content redaction is best effort;
-selecting conversation text may disclose personal or confidential information.
-A configured bundle's independent telemetry hooks retain their own policies;
-these settings govern the app's collector, not unrelated exporters.
+The default app-added hook is local only (`destinations: {}`). A hook already
+selected by a bundle keeps its own configuration; a saved complete mount plan or
+explicit module override is respected. Configure that hook in the running mount
+plan to change **raw local session capture**. Raw CI captures can contain prompts,
+tool arguments/results, reasoning and other content, as in the CLI.
 
-Capture enqueues without network I/O on the conversation path. A background task
-persists records in a private `diagnostics/events.sqlite3` database. Network
-workers are independent of capture and of one another. The in-memory queue is
-bounded at 2,000 events, individual metadata/content records at 48 KB, each
-server's pending/failed queue at 2,000 records. Overflow or storage failure is
-visible in settings and attention indicators, rather than stopping conversations.
-Unflushed records can be lost if the process crashes; normal shutdown flushes.
+These diagnostics settings instead govern the app's **selected index and optional
+forwarding**. The app tails shared captures read-only. Its default projection
+contains metadata, not prompts, reasoning, tool inputs/results, HTML or files.
+Conversation text is a separate opt-in. App-only events (updates, feedback, canvas,
+Smart Tool activity) append CI-format records; they do not replace session logging.
+A bundle's independently configured remote exporters retain their own policies.
 
-Retention defaults to 30 days and 25,000 records (whichever limit comes first).
-It applies to pending deliveries too; an expired delivery is counted explicitly.
-Accepted delivery receipts are kept for the record's retention period. SQLite
-reuses freed pages; file size can remain at its previous high-water mark.
+`diagnostics/events.sqlite3` is now only a bounded file-offset index and delivery
+outbox, not another event archive. Reading old captures never schedules uploads.
+New selected records can be forwarded to explicitly enabled destinations using the
+public library client. Authentication, redaction, destination selection and retry
+policy belong to the app; the local hook needs no ingestion API or server.
+
+App capture queues without network I/O on the conversation path. The in-memory
+queue is bounded at 2,000 records; each server's pending/failed queue at 2,000.
+Overflow and storage errors are visible without stopping conversations. Unflushed
+app events can be lost on a crash; normal shutdown flushes. The hook owns its own
+local durability and flushing behavior.
+
+Index retention defaults to 30 days and 25,000 records. It also expires pending
+deliveries with an explicit counter. It **does not delete shared events.jsonl or
+transcript.jsonl files**. Accepted delivery receipts live for the index retention
+period. SQLite reuses freed pages.
 
 ## Optional independent destinations
 

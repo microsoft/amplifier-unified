@@ -23,7 +23,7 @@ def read(directory):
 
 def persist(home,session):
     from .host.storage import SessionStore
-    directory=SessionStore(Path(home)/'sessions').directory(session.get('runtimeSessionId') or session['id'])
+    directory=SessionStore.for_app(home, session.get('workspace') or Path.cwd()).directory(session.get('runtimeSessionId') or session['id'])
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     value=read(directory)
     value.update(name_source=session.get('titleSource','manual'))

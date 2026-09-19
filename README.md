@@ -151,7 +151,7 @@ React chat / text / Live voice / Realtime fallback
 
 Live and Realtime request reasoning and app operations through `amplifier_delegate`. Only the Amplifier session executes tools, including `app_control`. Live retains its own audio transport and conversational speech generation; the session owns delegated work. Ending audio leaves accepted work running. A manager response reports pending background workers separately from completed work.
 
-Configuration lives in `~/.amplifier-unified/config/settings.yaml`, with private keys in `config/keys.env`, imported workspace snapshots in `config/workspaces/`, and live workspace overrides in `<workspace>/.amplifier-unified/settings.yaml`. Foundation has an app-owned registry/cache. Transcripts and job evidence live under `sessions/`; old transcripts are imported when their session is explicitly resumed. Interrupted operations are never automatically replayed. Settings provides provider connections, model discovery, routing presets, and provider-supported login. ChatGPT device-login tokens live in the app’s private configuration; providers without a public login flow use token or existing SDK authentication.
+Configuration lives in `~/.amplifier-unified/config/settings.yaml`, with private keys in `config/keys.env`, imported workspace snapshots in `config/workspaces/`, and live workspace overrides in `<workspace>/.amplifier-unified/settings.yaml`. Foundation has an app-owned registry/cache. Transcripts, Context Intelligence events and job evidence share the CLI’s `~/.amplifier/projects/<slug>/sessions/<id>/` directories. Existing Unified sessions migrate once without overwriting shared transcripts. See [storage and migration](docs/STORAGE.md). Interrupted operations are never automatically replayed. Settings provides provider connections, model discovery, routing presets, and provider-supported login. ChatGPT device-login tokens live in the app’s private configuration; providers without a public login flow use token or existing SDK authentication.
 
 Community bundles retain their providers, tools, hooks and agents. The supported streaming orchestrator is explicitly overlaid with loop-live and the original/adapted mount plans are recorded privately. Custom incompatible root orchestrators fail with an actionable error. The app currently includes a reviewed local loop-live change for delivered-input correlation and manager-turn completion; [the upstream contribution](docs/loop-live-upstream/README.md) is prepared but not published.
 
@@ -195,7 +195,7 @@ task's activation token; a persistent inbox loop's startup token expires on park
 Runtime admission also runs outside the HTTP app state lock, because its progress
 callbacks need that lock.
 
-`GET /api/state` exposes shared session/application state and attached device snapshots. `GET /api/actions` lists action schemas. `POST /api/actions` accepts `{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control tool use the same handlers. `GET /api/events` streams state updates. State includes `attention.items`, unread counts, and section/page destinations. `attention.read` accepts item IDs to acknowledge review; it does not dismiss the underlying update or issue. Changed facts become unread again, and acknowledgements survive restarts. SQLite stores conversations, accepted command IDs and settings. Interrupted work is marked rather than silently replayed.
+`GET /api/state` exposes shared session/application state and attached device snapshots. `GET /api/actions` lists action schemas. `POST /api/actions` accepts `{action,args,id?,expectedRevision?}`; UI controls and the runtime's app-control tool use the same handlers. `GET /api/events` streams state updates. State includes `attention.items`, unread counts, and section/page destinations. `attention.read` accepts item IDs to acknowledge review; it does not dismiss the underlying update or issue. Changed facts become unread again, and acknowledgements survive restarts. SQLite stores app settings, accepted command IDs and indexes; conversation transcripts and Context Intelligence events use the community session files. Interrupted work is marked rather than silently replayed.
 
 Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
 
@@ -288,7 +288,7 @@ Canvas publications are saved automatically with their chat and creating turn.
 Open several files or visuals in tabs, close tabs without deleting their content,
 and reopen them from the chat links or the canvas's **Saved artifacts** library.
 File previews preserve a snapshot. Direct HTML/Markdown/diagram content needs no
-intermediate file. Artifact bodies are stored separately in SQLite and loaded on
+intermediate file. Artifact bodies are stored as immutable files, indexed in SQLite, and loaded on
 demand, keeping the agent's default state overview small. The upgrade recovers
 accepted inline publications from existing checkpoints when available.
 

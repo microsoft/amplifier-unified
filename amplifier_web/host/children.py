@@ -136,6 +136,8 @@ class Children:
         return Runtime(row["sessionId"], observer=observe, max_input_chars=200000)
 
     async def install(self, session, prepared):
+        from .prompt_events import install
+        install(session.coordinator)
         self.prepared[session.session_id] = prepared
         self.sessions[session.session_id] = session
         coordinator = session.coordinator

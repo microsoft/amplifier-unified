@@ -29,10 +29,10 @@ def source():
 
 
 def test_fork_keeps_full_system_tool_context_and_configuration_without_job_ownership(tmp_path):
-    store=SessionStore(tmp_path/'sessions')
+    store=SessionStore.for_app(tmp_path,source()['workspace'])
     original=transcript()
     store.save('source-session',original,{'bundle_name':'anchors'},preserve_system=True)
-    source_dir=store.directory('source-session')
+    source_dir=tmp_path/'sessions/source-session';source_dir.mkdir(parents=True)
     (source_dir/'effective-configuration.json').write_text(json.dumps({'session':{'orchestrator':{'module':'loop-live'}},'tools':[{'module':'tool-test'}]}))
     (source_dir/'control-state.json').write_text(json.dumps({'goal':{'condition':'do not continue automatically'},'budget':{'maxOutputTokens':50}}))
     (source_dir/'live-jobs').mkdir();(source_dir/'live-jobs/job-old.json').write_text('{}')
@@ -44,9 +44,9 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     assert result['forkContext'] is False and result['selection']['model']=='selected'
     assert [row['text'] for row in result['messages']]==['First user turn','First answer']
     assert not (store.directory('fork-session')/'live-jobs').exists()
-    controls=json.loads((store.directory('fork-session')/'control-state.json').read_text())
+    controls=json.loads((tmp_path/'sessions/fork-session/control-state.json').read_text())
     assert controls['goal'] is None and controls['budget']['maxOutputTokens']==50
-    assert (store.directory('fork-session')/'configuration.json').stat().st_mode & 0o777==0o600
+    assert (tmp_path/'sessions/fork-session/configuration.json').stat().st_mode & 0o777==0o600
     assert store.load('source-session')[0]==original
     # Subsequent standalone checkpoints retain an explicitly forked system row.
     store.save('fork-session',messages,metadata)
@@ -64,22 +64,22 @@ def test_interrupted_calls_get_historical_error_receipts_not_replayed():
 
 
 def test_invalid_boundary_active_work_and_existing_destination_do_not_mutate_source(tmp_path):
-    store=SessionStore(tmp_path/'sessions');store.save('source-session',transcript(),{},preserve_system=True)
-    before=(store.directory('source-session')/'checkpoint.json').read_bytes()
+    store=SessionStore.for_app(tmp_path,source()['workspace']);store.save('source-session',transcript(),{},preserve_system=True)
+    before=(store.directory('source-session')/'transcript.jsonl').read_bytes()
     busy=copy.deepcopy(source());busy['status']='working'
     with pytest.raises(ValueError,match='finish'):fork_session(tmp_path,busy,'fork-session')
     with pytest.raises(ValueError,match='existing user turn'):fork_session(tmp_path,source(),'fork-session',turn=3)
     assert not store.directory('fork-session').exists()
     fork_session(tmp_path,source(),'fork-session')
     with pytest.raises(ValueError,match='already exists'):fork_session(tmp_path,source(),'fork-session')
-    assert (store.directory('source-session')/'checkpoint.json').read_bytes()==before
+    assert (store.directory('source-session')/'transcript.jsonl').read_bytes()==before
 
 
 async def test_service_fork_uses_durable_transcript_and_rechecks_busy_status(tmp_path):
     app=AppService(tmp_path,workspace=tmp_path)
     await app.dispatch('session.create',{})
     session=app._session();session.update({**source(),'id':session['id'],'workspace':str(tmp_path)})
-    store=SessionStore(tmp_path/'sessions');store.save(session['id'],transcript(),{},preserve_system=True)
+    store=SessionStore.for_app(tmp_path,tmp_path);store.save(session['id'],transcript(),{},preserve_system=True)
     session['status']='working'
     with pytest.raises(AppError,match='finish'):await app.dispatch('session.fork',{'id':session['id'],'turn':1})
     session['status']='idle'
@@ -92,7 +92,7 @@ async def test_service_fork_uses_durable_transcript_and_rechecks_busy_status(tmp
 
 
 def test_edit_boundary_keeps_prior_tools_but_excludes_original_prompt_and_later_context(tmp_path):
-    store=SessionStore(tmp_path/'sessions');store.save('source-session',transcript(),{},preserve_system=True)
+    store=SessionStore.for_app(tmp_path,source()['workspace']);store.save('source-session',transcript(),{},preserve_system=True)
     src=source()
     for i,row in enumerate(src['messages']):row['id']=str(i)
     result=fork_session(tmp_path,src,'edited',before_message_id='2')
@@ -120,7 +120,7 @@ async def test_edit_creates_one_independent_generation_and_preserves_source(tmp_
     src=app._session();src.update({**source(),'id':src['id'],'workspace':str(tmp_path)})
     for i,row in enumerate(src['messages']):row['id']=str(i)
     src['messages'][2]['attachments']=[{'id':'image','name':'Image.png'}]
-    store=SessionStore(tmp_path/'sessions');store.save(src['id'],transcript(),{},preserve_system=True)
+    store=SessionStore.for_app(tmp_path,tmp_path);store.save(src['id'],transcript(),{},preserve_system=True)
     original=copy.deepcopy(src)
     args={'sessionId':src['id'],'messageId':'2','text':'Revised question'}
     await app.dispatch('message.edit',args,command_id='edit-once')
@@ -162,7 +162,7 @@ def spoken(role, text, second, identity):
 
 
 def test_mixed_voice_fork_and_edit_use_history_boundaries_not_prompt_substrings(tmp_path):
-    store=SessionStore(tmp_path/'sessions')
+    store=SessionStore.for_app(tmp_path,source()['workspace'])
     visible=[spoken('user','First spoken question',1,'u1'), spoken('assistant','Voice reply',2,'a1'),
              spoken('user','Second spoken question',5,'u2'), spoken('assistant','Second voice reply',7,'a2'),
              spoken('user','Thanks',9,'u3')]
@@ -192,7 +192,7 @@ def test_mixed_voice_fork_and_edit_use_history_boundaries_not_prompt_substrings(
 
 
 def test_earlier_fork_ignores_later_missing_inputs_and_full_fork_preserves_failed_submission(tmp_path):
-    store=SessionStore(tmp_path/'sessions');store.save('source-session',transcript(),{})
+    store=SessionStore.for_app(tmp_path,source()['workspace']);store.save('source-session',transcript(),{})
     src=source();src['messages'].append({'id':'missing','role':'user','text':'Failed later submission'})
     fork_session(tmp_path,src,'early',turn=1)
     assert store.load('early')[0]==transcript()[1:6]
@@ -202,7 +202,7 @@ def test_earlier_fork_ignores_later_missing_inputs_and_full_fork_preserves_faile
 
 
 def test_voice_cut_closes_tool_receipts_without_later_results(tmp_path):
-    store=SessionStore(tmp_path/'sessions')
+    store=SessionStore.for_app(tmp_path,source()['workspace'])
     rows=[dated('user','Before speech',0),dated('assistant','Started tool',2,tool_calls=[{'id':'pending','name':'bash'}]),dated('tool','Future result',8,tool_call_id='pending',name='bash')]
     store.save('source-session',rows,{})
     src={**source(),'messages':[spoken('user','First',1,'u1'),spoken('user','Edit here',5,'u2')]}
@@ -213,7 +213,7 @@ def test_voice_cut_closes_tool_receipts_without_later_results(tmp_path):
 
 
 def test_edit_failed_first_submission_with_empty_checkpoint(tmp_path):
-    store=SessionStore(tmp_path/'sessions');store.save('source-session',[],{})
+    store=SessionStore.for_app(tmp_path,source()['workspace']);store.save('source-session',[],{})
     src={**source(),'messages':[{'id':'failed','role':'user','text':'Never delivered'}]}
     result=fork_session(tmp_path,src,'retry',before_message_id='failed')
     assert result['messages']==[] and store.load('retry')[0]==[]

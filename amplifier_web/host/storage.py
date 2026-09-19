@@ -1,4 +1,8 @@
-"""App-owned, atomic session checkpoints and read-only legacy import."""
+"""CLI transcript/metadata compatibility without importing the CLI host.
+
+Production stores share project session directories. Explicit base_dir stores
+remain available for reading/migrating pre-0.8 Unified checkpoints.
+"""
 from __future__ import annotations
 
 import copy
@@ -22,10 +26,65 @@ def _metadata(value):
 
 
 class SessionStore:
-    def __init__(self, base_dir=None, *, legacy_home=None):
+    def __init__(self, base_dir=None, *, legacy_home=None, shared=False, previous=None):
         self.base_dir = Path(base_dir or Path.home() / ".amplifier-unified" / "sessions").expanduser()
         self.base_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.legacy_home = Path(legacy_home or os.environ.get("AMPLIFIER_UNIFIED_IMPORT_HOME", Path.home() / ".amplifier")).expanduser()
+        self.shared = shared
+        self.previous = Path(previous) if previous else None
+
+    @classmethod
+    def for_app(cls, home, workspace):
+        from ..session_files import sessions_dir, amplifier_home
+        return cls(sessions_dir(workspace), legacy_home=amplifier_home(), shared=True,
+                   previous=Path(home) / 'sessions')
+
+    @classmethod
+    def find(cls, home, identity, default_workspace):
+        """Locate a native session without making another host-owned copy."""
+        from ..session_files import amplifier_home, validate_id
+        validate_id(identity)
+        candidates = list((amplifier_home() / 'projects').glob(f'*/sessions/{identity}/transcript.jsonl'))
+        if len(candidates) > 1:
+            raise ValueError('This session ID exists in more than one workspace. Open it through shared workspace history.')
+        if candidates:
+            return cls(candidates[0].parent.parent, shared=True, legacy_home=amplifier_home()).load(identity)
+        legacy = cls(Path(home) / 'sessions').load(identity)
+        if legacy:
+            workspace = legacy[1].get('working_dir') or default_workspace
+            return cls.for_app(home, workspace).load(identity)
+        return None
+
+    def _migrate(self, session_id):
+        """Publish a missing legacy transcript once; never overwrite CLI work.
+
+        Originals stay in place for rollback. The shared transcript wins from
+        this point forward, including changes made subsequently by the CLI.
+        """
+        if not self.previous:
+            return
+        directory = self.directory(session_id)
+        source = self.previous / session_id
+        if (directory / 'transcript.jsonl').exists() or not (source / 'checkpoint.json').is_file():
+            return
+        old = SessionStore(self.previous).load(session_id)
+        if old is None:
+            return
+        # Exclusive directory creation prevents a competing migration from
+        # overwriting a newer transcript. Existing shared directories may already
+        # contain CI events or naming before the first transcript checkpoint.
+        from filelock import FileLock
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with FileLock(str(directory / '.unified-migration.lock')):
+            if (directory / 'transcript.jsonl').exists():
+                return
+            self.save(session_id, *old, preserve_system=True)
+            # Job evidence is never replayed, and process ownership is not copied.
+            for original in (source / 'live-jobs').glob('job-*.json'):
+                target = directory / 'live-jobs' / original.name
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    self._atomic(target, original.read_text())
 
     def directory(self, session_id):
         if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,220}", session_id):
@@ -57,16 +116,34 @@ class SessionStore:
         if not preserve_system and not (metadata or {}).get("preserve_system"):
             rows = [m for m in rows if m.get("role") not in {"system", "developer"}]
         from ..naming import read
-        saved_metadata = _metadata({**copy.deepcopy(metadata or {}),**read(directory)})
+        existing = directory / 'metadata.json'
+        previous = json.loads(existing.read_text()) if existing.exists() else {}
+        saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {}),**read(directory)})
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
+        if saved_metadata.get('bundle_name'):
+            saved_metadata['bundle'] = saved_metadata['bundle_name']
         payload = {"version": 1, "messages": rows, "metadata": saved_metadata}
-        # One atomic file is authoritative: transcript/metadata exports cannot create
-        # a half-old/half-new checkpoint if the process exits between writes.
-        self._atomic(directory / "checkpoint.json", json.dumps(payload, ensure_ascii=False, default=str))
+        # Legacy stores used one private authority file. Shared stores project
+        # the Foundation checkpoint to the CLI's native transcript/metadata.
+        if not self.shared:
+            self._atomic(directory / "checkpoint.json", json.dumps(payload, ensure_ascii=False, default=str))
         self._atomic(directory / "transcript.jsonl", "".join(json.dumps(m, ensure_ascii=False, default=str) + "\n" for m in rows))
         self._atomic(directory / "metadata.json", json.dumps(saved_metadata, ensure_ascii=False, indent=2, default=str))
 
     def load(self, session_id):
+        if self.shared:
+            self._migrate(session_id)
+            directory = self.directory(session_id)
+            path = directory / 'transcript.jsonl'
+            if not path.exists():
+                return None
+            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+            if any(not isinstance(row, dict) for row in rows):
+                raise ValueError('Malformed session transcript')
+            metadata = directory / 'metadata.json'
+            value = json.loads(metadata.read_text()) if metadata.exists() else {}
+            from ..naming import read
+            return rows, {**value, **read(directory)}
         path = self.directory(session_id) / "checkpoint.json"
         if not path.exists():
             return None
@@ -81,6 +158,10 @@ class SessionStore:
         existing = self.load(session_id)
         if existing is not None:
             return existing
+        if self.shared:
+            # A session in another workspace must be opened there, not copied
+            # into this workspace while keeping the same root identity.
+            return None
         self.directory(session_id)  # Validate before interpolating a glob.
         candidates = []
         if workspace:

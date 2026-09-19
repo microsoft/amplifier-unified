@@ -223,7 +223,7 @@ class SmartToolsManager:
                 operation.update(status="interrupted", error="The app restarted. Work was not replayed.", updatedAt=time.time())
             self.persist_operation(operation)
         # Interrupted operations can outlive the bounded overview in app state.
-        for identity, value in service.db.execute("SELECT id,value FROM smart_tool_operations").fetchall():
+        for identity, value in service.db.execute("SELECT id,value FROM smart_tool_operations WHERE json_extract(value,'$.status') IN ('running','queued')").fetchall():
             operation = json.loads(value)
             if operation.get("status") in {"running", "queued"}:
                 operation.update(status="interrupted", error="The app restarted. Work was not replayed.", updatedAt=time.time())
@@ -232,32 +232,35 @@ class SmartToolsManager:
 
     def persist_operation(self, operation):
         """Write a receipt while holding service.lock; the caller publishes/commits."""
-        full = copy.deepcopy(operation)
-        for field in ("result", "arguments"):
-            value = full.get(field)
-            if isinstance(value, dict) and "$resource" in value:
-                stored = self.service.db.execute("SELECT value FROM state_resources WHERE id=?", (value["$resource"],)).fetchone()
-                if stored:
-                    full[field] = json.loads(stored[0])
-        self.service.db.execute("INSERT OR REPLACE INTO smart_tool_operations VALUES (?, ?)", (operation["id"], json.dumps(full)))
-        operation.update(self._overview(full))
+        overview = self._overview(operation)
+        self.service.db.execute("INSERT OR REPLACE INTO smart_tool_operations VALUES (?, ?)", (operation["id"], json.dumps(overview)))
+        operation.update(overview)
+        from .storage_migration import trim_operations
+        trim_operations(self.service.db, self.service.state)
 
     def _overview(self, operation):
         overview = copy.deepcopy(operation)
         for field in ("result", "arguments"):
             if field not in overview:
                 continue
+            if isinstance(overview[field],dict) and '$resource' in overview[field]:
+                continue
             text = json.dumps(overview[field], ensure_ascii=False)
             if len(text.encode()) > 16_000:
-                identity = hashlib.sha256(text.encode()).hexdigest()
-                self.service.db.execute("INSERT OR IGNORE INTO state_resources VALUES (?, ?)", (identity, text))
-                overview[field] = {"$resource": identity, "bytes": len(text.encode()), "summary": "Stored tool data; read this state path for paginated details."}
+                from .resource_files import put
+                overview[field] = {**put(self.service.db,overview[field]), "summary": "Stored tool data; read this state path for paginated details."}
         return overview
 
     def operation(self, identity):
         row = self.service.db.execute("SELECT value FROM smart_tool_operations WHERE id=?", (identity,)).fetchone()
         if row:
-            return json.loads(row[0])
+            operation = json.loads(row[0])
+            from .state_storage import resource
+            for field in ('result','arguments'):
+                value = operation.get(field)
+                if isinstance(value,dict) and '$resource' in value:
+                    operation[field] = resource(self.service.db,value['$resource'])
+            return operation
         operation = next((item for item in self.state["operations"] if item["id"] == identity), None)
         return copy.deepcopy(operation)
 

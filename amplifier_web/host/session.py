@@ -213,6 +213,16 @@ async def compose_configured_bundle(registry, loaded, config):
     if not snapshot:
         for behavior in config.app_bundles:
             loaded = loaded.compose(await registry.load(behavior))
+        if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
+            from ..session_files import capture_dir, project_slug
+            # The community hook owns kernel capture, discovery and metadata.
+            # App destinations are explicit; ambient server keys never enable
+            # forwarding merely because this default hook is present.
+            loaded.hooks.append({'module': 'hook-context-intelligence',
+                'source': 'git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=modules/hook-context-intelligence',
+                'config': {'destinations': {}, 'base_path': str(capture_dir(config.workspace, 'root').parents[3]),
+                           'project_slug': project_slug(config.workspace),
+                           'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
         if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
             loaded = loaded.compose(await registry.load("git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml"))
         loaded = _apply_settings(loaded, config)
@@ -244,10 +254,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .storage import SessionStore
 
     config = load_config(workspace)
-    # One process owns each session, including cwd and Foundation's source cache.
-    # No reads/writes of former-host settings happen after the import above.
+    # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
+    # remain the community data root, including for mounted CI logging hooks.
     os.chdir(config.workspace)
-    os.environ["AMPLIFIER_HOME"] = str(config.registry_home)
+    from ..session_files import capture_dir
+    if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
+        os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
     runtime = runtime or Runtime()
     def shared_value(name, default=None):
         if shared_snapshot is None:
@@ -323,9 +335,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         progress_callback=progress)
     await materialize_bundle_providers(loaded, prepared)
     apply_provider_environment(prepared.mount_plan)
+    from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,
+        project_slug=project_slug(config.workspace),
         bundle_name=chosen, project_dir=str(config.workspace), project_name=config.workspace.name)
-    store = SessionStore(config.home / "sessions")
+    store = SessionStore.for_app(config.home, config.workspace)
+    store._migrate(runtime.session_id)
     shared_messages = shared_value("messages")
     shared_metadata = shared_value("metadata", {})
     if shared_snapshot is not None and (not isinstance(shared_messages, list) or not isinstance(shared_metadata, dict)):
@@ -438,6 +453,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if path.is_file():
                 config_inputs.append(str(path.resolve()))
         report = {"bundle": chosen, "workspace": str(config.workspace),
+            "contextIntelligence": {"enabled": bool((coordinator.get_capability('context_intelligence._hook_state') or {}).get('unregister_fns'))},
             "session_id": runtime.session_id, "resumed": messages is not None,
             "providers": list(providers), "tools": list(coordinator.get("tools") or {}),
             "agents": list(prepared.mount_plan.get("agents", {})), "provider_choices": choices,
