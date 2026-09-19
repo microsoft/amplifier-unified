@@ -138,7 +138,7 @@ strict. An explicitly referenced required secret must be present and nonempty;
 another ambient provider credential cannot substitute for it. The same rule
 applies to root/agent providers and model-list/connection tests.
 
-No `amplifier-app-cli`, `amplifier-loop-live-cli`, or `amplifier-workspace` host libraries are installed or imported. The application owns configuration, approvals, checkpoints and child-session lifecycle, using Foundation's public bundle preparation and session APIs.
+No `amplifier-app-cli`, `amplifier-loop-live-cli`, or `amplifier-workspace` host libraries are installed or imported. The application owns configuration, approvals, native history saves and child-session lifecycle, using Foundation's public bundle preparation and session APIs.
 
 ```text
 React chat / text / Live voice / Realtime fallback
@@ -159,7 +159,8 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ### Automatic CLI workspaces and chats
 
-Unified pins the Foundation `session.shared_state` API. CLI participation
+Unified pins Foundation's native `session.history` reader/writer and
+`session.shared_state` ownership lock. CLI lock participation
 requires the upgraded shared-root adapter; restart older CLI processes after
 updating. Native Windows CLI persistence remains available, but shared-session
 locking is supported only on POSIX local filesystems.
@@ -173,7 +174,7 @@ and the refresh button beside the chat list checks immediately. Opening a
 chat creates only a browser view of the same root ID. It does not duplicate the
 runtime transcript. The view starts with the latest 100 visible messages;
 **Load earlier messages** reveals older history. Execution restores the complete
-common context, including tool results. Removing a workspace or chat from the
+native transcript, including tool results and provider replay fields. Removing a workspace or chat from the
 list keeps its shared files on disk and leaves it hidden from later discovery.
 Worker sessions and legacy chats with missing folders, unsupported IDs, or unknown
 bundles remain readable, with an explanation when continuation is unavailable.
@@ -201,8 +202,8 @@ state includes `/workspaceExplorer`; `view.update` accepts `navWorkspacePath`,
 
 CLI keeps the writer lock until exit. Web releases automatically after accepted
 work, delegated jobs, approvals, and saving settle, even if the page stays open.
-On the next action it acquires the lock and compares checkpoint/configuration
-file metadata. Unchanged valid state reuses the mounted session; changed state
+On the next action it acquires the lock and compares native transcript, metadata,
+backup and configuration file stamps. Unchanged valid state reuses the mounted session; changed state
 reloads. A busy owner rejects execution with diagnostics and retains the draft.
 No takeover, lock expiry, force-unlock, or automatic work replay is provided.
 

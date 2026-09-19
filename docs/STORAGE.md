@@ -20,10 +20,15 @@ Project slugs follow the CLI exactly, including spaces, underscores and periods.
 The community CI hook owns session event capture; Unified reads it rather than
 serializing UI progress into another session event log. The host emits the same
 prompt-completion event as app-cli at loop-live's final-turn boundary.
-`transcript.jsonl` is the native conversation projection. Foundation's
-`SharedSessionStore` remains the authority for execution ownership and its atomic
-full-context checkpoint, matching current CLI behavior. Opening a session in a
-second host does not create another runtime history. A busy owner rejects new work.
+`transcript.jsonl` is the sole resume-message authority. Foundation's
+`SessionHistoryStore` reads and atomically saves the existing native transcript
+and metadata, including CLI-compatible `.backup` recovery. `SharedSessionStore`
+retains cross-host acquire/check/release ownership only: new turns do not write
+another checkpoint. A native transcript (including an empty one) always wins over
+an old common checkpoint. Only a session without native transcript or backup can
+explicitly fall back to a legacy checkpoint; old files are retained unchanged.
+A busy owner rejects new work. Reads never mount tools/providers, replay work,
+emit prompt events, repair source files, or create another conversation copy.
 
 `unified/view.json` contains web presentation: displayed messages, activity cards,
 voice presentation and draft/UI associations. It is not the model's runtime
@@ -32,7 +37,24 @@ sidebar. Worker histories stay in the same native files and remain accessible
 through their parent conversation; independent forks are top-level chats.
 Browsing them reads a page of their native transcript without starting a worker;
 the displayed history refreshes after CLI changes. The next worker activation
-always reads Foundation's latest shared checkpoint.
+reads the latest native transcript under the shared lock. Warm workers reuse
+unchanged mounts; native transcript/metadata/backup changes force a remount.
+An external transcript/backup write during an active turn is rejected before Unified saves,
+preserving the older CLI compatibility guard.
+
+Saved tool activity uses Foundation's event reader and exact transcript
+associations. The native CI path is `context-intelligence/events.jsonl`; the
+explicit CI relocation setting is honored and legacy root `events.jsonl` is not
+preferred. The UI scans at most 5,000 physical lines or 16 MiB (including malformed and
+unrelated records) and retains at most 2,000
+compact observations per page load. Truncation, malformed records and backup
+recovery are reported; ambiguous or auxiliary activity is not assigned to a chat
+turn. Event bodies never become transcript messages. Raw prompts, model reasoning,
+API payloads and tool results are not retained in the activity projection.
+Missing model-call identity/cost is not estimated from tool activity. These
+native activity cards and diagnostics are in-memory only and are excluded from
+`unified/view.json`; existing web-owned activity, attachments, canvas references,
+voice presentation and drafts keep their existing persistence.
 
 App settings, command IDs, operation receipts and indexes remain in the app data
 directory. Immutable canvas/result bodies live in `artifacts/<sha256>.json`, with
@@ -54,8 +76,9 @@ Normal backups run file copying and compression in a background thread. They
 include app configuration (including credentials), artifacts, operation/index
 state, and shared root/worker sessions used by this app, including explicitly
 relocated CI captures. Automatically discovered CLI entries are a rebuildable
-index: listing or viewing them does not expand backups, scan their Context
-Intelligence event files, or run legacy canvas migration. Existing app drafts,
+index: listing them does not expand backups, read transcript/event bodies, or run
+legacy canvas migration. Opening a chat loads its transcript and lazily scans
+bounded CI activity; it does not add that external session to app backup scope. Existing app drafts,
 canvas artifacts and indexed diagnostic records remain part of app storage and
 backup. Backups do not collect unrelated CLI conversations or external Smart
 Tool work directories. Backups are

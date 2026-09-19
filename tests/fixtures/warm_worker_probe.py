@@ -87,7 +87,10 @@ Reply with the fixture response.
             break
         await asyncio.sleep(0.02)
     warm_seconds = time.monotonic() - warm_started
-    checkpoint = worker.shared_store.read()
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web.session_files import sessions_dir
+    checkpoint = {"messages": SessionHistoryStore(sessions_dir(workspace) / config["id"]).load_messages()}
+    assert worker.shared_store.read() is None
     assert id(worker.session) == first_session
     assert id(worker.execution) == first_execution
     assert [event["text"] for event in events if event.get("type") == "assistant.message"] == [

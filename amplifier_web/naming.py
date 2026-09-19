@@ -37,8 +37,10 @@ def persist(home,session, *, shared_rename=False):
         value['name']=session['title']
     if session.get('description'):value['description']=session['description']
     SessionStore._atomic(directory/'naming.json',json.dumps(value))
-    if shared_rename and (directory/'metadata.json').is_file():
+    if shared_rename and any((directory/name).is_file() for name in ('metadata.json','metadata.json.backup')):
         # Match CLI's explicit metadata rename; opening history never calls this.
-        metadata=json.loads((directory/'metadata.json').read_text())
+        from amplifier_foundation.session.history import SessionHistoryStore
+        history=SessionHistoryStore(directory)
+        metadata=history.load_metadata()
         metadata.update({key:value[key] for key in ('name','name_source') if key in value})
-        SessionStore._atomic(directory/'metadata.json',json.dumps(metadata,ensure_ascii=False,indent=2))
+        history.save_metadata(metadata)

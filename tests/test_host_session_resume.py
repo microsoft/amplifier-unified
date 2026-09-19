@@ -63,7 +63,7 @@ def mounted_host(tmp_path, monkeypatch):
         payload = {"messages": copy.deepcopy(messages), **kwargs}
         writes.append(payload)
         checkpoint.write_text(json.dumps(payload))
-    held = SimpleNamespace(write=write)
+    held = SimpleNamespace(write=write, check=Mock(), read=Mock(return_value=None))
     async def prepare(snapshot=None, **kwargs):
         return await host.prepare_manager(workspace, runtime=runtime, resume=True,
             shared_handle=held, shared_snapshot=snapshot, **kwargs)
@@ -88,23 +88,22 @@ async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_wit
     assert h.context.messages[:3] == rows[:3]
     receipt = json.loads(h.context.messages[3]["content"])
     assert receipt["status"] == "interrupted" and receipt["effects"] == "not_rolled_back"
-    assert h.writes[0]["messages"] == h.context.messages
+    assert h.writes == []
+    h.held.check.assert_called()
     assert h.store.load("native-root")[0] == h.context.messages
-    assert report["resumed"] and str(h.path) in report["config_inputs"]
+    assert report["resumed"] and report["history_source"] == "native"
     assert h.prepared.create_session.call_args.kwargs["session_id"] == "native-root"
     h.session.execute.assert_not_called()
 
 
-async def test_shared_resume_accepts_cli_projection_and_keeps_shared_receipts(mounted_host):
+async def test_native_history_wins_over_stale_checkpoint_and_repairs_receipts(mounted_host):
     h = mounted_host
-    rows = [{"role": "system", "content": "shared context"}, {"role": "user", "content": "first"},
-            {"role": "tool", "tool_call_id": "call-1", "content": json.dumps(
-                {"status": "queued", "job_id": "job-1", "call_id": "call-1"})}]
+    rows = [{"role": "user", "content": "native"}, {"role": "assistant", "content": "CLI answer"}]
     h.store.save("native-root", rows, {})
-    await h.prepare(snapshot(rows))
+    await h.prepare(snapshot([{"role": "user", "content": "stale"}]))
     assert h.context.messages == rows
-    assert h.writes[0]["messages"] == rows
-    assert h.store.load("native-root")[0] == rows[1:]
+    assert h.writes == []
+    assert h.store.load("native-root")[0] == rows
     h.session.execute.assert_not_called()
 
 
@@ -114,23 +113,18 @@ async def test_discovered_native_bundle_wins_over_current_app_default(mounted_ho
     h.store.save("native-root", rows, {"bundle": "native-recorded-bundle"})
     await h.prepare(bundle="native-recorded-bundle")
     h.registry.load.assert_awaited_once_with("native-recorded-bundle")
-    assert h.writes[0]["bundle"] == "native-recorded-bundle"
+    assert h.store.load("native-root")[1]["bundle"] == "native-recorded-bundle"
     assert h.context.messages == rows
 
 
-async def test_divergent_cli_history_refuses_before_mount_or_either_checkpoint_write(mounted_host):
+async def test_native_history_does_not_even_read_corrupt_common_checkpoint(mounted_host):
     h = mounted_host
-    older = [{"role": "user", "content": "first"}]
-    newer = older + [{"role": "assistant", "content": "CLI answer"}, {"role": "user", "content": "CLI next"}]
+    newer = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "CLI answer"}]
     h.store.save("native-root", newer, {"bundle": "anchors"})
-    h.checkpoint.write_text(json.dumps(snapshot(older)))
-    before = h.path.read_bytes(), h.checkpoint.read_bytes()
-    with pytest.raises(host.NativeTranscriptConflict, match="Both histories were preserved"):
-        await h.prepare(snapshot(older))
-    assert before == (h.path.read_bytes(), h.checkpoint.read_bytes())
-    assert h.writes == []
-    h.registry.load.assert_not_called()
-    h.prepared.create_session.assert_not_called()
+    h.held.read.side_effect = ValueError("corrupt legacy checkpoint")
+    await h.prepare()
+    assert h.context.messages == newer and h.writes == []
+    h.held.read.assert_not_called()
 
 
 @pytest.mark.parametrize("mutation", ["append", "delete", "replace", "symlink"])
@@ -139,7 +133,7 @@ async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, m
     rows = [{"role": "user", "content": "first"}]
     h.store.save("native-root", rows, {})
     await h.prepare(snapshot(rows))
-    original_common = h.checkpoint.read_bytes()
+    assert not h.checkpoint.exists()
     original_metadata = (h.path.parent / "metadata.json").read_bytes()
     if mutation == "append":
         with h.path.open("a") as stream:
@@ -160,15 +154,17 @@ async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, m
     with pytest.raises(host.NativeTranscriptConflict):
         await h.capabilities["live.checkpoint"]("completed")
     assert (h.path.read_bytes() if h.path.exists() else None) == native_after
-    assert h.checkpoint.read_bytes() == original_common
+    assert not h.checkpoint.exists()
     assert (h.path.parent / "metadata.json").read_bytes() == original_metadata
-    assert len(h.writes) == 1
+    assert h.writes == []
 
 
 async def test_missing_native_projection_uses_common_checkpoint_without_private_migration(mounted_host):
     h = mounted_host
     private = SessionStore(h.home / "sessions")
-    private.save("native-root", [{"role": "user", "content": "stale private copy"}], {})
+    private.directory("native-root").mkdir()
+    (private.directory("native-root") / "checkpoint.json").write_text(json.dumps({
+        "version": 1, "messages": [{"role": "user", "content": "stale private copy"}], "metadata": {}}))
     old_private = (private.directory("native-root") / "checkpoint.json").read_bytes()
     rows = [{"role": "user", "content": "authoritative common checkpoint"}]
     await h.prepare(snapshot(rows))
@@ -186,3 +182,30 @@ async def test_corrupt_native_transcript_never_becomes_empty_history(mounted_hos
     assert h.path.read_bytes() == original
     assert not h.writes
     h.registry.load.assert_not_called()
+
+
+async def test_native_backup_recovery_preserves_provider_fields_without_replay(mounted_host):
+    h = mounted_host
+    rows = [{"role": "user", "content": "first"}, {"role": "assistant", "content": [],
+             "provider_state": {"encrypted_reasoning": "opaque-fixture", "namespace": "tools"}}]
+    h.store.save("native-root", rows, {"bundle": "recorded-bundle", "unknown": {"keep": True}})
+    h.path.with_name('transcript.jsonl.backup').write_bytes(h.path.read_bytes())
+    h.path.write_text('{partial')
+    await h.prepare(snapshot([]))
+    assert h.context.messages == rows
+    assert h.store.load('native-root')[1]['unknown'] == {'keep': True}
+    h.registry.load.assert_awaited_once_with('recorded-bundle')
+    assert h.writes == []
+
+
+async def test_manual_rename_during_active_turn_survives_next_native_save(mounted_host):
+    from amplifier_web.naming import persist
+    h = mounted_host
+    h.store.save('native-root', [{'role': 'user', 'content': 'fixture'}], {'bundle': 'anchors'})
+    await h.prepare()
+    persist(h.home, {'id': 'native-root', 'workspace': str(h.home.parent / 'workspace'),
+                     'title': 'Manual name during work', 'titleSource': 'manual'}, shared_rename=True)
+    await h.capabilities['live.checkpoint']('completed')
+    assert h.store.load('native-root')[1]['name'] == 'Manual name during work'
+    assert h.store.load('native-root')[1]['name_source'] == 'manual'
+    assert h.writes == []

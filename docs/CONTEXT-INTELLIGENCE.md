@@ -16,8 +16,8 @@ through Foundation, just like a CLI bundle. It writes the same
 `~/.amplifier/projects/<slug>/sessions/<id>/context-intelligence/events.jsonl`
 and metadata contract. The orchestrator emits prompt submission; the host supplies
 prompt completion at each final turn. The native transcript remains beside that
-capture as `transcript.jsonl`. Foundation still owns the shared execution lock and
-atomic full-context checkpoint. See [storage](STORAGE.md).
+capture as `transcript.jsonl`. Foundation owns the shared execution lock and native transcript/metadata
+reader and writer; event logs enrich history in memory and never replace it. See [storage](STORAGE.md).
 
 The default app-added hook is local only (`destinations: {}`). A hook already
 selected by a bundle keeps its own configuration; a saved complete mount plan or

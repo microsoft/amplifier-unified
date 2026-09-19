@@ -22,7 +22,7 @@ import yaml
 from ..deployment import write_private
 from ..shared_state import workspace_snapshot_path
 
-FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@e210edabd947af82d5121a240d6934283ac540b9"
+FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@b3bdab2adcc2a8fe477aca64c20b77528a95e1df"
 _KEY_FILE_VALUES = {}
 
 

@@ -302,3 +302,17 @@ def test_explicit_root_metadata_refreshes_previous_worker_classification(tmp_pat
     assert refreshed['sessions'][0]['sessionKind'] == 'root'
     assert refreshed['sessions'][0]['parentId'] is None
     assert refreshed['sessions'][0]['canResume'] is True
+
+
+def test_canonical_metadata_and_missing_transcript_use_read_only_backups(tmp_path):
+    home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
+    workspace.mkdir()
+    directory = session(home, workspace, 'root', {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Recovered'})
+    (directory / 'metadata.json').rename(directory / 'metadata.json.backup')
+    (directory / 'metadata.json').write_text('{partial')
+    (directory / 'transcript.jsonl').rename(directory / 'transcript.jsonl.backup')
+    before = {path: path.read_bytes() for path in directory.iterdir()}
+    result = NativeHistory(home).scan()
+    row, = result['sessions']
+    assert row['title'] == 'Recovered' and row['canResume'] is True
+    assert before == {path: path.read_bytes() for path in directory.iterdir()}

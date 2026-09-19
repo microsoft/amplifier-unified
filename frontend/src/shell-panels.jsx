@@ -96,11 +96,14 @@ export function SessionHistoryControls({session,act,onLoadEarlier}){
  if(!session)return null;
  const unavailable=session.workspaceAvailable===false,readOnly=session.historyReadOnlyReason;
  const pending=!!session.historyLoading||session.historyLoaded===false&&!session.historyError,earlier=Number(session.sharedHistoryOffset)>0;
+ const notices=session.historyActivity?.diagnostics||[],partial=notices.some(item=>['activity_scan_limit','scan_limit','invalid_event','incomplete_event','unreadable_file'].includes(item.code)),recovered=notices.some(item=>item.code==='recovered_backup');
  const retry=()=>act('session.select',{id:session.id});
  const loadEarlier=()=>{onLoadEarlier?.();return act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100})};
- if(!pending&&!session.historyError&&!earlier&&!unavailable&&!readOnly)return null;
+ if(!pending&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
  return <div className="a-session-history" data-part="session-history">
   {(unavailable||readOnly)&&<p role="status"><FolderOpen/>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</p>}
+  {recovered&&<p role="status"><AlertCircle/>Showing a recovered history backup. Original files are unchanged.</p>}
+  {partial&&<p role="status"><AlertCircle/>Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.</p>}
   {pending&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
   {session.historyError&&<div className="a-session-history-error" role="alert"><AlertCircle/><span>{session.historyError}</span><button type="button" className="a-link" data-action="session.select" disabled={pending} onClick={retry}>Try again</button></div>}
   {earlier&&<button type="button" className="a-soft" data-action="session.history" disabled={pending} onClick={loadEarlier}>Load earlier messages</button>}

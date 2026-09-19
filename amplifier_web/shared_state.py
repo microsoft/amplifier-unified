@@ -1,8 +1,8 @@
-"""Shared host/worker helpers for Foundation's shared session authority.
+"""Shared host/worker helpers for Foundation's session ownership lock.
 
-This module intentionally has no Foundation import, letting configuration and
-the outer HTTP process use its pure helpers. The worker imports Foundation's
-``session.shared_state`` only after entering its isolated dependency environment.
+Configuration stamps and activation ownership remain pure helpers. The worker
+uses the lock in its isolated dependency environment; navigation uses the same
+Foundation version to read native history.
 """
 from __future__ import annotations
 

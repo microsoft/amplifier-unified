@@ -97,6 +97,10 @@ try{
  await page.getByText('Subagent conversation',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Open parent chat',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='native-chat');
+ session.historyActivity={diagnostics:[{code:'scan_limit',source:'events'},{code:'recovered_backup',source:'transcript'}]};state.revision++;
+ await page.evaluate(state=>window.emitFixtureState(state),state);
+ await page.getByText('Showing a recovered history backup. Original files are unchanged.',{exact:true}).waitFor();
+ await page.getByText('Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.getByRole('button',{name:'Maintenance',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).count(),0);

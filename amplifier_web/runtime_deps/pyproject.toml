@@ -23,12 +23,12 @@ dependencies = [
 [tool.uv]
 # Keep Foundation at the reviewed host API revision while bundles resolve their modules.
 override-dependencies = [
-  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@efd1e26f948bbaef5459d4e5f4321a240ee86b79",
+  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@b3bdab2adcc2a8fe477aca64c20b77528a95e1df",
 ]
 
 [tool.uv.sources]
 amplifier-module-loop-live = { path = "vendor/loop-live" }
-amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "efd1e26f948bbaef5459d4e5f4321a240ee86b79" }
+amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "b3bdab2adcc2a8fe477aca64c20b77528a95e1df" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "2feefe4ba0c4cb50fc0c6b33648a8ef6a2908820" }
 amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "2d1bdc4d9c1803491fe39820c8d503dd764d32de" }
 amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "12fffb6ad2bafb1bb7999ab02245a35e42ca8672" }

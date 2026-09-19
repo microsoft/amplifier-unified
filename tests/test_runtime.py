@@ -156,11 +156,12 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     worker.activation_gate = ActivationGate()
     first = worker.activation_gate.activate()
     worker.activation = first
-    native = tmp_path / "transcript.jsonl"
+    from amplifier_web.session_files import sessions_dir
+    native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
+    native.parent.mkdir(parents=True)
     native.write_text('{"role":"user","content":"before checkpoint"}\n')
     worker.config_inputs = (str(native),)
-    worker.parked_checkpoint_stamp = worker.shared_handle.write(
-        [{"role": "user", "content": "first"}], bundle="anchors", metadata={"fixture": True})
+    worker.parked_history_stamp = worker.history_stamp()
     worker.parked_config_stamp = configuration_stamp(
         workspace, "warm-session", worker.home, shared.file_stamp, extra_paths=worker.config_inputs)
     checkpoint_calls = []
@@ -190,7 +191,6 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
 @pytest.mark.asyncio
 async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(tmp_path):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
-    from amplifier_web.host.session import _NativeTranscriptGuard, NativeTranscriptConflict
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -206,7 +206,9 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
     worker.activation = worker.activation_gate.activate()
     messages = [{"role": "user", "content": "first"}]
     worker.shared_handle.write(messages, bundle="anchors", metadata={"fixture": True})
-    native = tmp_path / "transcript.jsonl"
+    from amplifier_web.session_files import sessions_dir
+    native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
+    native.parent.mkdir(parents=True)
     native.write_text(json.dumps(messages[0]) + "\n")
     worker.config_inputs = (str(native),)
     checkpoint_calls, remount_calls = [], []
@@ -216,18 +218,17 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
         get=lambda name: None,
         get_capability=lambda name: checkpoint if name == "live.checkpoint" else None))
     async def remount():
-        remount_calls.append(worker.shared_handle.read())
-        _NativeTranscriptGuard(native).admit(messages)
+        from amplifier_foundation.session.history import SessionHistoryStore
+        remount_calls.append(SessionHistoryStore(native.parent).load_messages())
     worker.remount = remount
     try:
         with patch("amplifier_web.runtime_worker.publish"):
             await worker.park(activation=worker.activation)
             native.write_text(native.read_text() + '{"role":"assistant","content":"new CLI turn"}\n')
             after_cli = native.read_bytes()
-            with pytest.raises(NativeTranscriptConflict):
-                await worker.acquire_for_mutation()
+            await worker.acquire_for_mutation()
         assert len(remount_calls) == 1
-        assert remount_calls[0]["messages"] == messages
+        assert remount_calls[0] == messages + [{"role": "assistant", "content": "new CLI turn"}]
         assert checkpoint_calls == ["completed"]
         assert worker.runtime.inbox.empty()
         assert native.read_bytes() == after_cli
@@ -419,3 +420,52 @@ asyncio.run(Probe().run())
             errors=[data['error'] for kind,data in events if kind=='runtime.error']
             self.assertEqual(errors,['Specific protocol failure'])
         finally:await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['metadata', 'backup', 'removed', 'unreadable'])
+async def test_parked_native_history_invalidation_keeps_authority_and_releases_on_refusal(tmp_path, change):
+    from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
+    from amplifier_web.session_files import sessions_dir
+    from amplifier_web.shared_state import configuration_stamp
+    worker = Worker()
+    worker.workspace = tmp_path
+    worker.home = tmp_path / 'home'
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id='fixture')
+    worker.shared_store = SharedSessionStore(tmp_path, 'fixture', root=tmp_path / 'locks')
+    worker.shared_store_stamp = file_stamp
+    worker.activation_gate = ActivationGate()
+    native = sessions_dir(tmp_path) / 'fixture'
+    native.mkdir(parents=True)
+    (native / 'transcript.jsonl').write_text('{"role":"user","content":"fixture"}\n')
+    (native / 'metadata.json').write_text('{"bundle":"anchors"}')
+    worker.parked_history_stamp = worker.history_stamp()
+    worker.parked_config_stamp = configuration_stamp(tmp_path, 'fixture', worker.home, file_stamp)
+    worker.parked = True
+    remounted = []
+    async def remount():
+        remounted.append(True)
+    worker.remount = remount
+    if change == 'metadata':
+        (native / 'metadata.json').write_text('{"bundle":"new-native-bundle"}')
+    elif change == 'backup':
+        (native / 'transcript.jsonl').rename(native / 'transcript.jsonl.backup')
+    elif change == 'removed':
+        (native / 'transcript.jsonl').unlink()
+    else:
+        worker.history_stamp = Mock(side_effect=OSError('stat unavailable'))
+    try:
+        if change in {'removed', 'unreadable'}:
+            with pytest.raises((RuntimeError, OSError)):
+                await worker.acquire_for_mutation()
+            assert not remounted
+            other = worker.shared_store.acquire(app='other')
+            other.release()
+        else:
+            await worker.acquire_for_mutation()
+            assert remounted == [True] and worker.shared_handle.active
+            assert worker.shared_store.read() is None
+    finally:
+        if worker.shared_handle:
+            worker.shared_handle.release()
