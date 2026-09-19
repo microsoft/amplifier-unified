@@ -31,13 +31,24 @@ def _error(message):
 
 def _registration(path, name=None):
     path = str(Path(path).expanduser().resolve())
-    return {"id": uuid.uuid5(uuid.NAMESPACE_URL, path).hex, "name": name or Path(path).name or path, "path": path}
+    return {"id": uuid.uuid5(uuid.NAMESPACE_URL, path).hex, "name": name or Path(path).name or path, "path": path,
+            "available": Path(path).is_dir()}
+
+
+def refresh_workspace_availability(workspaces):
+    """Refresh folder visibility without removing registrations or saved chats."""
+    for row in workspaces:
+        try:
+            row['available'] = bool(row.get('path') and Path(row['path']).expanduser().is_dir())
+        except (OSError, ValueError):
+            row['available'] = False
 
 
 def initialize(state):
     if "workspaces" not in state:
         paths = [state["settings"]["workspace"]] + [s["workspace"] for s in state["sessions"]]
         state["workspaces"] = list({_registration(path)["id"]: _registration(path) for path in paths if path}.values())
+    refresh_workspace_availability(state['workspaces'])
     if state.get("selectedWorkspaceId") not in {w["id"] for w in state["workspaces"]}:
         state["selectedWorkspaceId"] = next((w["id"] for w in state["workspaces"] if w["path"] == state["settings"]["workspace"]), state["workspaces"][0]["id"] if state["workspaces"] else None)
     state.setdefault("canvas", {"open": False, "events": []})

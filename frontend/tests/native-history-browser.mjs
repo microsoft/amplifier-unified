@@ -9,6 +9,13 @@ const session={id:'native-chat',sessionKind:'root',title:'Native project chat',w
 const child={id:'child-chat',sessionKind:'worker',parentId:'native-chat',nativeParentId:'native-chat',title:'Saved worker',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:false,messages:[],historyReadOnlyReason:'This is a saved worker conversation. Open its parent chat to continue.'};
 let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true},sessions:[session,child],workspaces:[{id:'project',name:'Fixture project',path:'/fixture',available:true}],selectedSessionId:session.id,selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
 state.sessions.push(...Array.from({length:4998},(_,i)=>({...child,sessionKind:'root',parentId:null,nativeParentId:null,id:'summary-'+i,title:'Indexed conversation '+i,historyLoaded:false,historyReadOnlyReason:null})));
+// A previously saved Converge skin must not restore truncation of the full path.
+state.theme={name:'Converge',css:'#amp-one .a-nav-workspace-path>span{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}'};
+state.workspaces.push(
+ {id:'other',name:'Fixture project',path:'/Users/fixture/another-parent/fixture',available:true},
+ {id:'missing',name:'Old project',path:'/removed/fixture',available:false},
+ {id:'unresolved',name:'Unresolved project',path:null,available:false},
+);
 const calls=[],errors=[];
 let browser,vite;
 try{
@@ -28,6 +35,7 @@ try{
   if(path==='/api/actions'){
    const {action,args}=route.request().postDataJSON();calls.push({action,args});
    if(action==='view.update')state.view={...state.view,...args.patch};
+   if(action==='workspace.select')state.selectedWorkspaceId=args.id;
    if(action==='session.history'){
     assert.deepEqual(args,{id:session.id,before:20,limit:100});
     session.messages=[...Array.from({length:20},(_,i)=>message(i)),...session.messages];session.sharedHistoryOffset=0;session.sharedHistoryUserTurnOffset=0;
@@ -40,6 +48,25 @@ try{
  });
  const started=performance.now();
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ assert.deepEqual(await page.locator('#nav-workspace option').allTextContents(),['/fixture · Fixture project','/Users/fixture/another-parent/fixture · Fixture project']);
+ await page.locator('#nav-workspace').selectOption('other');
+ await page.waitForFunction(()=>document.querySelector('.a-nav-workspace-path>span')?.textContent==='/Users/fixture/another-parent/fixture');
+ assert.equal(await page.locator('.a-nav-chat').count(),0);
+ await page.setViewportSize({width:390,height:844});
+ const pathLayout=await page.locator('.a-nav-workspace-path>span').evaluate(el=>({wrap:getComputedStyle(el).whiteSpace,overflow:el.scrollWidth>el.clientWidth}));
+ assert.deepEqual(pathLayout,{wrap:'normal',overflow:false});
+ await page.setViewportSize({width:1280,height:900});
+ await page.locator('#nav-workspace').selectOption('project');
+ await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===100);
+ state.workspaces[0].available=false;state.revision++;
+ await page.evaluate(state=>window.emitFixtureState(state),state);
+ await page.waitForFunction(()=>document.querySelector('#nav-workspace').value==='');
+ assert.equal(await page.locator('.a-nav-chat').count(),0,'missing current workspace must not show unrelated chats');
+ assert.equal(await page.getByRole('button',{name:'New chat in workspace',exact:true}).isDisabled(),true);
+ assert.equal(await page.locator('#nav-workspace option[value="project"]').count(),0);
+ state.workspaces[0].available=true;state.revision++;
+ await page.evaluate(state=>window.emitFixtureState(state),state);
+ await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===100);
  assert.equal(await page.locator('.a-nav-chat').count(),100);
  assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
  assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);
