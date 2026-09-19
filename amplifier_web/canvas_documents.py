@@ -11,8 +11,15 @@ def babylon_script():
     return re.sub(r'</script',r'<\\/script',source,flags=re.IGNORECASE)
 
 
-def canvas_source(canvas):
-    content=canvas.get('content','')
+def raw_source(canvas, db=None):
+    if canvas.get('contentResource'):
+        from .state_storage import resource
+        return resource(db,canvas['contentResource']['$resource']).get('content','')
+    return canvas.get('content','')
+
+
+def canvas_source(canvas, db=None):
+    content=raw_source(canvas,db)
     if canvas.get('kind')=='babylon':
         return '<script data-amplifier-library="babylon">'+babylon_script()+'</script>'+content
     return content

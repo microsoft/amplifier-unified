@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 MAX_TEXT = 1_000_000
 MAX_IMAGE = 5_000_000
+MAX_HTML = 20_000_000
 MAX_SURFACE = 100_000
 KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui', 'browser', 'babylon']
 EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
@@ -263,11 +264,11 @@ def canvas_command(state, action, args, origin):
             _error("Canvas files must be inside the selected workspace.")
         if not path.is_file():
             _error("Choose an existing file to preview.")
-        limit = MAX_IMAGE if kind == "image" else MAX_TEXT
+        limit = MAX_IMAGE if kind == "image" else MAX_HTML if kind in {"html","babylon"} else MAX_TEXT
         with path.open("rb") as file:
             data = file.read(limit + 1)
         if len(data) > limit:
-            _error("This file is too large to preview in the canvas.")
+            _error(f"This file is too large to preview in the canvas ({limit // 1_000_000} MB limit for {kind}). For larger interactive pages, serve the file from a local web server and use its HTTPS address, or download/open it in your browser.")
         try:
             canvas["content"] = _image(data) if kind == "image" else data.decode("utf-8")
         except UnicodeDecodeError:

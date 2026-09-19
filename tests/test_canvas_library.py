@@ -114,3 +114,36 @@ async def test_saved_bodies_are_paged_on_demand_not_repeated_in_overview(app):
     result=await app.app_bridge('get_state',{'path':'/canvasArtifacts/0/body/content','offset':0,'limit':100},app._session()['id'])
     assert result['value']==body[:100] and result['nextOffset']==100
     assert app.db.execute('SELECT count(*) FROM state_resources').fetchone()[0]==1
+
+
+async def test_large_html_snapshot_stays_out_of_state_and_survives_file_deletion(app,tmp_path):
+    from amplifier_web.canvas_documents import raw_source
+    from amplifier_web.workspace_canvas import MAX_HTML
+    baseline=len(json.dumps(app.get_state()))
+    body='<h1>Large HTML</h1><!--'+'x'*3_800_000+'-->'
+    path=tmp_path/'large.html';path.write_text(body)
+    result=await app.dispatch('canvas.show',{'kind':'auto','path':str(path)},origin='agent')
+    canvas=app.state['canvas'];identity=canvas['id']
+    assert 'content' not in canvas and canvas['contentResource']['bytes']>3_800_000
+    assert len(json.dumps(result))<baseline+20_000
+    assert raw_source(canvas,app.db)==body
+    path.unlink()
+    await app.dispatch('canvas.show',{'kind':'text','content':'Other tab'})
+    await app.dispatch('canvas.select',{'id':identity})
+    assert 'content' not in app.state['canvas']
+    assert raw_source(app.state['canvas'],app.db)==body
+    copy_result=await app.dispatch('canvas.copy',{'id':identity})
+    assert copy_result['effects'][0]['type']=='clipboard.url'
+    assert len(json.dumps(copy_result))<baseline+20_000
+    download=await app.dispatch('canvas.download',{'id':identity})
+    assert download['effects'][0]['url']==f'/api/canvas/{identity}/download'
+    detail=await app.app_bridge('get_state',{'path':'/canvas/contentResource/content','offset':0,'limit':100},app._session()['id'])
+    assert detail['value']==body[:100] and detail['total']==len(body)
+    path.write_bytes(b'x'*(MAX_HTML+1))
+    with pytest.raises(AppError,match='20 MB limit'):
+        await app.dispatch('canvas.show',{'kind':'auto','path':str(path)})
+    restored=AppService(app.data_dir,workspace=tmp_path)
+    try:
+        assert 'content' not in restored.state['canvas']
+        assert raw_source(restored.state['canvas'],restored.db)==body
+    finally:await restored.close()

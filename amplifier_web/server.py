@@ -173,7 +173,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         response.headers["Content-Disposition"] = ("inline" if row["mime"].startswith("image/") else "attachment") + "; filename*=UTF-8''" + quote(row["name"])
         return response
 
-    from .canvas_documents import canvas_source
+    from .canvas_documents import canvas_source, raw_source
 
     async def canvas_download(request):
         from .state_storage import resource
@@ -182,8 +182,16 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if not row:
             raise AppError("Canvas artifact unavailable", 404)
         canvas = {**row, **resource(service.db, row["body"]["$resource"])}
-        return web.Response(text=canvas_source(canvas), content_type="text/html",
-                            headers={"Content-Disposition": 'attachment; filename="canvas-3d.html"'})
+        return web.Response(text=canvas_source(canvas,service.db), content_type="text/html",
+                            headers={"Content-Disposition": 'attachment; filename="'+('canvas-3d.html' if canvas.get('kind')=='babylon' else 'canvas.html')+'"'})
+
+    async def canvas_source_text(request):
+        from .state_storage import resource
+        row=next((r for r in service.state.get('canvasArtifacts',[]) if r['id']==request.match_info['identity']),None)
+        if not row or row.get('kind') not in {'html','babylon'}:
+            raise AppError('Canvas source unavailable',404)
+        canvas={**row, **({} if row.get('contentResource') else resource(service.db,row['body']['$resource']))}
+        return web.Response(text=raw_source(canvas,service.db),content_type='text/plain',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
     async def canvas_document(request):
         canvas = service.state.get("canvas", {})
@@ -195,7 +203,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             return document_response(canvas)
         identity = json.dumps(canvas["id"])
         bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / "canvas_bridge.js").read_text().replace("__CANVAS_ID__", identity) + "</script>"
-        return web.Response(text=bootstrap + canvas_source(canvas), content_type="text/html", headers={
+        return web.Response(text=bootstrap + canvas_source(canvas,service.db), content_type="text/html", headers={
             "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})
 
@@ -232,6 +240,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/ca.crt", certificate)
     app.router.add_get("/api/canvas/{identity}/download", canvas_download)
     app.router.add_get("/api/canvas/{identity}/document", canvas_document)
+    app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)

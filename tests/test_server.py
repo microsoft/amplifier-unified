@@ -86,3 +86,23 @@ async def test_diagnostics_rejects_unknown_test_ids_without_growing_state(authen
         response = await client.post('/api/actions', json={'action':'diagnostics.test','args':{'id':identity}})
         assert response.status == 400
     assert app['service'].diagnostics.results == {}
+
+
+async def test_large_html_is_served_separately_with_same_sandbox(authenticated_client,tmp_path):
+    body='<h1>Large isolated file</h1><!--'+'x'*3_800_000+'-->'
+    (tmp_path/'large.html').write_text(body)
+    app=await create_app(tmp_path/'data',preload_providers=False,workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
+    client=await authenticated_client(app)
+    baseline=len(await (await client.get('/api/state')).read())
+    await app['service'].dispatch('canvas.show',{'kind':'auto','path':str(tmp_path/'large.html')})
+    identity=app['service'].state['canvas']['id']
+    document=await client.get(f'/api/canvas/{identity}/document')
+    assert document.status==200 and body in await document.text()
+    assert "sandbox allow-scripts;" in document.headers['Content-Security-Policy']
+    assert "connect-src 'none'" in document.headers['Content-Security-Policy']
+    source=await client.get(f'/api/canvas/{identity}/source')
+    assert source.content_type=='text/plain' and await source.text()==body
+    assert source.headers['X-Content-Type-Options']=='nosniff'
+    saved=await client.get(f'/api/canvas/{identity}/download')
+    assert 'attachment;' in saved.headers['Content-Disposition'] and await saved.text()==body
+    assert len(await (await client.get('/api/state')).read())<baseline+20_000

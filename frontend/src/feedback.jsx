@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {ExternalLink,Send,Plus,Paperclip,File,X,Image as ImageIcon} from 'lucide-react';
 import {ResultNotice} from './settings-ui';
 import './feedback.css';
+import {readItems} from './attention';
 
 const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:false,attachments:[]});
 const sizeLabel=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
@@ -49,7 +50,7 @@ export function FeedbackPanel({state,act}){
   catch{setError('The submission was not acknowledged. Check its status using the same request below; this will not post it twice.')}
   finally{submitting.current=false;setBusy(false)}
  }
- async function startNew(){if(working)return;setError('');setRetryUpload(null);try{await save(empty())}catch{setError('Could not start a new draft. Reconnect and try again.')}}
+ async function startNew(){if(busy||uploading)return;setError('');setRetryUpload(null);try{await save(empty())}catch{setError('Could not start a new draft. Reconnect and try again.')}}
  const facts=state.feedback?.diagnostics||{};
  return <section className={`a-feedback${dragging?' is-dragging':''}`} data-part="feedback" onPaste={paste} onDrop={drop} onDragOver={event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();event.stopPropagation();if(!frozen)setDragging(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget))setDragging(false)}}>
   <p>Send a bug report, idea, or question to <a href={issues} target="_blank" rel="noopener noreferrer">bkrabach/amplifier-unified</a>. Uses the host’s GitHub sign-in.</p>
@@ -74,9 +75,19 @@ export function FeedbackPanel({state,act}){
    <p className="a-caption">Only your text and the files listed above are sent when you submit. Files stay in this private repository’s history and are linked from the issue; your GitHub sign-in needs repository Contents write access. Optional diagnostics add the two facts above. Chats, paths, provider settings, and credentials are not attached automatically.</p>
    <div className="a-dialog-actions">
     {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
-    {done&&<button type="button" className="a-soft" data-action="view.update" onClick={startNew}><Plus/>New feedback</button>}
+    {(done||pending&&!busy)&&<button type="button" className="a-soft" data-action="view.update" onClick={startNew}><Plus/>New feedback</button>}
    </div>
   </form>
-  {requests.filter(item=>item.url&&item.requestId!==pending?.requestId).length>0&&<div className="a-feedback-recent"><h3>Recently sent</h3>{requests.filter(item=>item.url&&item.requestId!==pending?.requestId).slice(0,5).map(item=><a key={item.requestId} href={item.url} target="_blank" rel="noopener noreferrer">{item.title}<ExternalLink size={14}/></a>)}</div>}
+  {!!requests.filter(item=>item.requestId!==pending?.requestId).length&&<div className="a-feedback-recent"><h3>Submissions</h3>{requests.filter(item=>item.requestId!==pending?.requestId).map(item=><div key={item.requestId} className="a-feedback-receipt"><strong>{item.title}</strong><ResultNotice phase={item.status==='submitted'?'success':['failed','unknown'].includes(item.status)?'error':'working'} message={item.message}/>{item.url&&<a href={item.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>}{item.status==='unknown'&&<a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues</a>}{(state.attention?.items||[]).filter(i=>i.requestId===item.requestId&&!i.read).map(i=><button key={i.id} className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,[i])}>Mark reviewed</button>)}</div>)}</div>}
  </section>;
+}
+
+
+export function FeedbackNotice({state,act}){
+ if(['feedback','activity'].includes(state.view?.panel))return null;
+ const items=(state.attention?.items||[]).filter(i=>i.requestId&&!i.read);
+ const pending=state.feedback?.requests?.find(r=>['queued','sending'].includes(r.status));
+ const item=items[0],receipt=pending||state.feedback?.requests?.find(r=>r.requestId===item?.requestId);
+ if(!receipt)return null;
+ return <aside className="a-feedback-notice" aria-label="Feedback status"><div role="status"><ResultNotice phase={pending?'working':receipt.status==='submitted'?'success':'error'} message={pending?'Feedback received — sending in the background.':receipt.message}/></div><div className="a-feedback-notice-actions"><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'feedback'}})}>View {pending?'status':'feedback'}</button>{receipt.url&&<a href={receipt.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>}{!pending&&item&&<button type="button" className="a-icon" aria-label="Dismiss feedback notification" data-action="attention.read" onClick={()=>readItems(act,[item])}><X size={16}/></button>}</div></aside>;
 }
