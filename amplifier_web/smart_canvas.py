@@ -60,7 +60,7 @@ class SmartCanvas:
         self.binding(identity)
         return result
 
-    async def command(self, action, args, operation_id, origin):
+    async def command(self, action, args, operation_id, origin, *, defer_publish=False):
         manager = self.service.smart_tools
         if action == 'smartTools.open':
             record = {'id':operation_id,'action':action,'origin':origin,'target':copy.deepcopy(args),
@@ -91,15 +91,16 @@ class SmartCanvas:
                     record = {'id':operation_id,'action':action,'origin':'app','target':{'canvasId':args['canvasId'],'name':args['name']},
                               'status':'failed','error':str(exc)[:2000],'createdAt':time.time(),'updatedAt':time.time()}
                     rows = self.service.state['smartTools']['operations']
-                    rows[:] = [r for r in rows if r.get('status') == 'running'] + [r for r in rows if r.get('status') != 'running'][-49:]
+                    rows[:] = [r for r in rows if r['id'] != operation_id and r.get('status') in {'running', 'queued'}] + [r for r in rows if r['id'] != operation_id and r.get('status') not in {'running', 'queued'}][-49:]
                     rows.append(record)
                     manager.persist_operation(record)
-                    self.service._publish()
+                    self.service._publish_smart_tool_update(defer_publish=defer_publish)
                 return
             mapped = {'id':binding['serverId'],'name':args['name'],'arguments':args.get('arguments',{}),
                       'sessionId':canvas.get('sessionId'), '_configuration':binding['configuration'],
                       '_allowedTools':binding['allowedTools']}
-            result = await manager.command('smartTools.call', mapped, operation_id, 'agent' if origin == 'agent' else 'app')
+            kwargs = {'defer_publish': True} if defer_publish else {}
+            result = await manager.command('smartTools.call', mapped, operation_id, 'agent' if origin == 'agent' else 'app', **kwargs)
             # Context is descriptive, not authority. Retain the latest result only for
             # this view; never replace its launch arguments with another tool's args.
             if result is not None:
@@ -107,7 +108,7 @@ class SmartCanvas:
                     active = self.service.state.get('canvas', {})
                     if active.get('id') == args['canvasId']:
                         active['mcp']['lastOperationId'] = operation_id
-                        self.service._publish()
+                        self.service._publish_smart_tool_update(defer_publish=defer_publish)
             return
         return await manager.command(action, args, operation_id, origin)
 

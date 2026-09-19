@@ -13,12 +13,13 @@ class Tools:
             'tools':[{'name':'read','inputSchema':{'type':'object'},'_meta':{'ui':{'resourceUri':'ui://counter'}}}]}], 'operations':[]}
     async def read_app(self, identity, uri):
         return {'html':'<!doctype html><h1>Independent</h1>','tools':['read'],'csp':{},'permissions':{}}
-    async def command(self, action, args, identity, origin):
+    async def command(self, action, args, identity, origin, *, defer_publish=False):
         row={'configuration':configuration_key(self.service.state['smartTools']['servers'][0]),'id':identity,'action':action,'origin':origin,'target':copy.deepcopy(args),'arguments':args.get('arguments',{}),
              'status':'completed','result':{'content':[{'type':'text','text':'One'}],'structuredContent':{'count':1}}}
         async with self.service.lock:
+            self.service.state['smartTools']['operations'] = [o for o in self.service.state['smartTools']['operations'] if o['id'] != identity]
             self.service.state['smartTools']['operations'].append(row)
-            self.service._publish()
+            self.service._publish_smart_tool_update(defer_publish=defer_publish)
         return row['result']
     def persist_operation(self, record):pass
     def operation(self, identity):return next((o for o in self.service.state['smartTools']['operations'] if o['id']==identity), None)

@@ -241,7 +241,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             accepted = await service.dispatch('smartTools.appCall', {
                 'canvasId': request.match_info['identity'],
                 'name': payload.get('name'), 'arguments': payload.get('arguments', {}),
-            }, command_id=identity, origin='ui')
+            }, command_id=identity, origin='ui', include_state=False)
             operation = await service.wait_smart_tool(accepted['operationId'])
             return web.json_response(operation, headers={'Cache-Control': 'no-store'})
         finally:
