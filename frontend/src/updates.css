@@ -19,12 +19,15 @@
 .a-update-failure{display:flex;align-items:flex-start;gap:8px;border-left:3px solid var(--a-danger,#b23d50);padding:9px 12px;color:var(--a-danger,#b23d50)}
 .a-update-failure>svg{width:16px;height:16px;flex-shrink:0;margin-top:2px}
 .a-update-failure>div{min-width:0}.a-update-failure p{margin:4px 0;font-size:12px}
+.a-update-failure.resolved{border-left-color:var(--a-success,#23724d);color:var(--a-muted,#5c6475)}
+.a-update-failure.resolved>svg{color:var(--a-success,#23724d)}
 .a-update-diagnostics code{overflow-wrap:anywhere;font-size:11px}
 .a-update-diagnostics-toggle{display:inline-flex;align-items:center;gap:5px;margin-top:8px}
 .a-update-diagnostics-toggle svg{width:14px;height:14px}
 .a-update-diagnostic-details{display:grid;gap:8px;margin-top:10px;min-width:0}
 .a-update-phase-list{list-style:none;padding:0;margin:0}.a-update-phase-list li{padding:6px 0;border-bottom:1px solid var(--a-line,#dce3ef)}
 .a-update-phase-list li>div{display:flex;gap:7px;align-items:center;font-size:12px;min-width:0}.a-update-phase-list svg{width:14px;height:14px;flex-shrink:0}
-.a-update-phase-list .succeeded svg{color:var(--a-success,#23724d)}.a-update-phase-list .failed svg,.a-update-phase-list .interrupted svg{color:var(--a-danger,#b23d50)}
+.a-update-phase-list .succeeded svg{color:var(--a-success,#23724d)}.a-update-phase-list .failed svg,.a-update-phase-list .interrupted svg,.a-update-phase-list .rejected svg{color:var(--a-danger,#b23d50)}
+.a-update-phase-list .historical svg{color:var(--a-muted,#5c6475)}
 .a-update-phase-list .a-caption{margin:3px 0 0 21px}.a-update-phase-status{margin-left:auto;color:var(--a-muted,#5c6475);font-size:11px}
 .a-update-receipt{width:100%;box-sizing:border-box;min-height:100px;max-height:260px;resize:vertical;font:11px/1.5 ui-monospace,monospace}

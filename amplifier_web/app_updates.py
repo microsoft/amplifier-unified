@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import time
+import uuid
 from importlib import metadata
 from . import __version__
 from .host.config import write_private
@@ -211,16 +212,14 @@ async def _activate(manager):
     # here would permit a new conversation between the helper spawn and SIGTERM.
     manager.diagnostics.clear_failure()
     await manager.publish(phase='activating',pendingApp=None,appAvailable=False,error=None,
-        pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId']},detail='Application installed. Restarting the local host…')
+        pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
+                        'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time()},detail='Application installed. Restarting the local host…')
     # A generated systemd unit owns its process lifecycle.  Asking systemd to
     # restart that unit avoids racing its restart policy with a second detached
     # process spawned by this in-process updater.
-    from .deployment_service import UNIT_NAME, current_process_is_unit_managed
+    from .deployment_service import current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
-        try:
-            await manager.diagnostics.run('service-restart',process,'systemctl','--user','restart',UNIT_NAME,timeout=30)
-        except (RuntimeError, TimeoutError):
-            await manager.publish(phase='error',pendingRestart=None,error='The app installed, but the managed service could not restart. Run amplifier-unified service restart.')
+        await request_managed_restart(manager)
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
@@ -240,11 +239,53 @@ with open(logpath,'a') as log:
     try:
         await manager.diagnostics.run('restart-helper',asyncio.create_subprocess_exec,str(helper_python),str(helper),str(os.getpid()),json.dumps(options),str(manager.directory/'restart.log'),start_new_session=True,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
     except (OSError,ValueError):
-        await manager.publish(phase='error',pendingRestart=None,error='The update installed, but its restart helper could not start. Restart Amplifier Unified from the terminal.')
+        await manager.publish(phase='activating',error='The update installed, but its restart helper could not start. Restart Amplifier Unified from the terminal.',
+                              detail='Waiting for a healthy restarted host. New work remains paused.')
         return
     import signal
     manager.diagnostics.record('restart-request','succeeded')
     os.kill(os.getpid(),signal.SIGTERM)
+
+
+async def request_managed_restart(manager):
+    """Queue an OS-owned restart; only a ready successor confirms completion.
+
+    Even with --no-block, systemd can stop this entire cgroup before the
+    systemctl client receives its reply. A signal, timeout, or cancelled await
+    therefore leaves the request outcome unknown, not successful or rejected.
+    The durable marker and work gate survive every outcome of the handoff.
+    """
+    from .deployment_service import UNIT_NAME
+    from .update_diagnostics import CommandFailure, exception_type
+
+    marker=dict(manager.service.state['updates']['pendingRestart'])
+    marker.update(requestStatus='requesting')
+    await manager.publish(phase='activating',pendingRestart=marker)
+    command_id=uuid.uuid4().hex
+    manager.diagnostics.record('service-restart-request','started',commandId=command_id)
+    started=time.monotonic()
+    try:
+        result=await process('systemctl','--user','--no-block','restart',UNIT_NAME,timeout=30)
+    except BaseException as error:
+        if not isinstance(error,(Exception,asyncio.CancelledError)):raise
+        facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}
+        facts.update(getattr(error,'diagnostic_facts',{}))
+        exit_code=facts.get('exitCode')
+        rejected=(isinstance(error,CommandFailure) and type(exit_code) is int and exit_code>0) or (isinstance(error,OSError) and not isinstance(error,TimeoutError))
+        status='rejected' if rejected else 'uncertain'
+        marker.update(requestStatus=status)
+        manager.diagnostics.record('service-restart-request','failed' if rejected else status,commandId=command_id,**facts)
+        await manager.publish(phase='activating',pendingRestart=marker,
+            error=('The app installed, but the managed restart request was rejected. Run amplifier-unified service restart.' if rejected else None),
+            detail=('Waiting for a healthy restarted host. New work remains paused.' if rejected else
+                    'Restart request confirmation was interrupted. Waiting for a healthy restarted host; new work remains paused. If it does not reconnect, run amplifier-unified service restart.'))
+        if isinstance(error,asyncio.CancelledError):raise
+        return
+    marker.update(requestStatus='accepted')
+    facts={'durationMs':round((time.monotonic()-started)*1000),**getattr(result,'diagnostic_facts',{})}
+    manager.diagnostics.record('service-restart-request','accepted',commandId=command_id,**facts)
+    await manager.publish(phase='activating',pendingRestart=marker,error=None,
+        detail='The service manager accepted the restart request. Waiting for the updated host to become ready…')
 
 
 def restart_arguments(manager, executable):

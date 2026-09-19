@@ -18,6 +18,11 @@ import uuid
 from .host.config import write_private
 
 
+def work_paused(state):
+    updates = state.get('updates', {})
+    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart'))
+
+
 def active_release(home):
     path = Path(home) / 'updates' / 'active.json'
     value = json.loads(path.read_text()) if path.exists() else {}
@@ -167,12 +172,15 @@ class UpdateManager:
         self.lock = asyncio.Lock()
         self.inventory = []
         self.task = None
+        self.readiness_task = None
         self.closed = False
+        from .update_readiness import running_identity
+        self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
         restarted=state.get('pendingRestart') or {}
-        if restarted.get('version')==__import__('amplifier_web').__version__:
-            state.update(phase='installed',pendingRestart=None,pendingApp=None,appAvailable=False,
-                         installedAt=time.time(),error=None,detail='Application update installed and restarted successfully.')
+        if restarted:
+            state.update(phase='activating', pendingApp=None,
+                         detail='Checking that the restarted server is serving the installed release…')
         elif state.get('phase') in {'checking','staging','validating','activating'}:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
@@ -180,6 +188,7 @@ class UpdateManager:
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
         application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
+        application['runningRevision'] = self.running_identity['revision']
         state['application']=application
         latest=version_tuple(application.get('latest'))
         current=version_tuple(__import__('amplifier_web').__version__)
@@ -196,11 +205,22 @@ class UpdateManager:
         state['canRollback'] = 'previous' in active_release(self.home)
         from .update_diagnostics import UpdateDiagnostics
         self.diagnostics=UpdateDiagnostics(self)
-        if restarted.get('version')==__import__('amplifier_web').__version__:
-            self.diagnostics.begin('application',restarted.get('revision'),restarted.get('attemptId'))
-            self.diagnostics.clear_failure()
-            self.diagnostics.record('restart-ack','succeeded',observedVersion=__import__('amplifier_web').__version__)
+        from .update_readiness import valid_target
+        if restarted and not valid_target(restarted):
+            state['error'] = 'The saved restart receipt is incomplete. The running release cannot be confirmed from that receipt; review the update details.'
         service._save()
+
+    async def confirm_readiness(self, health, expected=None):
+        from .update_readiness import confirm_readiness
+        return await confirm_readiness(self, health, expected=expected)
+
+    def awaiting_restart(self):
+        from .update_readiness import recovery_candidate
+        # A legacy erased-marker receipt must not permanently prevent repairs
+        # after an unrelated manual upgrade. Only its active health check gates
+        # another update; an actual pending handoff remains gated until verified.
+        return bool(self.service.state['updates'].get('pendingRestart') or
+                    (self.readiness_task and not self.readiness_task.done() and recovery_candidate(self)))
 
     async def publish(self, **values):
         async with self.service.lock:
@@ -252,6 +272,7 @@ class UpdateManager:
         return rows
 
     async def command(self, action):
+        if self.awaiting_restart():return
         previous_error=self.service.state['updates'].get('error')
         try:
             await getattr(self, action)()
@@ -262,10 +283,10 @@ class UpdateManager:
             last=self.diagnostics.state.get('latest',{})
             phase=last.get('phase',action)
             if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
-            await self.publish(phase='error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
+            await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
 
     async def check(self):
-        if self.lock.locked() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
+        if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
         async with self.lock:
             await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking configured ecosystem sources…', error=None)
             try:
@@ -295,6 +316,7 @@ class UpdateManager:
                 public = group_sources(rows)
                 from .app_updates import check as check_application
                 application=await check_application()
+                application['runningRevision'] = self.running_identity['revision']
                 app_available=application.get('status')=='update'
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
                     items=public+self.protected_items()+[application],application=application,appAvailable=app_available,
@@ -304,7 +326,7 @@ class UpdateManager:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
     async def app(self):
-        if self.lock.locked():return
+        if self.lock.locked() or self.awaiting_restart():return
         from .app_updates import stage,activate
         async with self.lock:
             if not self.service.state['updates'].get('pendingApp'):
@@ -312,6 +334,7 @@ class UpdateManager:
         await activate(self)
 
     async def install(self):
+        if self.awaiting_restart():return
         if self.service.state['updates'].get('pendingApp'):
             from .app_updates import activate
             await activate(self)
@@ -394,7 +417,7 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,env=env,timeout=900)
 
     async def activate(self, rollback=False):
-        if self.lock.locked(): return
+        if self.lock.locked() or self.awaiting_restart(): return
         async with self.lock:
             if self.closed: return
             pointer=active_release(self.home)
@@ -444,6 +467,7 @@ class UpdateManager:
     async def tick(self):
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
+        if self.awaiting_restart():return
         if state.get('pendingApp'):
             from .app_updates import activate
             await activate(self)
@@ -469,11 +493,14 @@ class UpdateManager:
                 if last.get('status') not in {'failed','interrupted'}:
                     self.diagnostics.record('background-update','failed',errorType=exception_type(error))
                 phase=self.diagnostics.state['latest']['phase']
-                await self.publish(phase='error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
+                await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             await asyncio.sleep(60)
 
     async def close(self):
         self.closed=True
+        if self.readiness_task:
+            self.readiness_task.cancel()
+            await asyncio.gather(self.readiness_task,return_exceptions=True)
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task,return_exceptions=True)

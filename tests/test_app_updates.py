@@ -163,7 +163,7 @@ async def test_managed_service_restart_does_not_spawn_a_second_host(tmp_path,mon
     monkeypatch.setattr(app_updates.asyncio,'create_subprocess_exec',lambda *args,**kwargs: pytest.fail('managed service must not spawn a helper'))
     monkeypatch.setattr(app_updates.os,'kill',lambda *args: pytest.fail('managed service must not terminate itself'))
     await app_updates.activate(manager)
-    assert calls[-1]==('systemctl','--user','restart','amplifier-unified.service')
+    assert calls[-1]==('systemctl','--user','--no-block','restart','amplifier-unified.service')
     assert service.state['updates']['pendingRestart']['version']=='99.0.0'
     await service.close()
 
@@ -178,13 +178,15 @@ async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypat
     assert service.state['updates']['pendingApp'] is None
     await service.close()
 
-async def test_new_host_recognizes_successful_application_restart(tmp_path):
+async def test_version_only_restart_marker_cannot_acknowledge_during_construction(tmp_path):
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     from amplifier_web import __version__
     service.state['updates']={'phase':'activating','pendingRestart':{'version':__version__},'pendingApp':{'revision':'old'}}
     manager=UpdateManager(service);service.update_manager=manager
-    assert service.state['updates']['phase']=='installed'
-    assert service.state['updates']['pendingRestart'] is None
+    assert service.state['updates']['phase']=='activating'
+    assert service.state['updates']['pendingRestart']=={'version':__version__}
+    assert 'incomplete' in service.state['updates']['error']
+    assert not any(event['phase']=='restart-ack' for event in manager.diagnostics.state['events'])
     await service.close()
 
 async def test_installed_application_removed_from_pending_updates_but_sources_preserved(tmp_path):

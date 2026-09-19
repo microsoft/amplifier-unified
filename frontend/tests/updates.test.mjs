@@ -7,13 +7,14 @@ import {createServer} from 'vite';
 
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
+const {diagnosticReceipt,reconciledFailure}=await server.ssrLoadModule('/src/update-diagnostics.jsx');
 test.after(()=>server.close());
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 
 const application={id:'application',kind:'app',label:'Amplifier Unified',current:'0.6.3',latest:'v0.6.3',status:'current',channel:'github-releases'};
 const component={id:'bundle',label:'Community bundle',status:'update',current:'aaaaaaa',latest:'bbbbbbb'};
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
-function render(updates={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:state(updates),act:()=>{}}));}
+function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
 test('installed app and published release remain visible with source inventory closed',()=>{
  const html=render({items:Array.from({length:87},(_,id)=>({id:String(id),label:'Hidden source '+id,status:'current'}))});
@@ -65,7 +66,7 @@ test('staged app, restart, interrupted install and successful restart report the
  assert.doesNotMatch(staged,/a-check-result success/);
  const restarting=render({phase:'activating',pendingRestart:{version:'0.6.4'},detail:'Application installed. Restarting the local host…'});
  assert.match(restarting,/Restarting…/);
- assert.match(restarting,/this page will reconnect/);
+ assert.match(restarting,/Application installed. Restarting the local host/);
  assert.match(restarting,/a-check-result pending/);
  const interrupted=render({phase:'interrupted',detail:'Application installation was interrupted.'});
  assert.match(interrupted,/a-check-result error/);
@@ -86,6 +87,27 @@ test('prepared app failure is visibly an error and allows the existing install a
  await renderAct(async()=>button.props.onClick());
  assert.equal(calls[0].name,'updates.install');
  await renderAct(async()=>root.unmount());
+});
+
+test('a rejected restart keeps its work gate but displays actionable failure instead of restarting',()=>{
+ const html=render({phase:'activating',pendingRestart:{version:'0.6.4',requestStatus:'rejected'},
+  error:'The app installed, but the managed restart request was rejected. Run amplifier-unified service restart.',
+  detail:'Waiting for a healthy restarted host. New work remains paused.'});
+ assert.match(html,/Needs attention/);
+ assert.match(html,/Restart needs attention/);
+ assert.match(html,/a-check-result error/);
+ assert.match(html,/amplifier-unified service restart/);
+ assert.match(html,/<button class="a-primary" disabled="" data-action="updates.install"/);
+ assert.doesNotMatch(html,/Restarting|this page will reconnect/);
+});
+
+test('unconfirmed restart request waits for readiness without promising completion',()=>{
+ const html=render({phase:'activating',pendingRestart:{version:'0.6.4',requestStatus:'uncertain'},
+  detail:'Restart request confirmation was interrupted. Waiting for a healthy restarted host.'});
+ assert.match(html,/Awaiting restarted host/);
+ assert.match(html,/Awaiting restart…/);
+ assert.match(html,/confirmation was interrupted/);
+ assert.doesNotMatch(html,/this page will reconnect|installed and restarted successfully|Latest release installed/);
 });
 
 test('visible update controls use the shared action registry and only promise ecosystem rollback',async()=>{
@@ -137,4 +159,79 @@ test('completed retry retains history without showing an active failure notice',
  const html=render({diagnostics:{attemptId:done.attemptId,events:[failure,done],latest:done}});
  assert.match(html,/View update details/);
  assert.doesNotMatch(html,/a-update-failure"/);
+});
+
+test('restart request acceptance is distinct from readiness and acknowledgement',()=>{
+ const events=[['service-restart-request','accepted'],['restart-readiness','uncertain'],['restart-ack','succeeded'],['restart-reconcile','succeeded'],['service-restart-request','rejected']].map(([phase,status],index)=>({id:String(index),attemptId:'request',phase,status}));
+ const html=render({diagnostics:{attemptId:'request',events}},{maintenanceDraft:{updateDiagnosticsExpanded:true}});
+ assert.match(html,/Request service restart/);
+ assert.match(html,/Check restarted host readiness/);
+ assert.match(html,/Confirm restarted version/);
+ assert.match(html,/Verify current installation/);
+ for(const [status,title] of [['accepted','Accepted'],['uncertain','Unconfirmed'],['rejected','Rejected']]){
+  const row=html.match(new RegExp('<li class="'+status+'">(.*?)</li>'))?.[1]||'';
+  assert.match(row,new RegExp(title));
+  assert.doesNotMatch(row,/lucide-check/);
+ }
+});
+
+const reconciliation={attemptId:failure.attemptId,version:application.current,revision:'c'.repeat(40),verifiedAt:101};
+function reconciledUpdates(patch={}){
+ const oldFailure={...failure,phase:'service-restart',exitCode:-15};
+ return {phase:'installed',error:null,application:{...application,runningRevision:reconciliation.revision},
+  reconciliation,diagnostics:{attemptId:failure.attemptId,lastFailure:oldFailure,events:[oldFailure,{id:'reconciled',attemptId:failure.attemptId,phase:'restart-reconcile',status:'succeeded'}]},...patch};
+}
+test('verified current installation labels retained restart failure as resolved historical evidence',()=>{
+ const updates=reconciledUpdates();
+ const html=render(updates,{maintenanceDraft:{updateDiagnosticsExpanded:true}});
+ assert.equal(reconciledFailure(updates),true);
+ assert.match(html,/a-update-failure resolved/);
+ assert.match(html,/Previous update issue resolved/);
+ assert.match(html,/current installation is verified healthy/);
+ assert.match(html,/<li class="failed historical">/);
+ assert.match(html,/Failed \(historical\)/);
+ assert.match(html,/Exit -15/);
+ assert.doesNotMatch(html,/Last update issue:|Confirm restarted version/);
+ const receipt=JSON.parse(diagnosticReceipt(updates.diagnostics,updates.reconciliation));
+ assert.equal(receipt.lastFailure.status,'failed');
+ assert.equal(receipt.lastFailure.exitCode,-15);
+ assert.deepEqual(receipt.reconciliation,reconciliation);
+});
+
+test('stale or incomplete reconciliation cannot hide a current failure',()=>{
+ for(const patch of [
+  {reconciliation:{...reconciliation,attemptId:'different'}},
+  {reconciliation:{...reconciliation,version:'0.0.0'}},
+  {reconciliation:{...reconciliation,revision:'different'}},
+  {reconciliation:{...reconciliation,verifiedAt:undefined}},
+  {error:'A new error'},
+  {diagnostics:{lastFailure:{...failure,attemptId:'new-failed-attempt'}}},
+  {pendingRestart:{version:application.current}},
+  {pendingApp:{version:application.current}},
+ ]){
+  const updates=reconciledUpdates(patch);
+  assert.equal(reconciledFailure(updates),false);
+  const html=render(updates);
+  assert.match(html,/Last update issue:/);
+  assert.doesNotMatch(html,/Previous update issue resolved|a-update-failure resolved/);
+ }
+});
+
+test('a new update check does not turn a verified historical failure back into an active issue',()=>{
+ for(const phase of ['checking','checked','available']){
+  const updates=reconciledUpdates({phase});
+  assert.equal(reconciledFailure(updates),true);
+  const html=render(updates);
+  assert.match(html,/Previous update issue resolved/);
+  assert.doesNotMatch(html,/Last update issue:/);
+ }
+});
+
+test('copied receipts include version revisions but exclude raw output and extra reconciliation fields',()=>{
+ const event={...failure,expectedRevision:'c'.repeat(40),observedRevision:'d'.repeat(40),stdout:'secret output',path:'/private/folder'};
+ const receipt=JSON.parse(diagnosticReceipt({attemptId:failure.attemptId,lastFailure:event,events:[event]},{...reconciliation,stdout:'secret output',path:'/private/folder'}));
+ assert.equal(receipt.lastFailure.expectedRevision,event.expectedRevision);
+ assert.equal(receipt.events[0].observedRevision,event.observedRevision);
+ assert.equal(receipt.lastFailure.status,'failed');
+ assert.doesNotMatch(JSON.stringify(receipt),/secret output|private\/folder|stdout"|path"/);
 });

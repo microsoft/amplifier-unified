@@ -221,7 +221,8 @@ class Management:
             if not session.get('workspace') or not Path(session['workspace']).is_dir():
                 raise ValueError('Restore this project folder before continuing its chat.')
         if not self.service.runtime:raise ValueError('Amplifier runtime is unavailable')
-        if self.service.state.get('updates',{}).get('phase')=='activating':raise ValueError('An update is activating; retry shortly')
+        from .updates import work_paused
+        if work_paused(self.service.state):raise ValueError('An update is activating; retry shortly')
         # Explicitly using runtime controls makes this a web-owned presentation.
         if session.get('historyManaged') and not session.get('historyLoaded'):
             await self.service.history.ensure_loaded(session['id'])

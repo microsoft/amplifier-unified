@@ -70,9 +70,13 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
         body = await response.json()
         assert "dataIdentity" not in body
         assert "runtime" not in body
+        assert "revision" not in body and "instanceId" not in body
     response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
     assert response.status == 200
-    assert (await response.json())["dataIdentity"] == data_identity(tmp_path)
+    body = await response.json()
+    assert body["dataIdentity"] == data_identity(tmp_path)
+    assert body["instanceId"] == app['service'].update_manager.running_identity['instanceId']
+    assert body['revision'] == app['service'].update_manager.running_identity['revision']
 
 
 async def test_login_rejects_cross_origin_before_pam(aiohttp_client, tmp_path):
