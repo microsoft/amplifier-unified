@@ -6,7 +6,7 @@ manager and conversation list are independent registered components. Additional
 instances can follow the active workspace, pin a workspace, or show all chats.
 An external module can replace either component while the app stays open.
 
-The content-workspace milestone, integrated with Unified 0.11.8, adds a
+The content-workspace milestone, integrated with Unified 0.11.9, adds a
 renderer registry, validated hot-loaded artifact viewers, and a second pinned
 artifact view. See [Artifact viewers](#artifact-viewers) below for its API,
 ownership boundaries and acceptance checks.
@@ -358,12 +358,18 @@ make no real provider/model calls; they do not prove voice continuity or every
 third-party renderer's behavior. This branch does not restart a user preview,
 publish a release or change the application version.
 
-Verification after integrating 0.11.8: **1,047 Python tests passed, 11 skipped**,
+Verification with 0.11.9 and saved-body restoration: **1,065 Python tests passed, 11 skipped**,
 and **154 frontend unit tests passed**. The production build, renderer hot-load
 proof, MCP App proof, navigation shell proof, existing canvas and saved-artifact
 browser suites, panel-layout, empty-host and live-client browser suites passed.
 The source distribution and wheel built and passed release verification.
-The eight browser suites passed with the 0.11.7 integration; after the 0.11.8
-configuration bridge landed, the unchanged frontend sources were rebuilt and
-the renderer proof and distribution verification passed again. The renderer proof also
-exercises the recovery startup URL, including accurate fallback/ready status.
+The eight browser suites passed with the 0.11.7 integration. After integrating
+the configuration and storage fixes, the frontend was rebuilt and the renderer,
+actual-host-restart and MCP App browser proofs passed again. The renderer proof
+also exercises the recovery startup URL, including accurate fallback/ready status.
+
+The independently consumable saved-body restore fix (PR #76) restores ordinary
+content and surfaces from compact client records after a host restart. This
+branch applies the same behavior to its pinned-view resource endpoint. Large
+HTML/Babylon bodies remain indirect. The restart proof is
+`node frontend/tests/canvas-restart-browser.mjs`; run it from the repository root.

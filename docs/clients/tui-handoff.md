@@ -1,6 +1,6 @@
 # Amplifier TUI: Unified-backed live sessions
 
-Status: Ready for TUI implementation against Unified 0.11.7.
+Status: Ready for TUI implementation. Use Unified 0.11.9 or later.
 
 ## Outcome and scope
 
@@ -21,13 +21,17 @@ amplifier-app-tui repository has been modified by this work.
 ## Release baseline and source of truth
 
 - Protocol: version 1, HTTP commands and SSE snapshots.
-- Required host baseline: [Unified 0.11.7](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.7)
-  or a later compatible release. Use the immutable release tag to resolve its commit.
+- Recommended host: [Unified 0.11.9](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.9)
+  or a later compatible release, which corrects canvas resource retention across
+  clients. Use the immutable release tag to resolve its commit.
+- Live-client validation baseline: Unified 0.11.7. Its exact evidence and runtime
+  revisions remain recorded in the validation document linked below.
 - Pinned loop-live: `11a730ac24463cb5bea8bd65385f494aa8f0f454`.
   This includes the scheduling/ownership fix from
   [loop-live PR 5](https://github.com/bkrabach/amplifier-module-loop-live/pull/5).
 - Empty-composer draft support first shipped in Unified 0.11.4; the live-client
-  transport first shipped in 0.11.1. Use 0.11.7 for the combined tested baseline.
+  transport first shipped in 0.11.1. The combined live-client checks were validated on 0.11.7; use 0.11.9 or later
+  for the resource-retention correction.
 - Detailed contract: [live-sessions.md](live-sessions.md).
 - Server: `amplifier_web/live_clients.py`.
 - Python adapter: `amplifier_web/session_client.py`.

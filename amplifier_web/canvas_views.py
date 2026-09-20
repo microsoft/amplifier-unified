@@ -162,7 +162,8 @@ class CanvasViews:
     def canvas(self, view_id):
         from .state_storage import resource
         row, preference = self.resolve(view_id)
-        body = {} if row.get('contentResource') else resource(self.service.db, row['body']['$resource'])
+        indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon'}
+        body = {} if indirect else resource(self.service.db, row['body']['$resource'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
                   'resourceRevision': self.revision(row), 'generation': preference['generation']}
         canvas.pop('body', None)
@@ -171,8 +172,10 @@ class CanvasViews:
             canvas.update({key: copy.deepcopy(live[key]) for key in ('view', 'renderReports', 'document', 'interaction', 'mcp', 'events') if key in live})
         else:
             canvas.update({key: copy.deepcopy(preference[key]) for key in ('view', 'renderReports', 'document', 'interaction', 'events') if key in preference})
-        if row.get('contentResource'):
+        if indirect:
             canvas.pop('content', None)
+        else:
+            canvas.pop('contentResource', None)
         return canvas
 
     def command(self, action, args, origin):

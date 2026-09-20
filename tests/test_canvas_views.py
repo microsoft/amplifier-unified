@@ -317,3 +317,22 @@ async def test_agent_download_reaches_only_its_bound_browser_and_diagnostics_fol
     assert recorded[-1][1]['data']['sessionId'] == current['resource']['sessionId']
     assert recorded[-1][1]['data']['artifactId'] == current['resourceId']
     assert app.clients.records['one']['selectedSessionId'] == selected
+
+
+async def test_pinned_legacy_body_is_materialized_after_restart(app):
+    current = await show(app, 'markdown', '# A saved secondary document')
+    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
+    with app.clients.bind('one'):
+        row = app.canvas_views.artifact(current['resourceId'])
+        row['contentResource'] = row['body']
+        app._save()
+    restored = AppService(app.data_dir, workspace=app.default_workspace)
+    try:
+        with restored.clients.bind('one'):
+            canvas = restored.canvas_views.canvas('secondary')
+            assert canvas['content'] == '# A saved secondary document'
+            assert 'contentResource' not in canvas
+            assert canvas['id'] == current['resourceId']
+            assert canvas['resourceRevision'] == current['resourceRevision']
+    finally:
+        await restored.close()
