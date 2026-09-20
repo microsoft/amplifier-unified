@@ -153,7 +153,7 @@ def is_entry_navigation(request: web.Request) -> bool:
     """
     return (
         request.method in {"GET", "HEAD"}
-        and request.path in {"/", "/login", "/setup"}
+        and request.path in {"/", "/login", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete"}
         and "Origin" not in request.headers
         and request.headers.get("Sec-Fetch-Mode") == "navigate"
         and request.headers.get("Sec-Fetch-Dest") == "document"
@@ -167,7 +167,7 @@ async def auth_required(request: web.Request, handler):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
     # Public, immutable UI resources only. Authentication still gates the SPA,
     # every API, and all user-authored files/canvas documents.
-    public = {"/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
+    public = {"/oauth/mcp/callback", "/oauth/mcp/complete", "/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
               "/manifest.webmanifest", "/sw.js", "/pwa.js", "/offline.html", "/app-pages.css", "/favicon.ico",
               "/branding/favicons/favicon.ico", "/branding/favicons/favicon-32.png",
               "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",

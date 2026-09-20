@@ -11,9 +11,7 @@ from .canvas_library import remember
 from . import service as api
 
 
-def configuration_key(server):
-    config = {k: server.get(k) for k in ('id', 'command', 'args', 'env', 'cwd')}
-    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+from .smart_tools import configuration_key
 
 
 def definitions(schema, string):
@@ -23,11 +21,19 @@ def definitions(schema, string):
         'smartTools.catalog': ('Refresh the public Smart Tools catalog; listing does not install or run code.', schema()),
         'smartTools.inspect': ('Read a Git Smart Tool descriptor and manifest without running its code.', schema(source, ['repository'])),
         'smartTools.install': ('Install a Python Git Smart Tool in an isolated environment. Does not start it or configure models.', schema({**source, 'extras': {'type':'array','maxItems':20,'items':string(100)}}, ['repository'])),
-        'smartTools.configure': ('Register or edit an MCP stdio server. env maps child variable names to host environment variable names, never secret values.', schema({**identity, 'name':string(200), 'command':string(4000), 'args':{'type':'array','maxItems':100,'items':string(4000)}, 'env':{'type':'object','maxProperties':50,'additionalProperties':string(200)}, 'cwd':string(4000)}, ['name','command'])),
-        'smartTools.connect': ('Start this configured MCP server and discover its tools.', schema(identity)),
+        'smartTools.configure': ('Register an MCP stdio or Streamable HTTP server. env/headers map names to host environment variable names, never secret values. OAuth requires explicit authStart; configuration does not connect.', schema({**identity, 'name':string(200), 'transport':{'enum':['stdio','streamable-http']}, 'command':string(4000), 'args':{'type':'array','maxItems':100,'items':string(4000)}, 'env':{'type':'object','maxProperties':50,'additionalProperties':string(200)}, 'headers':{'type':'object','maxProperties':50,'additionalProperties':string(200)}, 'url':string(2000), 'auth':{'enum':['environment','oauth']}, 'installationId':string(100), 'cwd':string(4000)}, ['name'])),
+        'smartTools.reconnect': ('Close and explicitly reconnect with current credentials. Does not replay prior calls.', schema(identity, ['id'])),
+        'smartTools.authStart': ('Start SDK OAuth sign-in. The user must open the returned authorization URL and complete consent. redirectOrigin must be a configured app origin. Never complete provider consent autonomously.', schema({**identity,'redirectOrigin':string(2000)}, ['id'])),
+        'smartTools.authStatus': ('Read sign-in progress, requested/granted scopes and unknown account identity. Does not connect.', schema(identity, ['id'])),
+        'smartTools.authCancel': ('Cancel pending sign-in; does not revoke an existing provider grant.', schema(identity, ['id'])),
+        'smartTools.authForget': ('Disconnect and remove locally stored OAuth credentials. Remote authorization is not revoked; use the provider account controls for revocation.', schema(identity, ['id'])),
+        'smartTools.uninstall': ('Remove one app-managed package only after all dependent connection registrations have been removed. Only the app-managed installation folder is removed; work stored elsewhere is kept.', schema(identity, ['id'])),
+        'smartTools.discover': ('Search model-visible tool summaries on an explicitly connected server. refresh re-lists a stale catalog without invoking tools. No schemas are loaded.', schema({**identity,'query':string(500),'refresh':{'type':'boolean'},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':25},'catalogRevision':string(100)}, ['id'])),
+        'smartTools.schemas': ('Load one to five exact callable schemas (64 KB maximum) from a current catalog. Include catalogRevision in the subsequent call. UI-only tools are excluded.', schema({**identity,'names':{'type':'array','minItems':1,'maxItems':5,'items':string(200)},'catalogRevision':string(100)}, ['id','names','catalogRevision'])),
+        'smartTools.connect': ('Connect this configured MCP server and discover compact tool summaries. Never starts interactive sign-in.', schema(identity)),
         'smartTools.disconnect': ('Disconnect this MCP server. Tool-owned durable work may continue independently.', schema(identity)),
         'smartTools.remove': ('Remove this server registration, keeping installed files and tool-owned work.', schema(identity)),
-        'smartTools.call': ('Call a discovered model-visible tool. Receipt operationId identifies the durable result under smartTools.operations. A timeout is not proof that tool-owned work stopped; inspect its status before retrying.', schema({**identity,'name':string(200),'arguments':{'type':'object'},'sessionId':string(200),'timeoutSeconds':{'type':'number','minimum':1,'maximum':300}}, ['id','name'])),
+        'smartTools.call': ('Call a discovered model-visible tool. Receipt operationId identifies the durable result under smartTools.operations. A timeout is not proof that tool-owned work stopped; inspect its status before retrying.', schema({**identity,'name':string(200),'arguments':{'type':'object'},'catalogRevision':string(100),'sessionId':string(200),'timeoutSeconds':{'type':'number','minimum':1,'maximum':300}}, ['id','name'])),
         'smartTools.result': ('Inspect an older or large operation result in /smartTools/inspectedOperation. Follow $resource state paths for paged content.', schema({'operationId':string(100)})),
         'smartTools.resources': ('List a connected MCP server’s resources or resource templates, one page at a time. Resource reads are bounded to 2 MB; use the tool’s chunk resources for media.', schema({**identity,'kind':{'enum':['list','templates']},'cursor':string(4000)}, ['id'])),
         'smartTools.readResource': ('Read a resource URI through this connected MCP server. The host never fetches the URI directly. Use tool-provided bounded chunks for large media.', schema({**identity,'uri':string(4000)}, ['id','uri'])),
@@ -47,7 +53,7 @@ class SmartCanvas:
             raise api.AppError('This tool view is no longer active. Reopen its canvas tab.', 409)
         binding = canvas['mcp']
         server = next((s for s in self.service.state['smartTools']['servers'] if s['id'] == binding['serverId']), None)
-        if not server or configuration_key(server) != binding['configuration']:
+        if not server or configuration_key(server) != binding['configuration'] or (binding.get('catalogRevision') and (binding['catalogRevision'] != server.get('catalogRevision') or server.get('catalogState') != 'current')):
             raise api.AppError('This server configuration changed. Open a fresh tool view.', 409)
         return canvas, binding
 
@@ -98,7 +104,7 @@ class SmartCanvas:
                 return
             mapped = {'id':binding['serverId'],'name':args['name'],'arguments':args.get('arguments',{}),
                       'sessionId':canvas.get('sessionId'), '_configuration':binding['configuration'],
-                      '_allowedTools':binding['allowedTools']}
+                      '_allowedTools':binding['allowedTools'], 'catalogRevision':binding.get('catalogRevision')}
             kwargs = {'defer_publish': True} if defer_publish else {}
             result = await manager.command('smartTools.call', mapped, operation_id, 'agent' if origin == 'agent' else 'app', **kwargs)
             # Context is descriptive, not authority. Retain the latest result only for
@@ -142,7 +148,7 @@ class SmartCanvas:
             canvas = {'id':uuid.uuid4().hex,'kind':'mcp-app','open':True,'title':tool.get('title') or server['name'],
                       'content':app['html'],'sessionId':sid,'workspaceId':workspace['id'],
                       'view':{},'events':[],'renderReports':{},'createdAt':time.time(),
-                      'mcp':{'serverId':args['id'],'configuration':key,'resourceUri':uri,'tool':args['tool'],
+                      'mcp':{'serverId':args['id'],'configuration':key,'catalogRevision':server.get('catalogRevision'),'resourceUri':uri,'tool':args['tool'],
                              'allowedTools':app['tools'], 'operationId':args.get('operationId'),
                              'toolArguments':copy.deepcopy((operation or {}).get('arguments',{})),
                              'requestedCsp':app.get('csp',{}),'requestedPermissions':app.get('permissions',{}),
