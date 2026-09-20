@@ -9,6 +9,9 @@
 #amp-one .a-feedback-result .a-check-result {margin:0 0 8px}
 #amp-one .a-feedback-recent {display:grid;gap:8px;margin-top:14px}
 #amp-one .a-feedback-recent h3 {margin:0}
+#amp-one .a-feedback-followup{display:grid;gap:10px;margin-top:24px;border-top:1px solid var(--a-line);padding-top:16px}
+#amp-one .a-feedback-report{max-height:360px;overflow:auto;padding:12px;border:1px solid var(--a-line);border-radius:8px}
+#amp-one .a-feedback-report pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.5}
 #amp-one .a-feedback-recent a {min-width:0;overflow-wrap:anywhere}
 #amp-one .a-feedback.is-dragging {outline:2px dashed var(--a-accent);outline-offset:6px;border-radius:12px}
 #amp-one .a-feedback-files {min-width:0;border:1px dashed var(--a-line);border-radius:12px;padding:12px;margin:4px 0}

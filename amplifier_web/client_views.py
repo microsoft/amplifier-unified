@@ -171,6 +171,8 @@ class ClientViews:
         record = self.record()
         if record is None:
             return snapshot
+        if feedback := getattr(self.service, "feedback", None):
+            snapshot["feedback"] = feedback.followups.project(snapshot.get("feedback", {}))
         snapshot.pop("canvasTabs", None)
         snapshot['canvasWorkspace'] = self.service.canvas_views.project()
         from .canvas_library import presentation

@@ -84,6 +84,24 @@ async def main():
                     row.update(id=identity,title=f'Additional conversation {index}',status='idle',nativeIdentity=None,runtimeSessionId=None,
                         messages=[{'id':f'{identity}-m-{i}','role':'assistant','text':'Retained text. '*350,'createdAt':1700000000+i} for i in range(count)],execution={'turns':[],'nodes':[]})
                     service.state['sessions'].append(row)
+            elif op=='inspection':
+                from amplifier_web.execution import ensure_turn
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.runtime import normalize_event
+                row=service._session(aid);now=time.time()
+                row.update(status='working',messages=[{'id':'question','role':'user','text':'Inspect this work','createdAt':now-5},
+                    {'id':'long-answer','role':'assistant','text':'# Complete response\n\n'+('A visible paragraph with **formatting**.\n\n'*450)+'COMPLETE-RESPONSE-END','createdAt':now}],execution={'turns':[],'nodes':[]})
+                ensure_turn(row,'inspect');row['execution']['turns'][0].update(startedAt=now-3,anchorMessageId='question')
+                emitted=[];events=ExecutionEvents(aid,emitted.append);events.turn_id='inspect'
+                events.hook(aid,'tool:pre',{'tool_call_id':'inspect-tool','tool_name':'fixture.read','tool_input':{'action':'inspect fixture','path':'/fixture/public.txt','authorization':'Bearer never-publish-this','text':'input '*150}})
+                events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','tool_result':{'success':True,'output':'Result line. '*2000+'RESULT-END','url':'https://example.com/artifact'}})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
+                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2})
+            elif op=='inspection-finish':
+                now=time.time()
+                await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'completed','endedAt':now,'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}})
+                await service.on_runtime_event('runtime.status',{'sessionId':aid,'status':'idle'})
             elif op=='many':
                 template=copy.deepcopy(service._session(aid)); now=time.time()
                 service.state['sessions'].extend([{**copy.deepcopy(template),'id':f'library-{i}','title':f'Library conversation {i:03}',

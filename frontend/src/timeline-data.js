@@ -1,6 +1,6 @@
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
- if(session?.execution?.nodes?.length){const nodes=session.execution.nodes,turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns}}
+ if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns}}
  const workers=visibleWorkers(session?.workers||[]),events=session?.runtimeEvents||[];
  if(!workers.length&&!events.some(e=>e.type==='runtime.tool'||String(e.type).startsWith('tool.')))return {nodes:[],turns:[]};
  const turnId='observed-activity',nodes=[],tools=new Map();
@@ -42,17 +42,30 @@ export function turnPlacements(messages,data){
  return {after,before};
 }
 export function compactTokens(value){return value>=1000000?`${(value/1000000).toFixed(1).replace(/\.0$/,'')}m`:value>=1000?`${(value/1000).toFixed(1).replace(/\.0$/,'')}k`:String(value)}
-export function usageLabel(usage){
- if(!usage)return null;
- if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return null;
+export const liveStates=new Set(['running','working','starting','queued','pending','retrying','idle']);
+export function isRunning(record){return liveStates.has(record?.status||record?.phase)&&!Number.isFinite(record?.endedAt)}
+export function elapsedLabel(record,now=Date.now()/1000){
+ if(!Number.isFinite(record?.startedAt))return null;
+ const end=Number.isFinite(record.endedAt)?record.endedAt:isRunning(record)?now:null;
+ if(end===null)return null;
+ const duration=Math.max(0,end-record.startedAt),seconds=Math.floor(duration);
+ return duration>=60?`${Math.floor(seconds/60)}m ${seconds%60}s`:isRunning(record)?`${seconds}s`:`${Number(duration.toFixed(1))}s`;
+}
+export function usageLabel(usage,{pending=false}={}){
+ if(!usage)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
+ if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
  const tokens=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
+ // Older saved rows may lack per-metric pending counts. Only a live lifecycle
+ // can supply that fallback; a finished call must not promise future telemetry.
+ const tokenPending=usage.tokenPendingCalls??(pending?usage.tokenUnknownCalls||0:0),costPending=usage.costPendingCalls??(pending?usage.unknownCalls||0:0);
  const type=usage.costType||((usage.costUsd!=null&&usage.unknownCalls===0)?'reported':'unavailable');
- const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}${type==='partial'?'+':''}`:null;
+ const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}${type==='partial'&&!costPending?'+':''}`:null;
  const pieces=[];
- if(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls)pieces.push('tokens unavailable');else if(tokens!=null)pieces.push(`${compactTokens(tokens)} tokens${usage.tokenUnknownCalls?' + ?':''}`);
- if(cost)pieces.push(cost);else if(usage.calls||tokens!=null)pieces.push('cost unavailable');
+ if(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls)pieces.push(tokenPending===usage.calls?'tokens pending':tokenPending?'tokens partly pending':'tokens unavailable');
+ else if(tokens!=null)pieces.push(`${compactTokens(tokens)} tokens${usage.tokenUnknownCalls?(tokenPending===usage.tokenUnknownCalls?' + pending':' + ?'):''}`);
+ if(cost)pieces.push(cost+(costPending?' + pending':''));else if(usage.calls||tokens!=null)pieces.push(costPending===usage.calls?'cost pending':costPending?'cost partly pending':'cost unavailable');
  if(!pieces.length)return null;
- const breakdown=[usage.inputTokens!=null?`${usage.inputTokens} input tokens`:null,usage.outputTokens!=null?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':'Cost is unavailable'].filter(Boolean).join(' · ');
+ const breakdown=[usage.inputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.inputTokens} input tokens`:null,usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,tokenPending?`${tokenPending} call(s) awaiting token usage`:null,costPending?`${costPending} call(s) awaiting cost`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':costPending===usage.calls?'Cost has not been reported yet':'Provider did not report a cost for completed calls',usage.estimatedCalls&&type==='partial'?'Includes estimated cost':null].filter(Boolean).join(' · ');
  return {text:pieces.join(' · '),title:breakdown};
 }
 export function treeForTurn(data,turnId){
@@ -63,4 +76,19 @@ export function treeForTurn(data,turnId){
  const mark=node=>{if(covered.has(node.id))return;covered.add(node.id);for(const child of children.get(node.id)||[])mark(child)};
  roots.forEach(mark);for(const node of nodes)if(!covered.has(node.id)){roots.push(node);mark(node)}
  return {roots,children};
+}
+
+export function detailLinks(text){
+ let value;try{value=JSON.parse(text)}catch{return []}
+ const urls=new Set();
+ function visit(item,depth=0){
+  if(!item||typeof item!=='object'||depth>8)return;
+  for(const [key,value] of Object.entries(item).slice(0,100)){
+   if(urls.size>=8)return;
+   if(['url','uri','html_url','web_url','artifact_url'].includes(key)&&typeof value==='string'){
+    try{const url=new URL(value);if(['https:','http:'].includes(url.protocol)&&!url.username&&!url.password)urls.add(url.href)}catch{}
+   }else if(typeof value==='object')visit(value,depth+1);
+  }
+ }
+ visit(value);return [...urls];
 }

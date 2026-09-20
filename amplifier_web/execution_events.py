@@ -5,9 +5,12 @@ import asyncio
 import contextvars
 from functools import wraps
 import math
+import json
 import time
 import uuid
 import weakref
+
+from .execution_details import tool_detail
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
@@ -68,7 +71,9 @@ class ExecutionEvents:
                    "phase": event.get("status", "running"), "label": event.get("agent") or "Worker",
                    "toolCallId": call_id, "startedAt": previous.get("startedAt", time.time())}
             if row["phase"] in {"completed", "cancelled", "error", "interrupted"}:
-                row["endedAt"] = time.time()
+                row["endedAt"] = previous.get("endedAt") or time.time()
+            else:
+                row["endedAt"] = None
             if isinstance(event.get("report"),str) and event["report"]:
                 row["summary"]=event["report"][:12000]
             elif previous.get("summary"):row["summary"]=previous["summary"]
@@ -102,7 +107,7 @@ class ExecutionEvents:
                    "rootSessionId":self.root_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
                    "provider":str(getattr(info,"id",type(provider).__name__))[:160],
                    "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
-                   "startedAt":time.time()}
+                   "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
             token = CURRENT_CALL.set(row["id"])
             self.publish(row)
             try:
@@ -139,15 +144,23 @@ class ExecutionEvents:
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
             arguments=data.get("tool_input",{})
             if event=="tool:pre" and isinstance(arguments,dict):
-                fields=[key for key in arguments if key not in {'api_key','token','password','secret','authorization'}]
-                row["summary"]="Running "+row["label"]+(" with "+", ".join(fields[:12])+"." if fields else ".")
+                row.update(endedAt=None, output=None, error=None)
+                row["input"] = tool_detail(arguments)
+                try: public_arguments = json.loads(row["input"])
+                except (ValueError, TypeError): public_arguments = {}
+                operation = next((public_arguments.get(key) for key in ("description", "action", "operation", "file_path", "path") if isinstance(public_arguments, dict) and isinstance(public_arguments.get(key), str)), "")
+                row["purpose"] = tool_detail(operation)[:200]
+                row["summary"] = "Running " + row["label"] + (" · " + row["purpose"] if row["purpose"] else "")
             if event != "tool:pre":
-                row["endedAt"] = now
+                if row.get("endedAt") is None: row["endedAt"] = now
                 result=data.get("tool_result",{})
                 if hasattr(result,"model_dump"):result=result.model_dump()
                 failed=event=="tool:error" or (isinstance(result,dict) and result.get("success") is False)
                 if failed:row["phase"]="error"
-                row["summary"]=("The tool reported an error." if failed else "Tool completed.")+" Expand any delegated actions below for their progress and results."
+                row["summary"] = ("Failed " if failed else "Completed ") + row["label"] + (" · " + row.get("purpose", "") if row.get("purpose") else "")
+                if "tool_result" in data: row["output"] = tool_detail(result)
+                error = data.get("error") or data.get("error_message") or (result.get("error") if isinstance(result, dict) else None)
+                if error is not None: row["error"] = tool_detail(error)
 
             self.calls[key] = row
             self.publish(row)
@@ -158,6 +171,9 @@ class ExecutionEvents:
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 return
+            purpose = CALL_PURPOSE.get() or {}
+            if purpose: parent, turn = None, purpose.get("turnId", turn)
+            scope = {"label": purpose.get("label", "Model call"), "lifecycle": "background" if purpose.get("lifecycle")=="background" else "turn"}
             task = asyncio.current_task()
             if task is None:
                 return
@@ -165,7 +181,7 @@ class ExecutionEvents:
             if event == "llm:request":
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
                     "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "phase": "running",
-                    "label": "Model call", "startedAt": now,
+                    **scope, "startedAt": now,
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)}}
                 self.requests[task] = row
             elif row is None:
@@ -174,7 +190,7 @@ class ExecutionEvents:
                 if event != "llm:response":
                     return
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
-                    "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "label": "Model call"}
+                    "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", **scope}
             row = dict(row)
             if event == "llm:response":
                 row.update(phase="error" if data.get("status") == "error" else "completed", endedAt=now,
@@ -192,4 +208,7 @@ class ExecutionEvents:
         priced = [row for row in calls if "costUsd" in row.get("usage", {})]
         totals.update(costUsd=sum(row["usage"]["costUsd"] for row in priced) if priced else None,
                       costType="reported" if priced and len(priced) == len(calls) else "partial" if priced else "unavailable")
-        return {"calls": len(calls), "usage": totals, "trace": list(self.nodes.values())[-500:]}
+        # Usage inspection remains a metadata trace; full tool fields are read
+        # independently through conversation detail, never duplicated in totals.
+        trace=[{key:value for key,value in row.items() if key not in {"input","output","error"}} for row in list(self.nodes.values())[-500:]]
+        return {"calls": len(calls), "usage": totals, "trace": trace}

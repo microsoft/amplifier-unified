@@ -8,6 +8,7 @@
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
     "test:voice-ending-browser": "node tests/voice-ending-browser.mjs",
+    "test:feedback-followup-browser": "node tests/feedback-followup-browser.mjs",
     "test:settings-browser": "node tests/settings-browser.mjs",
     "test:chat-browser": "node tests/chat-browser.mjs",
     "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
@@ -17,6 +18,7 @@
     "test:message-browser": "node tests/message-browser.mjs",
     "test:artifact-browser": "node tests/artifact-browser.mjs",
     "test:timeline-browser": "node tests/timeline-browser.mjs",
+    "test:execution-browser": "node tests/execution-inspection-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
     "test:panel-browser": "node tests/panel-layout-browser.mjs",
@@ -42,7 +44,8 @@
     "test:bundle-browser": "node tests/bundle-browser.mjs",
     "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
     "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
-    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs"
+    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
+    "test:export-browser": "node tests/conversation-export-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

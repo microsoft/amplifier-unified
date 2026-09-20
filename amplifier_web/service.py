@@ -13,7 +13,7 @@ import uuid
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
 from .updates import work_paused
 
 
@@ -63,7 +63,8 @@ ACTION_DEFINITIONS = {
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
-    "session.export": ("Export a conversation", schema({"id": string(100)})),
+    "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
@@ -582,6 +583,27 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        prepared_export = None
+        if action == 'session.export' and args.get('format') == 'markdown':
+            from .conversation_export import markdown
+            async with self.lock:
+                # Retried receipts refer to the original bytes even if their
+                # source is now missing. Do not read native history again.
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._publish()
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                source = copy.deepcopy(self._session(args['id']))
+                artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
+            # Native storage may be slow. Freeze the host-owned portion first,
+            # then let navigation and runtime events continue during the read.
+            try:
+                prepared_export = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from exc
         pending = []
         async with self.lock:
             # Flush and compare under the same lock: a queued runtime event
@@ -610,7 +632,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -859,7 +881,30 @@ class AppService:
                 self.state['view']['messageEdit']=None
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
+            elif action == 'session.export' and args.get('format') == 'markdown':
+                from .resource_files import put
+                source, content = prepared_export
+                reference = put(self.db, content)
+                identity = reference['$resource']
+                filename = 'amplifier-conversation-' + identity[:12] + '.md'
+                diagnostic_result = {'snapshotId': identity, 'sessionId': source['id'], 'filename': filename,
+                    'mimeType': 'text/markdown', 'content': reference,
+                    'statePath': '/conversationExports/' + identity + '/content',
+                    'url': '/api/conversation/exports/' + identity}
+                self.state.setdefault('conversationExports', {})[identity] = copy.deepcopy(diagnostic_result)
+                destination = args.get('destination', 'download')
+                if destination != 'none':
+                    request_id = str(uuid.uuid4())
+                    self.state['view']['conversationExport'] = {'sessionId': source['id'], 'requestId': request_id, 'status': 'pending'}
+                    effects.append({'type': 'conversation.export', 'requestId': request_id,
+                                    'destination': destination, 'url': diagnostic_result['url']})
+            elif action == 'session.exportResult':
+                result = self.state['view'].get('conversationExport', {})
+                if result.get('requestId') == args['requestId']:
+                    result.update(status=args['status'], message=args.get('message', ''))
             elif action in {"state.export", "session.export", "theme.export"}:
+                if action == 'session.export' and args.get('destination', 'download') != 'download':
+                    raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else self.state["theme"]["css"]
                 mime = "text/css" if action == "theme.export" else "application/json"
                 effects.append({"type": "download", "filename": "amplifier-skin.css" if action == "theme.export" else "amplifier-export.json", "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
@@ -946,7 +991,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -989,6 +1034,9 @@ class AppService:
                 view=self.state['view']
                 if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
+            elif action in {"feedback.get", "feedback.comment"}:
+                if self.feedback.followups.accept(action, args, origin):
+                    pending.append((self.feedback.followups.run, (args['requestId'],)))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':
@@ -1121,7 +1169,7 @@ class AppService:
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
-            if action == "feedback.submit":
+            if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
@@ -1319,6 +1367,10 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+            elif kind == "runtime.ended":
+                # A turn may finish before naming does; only the runtime host
+                # can confirm that no independent call can still be running.
+                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked
@@ -1487,6 +1539,8 @@ class AppService:
                 action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
+            if args['action'] == 'session.export':
+                action_args.setdefault('id', session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             await self._flush_pending_progress()
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}

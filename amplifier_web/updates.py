@@ -400,6 +400,7 @@ class UpdateManager:
         if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
         if any(op.get('status') in {'queued','running'} for op in state.get('smartTools',{}).get('operations',[])):return True
         if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('requests',[])):return True
+        if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('followups',[])):return True
         if state.get('voice',{}).get('status') not in {None,'disconnected','idle','ended','error'}:
             return True
         for session in state['sessions']:
