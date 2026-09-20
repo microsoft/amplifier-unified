@@ -168,3 +168,34 @@ async def test_large_html_is_served_separately_with_same_sandbox(authenticated_c
     saved=await client.get(f'/api/canvas/{identity}/download')
     assert 'attachment;' in saved.headers['Content-Disposition'] and await saved.text()==body
     assert len(await (await client.get('/api/state')).read())<baseline+20_000
+
+
+async def test_surface_host_is_trusted_and_limits_child_navigation(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {})
+    service.clients.attach('surface-owner')
+    with service.clients.bind('surface-owner'):
+        created = await service.dispatch('canvas.apps.create', {
+            'title': 'Host boundary', 'content': '<p>Authored HTML stays in the child</p>',
+            'manifest': {'version': 1, 'stateSchema': {'type': 'object'}}, 'initialState': {}})
+        identity = created['result']['id']
+        view = service.canvas_views.summary('primary')
+    client = await authenticated_client(app)
+    target = {k: str(view[k]) for k in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
+    target['clientId'] = 'surface-owner'
+    response = await client.get(f'/api/canvas/{identity}/app-host', params=target)
+    assert response.status == 200
+    policy = response.headers['Content-Security-Policy']
+    assert "script-src 'nonce-" in policy
+    assert f'/api/canvas/{identity}/document;' in policy
+    assert "frame-src 'self'" not in policy
+    body = await response.text()
+    assert 'Authored HTML stays in the child' not in body
+    assert "child.sandbox = 'allow-scripts'" in body
+    child = await client.get(f'/api/canvas/{identity}/document', params=target)
+    assert "sandbox allow-scripts;" in child.headers['Content-Security-Policy']
+    assert 'Authored HTML stays in the child' in await child.text()
+    stale = await client.get(f'/api/canvas/{identity}/app-host', params={**target, 'generation': '99999'})
+    assert stale.status == 409

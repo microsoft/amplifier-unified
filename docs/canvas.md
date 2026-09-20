@@ -163,6 +163,14 @@ can inspect events during its next interaction and update the surface with
 `canvas.show`. `canvas.close` preserves the last content. Layout controls such
 as `canvasWidth`, `navPinned`, and `navExpanded` are in shared `view` state.
 
+## Interactive conversation surfaces
+
+Use `canvas.apps.create` for interactive UX that agents will refine during a
+conversation. It gives one stable tab, shared typed state, agent/user event
+parity, retained design revisions and reviewed host actions. See
+[the contract](shell/conversation-surfaces.md). `canvas.show` retains its
+existing immutable snapshot semantics.
+
 ## Artifact library and tabs
 
 `canvas.show` saves a snapshot with a stable ID, title, format, owning chat,

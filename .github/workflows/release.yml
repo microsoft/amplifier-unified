@@ -74,6 +74,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/canvas-dirty-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:canvas-dirty-browser
+      - name: Verify shared conversation surfaces and isolation
+        working-directory: frontend
+        run: npm run test:canvas-apps-browser
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}

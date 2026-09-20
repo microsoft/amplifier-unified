@@ -15,7 +15,7 @@ def restore_body(canvas, db):
     keep those potentially large bodies out of browser snapshots.
     """
     reference = canvas.get('contentResource')
-    if not reference or canvas.get('kind') in {'html', 'babylon'}:
+    if not reference or canvas.get('kind') in {'html', 'babylon', 'canvas-app'}:
         return
     try:
         body = resource(db, reference['$resource'])
@@ -46,7 +46,7 @@ def presentation(state, row):
 def remember(state, db):
     rows = state.setdefault('canvasArtifacts', [])
     canvas = state.get('canvas', {})
-    if not canvas.get('kind') or canvas.get('placeholder'):
+    if not canvas.get('kind') or canvas.get('placeholder') or canvas.get('app'):
         return
     if 'sessionId' not in canvas:  # Migrate the one legacy preview.
         canvas['sessionId'] = state.get('selectedSessionId')
@@ -145,7 +145,10 @@ def fork_artifacts(state, source_id, target):
     kept={m['id'] for m in target.get('messages',[]) if m.get('id')}
     for row in list(state.get('canvasArtifacts',[])):
         if row.get('sessionId')==source_id and row.get('messageId') in kept:
-            state['canvasArtifacts'].append({**copy.deepcopy(row),'id':uuid.uuid4().hex,'sessionId':target['id'],'tabOpen':False,**({'sharedToolView':True} if row.get('kind')=='mcp-app' else {})})
+            cloned = {**copy.deepcopy(row),'id':uuid.uuid4().hex,'sessionId':target['id'],'tabOpen':False,**({'sharedToolView':True} if row.get('kind')=='mcp-app' else {})}
+            if cloned.get('app'):
+                cloned['app']['requests'] = []  # Forked history never replays approvals.
+            state['canvasArtifacts'].append(cloned)
 
 
 def recover_legacy(state, db, home):

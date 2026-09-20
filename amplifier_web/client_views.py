@@ -107,6 +107,8 @@ class ClientViews:
         return self.records[identity]
 
     def reconcile(self, identity):
+        from .canvas_apps import sync
+        sync(self.service)
         record = self.records[identity]
         self.dirty.add(identity)
         sessions = {row["id"]: row for row in self.service._state.get("sessions", [])}
