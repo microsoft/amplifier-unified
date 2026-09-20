@@ -13,7 +13,7 @@ import uuid
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
 from .updates import work_paused
 
 
@@ -1363,6 +1363,10 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+            elif kind == "runtime.ended":
+                # A turn may finish before naming does; only the runtime host
+                # can confirm that no independent call can still be running.
+                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked
