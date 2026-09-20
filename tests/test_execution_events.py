@@ -66,93 +66,41 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result,{'costType':'unavailable'})
 
 
-def test_worker_report_and_tool_failure_are_visible_without_raw_payloads():
+def test_worker_report_and_tool_failure_have_metadata_without_payload_copies():
     events=ExecutionEvents('root',lambda event:None)
-    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'bash','tool_input':{'command':'ls -la','token':'private'}})
-    assert 'ls -la' in events.nodes['tool:root:call']['input'] and 'private' not in str(events.nodes)
-    events.hook('root','tool:post',{'tool_call_id':'call','tool_result':{'success':False,'error':{'message':'private'}}})
-    assert events.nodes['tool:root:call']['phase']=='error'
-    events.lifecycle({'type':'child.updated','sessionId':'child','status':'completed','report':'Completed the requested review.'})
-    assert events.nodes['worker:child']['summary']=='Completed the requested review.'
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'bash','tool_input':{'command':'ls -la','token':'user data'}})
+    events.hook('root','tool:post',{'tool_call_id':'call','tool_result':{'success':False,'error':'failure body'}})
+    row=events.nodes['tool:root:call']
+    assert row['phase']=='error' and row['liveObservation']
+    assert all(key not in row for key in ('input','output','error','purpose'))
+    events.lifecycle({'type':'child.updated','sessionId':'child','status':'completed','report':'Completed review.'})
+    assert events.nodes['worker:child']['summary']=='Completed review.'
 
 
-def test_streaming_hook_result_survives_transport_and_browser_projection():
-    """loop-streaming publishes `result`, unlike app-control's `tool_result`."""
-    from amplifier_web.execution import ingest
-    from amplifier_web.browser_detail import page, read_text
+def test_streaming_hook_transports_lifecycle_without_capturing_alternate_content():
     events=ExecutionEvents('root',lambda event:None)
     arguments={'command':'python -m pytest -q','cwd':'/workspace'}
     events.hook('root','tool:pre',{'tool_call_id':'stream','tool_name':'bash','tool_input':arguments})
     events.hook('root','tool:post',{'tool_call_id':'stream','tool_name':'bash','tool_input':arguments,
-        'result':{'success':False,'output':{'stdout':'line\n'*6000,'stderr':'test failed','returncode':1},'error':{'message':'test failed','authorization':'secret'}}})
-    row=events.nodes['tool:root:stream']
-    assert row['phase']=='error' and 'test failed' in row['error']
-    assert 'python -m pytest' in row['summary']
-    assert 'secret' not in row['output']
-    session={'id':'root'}
-    ingest(session,normalize_event({'type':'execution.event','event':row},'root')[1])
-    projected=page(session,'nodes')['items'][0]
-    assert 'outputDetail' in projected
-    reference=projected['outputDetail'];offset=0;full=''
-    while offset is not None:
-        result=read_text(session,{**reference,'offset':offset});full+=result['value'];offset=result['nextOffset']
-    assert full==row['output'] and 'returncode' in full
+        'result':{'success':False,'output':{'stdout':'line\n'*6000,'returncode':1}}})
+    row=normalize_event({'type':'execution.event','event':events.nodes['tool:root:stream']},'root')[1]
+    assert row['phase']=='error' and row['liveObservation']
+    assert not any(key in row for key in ('input','output','error'))
+    assert 'python -m pytest' not in str(row) and 'line' not in str(row)
 
 
-def test_post_only_streaming_event_retains_arguments_and_falsey_result():
+def test_post_only_falsey_result_still_has_a_completed_lifecycle():
     events=ExecutionEvents('root',lambda event:None)
-    events.hook('root','tool:post',{'tool_call_id':'missed-pre','tool_name':'bash',
-        'tool_input':{'command':'true'},'result':''})
+    events.hook('root','tool:post',{'tool_call_id':'missed-pre','tool_name':'bash','tool_input':{'command':'true'},'result':''})
     row=events.nodes['tool:root:missed-pre']
-    assert 'true' in row['input'] and row['output']=='' and row['phase']=='completed'
-
-
-def test_public_tool_details_redact_credentials_and_private_blocks(monkeypatch):
-    monkeypatch.setenv('FIXTURE_API_KEY','unique-fixture-credential')
-    events=ExecutionEvents('root',lambda event:None)
-    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'app','tool_input':{'action':'feedback.get','authorization':'Bearer hidden','nested':{'access_token':'also-hidden'},'url':'https://user:pass@example.test','text':'unique-fixture-credential'}})
-    events.hook('root','tool:post',{'tool_call_id':'call','tool_result':{'success':False,'output':{'url':'https://github.com/example/repo/issues/2','content':[{'type':'text','text':'Public output'},{'type':'thinking','text':'protected thought'}]},'error':{'message':'Missing item','raw':'private dump'}}})
-    row=events.nodes['tool:root:call']
-    assert row['phase']=='error' and row['summary']=='Failed app · feedback.get'
-    assert 'Public output' in row['output'] and 'https://github.com/example/repo/issues/2' in row['output']
-    assert 'Missing item' in row['error']
-    for forbidden in ('unique-fixture-credential','also-hidden','Bearer hidden','user:pass','protected thought','private dump'):
-        assert forbidden not in str(row)
-    normalized=normalize_event({'type':'execution.event','event':row},'root')[1]
-    assert normalized['input']==row['input'] and normalized['output']==row['output']
-    private=normalize_event({'type':'execution.event','event':{**row,'kind':'llm'}},'root')[1]
-    assert all(key not in private for key in ('input','output','error'))
-
-
-def test_public_tool_details_are_bounded_and_never_stringify_objects():
-    from amplifier_web.execution_details import tool_detail,DETAIL_LIMIT
-    class Private:
-        def __str__(self):return 'must not appear'
-    assert tool_detail(Private())=='[unsupported detail]'
-    text=tool_detail({'output':'x'*200000})
-    assert len(text)<DETAIL_LIMIT+100 and 'omitted' in text
-    assert 'private content omitted' in tool_detail({'analysis':'private','nested':{'visibility':'hidden','text':'private'}})
-
-
-def test_private_tool_block_cannot_leak_through_collapsed_purpose():
-    events=ExecutionEvents('root',lambda event:None)
-    events.hook('root','tool:pre',{'tool_call_id':'private','tool_name':'fixture','tool_input':{'visibility':'private','description':'Do not expose this description'}})
-    assert 'Do not expose' not in str(events.nodes)
+    assert row['phase']=='completed' and 'input' not in row and 'output' not in row
 
 
 def test_usage_inspection_does_not_duplicate_large_tool_content():
     events=ExecutionEvents('root',lambda event:None)
     events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{'text':'x'*64000}})
-    assert 'input' in events.nodes['tool:root:call']
+    assert 'input' not in events.nodes['tool:root:call']
     assert 'input' not in events.usage()['trace'][0]
-
-
-def test_tool_text_redacts_userinfo_tokens_assignments_and_private_keys():
-    from amplifier_web.execution_details import tool_detail
-    result=tool_detail('https://a-secret-token@example.test/path TEAM_KEY=some-key token=another-token\n-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----')
-    result += tool_detail('{"api_key":"json-string-credential"}')
-    for forbidden in ('a-secret-token','some-key','another-token','private-material','json-string-credential'):
-        assert forbidden not in result
 
 
 def test_repeated_tool_completion_preserves_end_time_and_retry_clears_old_result(monkeypatch):
@@ -174,7 +122,7 @@ def test_repeated_tool_completion_preserves_end_time_and_retry_clears_old_result
     ingest(session,{**row,'phase':'error','endedAt':12,'error':'failed once'})
     ingest(session,row)
     assert session['execution']['nodes'][0]['endedAt'] is None
-    assert session['execution']['nodes'][0]['error'] is None
+    assert session['execution']['nodes'][0].get('error') is None
 
 
 async def test_unwrappable_provider_hook_fallback_preserves_background_lifecycle():
@@ -190,3 +138,12 @@ async def test_unwrappable_provider_hook_fallback_preserves_background_lifecycle
         assert events.nodes[pending['id']]['phase']=='completed'
         assert events.nodes[pending['id']]['lifecycle']=='background'
     finally:CALL_PURPOSE.reset(token)
+
+
+def test_usage_summary_includes_cache_writes_once_without_changing_reported_counts():
+    from amplifier_web.execution import rollup
+    usage=public_usage({'input_tokens':4,'output_tokens':2,'total_tokens':6,'cache_read_tokens':3,'cache_write_tokens':100})
+    assert usage['inputTokens']==4 and usage['totalTokens']==6
+    assert usage['grossInputTokens']==104 and usage['grossTotalTokens']==106
+    total=rollup([{'usage':usage},{'usage':usage}])
+    assert total['totalTokens']==12 and total['grossTotalTokens']==212

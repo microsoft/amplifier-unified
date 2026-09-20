@@ -74,6 +74,9 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
+      - name: Verify draft-first chat setup and composer controls
+        working-directory: frontend
+        run: npm run test:new-chat-browser
       - name: Verify live surface awareness and draft checkpoints
         working-directory: frontend
         run: npm run test:surface-context-browser

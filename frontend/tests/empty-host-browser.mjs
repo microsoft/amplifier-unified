@@ -20,7 +20,7 @@ try{
  const initial=await page.evaluate(()=>window.amplifier.getState());
  assert.equal(initial.sessions.length,0);
  assert.ok(!initial.selectedSessionId);
- await expect(page.getByRole('heading',{name:'What shall we work on?'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'New chat',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-message').count(),0);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeEditable();
@@ -48,7 +48,7 @@ try{
  let firstCreate=true;
  await page.route('**/api/actions',async route=>{
   const action=route.request().method()==='POST'&&route.request().postDataJSON()?.action;
-  if(action==='session.create'&&firstCreate){firstCreate=false;createSeen();await heldCreate;if(process.argv.includes('--fail-create'))return route.fulfill({status:503,json:{error:'Synthetic creation failure'}})}
+  if(action==='session.create'&&firstCreate){firstCreate=false;createSeen();await heldCreate;if(process.argv.includes('--lost-create')){await route.fetch();return route.fulfill({status:503,json:{error:'Creation acknowledgement lost'}})}if(process.argv.includes('--fail-create'))return route.fulfill({status:503,json:{error:'Synthetic creation failure'}})}
   if(action==='conversation.send')await held;
   await route.continue();
  });
@@ -65,11 +65,19 @@ try{
  await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  releaseCreate();
  if(process.argv.includes('--fail-create')){
-  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
   await expect(composer).toHaveValue('Next draft while the first delivery is pending');
-  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await page.getByRole('button',{name:'Check delivery',exact:true}).click();
  }
  release();
+ if(process.argv.includes('--lost-create')){
+  await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId);
+  const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  await page.reload();await composer.waitFor();
+  const check=page.getByRole('button',{name:'Check delivery',exact:true});
+  if(await check.count())await check.click();
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),first);
+ }
  await page.getByText('Synthetic first response',{exact:true}).waitFor();
  await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  await expect(composer).toBeEditable();
