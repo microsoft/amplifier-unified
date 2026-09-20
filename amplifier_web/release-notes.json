@@ -2,12 +2,33 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.16.0",
+      "title": "A complete, easier-to-navigate settings experience",
+      "changes": [
+        "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
+        "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
+        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Unsaved private fields survive moving between settings sections while the dialog is open.",
+        "Actions show immediate feedback, background work marks only the affected controls, and nested dialogs support outside-click and Escape dismissal. Mobile layouts and shared/custom skins remain supported."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.15.3",
+      "title": "Conversation export, execution details and feedback follow-up",
+      "changes": [
+        "Copy or download a whole conversation as Markdown, including older saved messages, code, voice transcripts and artifact references. JSON export remains available.",
+        "Read complete assistant replies automatically and expand public tool inputs, results and errors. Live timers and usage distinguish pending work from unavailable measurements, including background conversation naming.",
+        "Read reports submitted through this host and append follow-up comments to reports owned by its signed-in GitHub account. Drafts and selected reports stay separate between browsers, and retrying a comment does not post it twice."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.15.2",
       "title": "Switch bundles without a required preview",
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -26,7 +47,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

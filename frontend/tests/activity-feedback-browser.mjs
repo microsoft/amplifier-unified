@@ -37,10 +37,14 @@ try{
  assert.equal(await page.locator('#provider-model option[value="model-b"]').count(),1);
  await page.locator('#provider-source').count();
  // User edits survive independent completions and dismissal.
- await page.locator('#provider-id').fill('unsaved-name');
  state.setup.operations['providers.models:one']={phase:'error',commandId:refresh.body.id,error:'Fixture unavailable'};state.setup.providerCatalogs.one={phase:'error',models:[]};state.revision++;
  await page.evaluate(value=>window.emitState(value),state);
  await page.waitForFunction(()=>!document.querySelector('[data-activity-region="provider-models"][data-region-pending]'));
+ assert.equal(await page.locator('#provider-model').evaluate(el=>el.tagName),'INPUT');
+ assert.equal(await page.locator('#provider-model-options option[value="model-b"]').count(),1);
+ await page.locator('#provider-model').fill('custom-model-after-failure');await page.locator('#provider-id').click();
+ await page.waitForFunction(()=>window.amplifier.getState().view.providerEditor.model==='custom-model-after-failure');
+ await page.locator('#provider-id').fill('unsaved-name');
  assert.equal(await page.locator('#provider-id').inputValue(),'unsaved-name');
  await page.locator('#provider-id').click();assert.equal(await page.locator('[role="dialog"]').count(),1);
  const input=await page.locator('#provider-id').boundingBox();await page.mouse.move(input.x+10,input.y+10);await page.mouse.down();await page.mouse.move(2,2);await page.mouse.up();assert.equal(await page.locator('[role="dialog"]').count(),1);

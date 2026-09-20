@@ -13,7 +13,10 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const presentation=async(id,value)=>{if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());};
  await openSettingsPage(page,'notifications');
+ assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
+ assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
  await page.getByLabel('Notification server',{exact:true}).fill('https://notify.example');
  await page.getByLabel(/^Topic/).fill('fixture-private-topic');
  await page.getByLabel(/^Access token/).fill('fixture-private-token');
@@ -61,8 +64,7 @@ try{
  await page.getByRole('button',{name:'End preview',exact:true}).click();
  await page.getByRole('button',{name:'Apply skin',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
- await page.locator('#scheme').selectOption('dark');await page.locator('#layout').selectOption('work');
- await page.waitForFunction(()=>window.amplifier.getState().view.layout==='work');
+ await presentation('scheme','dark');await presentation('layout','work');
  await page.reload();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');assert.equal(await page.locator('#layout').inputValue(),'work');
  await page.getByRole('button',{name:'Restore default skin',exact:true}).click();
@@ -89,7 +91,7 @@ try{
  // dialog on small phones, tablets, desktop, and both appearance schemes.
  let layouts=0;
  for(const scheme of ['light','dark']){
-  await openSettingsPage(page,'appearance');await page.locator('#scheme').selectOption(scheme);
+  await openSettingsPage(page,'appearance');await presentation('scheme',scheme);
   for(const width of [320,390,736,1280]){
    await page.setViewportSize({width,height:900});
    for(const section of settingsSections)for(const [id] of section.pages){
@@ -101,9 +103,9 @@ try{
    }
   }
  }
- await openSettingsPage(page,'notifications');await page.screenshot({path:'/tmp/settings-notifications-final.png'});
- await openSettingsPage(page,'providers');await page.screenshot({path:'/tmp/settings-providers-final.png'});
+ await openSettingsPage(page,'notifications');await page.screenshot({animations:'disabled',path:'/tmp/settings-notifications-final.png'});
+ await openSettingsPage(page,'providers');await page.screenshot({animations:'disabled',path:'/tmp/settings-providers-final.png'});
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({destinations:24,layouts,notificationPersistence:true,privateDrafts:true,voicePersistence:true,skinPersistence:true,catalogToConnection:true,browserErrors:0}));
-}catch(error){if(page)await page.screenshot({path:'/tmp/settings-completeness-failure.png'});throw error}
+}catch(error){if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
