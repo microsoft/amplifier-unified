@@ -36,7 +36,9 @@ async def test_release_check_requires_real_tag_revision(monkeypatch):
     monkeypatch.setattr(app_updates,'process',process)
     result=await app_updates.check()
     assert result['status']=='update' and result['revision']=='b'*40
-    assert len(calls)==2
+    assert len(calls)==3
+    assert calls[-1][-1].endswith('?ref='+'b'*40)
+    assert result['releaseNotesWarning']
     async def fail(*args,**kwargs):raise RuntimeError('private credential detail')
     monkeypatch.setattr(app_updates,'process',fail)
     result=await app_updates.check()

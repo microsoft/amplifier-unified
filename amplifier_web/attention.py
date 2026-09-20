@@ -15,6 +15,11 @@ def snapshot(state):
             add('feedback:'+receipt['requestId'],{'submitted':'Feedback sent','failed':'Feedback could not be sent','unknown':'Check feedback delivery'}[status],
                 'feedback','feedback',receipt.get('message',''),status,requestId=receipt['requestId'],label=receipt.get('title','Feedback'),url=receipt.get('url'),status=status)
     updates=state.get('updates',{})
+    from .release_notes import notice_id
+    for release in updates.get('application',{}).get('releaseNotes',[]):
+        for notice in release.get('notices',[]):
+            add(notice_id(release,notice),notice['title'],'maintenance','updates',
+                notice['detail']+' '+notice['action'],release['version'],releaseVersion=release['version'])
     for row in updates.get('items',[]):
         if row.get('status') in {'update','check_failed','local_changes'}:
             status=row['status'];label={'update':'Update available','check_failed':'Could not check','local_changes':'Local edits preserved'}[status]

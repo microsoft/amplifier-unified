@@ -45,18 +45,33 @@ try{
  await page.getByText(/Your CLI projects and conversations appear automatically/).waitFor();
  assert.equal(await page.getByRole('button',{name:'Browse saved conversations',exact:true}).count(),0);
  await page.getByRole('button',{name:'Back to Maintenance',exact:true}).click();
- assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),'1');
- assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').innerText(),'1');
+ assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),'3');
+ assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').innerText(),'3');
  await page.getByRole('button',{name:/Updates.*updates available/}).click();
  await page.locator('#available-updates-list li').first().waitFor();
  assert.equal(await page.locator('#available-updates-list li').count(),1);
  assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
  assert.equal(await page.locator('#available-updates-list .a-check-result').count(),0);
+ await page.getByRole('region',{name:'High-impact changes',exact:true}).waitFor();
+ assert.equal(await page.locator('.a-release-notices article').count(),2);
+ assert.equal(await page.locator('.a-release-entry').count(),3);
+ await page.screenshot({animations:'disabled',path:'/tmp/amplifier-release-notices-desktop.png'});
+ await page.getByRole('button',{name:'Mark notice reviewed',exact:true}).first().click();
+ await page.waitForFunction(()=>window.amplifier.getState().attention.unread===2);
+ assert.equal(await page.locator('.a-release-notices article').count(),1);
  await page.getByRole('button',{name:'Mark reviewed',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().attention.unread===0);
  assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').count(),0);
  assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').count(),0);
  assert.equal(await page.locator('#available-updates-list li').count(),1);
+ assert.equal(await page.locator('.a-release-notices').count(),0);
+ assert.equal(await page.locator('.a-release-entry').count(),3);
+ assert.equal(await page.locator('.a-release-reviewed').count(),2);
+ await page.reload();
+ await page.getByRole('region',{name:'Changelog',exact:true}).waitFor();
+ assert.equal(await page.locator('.a-release-notices').count(),0);
+ await page.locator('.a-release-entry summary').filter({hasText:'0.11.0'}).click();
+ await page.locator('.a-release-entry').filter({hasText:'0.11.0'}).getByText('Settings now apply across Amplifier apps',{exact:true}).waitFor();
  await page.setViewportSize({width:680,height:844});
  const floating=await page.locator('.a-dialog').boundingBox();assert.ok(floating.x>0&&floating.y>0);assert.ok(floating.width<680);
 
@@ -65,6 +80,8 @@ try{
  await page.setViewportSize({width:390,height:844});
  const rect=await page.locator('.a-dialog').boundingBox();assert.equal(rect.x,0);assert.equal(rect.y,0);assert.equal(rect.width,390);assert.equal(rect.height,844);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+ await page.getByRole('region',{name:'Changelog',exact:true}).scrollIntoViewIfNeeded();
+ await page.screenshot({animations:'disabled',path:'/tmp/amplifier-changelog-mobile.png'});
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-mobile.png'});
 
  await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();

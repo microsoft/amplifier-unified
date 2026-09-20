@@ -18,6 +18,18 @@ Application activation also verifies that the running host and the executable on
 
 ## Publishing application releases
 
+### Changelog and high-impact notices
+
+Updates includes an offline changelog packaged from `amplifier_web/release-notes.json`. History begins at 0.11.0; earlier releases are not reconstructed. Update checks fetch this same file from the exact published Git commit, so skipped releases and their notices appear before installing. Unavailable or invalid notes show a fallback message without blocking installation. Cached notes survive failed checks and restarts; installed package entries take precedence over older cached wording.
+
+Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Keep existing entries so users who skip versions can review the intervening changes.
+
+High-impact notices appear above the update controls and contribute to the shared Settings / Maintenance / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in the changelog after review; changed wording becomes unread again. All high-impact notices in the available history start unread, including on a fresh installation.
+
+The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 100 releases, five notices per release and 256 KB of text; archive older history deliberately when approaching those limits.
+
+### Release workflow
+
 The **Publish application release** GitHub Actions workflow runs when the package version or release tooling changes on main, and can also be started manually on main. A release requires the same stable `X.Y.Z` version in `pyproject.toml` and `amplifier_web/__init__.py`, with the lockfile updated. Build the frontend and commit the resulting `amplifier_web/static` assets before merging; Git-based installs consume those checked-in files.
 
 The workflow runs the Python and frontend tests, rebuilds the frontend and checks for asset drift, builds a wheel and source archive, checks their versions and packaged source/assets, and imports the installed wheel in a fresh environment. It then creates the immutable `vX.Y.Z` tag and a draft release, attaches both distributions and SHA-256 checksums, and publishes the release. Publication happens only after validation and asset upload, so incomplete drafts are invisible to the updater. The workflow uses the repository's GitHub Actions token with contents-write permission; no additional provider credentials or paid model calls are needed.

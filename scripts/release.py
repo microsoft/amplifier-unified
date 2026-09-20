@@ -5,6 +5,7 @@ import argparse
 import ast
 from email.parser import Parser
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -51,6 +52,7 @@ def plan(root):
 def verify_dist(root, dist, expected):
     if version_at(root) != expected:
         raise ValueError("Checkout version changed during release")
+    notes = release_notes(root, expected)
     wheels = list(dist.glob("*.whl"))
     sources = list(dist.glob("*.tar.gz"))
     if len(wheels) != 1 or len(sources) != 1:
@@ -63,7 +65,7 @@ def verify_dist(root, dist, expected):
             raise ValueError("Wheel metadata does not match release version")
         prefix = "amplifier_web/"
         files = [path for path in (root / "amplifier_web").rglob("*")
-                 if path.is_file() and (path.suffix in {".py", ".js"} or path.is_relative_to(root / "amplifier_web/static")
+                 if path.is_file() and (path.suffix in {".py", ".js"} or path.name == 'release-notes.json' or path.is_relative_to(root / "amplifier_web/static")
                                        or path.is_relative_to(root / "amplifier_web/runtime_deps"))
                  and "__pycache__" not in path.parts and path.suffix != ".pyc"]
         for path in files:
@@ -81,8 +83,24 @@ def verify_dist(root, dist, expected):
         module = archive.extractfile(prefix + "amplifier_web/__init__.py").read().decode()
         if package_version(project, module) != expected:
             raise ValueError("Source archive does not match release version")
+        if notes and archive.extractfile(prefix + 'amplifier_web/release-notes.json').read() != (root / 'amplifier_web/release-notes.json').read_bytes():
+            raise ValueError('Source archive does not contain validated release notes')
     (dist / "SHA256SUMS").write_text("".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in [*wheels, *sources]))
+
+
+def release_notes(root, expected):
+    path = root / 'amplifier_web/release_notes.py'
+    # Rerunning an immutable historical tag must still use its original assets.
+    if not path.exists() and tuple(map(int, expected.split('.'))) <= (0, 11, 2):
+        return None
+    if not path.is_file():
+        raise ValueError('Release notes module is required')
+    spec = importlib.util.spec_from_file_location('release_history', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    entries = module.parse((root / 'amplifier_web/release-notes.json').read_text(), expected)
+    return module.markdown(entries, expected)
 
 
 def publish(root, repository, tag, revision, dist):
@@ -112,9 +130,15 @@ def publish(root, repository, tag, revision, dist):
     if release and not release["isDraft"]:
         print("Release already published; immutable tag and assets left unchanged.")
         return
+    notes = release_notes(root, tag[1:])
+    notes_file = dist / 'RELEASE_NOTES.md'
+    if notes:
+        notes_file.write_text(notes)
     if release is None:
         run("gh", "release", "create", tag, "--repo", repository, "--verify-tag", "--draft", "--title",
-            "Amplifier Unified " + tag[1:], "--generate-notes")
+            "Amplifier Unified " + tag[1:], *(['--notes-file', str(notes_file)] if notes else ['--generate-notes']))
+    elif notes:
+        run('gh', 'release', 'edit', tag, '--repo', repository, '--notes-file', str(notes_file))
     assets = [*sorted(dist.glob("*.whl")), *sorted(dist.glob("*.tar.gz")), dist / "SHA256SUMS"]
     run("gh", "release", "upload", tag, *map(str, assets), "--repo", repository, "--clobber")
     # Do not make an older repair release latest over an already published newer version.

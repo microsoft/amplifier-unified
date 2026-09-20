@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "releases": [
+    {
+      "version": "0.11.3",
+      "title": "Release history and important update notices",
+      "changes": [
+        "Updates now includes a changelog, with installed release notes available offline and upcoming notes loaded from the exact published release.",
+        "High-impact changes show what changed and what to do. Review status is shared across devices; reviewing clears the badge and keeps the notice in the changelog.",
+        "Release publishing now requires an authored changelog entry and uses it for GitHub release notes. This history begins with version 0.11.0."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.11.1",
+      "title": "Live conversations across windows and devices",
+      "changes": [
+        "Connected web windows and devices share accepted messages, live replies, approvals and running work.",
+        "Each browser keeps its own selected conversation, drafts, panels and canvas controls. Reload restores that browser's view; disconnecting leaves work running.",
+        "The service API and Python adapter support future terminal clients. A separate TUI application is not included in this release.",
+        "Shared configuration introduced in 0.11.0 is preserved."
+      ],
+      "notices": [
+        {
+          "id": "independent-browser-views",
+          "title": "Devices share work and keep separate views",
+          "detail": "Messages and approvals affect the same live conversation across connected devices. Selecting another conversation or editing an unsent draft now affects only that browser. The first browser to attach inherits saved drafts from the previous shared view.",
+          "action": "Use the same conversation on another device to follow ongoing work. Check the first attached browser for drafts saved before this upgrade. Closing a browser does not stop the work."
+        }
+      ]
+    },
+    {
+      "version": "0.11.0",
+      "title": "Shared Amplifier configuration",
+      "changes": [
+        "Amplifier Unified reads the same ~/.amplifier/settings.yaml as Amplifier CLI, including providers, model routing, bundle defaults and voice preferences.",
+        "Workspace .amplifier/settings.yaml and settings.local.yaml override global defaults; existing session overrides remain in effect.",
+        "Provider credentials use the shared ~/.amplifier/keys.env and routing profiles use shared Amplifier locations."
+      ],
+      "notices": [
+        {
+          "id": "shared-configuration",
+          "title": "Settings now apply across Amplifier apps",
+          "detail": "Shared ~/.amplifier configuration is now authoritative. Changes to shared providers, routing and voice preferences can affect CLI and Unified sessions. Migration preserves existing shared values and keeps a backup of the previous private Unified settings; conflicting private values are not copied over shared values.",
+          "action": "Review providers, model routing and voice preferences after upgrading. Put project-specific choices in the workspace's .amplifier settings. If an old Unified choice is missing, compare the migration backup under ~/.amplifier-unified/backups/shared-settings-* before changing shared values."
+        }
+      ]
+    }
+  ]
+}

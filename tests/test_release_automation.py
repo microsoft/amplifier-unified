@@ -23,6 +23,8 @@ def repository(tmp_path):
     (tmp_path/'amplifier_web/__init__.py').write_text('__version__ = "1.2.3"\n')
     (tmp_path/'amplifier_web/static/index.html').write_text('<script src="/assets/app.js"></script>')
     (tmp_path/'amplifier_web/static/assets/app.js').write_text('console.log("packaged")')
+    (tmp_path/'amplifier_web/release_notes.py').write_text((Path(__file__).parents[1]/'amplifier_web/release_notes.py').read_text())
+    (tmp_path/'amplifier_web/release-notes.json').write_text(json.dumps({'schemaVersion':1,'releases':[{'version':'1.2.3','title':'Fixture release','changes':['A useful change.'],'notices':[{'id':'migration','title':'Review settings','detail':'Settings moved.','action':'Review your defaults.'}]}]}))
     git(tmp_path,'init','-b','main');git(tmp_path,'config','user.email','release-test@example.invalid');git(tmp_path,'config','user.name','Fixture')
     git(tmp_path,'add','.');git(tmp_path,'commit','-m','release')
     return tmp_path
@@ -35,7 +37,7 @@ def distributions(root):
         for path in (root/'amplifier_web').rglob('*'):
             if path.is_file():wheel.write(path,path.relative_to(root))
     with tarfile.open(dist/'amplifier_unified-1.2.3.tar.gz','w:gz') as source:
-        for path in (root/'pyproject.toml',root/'amplifier_web/__init__.py'):
+        for path in (root/'pyproject.toml',root/'amplifier_web/__init__.py',root/'amplifier_web/release-notes.json'):
             source.add(path,'amplifier_unified-1.2.3/'+str(path.relative_to(root)))
     return dist
 
@@ -108,6 +110,8 @@ def test_new_release_publishes_only_after_draft_assets_are_uploaded(repository,m
     mutations=[call for call in calls if call[:2]==('git','push') or call[:3] in {('gh','release','create'),('gh','release','upload'),('gh','release','edit')}]
     assert [call[1] if call[0]=='git' else call[2] for call in mutations]==['push','create','upload','edit']
     assert '--draft' in mutations[1] and '--verify-tag' in mutations[1]
+    assert '--notes-file' in mutations[1] and '--generate-notes' not in mutations[1]
+    assert 'What to do:' in (dist/'RELEASE_NOTES.md').read_text()
     assert '--draft=false' in mutations[-1] and '--latest=true' in mutations[-1]
     assert not any('--force' in call for call in calls)
 
@@ -120,3 +124,26 @@ def test_invalid_package_never_creates_a_tag_or_release(repository,monkeypatch):
     with pytest.raises(ValueError,match='validated source/assets'):
         release.publish(repository,'example/app','v1.2.3',revision,dist)
     assert calls==[('git','rev-parse','HEAD')]
+
+
+def test_release_requires_notes_for_exact_version_before_any_mutation(repository,monkeypatch):
+    dist=distributions(repository);revision=git(repository,'rev-parse','HEAD');calls=[]
+    path=repository/'amplifier_web/release-notes.json'
+    path.write_text(path.read_text().replace('1.2.3','1.2.2'))
+    monkeypatch.setattr(release,'run',lambda *args,**kwargs:calls.append(args) or revision)
+    with pytest.raises(ValueError,match='published version'):
+        release.publish(repository,'example/app','v1.2.3',revision,dist)
+    assert calls==[('git','rev-parse','HEAD')]
+
+
+def test_release_detects_unpacked_or_stale_notes(repository):
+    dist=distributions(repository)
+    path=repository/'amplifier_web/release-notes.json'
+    path.write_text(path.read_text().replace('A useful change.','An additional change.'))
+    with pytest.raises(ValueError,match='validated source/assets'):
+        release.verify_dist(repository,dist,'1.2.3')
+
+
+def test_historical_release_rerun_before_notes_supported(tmp_path):
+    assert release.release_notes(tmp_path,'0.11.2') is None
+    with pytest.raises(ValueError,match='required'):release.release_notes(tmp_path,'0.11.3')
