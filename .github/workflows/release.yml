@@ -68,6 +68,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:navigation-browser
+      - name: Verify pending message delivery and editing
+        working-directory: frontend
+        run: npm run test:message-outbox-browser
       - name: Verify cached-source update reporting
         if: ${{ hashFiles('frontend/tests/cache-usage-browser.mjs') != '' }}
         working-directory: frontend

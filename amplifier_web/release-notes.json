@@ -8,7 +8,8 @@
         "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
         "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
         "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Conversation diagnosis and safe recovery copies remain available from Current conversation. Unsaved private fields survive moving between settings sections while the dialog is open.",
-        "Notification refreshes and maintenance actions keep progress visible until completion. Mobile layouts, keyboard navigation, and shared or custom skins remain supported."
+        "Notification refreshes and maintenance actions keep progress visible until completion. Mobile layouts, keyboard navigation, and shared or custom skins remain supported.",
+        "Sending clears the composer immediately and tracks pending delivery beside the message, with explicit retry or delivery checks. Message editing can continue in the current conversation or create a fork, preserving the original history."
       ],
       "notices": []
     },
