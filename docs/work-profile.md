@@ -11,8 +11,9 @@ installs Unified from this checkout, with the app's normal packaged worker.
 
 ## Opt in
 
-Open **Session details → New conversation options** and enter this in its
-**Bundle** field:
+In Unified v0.12.0 or later, use **Conversation bundle** beside the model to choose
+a registered root, preview an idle conversation switch, or fork with another root.
+The new-conversation options also accept a bundle source:
 
 ```text
 git+https://github.com/bkrabach/amplifier-bundle-work@main#subdirectory=bundle.md
@@ -95,3 +96,10 @@ retained corrections, one tool execution, verified child output, public streamin
 to both clients, offline completion, draft isolation, reload, and no browser
 errors or visible alerts. The completion screenshot was also inspected. This
 migration run did not repeat the earlier compaction or audio scenarios.
+
+
+The optional `anchors-work` preset lives at `presets/anchors-work.md` in the same
+bundle repository. It retains Anchors capabilities while composing Work behavior
+last. Register that source as a standalone alias too. See
+[scoped bundle defaults and switching](SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified)
+for app, workspace, and shared defaults and history-preserving root transitions.

@@ -106,3 +106,40 @@ The adapter is an Amplifier host extension, not a universal Smart Tools
 invocation contract. Deterministic domain operations remain independent of
 provider credentials. See [the TUI handoff](TUI-SHARED-CONFIGURATION.md) for the
 shared file contract, optional adapter interface and cross-host adoption checks.
+
+## Root bundle defaults in Unified
+
+The conversation bundle picker uses registered standalone roots, independently of
+provider/model selection. New conversations use an explicit bundle choice first,
+then the workspace's shared local/project default, then Unified's optional app
+preference, then the shared user default (falling back to `anchors`). Existing
+conversations retain their saved root.
+
+The default picker exposes three scopes. **This Unified app** stores `appBundle`
+in app state and leaves shared settings untouched. **This workspace on this
+computer** edits `bundle.active` in `.amplifier/settings.local.yaml`; clearing it
+reveals a project/team default if present. **Shared Amplifier settings** edits
+`~/.amplifier/settings.yaml` and can affect the CLI and other consuming hosts.
+`bundle.default` provides the same scoped action to agents; `bundle:null` clears
+only the chosen override. The older `settings.update {patch:{bundle:...}}` action
+retains its shared-global meaning for compatibility.
+
+For an existing conversation, preview the new root from the bundle control beside
+the model. Switching requires idle work and an unchanged preview. The root is
+resolved with current host composition; previous conversation mount-plan edits,
+module toggles, mode, and budget overrides are discarded. A compatible model pin
+and its reasoning effort survive. An unavailable provider pin requires an
+explicit reset choice. Original user/tool history is retained; old authoritative
+system/developer rows are replaced by the new root's instructions. The worker
+journals the affected session files, mounts the replacement under the same
+Foundation execution ownership, and restores the original files/configuration if
+mounting fails. Interrupted transactions are recovered on the next mount without
+replaying work. Per-conversation settings from shared files still apply.
+
+**Fork with this bundle** leaves the source unchanged and validates a new root
+before publishing its independent history. It retains visible voice references,
+tool evidence, and artifact snapshots, without copying job ownership, approvals,
+or active goals. It does not clone underlying external MCP tool work. Both paths
+use `bundle.preview`, `bundle.switch`, and `bundle.fork` through the shared UI/agent
+action registry. A receipt means accepted; final `bundleChange` state reports the
+outcome. Previews are intentionally invalid after host restart.

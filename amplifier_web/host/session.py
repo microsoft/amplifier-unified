@@ -299,12 +299,38 @@ def module_source(config, snapshot, module, source):
     return source if snapshot else config.module_sources.get(module) or source
 
 
+async def load_root_bundle(config, chosen):
+    """Resolve a root and host composition without per-conversation overrides."""
+    from amplifier_foundation import BundleRegistry
+    registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
+    registrations = dict(config.registrations)
+    if "foundation" in registry.list_registered():
+        registrations.pop("foundation", None)
+    registry.register(registrations)
+    # Search app-owned named bundle files before registry aliases. Direct paths
+    # are resolved from the chosen workspace, matching community bundle usage.
+    candidate = Path(chosen).expanduser()
+    if not candidate.is_absolute():
+        candidate = config.workspace / candidate
+    if candidate.exists():
+        chosen = str(candidate)
+    else:
+        for path in (config.home / "bundles" / chosen, config.home / "bundles" / (chosen + ".md"),
+                     config.workspace / ".amplifier-unified" / "bundles" / chosen):
+            if path.exists():
+                chosen = str(path)
+                break
+    loaded = await registry.load(chosen)
+    loaded = await compose_configured_bundle(registry, loaded, config)
+    return registry, loaded, chosen
+
+
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, **kwargs):
-    from amplifier_foundation import BundleRegistry, SessionConfigurator
+    from amplifier_foundation import SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
     from amplifier_core import HookResult
@@ -359,27 +385,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
-    registrations = dict(config.registrations)
-    if "foundation" in registry.list_registered():
-        registrations.pop("foundation", None)
-    registry.register(registrations)
-    # Search app-owned named bundle files before registry aliases. Direct paths
-    # are resolved from the chosen workspace, matching community bundle usage.
-    candidate = Path(chosen).expanduser()
-    if not candidate.is_absolute():
-        candidate = config.workspace / candidate
-    if candidate.exists():
-        chosen = str(candidate)
-    else:
-        for path in (config.home / "bundles" / chosen, config.home / "bundles" / (chosen + ".md"),
-                     config.workspace / ".amplifier-unified" / "bundles" / chosen):
-            if path.exists():
-                chosen = str(path)
-                break
-    loaded = await registry.load(chosen)
+    registry, loaded, chosen = await load_root_bundle(config, chosen)
     snapshot = is_snapshot(loaded)
-    loaded = await compose_configured_bundle(registry, loaded, config)
     from ..runtime_controls import override_path, validate_plan
     edited_path = override_path(runtime.session_id)
     if edited_path.exists():
@@ -521,7 +528,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 path = config.workspace / path
             if path.is_file():
                 config_inputs.append(str(path.resolve()))
-        report = {"bundle": chosen, "workspace": str(config.workspace),
+        report = {"bundle": chosen, "root_bundle": bundle_identity, "workspace": str(config.workspace),
             "contextIntelligence": {"enabled": bool((coordinator.get_capability('context_intelligence._hook_state') or {}).get('unregister_fns'))},
             "session_id": runtime.session_id, "resumed": messages is not None,
             "providers": list(providers), "tools": list(coordinator.get("tools") or {}),

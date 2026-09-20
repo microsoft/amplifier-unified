@@ -266,7 +266,8 @@ class BundleManager:
                 names = {name for name,row in registry.items() if isinstance(row,dict) and row.get('is_root')}
                 names.update(config.registrations)
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
-                return {"bundles": self.public_entries(settings), "registeredBundles":[{"name":name,"value":name} for name in sorted(names-disabled)]}
+                from .bundle_selection import catalog_entry
+                return {"bundles": self.public_entries(settings), "registeredBundles":[catalog_entry(name) for name in sorted(names-disabled)]}
             def mutate(current):
                 entries = self.entries(current)
                 excluded = set(current.get("web_bundles", {}).get("excluded", []))

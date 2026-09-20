@@ -312,7 +312,7 @@ class RuntimeManager:
                 # Encoding rejected this command before writing to the pipe.
                 row["inflight"].discard(identity)
                 raise
-            timeout = 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = None if op == "control" and args.get("operation") == "bundle.switch" else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:

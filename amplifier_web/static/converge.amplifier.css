@@ -753,3 +753,11 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-subagent-history-list{display:grid;gap:6px}
 #amp-one .a-subagent-history-list>button{justify-content:flex-start;text-align:left;min-width:0}
 #amp-one .a-subagent-history-list>button>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Bundle controls share the composer space without widening narrow chats. */
+#amp-one.a-chat-shell .a-bundle-trigger>span{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one.a-chat-shell .a-bundle-popover{width:min(440px,calc(100vw - 32px));max-height:min(650px,70vh);overflow:auto}
+#amp-one.a-chat-shell .a-bundle-changes{margin-top:16px;font-size:12px}
+#amp-one.a-chat-shell .a-bundle-changes p{overflow-wrap:anywhere;margin:4px 0 12px}
+#amp-one.a-chat-shell .a-bundle-changes input[type=checkbox]{width:auto;margin-right:8px}
+@media(max-width:600px){#amp-one.a-chat-shell .a-bundle-trigger>span{max-width:64px}#amp-one.a-chat-shell .a-bundle-trigger>svg:last-child{display:none}#amp-one.a-chat-shell .a-model-trigger>span{max-width:78px}#amp-one.a-chat-shell .a-bundle-popover{position:fixed;left:16px;right:16px;bottom:112px;width:auto;max-width:none}}

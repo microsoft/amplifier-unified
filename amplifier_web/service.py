@@ -88,6 +88,10 @@ ACTION_DEFINITIONS = {
     "routing.show": ("Inspect a routing preset",schema({"name":string(200)})),
     "routing.use": ("Use a model routing preset",schema({"name":string(200),"scope":{"enum":["global","project","local"]}},["name"])),
     "routing.save": ("Save a custom routing preset",schema({"activate":{"type":"boolean"},"name":string(200),"matrix":{"type":"object"},"scope":{"enum":["global","project","local"]}},["name","matrix"])),
+    "bundle.preview": ("Preview a replacement root bundle for an idle conversation", schema({"sessionId":string(200),"bundle":string(2000)},["sessionId","bundle"])),
+    "bundle.switch": ("Switch an idle conversation after preview; preserve history and compatible model selection", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle","previewId"])),
+    "bundle.fork": ("Fork history into a different root bundle after preview", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle","previewId"])),
+    "bundle.default": ("Set or clear the default root for this app, workspace, or shared Amplifier settings", schema({"scope":{"enum":["app","workspace","shared"]},"bundle":{"type":["string","null"],"minLength":1,"maxLength":2000},"workspace":string(4000)},["scope","bundle"])),
     "bundle.discover": ("Browse bundles and behaviors in a Git repository", schema({"url":string(4000)})),
     "bundles.list": ("List app behaviors and standalone bundles",schema()),
     "bundles.add": ("Add a behavior or standalone bundle",schema({"uri":string(4000),"name":string(200),"role":{"enum":["behavior","standalone"]}},["uri","role"])),
@@ -258,6 +262,9 @@ class AppService:
         for session in self.state["sessions"]:
             restore(session)
             session["configurationBusy"]=False
+            if session.get("bundleChange", {}).get("phase") == "working":
+                session["bundleChange"] = {"phase":"error", "error":"The app restarted during a bundle change. Load the conversation and preview again; work was not replayed."}
+            session.pop("bundlePreview", None)
             if session["status"] in {"working", "starting", "ready", "stopping"}:
                 session["status"] = "interrupted"
                 session["activity"] = {"phase": "interrupted", "label": "Previous work was interrupted; it has not been replayed.", "activeTools": [], "updatedAt": time.time()}
@@ -301,7 +308,8 @@ class AppService:
 
     def _refresh_shared_preferences(self):
         from .shared_settings import read_settings, settings_paths
-        workspace = self.state["settings"]["workspace"]
+        selected = next((row for row in self.state.get("workspaces", []) if row["id"] == self.state.get("selectedWorkspaceId")), {})
+        workspace = selected.get("path") or self.state["settings"]["workspace"]
         paths = settings_paths(workspace)
         def stamp(path):
             try:
@@ -309,13 +317,16 @@ class AppService:
                 return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
             except (FileNotFoundError, NotADirectoryError):
                 return (str(path), None)
-        stamp_value = tuple(stamp(path) for path in paths.values())
+        stamp_value = (self.state["settings"].get("appBundle"), *tuple(stamp(path) for path in paths.values()))
         if getattr(self, "_shared_preferences_stamp", None) == stamp_value:
             return
         settings = read_settings(workspace)
         voice = settings.get("voice", {})
+        from .bundle_selection import defaults
+        bundle_defaults = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))
+        self.state["bundleDefaults"] = bundle_defaults
         self.state["settings"].update(
-            bundle=settings.get("bundle", {}).get("active") or "anchors",
+            bundle=bundle_defaults["effective"],
             preferredVoice=voice.get("preferred_model", "gpt-live-1"),
             fallbackVoice=voice.get("fallback_model", "gpt-realtime-2.1"))
         self._shared_preferences_stamp = stamp_value
@@ -483,11 +494,13 @@ class AppService:
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
         if not args.get('workspace') and selected.get('available') is False:
             raise AppError('This project folder is unavailable. Choose an existing workspace to start work.')
-        workspace = str(Path(args.get("workspace") or self.state["settings"]["workspace"]).expanduser().resolve())
+        workspace = str(Path(args.get("workspace") or selected.get("path") or self.state["settings"]["workspace"]).expanduser().resolve())
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
+        from .bundle_selection import defaults
+        selected_bundle = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))["effective"]
         now = time.time()
-        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or read_settings(workspace).get("bundle", {}).get("active") or "anchors", "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
+        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -537,7 +550,7 @@ class AppService:
             return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -728,6 +741,8 @@ class AppService:
                 self.state['view'].pop('navChatPage', None)
             elif action == "session.delete":
                 session = self._session(args["id"])
+                if session.get("configurationBusy"):
+                    raise AppError("Finish configuration changes before removing this conversation.",409)
                 if self.runtime:
                     pending.append((self.runtime.stop, (session["id"],)))
                 self.history.hide_session(session)
@@ -888,7 +903,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -942,6 +957,21 @@ class AppService:
                     if action == 'smartTools.appCall':
                         self.smart_canvas.binding(args['canvasId'])
                     pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
+            elif action == 'bundle.default':
+                from .preferences import SettingsStore
+                bundle = args['bundle'].strip() if isinstance(args['bundle'], str) else None
+                if bundle == '': raise AppError('Choose a bundle or clear the override.')
+                workspace = str(Path(args.get('workspace') or self.state['settings']['workspace']).expanduser().resolve())
+                if not Path(workspace).is_dir(): raise AppError('Choose an existing workspace.')
+                if args['scope'] == 'app':
+                    self.state['settings']['appBundle'] = bundle
+                else:
+                    def update_default(value):
+                        if bundle: value.setdefault('bundle', {})['active'] = bundle
+                        else: value.get('bundle', {}).pop('active', None)
+                    SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
+                self._shared_preferences_stamp = None
+                self._refresh_shared_preferences()
             elif action.startswith(("bundle.","bundles.","configuration.","runtime.","permissions.","history.","maintenance.","notifications.","providers.","routing.","modules.","sources.","locations.")):
                 if not self.management: raise AppError("Management service is unavailable.")
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
@@ -1275,6 +1305,8 @@ class AppService:
                     session.pop("progress", None)
                 if payload.get("report"):
                     session["runtimeReport"] = payload["report"]
+                    if payload["report"].get("root_bundle"):
+                        session["bundle"] = payload["report"]["root_bundle"]
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
@@ -1392,6 +1424,8 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
+                action_args.setdefault('workspace', self._session(session_id)['workspace'])
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
