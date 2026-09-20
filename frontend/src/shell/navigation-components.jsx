@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Copy,Folder,MoreHorizontal} from 'lucide-react';
 import {chatPage,visibleWorkspaces} from '../chat-navigation';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
-import {activityFor,relativeActivity,compactParent} from '../navigation-presentation';
+import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {WorkspaceExplorer} from '../workspace-explorer';
 import {AttentionBadge} from '../attention';
 import {PathField} from '../settings-ui';
@@ -89,8 +89,8 @@ export function ChatDetails({chat,model,now,close}){
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
   <CopyDetail label="Full workspace path" value={chat.workspace||'Unavailable'}/>
-  <CopyDetail label="Session ID" value={chat.id}/>
-  {chat.runtimeSessionId&&chat.runtimeSessionId!==chat.id&&<CopyDetail label="Runtime session ID" value={chat.runtimeSessionId}/>}
+  <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
+  <p className="a-caption">Shared with Amplifier CLI in this workspace.</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>

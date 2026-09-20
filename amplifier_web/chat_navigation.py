@@ -133,7 +133,8 @@ def snapshot(state):
             continue
         title = session.get('title') or 'Untitled conversation'
         description = session.get('description') or ''
-        if not _matches((title, description, session['id'], workspace['path'], workspace.get('name', '')), query):
+        shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+        if not _matches((title, description, session['id'], shared_id, workspace['path'], workspace.get('name', '')), query):
             continue
         summary = activity(session, bool(unread.get(session['id'])))
         counts[summary['kind']] += 1
