@@ -90,6 +90,7 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
     runtime=Runtime();app=AppService(tmp_path,runtime,workspace=tmp_path)
     await app.dispatch('session.create',{});src=app._session();identity=src['id'];src.update({**source(tmp_path),'id':identity})
     store=SessionStore.for_app(tmp_path,tmp_path);store.save(identity,transcript(),{'preserve_system':True},preserve_system=True)
+    src.update(failure={'category':'old'},health={'failure':{'category':'old'}})
     args={'sessionId':identity,'messageId':'2','text':'Revised question','mode':'current'}
     task=asyncio.create_task(app.dispatch('message.edit',args,command_id='edit-current'))
     await entered.wait()
@@ -97,6 +98,7 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
     release.set();await task
     assert len(app.state['sessions'])==1 and app._session()['id']==identity
     assert [row['text'] for row in src['messages']]==['First user turn','First answer','Revised question']
+    assert 'failure' not in src and 'health' not in src
     assert runtime.inputs==[(identity,'Revised question','edit-current')]
     await app.dispatch('message.edit',args,command_id='edit-current')
     assert len(runtime.inputs)==1

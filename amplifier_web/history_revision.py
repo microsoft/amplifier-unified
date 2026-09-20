@@ -139,7 +139,7 @@ def apply_revision(service, session, result, *, interrupted=False):
     session.update({key: copy.deepcopy(result[key]) for key in ('messages', 'nativeRevision', 'sharedHistoryOffset', 'sharedHistoryUserTurnOffset', 'sharedHistoryTotal') if key in result})
     trim_execution(session, previous, edit['messageId'])
     session.update(historyManaged=False, historyLoaded=True, historyLoading=False, streaming='', workers=[], approvals=[])
-    for key in ('historyActivity', 'nativeBoundary', 'nativeBoundaryId', 'messageWindow', 'executionWindow', 'error'):
+    for key in ('historyActivity', 'nativeBoundary', 'nativeBoundaryId', 'messageWindow', 'executionWindow', 'error', 'failure', 'health'):
         session.pop(key, None)
     message = service._message(session, 'user', edit['text'], edit['via'], inputId=edit['operationId'], attachments=edit['attachments'])
     if interrupted:
