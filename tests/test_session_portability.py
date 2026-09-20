@@ -13,7 +13,7 @@ async def test_fallback_is_visible_in_native_metadata_and_reverse_rename_survive
         await app.dispatch("session.create", {})
         session = app._session()
         sid = session["id"]
-        session.update(title="A useful first prompt", titleSource="automatic")
+        session.update(title="A useful first prompt", titleSource="automatic", description="Existing description")
         app._save()
         store = SessionStore.for_app(app.data_dir, tmp_path)
         messages = [{"role": "user", "content": "original", "metadata": {"opaque": "kept"}}]
@@ -22,7 +22,10 @@ async def test_fallback_is_visible_in_native_metadata_and_reverse_rename_survive
         names = SessionMetadataStore(directory)
         assert names.read()["name"] == "A useful first prompt"
         assert names.read()["name_source"] == "fallback"
+        assert names.read()["description"] == "Existing description"
+        names.update({"description": "Changed in the CLI"})
         await app.dispatch("session.rename", {"id": sid, "title": "Web choice"})
+        assert names.read()["description"] == "Changed in the CLI"
         await app.dispatch("session.rename", {"id": sid, "title": "New conversation"})
         assert names.read()["name"] == "New conversation"
         assert names.read()["name_source"] == "manual"

@@ -88,5 +88,6 @@ def persist(home, session, *, shared_rename=False, expected_revision=None):
     if title and (shared_rename or title not in PLACEHOLDERS):
         store.set_name(title[:200], source='manual' if shared_rename else
                        ('generated' if source == 'generated' else 'fallback'),
-                       description=session.get('description'), expected_revision=expected_revision)
+                       description=session.get('description') if source == 'generated' and not shared_rename else None,
+                       expected_revision=expected_revision)
     refresh(home, session)

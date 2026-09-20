@@ -127,9 +127,12 @@ class SessionStore:
         previous = history.load_metadata()
         saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {})})
         if not previous.get('name'):
-            title, source, _, _ = initial_name(history.session_dir)
+            title, source, legacy, view = initial_name(history.session_dir)
             if isinstance(title, str) and title.strip():
                 saved_metadata.update(name=title.strip()[:200], name_source=source)
+                description = legacy.get('description') or view.get('description')
+                if isinstance(description, str) and description.strip():
+                    saved_metadata.setdefault('description', description)
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
         if saved_metadata.get('bundle_name'):
             saved_metadata['bundle'] = saved_metadata['bundle_name']
