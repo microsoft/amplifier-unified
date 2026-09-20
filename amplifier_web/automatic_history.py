@@ -232,6 +232,13 @@ class AutomaticHistory:
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
+                    # Most refreshes contain no unresolved folders. Index the
+                    # exceptions once instead of rescanning every registration
+                    # for every discovered workspace while holding the app lock.
+                    unresolved_by_project = {}
+                    for item in state['workspaces']:
+                        if not item.get('path'):
+                            unresolved_by_project.setdefault(item.get('nativeProject'), {})[item['id']] = item
                     for row in known:
                         previous = workspaces.get(row['id'])
                         if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
@@ -246,9 +253,9 @@ class AutomaticHistory:
                         if row['id'] in hidden_workspaces:
                             continue
                         previous = workspaces.get(row['id'])
-                        unresolved = [item for item in state['workspaces']
-                                      if item.get('nativeProject') == row['nativeProject']
-                                      and item['id'] != row['id'] and not item.get('path')]
+                        previous_project = previous.get('nativeProject') if previous else None
+                        unresolved = [item for identity, item in unresolved_by_project.get(row['nativeProject'], {}).items()
+                                      if identity != row['id']]
                         if previous is None:
                             state['workspaces'].append(dict(row)); workspaces[row['id']] = state['workspaces'][-1]
                             previous = workspaces[row['id']]
@@ -257,6 +264,13 @@ class AutomaticHistory:
                             for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
                                 if key in row and previous.get(key) != row[key]:
                                     previous[key] = row[key]; changed = True
+                        if not previous.get('path'):
+                            # Later rows in this same scan must see additions
+                            # and identity changes, just as a fresh list scan did.
+                            project = previous.get('nativeProject')
+                            if previous_project != project:
+                                unresolved_by_project.get(previous_project, {}).pop(previous['id'], None)
+                            unresolved_by_project.setdefault(project, {})[previous['id']] = previous
                         for old in unresolved:
                             # Migrate the generated placeholder, preserving any
                             # user customization and every reference to it.
@@ -279,6 +293,7 @@ class AutomaticHistory:
                                     scoped['workspaceId'] = row['id']
                             state['workspaces'].remove(old)
                             workspaces.pop(old['id'], None)
+                            unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
                             changed = True
                     existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                  s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
