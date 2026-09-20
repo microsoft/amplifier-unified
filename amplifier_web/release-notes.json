@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.6",
+      "title": "Reliable live-session activation and terminal client handoff",
+      "changes": [
+        "A new live turn keeps session ownership while it is being scheduled, preventing a concurrent UI control from parking it before execution starts.",
+        "The runtime uses the reviewed loop-live scheduling correction across both session preparation and installed runtime dependencies.",
+        "The TUI developer handoff documents the supported connection, command, snapshot, retry and lifecycle contracts with validation boundaries."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.5",
       "title": "Updates resume after inspecting runtime settings",
       "changes": [

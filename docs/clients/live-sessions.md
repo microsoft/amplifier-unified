@@ -1,5 +1,8 @@
 # Unified live session contract, version 1
 
+TUI implementers: start with the [integration handoff](tui-handoff.md) for the
+supported release, client lifecycle, retry rules and acceptance checklist.
+
 Unified owns execution while holding the Foundation session lock. Web, terminal,
 and native clients attach to that host. Attaching or disconnecting a client never
 acquires, releases, stops, or transfers execution ownership. Existing CLI takeover
