@@ -33,6 +33,11 @@ and later update intervals. A custom name supplied through Rename is preserved,
 including against a late generated result; automatic naming calls are skipped
 for custom names. Canonical names remain in shared session metadata for CLI use.
 
+Client builders: the [shared-client direction packet](docs/clients/direction.md)
+proposes common experience and state contracts for web, TUI and future native
+clients, with a source assessment and coordination plan. These contracts are DRAFT;
+the [live-session API](docs/clients/live-sessions.md) documents current transport support.
+
 ## Run this checkout
 
 ```sh
