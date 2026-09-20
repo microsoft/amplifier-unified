@@ -5,6 +5,7 @@ refreshable. User-supplied pins and local worktrees remain explicit choices.
 """
 from __future__ import annotations
 import asyncio
+from collections.abc import Mapping
 import hashlib
 import json
 import os
@@ -120,8 +121,20 @@ def configured_sources(service):
     selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
                       for s in state['sessions']
                       if not (s.get('historyManaged') and s.get('historyReadOnlyReason')))
-    selections.update((w['path'], None, None) for w in state.get('workspaces', [])
-                      if isinstance(w.get('path'), str) and w['path'].strip())
+    for workspace in state.get('workspaces', []):
+        # Native history retains an unavailable, pathless workspace placeholder.
+        # It is not a source-selection error, unlike malformed workspace rows.
+        if (isinstance(workspace, Mapping)
+                and isinstance(workspace.get('nativeProject'), str)
+                and workspace.get('nativeProject')
+                and 'path' in workspace and workspace['path'] is None
+                and workspace.get('available') is False):
+            continue
+        path = workspace.get('path') if isinstance(workspace, Mapping) else None
+        if not isinstance(path, str) or not path.strip():
+            incomplete = True
+            continue
+        selections.add((path, None, None))
     try:
         path = foundation_home(home)/'registry.json'
         registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
@@ -450,7 +463,9 @@ class UpdateManager:
                 'id', 'workspace', 'bundle', 'runtimeSessionId', 'nativeIdentity',
                 'historyManaged', 'historyReadOnlyReason') if key in row}
                 for row in state['sessions']],
-            'workspaces': [{'path': row.get('path')} for row in state.get('workspaces', [])],
+            'workspaces': [{key: row[key] for key in ('nativeProject', 'path', 'available') if key in row}
+                           if isinstance(row, Mapping) else row
+                           for row in state.get('workspaces', [])],
         })
         snapshot.source_issues = []
         configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
