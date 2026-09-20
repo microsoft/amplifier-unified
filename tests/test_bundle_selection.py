@@ -85,11 +85,13 @@ def test_fork_with_bundle_keeps_tools_voice_and_original_but_replaces_instructio
 
 
 @pytest.mark.parametrize('fail',[False,True])
-async def test_worker_switch_commits_only_after_mount_and_rolls_back_failure(tmp_path,monkeypatch,fail):
+@pytest.mark.parametrize('reviewed',[False,True])
+async def test_worker_switch_commits_only_after_mount_and_rolls_back_failure(tmp_path,monkeypatch,fail,reviewed):
     home=tmp_path/'app';store,messages=seed(home,tmp_path)
     result={'bundle':'work','fingerprint':'same','selection':None,'modelCompatible':True}
-    async def inspect(*args): return result.copy()
-    monkeypatch.setattr('amplifier_web.bundle_selection.preview',inspect)
+    candidate=object()
+    async def inspect(*args): return result.copy(),candidate
+    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle',inspect)
     class Controls:
         def require_idle(self): pass
         async def checkpoint(self): pass
@@ -107,16 +109,18 @@ async def test_worker_switch_commits_only_after_mount_and_rolls_back_failure(tmp
             self.started=[]
         async def start(self,config,**kw):
             self.started.append(config['bundle'])
+            assert kw.get('resolved_root') is (candidate if config['bundle']=='work' else None)
             if fail and config['bundle']=='work': raise ValueError('module did not mount')
             self.controls=Controls();self.session=Session()
     worker=Worker()
+    args={'bundle':'work',**({'previewId':'reviewed'} if reviewed else {})}
     if fail:
-        with pytest.raises(ValueError,match='did not mount'): await switch(worker,{'bundle':'work','previewId':'reviewed'})
+        with pytest.raises(ValueError,match='did not mount'): await switch(worker,args)
         assert store.load('source')[0]==messages
         assert store.load('source')[1]['bundle_name']=='anchors'
         assert worker.started==['work','anchors']
     else:
-        assert (await switch(worker,{'bundle':'work','previewId':'reviewed'}))['historyPreserved']
+        assert (await switch(worker,args))['historyPreserved']
         assert store.load('source')[0]==messages[1:]
         assert store.load('source')[1]['bundle_name']=='work'
     assert not worker.remounting
@@ -173,15 +177,17 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
         assert app.state['actionStatus']['bundle.preview']['phase']=='error'
     finally: await app.close()
 
-async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path):
+@pytest.mark.parametrize('reviewed',[False,True])
+async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path,reviewed):
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
         await app.dispatch('session.create',{'bundle':'anchors'})
         source=app._session();sid=source['id']
         source['messages']=[{'id':'user','role':'user','text':'keep'}]
-        await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
-        await settled(app)
-        payload={'action':'bundle.fork','id':'fork-once','args':{'sessionId':sid,'bundle':'work','previewId':'token'}}
+        if reviewed:
+            await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
+            await settled(app)
+        payload={'action':'bundle.fork','id':'fork-once','args':{'sessionId':sid,'bundle':'work',**({'previewId':'token'} if reviewed else {})}}
         await app.app_bridge('dispatch',payload,sid);await settled(app)
         child=app._session();assert child['id']!=sid and child['bundle']=='work'
         assert child['messages']==[{'id':'user','role':'user','text':'keep','nativeIndex':0}]
@@ -207,11 +213,62 @@ async def test_generic_runtime_action_cannot_bypass_root_switch_policy(tmp_path)
 async def test_unavailable_model_requires_explicit_reset_before_any_mutation(tmp_path,monkeypatch):
     home=tmp_path/'app';store,messages=seed(home,tmp_path)
     inspected={'bundle':'work','fingerprint':'same','selection':{'instance':'missing','model':'chosen'},'modelCompatible':False}
-    async def preview(*args):return inspected.copy()
-    monkeypatch.setattr('amplifier_web.bundle_selection.preview',preview)
+    async def inspect(*args):return inspected.copy(),object()
+    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle',inspect)
     worker=SimpleNamespace(controls=SimpleNamespace(require_idle=lambda:None),workspace=tmp_path,
                            bundle_preview={**inspected,'previewId':'token'})
-    with pytest.raises(ValueError,match='unavailable'):
-        await switch(worker,{'bundle':'work','previewId':'token'})
+    result=await switch(worker,{'bundle':'work'})
+    assert result['requiresModelChoice'] and not result['preview']['modelCompatible']
+    assert worker.bundle_preview['previewId']==result['preview']['previewId']
     assert store.load('source')[0]==messages
     assert not (home/'sessions/source/bundle-transition.json').exists()
+
+
+async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path):
+    class ModelRuntime(Runtime):
+        async def control(self,sid,operation,args):
+            if operation=='bundle.switch' and not args.get('resetModel'):
+                self.calls.append((sid,operation,args))
+                return {'requiresModelChoice':True,'preview':{'bundle':'work','previewId':'model-choice','modelCompatible':False}}
+            return await super().control(sid,operation,args)
+    runtime=ModelRuntime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
+    try:
+        await app.dispatch('session.create',{'bundle':'anchors'})
+        sid=app._session()['id']
+        app._session()['selection']={'instance':'old','model':'pinned'}
+        await app.app_bridge('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work'}},sid)
+        await settled(app)
+        assert app._session()['bundle']=='anchors'
+        assert app._session()['bundlePreview']['previewId']=='model-choice'
+        assert app._session()['bundleChange']['phase']=='error'
+        assert app._session()['selection']['model']=='pinned'
+        assert not app._session()['configurationBusy']
+        await app.app_bridge('dispatch',{'action':'bundle.switch','args':{'sessionId':sid,'bundle':'work','previewId':'model-choice','resetModel':True}},sid)
+        await settled(app)
+        assert app._session()['bundle']=='work'
+        assert 'selection' not in app._session()
+        assert not any(op=='bundle.preview' for _,op,_ in runtime.calls)
+    finally: await app.close()
+
+
+async def test_stale_reviewed_preview_rejected_before_checkpoint(tmp_path,monkeypatch):
+    checked={'bundle':'work','fingerprint':'new','selection':None,'modelCompatible':True}
+    async def inspect(*args):return checked,object()
+    monkeypatch.setattr('amplifier_web.bundle_selection.inspect_bundle',inspect)
+    worker=SimpleNamespace(controls=SimpleNamespace(require_idle=lambda:None),workspace=tmp_path,
+                           bundle_preview={**checked,'fingerprint':'old','previewId':'token'})
+    with pytest.raises(ValueError,match='Preview it again'):
+        await switch(worker,{'bundle':'work','previewId':'token'})
+
+
+def test_resolved_root_is_one_use_and_rejects_changed_settings(tmp_path):
+    from amplifier_web.host.session import ResolvedRoot
+    from amplifier_web.host.config import HostConfig
+    config=HostConfig(tmp_path,tmp_path,{'bundle':{'active':'work'}},tmp_path/'cache')
+    root=(object(),object(),'resolved')
+    candidate=ResolvedRoot(copy.deepcopy(config),'work',root)
+    changed=copy.deepcopy(config);changed.settings['bundle']['active']='other'
+    with pytest.raises(ValueError,match='changed'):candidate.take(changed,'work')
+    with pytest.raises(ValueError,match='changed'):candidate.take(config,'other')
+    assert candidate.take(config,'work') is root
+    with pytest.raises(ValueError,match='changed'):candidate.take(config,'work')

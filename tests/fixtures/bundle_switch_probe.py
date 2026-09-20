@@ -33,6 +33,13 @@ async def mount(coordinator,config=None):
     import amplifier_web.runtime_worker as module
     from amplifier_web.host.storage import SessionStore
     events=[];module.publish=events.append;worker=Worker()
+    import amplifier_web.host.session as host
+    original_load=host.load_root_bundle
+    resolutions=[]
+    async def counted_load(config,bundle):
+        resolutions.append(bundle)
+        return await original_load(config,bundle)
+    host.load_root_bundle=counted_load
     async def control(operation,args=None):
         identity='request-'+str(len(events))
         await worker.command({'op':'control','id':identity,'operation':operation,'arguments':args or {}})
@@ -54,7 +61,9 @@ async def mount(coordinator,config=None):
         original=store.load('switch-fixture')[0]
         checked=await control('bundle.preview',{'bundle':bundles['second']})
         assert checked['modelCompatible']
+        resolutions.clear()
         result=await control('bundle.switch',{'bundle':bundles['second'],'previewId':checked['previewId']})
+        assert resolutions==[bundles['second']]
         assert result['providers']['effective']['model']=='fixture'
         assert result['providers']['effective']['effort']=='high'
         assert worker.session.coordinator.get('context').max_tokens==20000
@@ -62,20 +71,24 @@ async def mount(coordinator,config=None):
         assert store.load('switch-fixture')[1]['bundle_name']==bundles['second']
         assert 'second root instructions' in worker.controls.prepared.bundle.instruction
         assert any(event.get('type')=='runtime.ready' and event['report'].get('root_bundle')==bundles['second'] for event in events)
+        resolutions.clear()
+        await control('bundle.switch',{'bundle':bundles['first']})
+        assert resolutions==[bundles['first']]
+        assert store.load('switch-fixture')[0]==original
+        assert worker.session.coordinator.get('context').max_tokens==10000
         before=store.load('switch-fixture')
-        checked=await control('bundle.preview',{'bundle':bundles['bad']})
         try:
-            await control('bundle.switch',{'bundle':bundles['bad'],'previewId':checked['previewId']})
+            await control('bundle.switch',{'bundle':bundles['bad']})
             raise AssertionError('broken candidate accepted')
         except RuntimeError as exc: assert 'mount' in str(exc).lower() or 'provider' in str(exc).lower()
         assert store.load('switch-fixture')[0]==before[0]
-        assert store.load('switch-fixture')[1]['bundle_name']==bundles['second']
-        assert worker.session.coordinator.get('context').max_tokens==20000
+        assert store.load('switch-fixture')[1]['bundle_name']==bundles['first']
+        assert worker.session.coordinator.get('context').max_tokens==10000
         assert not worker.shutdown.is_set()
         await worker.command({'op':'send','id':'after','input_id':'after-switch','text':'Continue after the failed switch.'})
         await settled()
         assert sum(event.get('type')=='assistant.message' for event in events)==2
-        print(json.dumps({'real_switch':True,'history_preserved':True,'model_effort_preserved':True,'old_budget_reset':True,'failed_mount_rolled_back':True,'continued_after_failure':True,'replayed_work':False}))
+        print(json.dumps({'reviewed_and_direct_switch':True,'one_resolution_per_apply':True,'history_preserved':True,'model_effort_preserved':True,'old_budget_reset':True,'failed_mount_rolled_back':True,'continued_after_failure':True,'replayed_work':False}))
     finally:
         worker.shutdown.set();await worker.run()
 

@@ -122,3 +122,25 @@ def test_tool_text_redacts_userinfo_tokens_assignments_and_private_keys():
     result += tool_detail('{"api_key":"json-string-credential"}')
     for forbidden in ('a-secret-token','some-key','another-token','private-material','json-string-credential'):
         assert forbidden not in result
+
+
+def test_repeated_tool_completion_preserves_end_time_and_retry_clears_old_result(monkeypatch):
+    events=ExecutionEvents('root',lambda event:None)
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:10)
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{}})
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:12)
+    result={'tool_call_id':'call','tool_result':{'success':False,'error':'failed once'}}
+    events.hook('root','tool:post',result)
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:20)
+    events.hook('root','tool:post',result)
+    assert events.nodes['tool:root:call']['endedAt']==12
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{}})
+    row=events.nodes['tool:root:call']
+    assert row['phase']=='running' and row['startedAt']==10
+    assert all(row.get(key) is None for key in ('endedAt','output','error'))
+    from amplifier_web.execution import ingest
+    session={}
+    ingest(session,{**row,'phase':'error','endedAt':12,'error':'failed once'})
+    ingest(session,row)
+    assert session['execution']['nodes'][0]['endedAt'] is None
+    assert session['execution']['nodes'][0]['error'] is None

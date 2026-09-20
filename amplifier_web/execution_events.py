@@ -71,7 +71,9 @@ class ExecutionEvents:
                    "phase": event.get("status", "running"), "label": event.get("agent") or "Worker",
                    "toolCallId": call_id, "startedAt": previous.get("startedAt", time.time())}
             if row["phase"] in {"completed", "cancelled", "error", "interrupted"}:
-                row["endedAt"] = time.time()
+                row["endedAt"] = previous.get("endedAt") or time.time()
+            else:
+                row["endedAt"] = None
             if isinstance(event.get("report"),str) and event["report"]:
                 row["summary"]=event["report"][:12000]
             elif previous.get("summary"):row["summary"]=previous["summary"]
@@ -142,6 +144,7 @@ class ExecutionEvents:
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
             arguments=data.get("tool_input",{})
             if event=="tool:pre" and isinstance(arguments,dict):
+                row.update(endedAt=None, output=None, error=None)
                 row["input"] = tool_detail(arguments)
                 try: public_arguments = json.loads(row["input"])
                 except (ValueError, TypeError): public_arguments = {}
@@ -149,7 +152,7 @@ class ExecutionEvents:
                 row["purpose"] = tool_detail(operation)[:200]
                 row["summary"] = "Running " + row["label"] + (" · " + row["purpose"] if row["purpose"] else "")
             if event != "tool:pre":
-                row["endedAt"] = now
+                if row.get("endedAt") is None: row["endedAt"] = now
                 result=data.get("tool_result",{})
                 if hasattr(result,"model_dump"):result=result.model_dump()
                 failed=event=="tool:error" or (isinstance(result,dict) and result.get("success") is False)
