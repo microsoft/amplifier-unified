@@ -33,6 +33,8 @@ class Worker:
     def __init__(self):
         self.session = self.runtime = self.execution = None
         self.approvals = {}
+        self.operation_ids = set()
+        self.operation_controls = 0
         self.bridges = {}
         self.start_task = None
         self.tasks = set()
@@ -118,6 +120,20 @@ class Worker:
         if coordinator.get_capability("web.activity"):
             return
         coordinator.register_capability("web.activity", True)
+        async def observe_operation(event):
+            identity = (coordinator.session_id, event.get("operationId"))
+            if event.get("phase") == "started":
+                self.operation_ids.add(identity)
+            try:
+                return await self.bridge("operations.observe", {
+                    "runtimeSessionId": coordinator.session_id, "event": event})
+            finally:
+                if event.get("phase") == "finished":
+                    self.operation_ids.discard(identity)
+                    task = asyncio.create_task(self.park())
+                    self.tasks.add(task)
+                    task.add_done_callback(self.tasks.discard)
+        coordinator.register_capability("operations.observe", observe_operation)
         def public_stream():
             from amplifier_web.execution_events import CALL_PURPOSE
             return not CALL_PURPOSE.get()
@@ -335,7 +351,7 @@ class Worker:
             if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
             loop = self.session.coordinator.get("orchestrator")
-            if (self.approvals or self.bridges or self.runtime.queued_inputs
+            if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
                     or not self.runtime.inbox.empty() or self.runtime.generation
                     or (loop and (loop.pending or loop._active_jobs()))):
                 return
@@ -445,7 +461,7 @@ class Worker:
             async with self.command_lock:
                 loop = self.session.coordinator.get("orchestrator") if self.session else None
                 settled = bool(self.parked and not self.ownership.yielding
-                    and not self.approvals and not self.bridges and not self.remounting
+                    and not self.approvals and not self.bridges and not self.operation_ids and not self.operation_controls and not self.remounting
                     and not self.runtime.queued_inputs and self.runtime.inbox.empty()
                     and not self.runtime.generation
                     and not (self.naming and self.naming.pending and not self.naming.pending.done())
@@ -464,9 +480,19 @@ class Worker:
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
+                detached_cancel = op == "control" and data.get("operation") == "operations.cancel"
+                if detached_cancel:
+                    self.operation_controls += 1
+                else:
+                    try:
+                        await self._command_serial(data)
+                    finally:
+                        self.activation_gate.reset(token)
+            if detached_cancel:
                 try:
                     await self._command_serial(data)
                 finally:
+                    self.operation_controls -= 1
                     self.activation_gate.reset(token)
             if op == "control":
                 # A control-only action does not wake the live loop's inbox.

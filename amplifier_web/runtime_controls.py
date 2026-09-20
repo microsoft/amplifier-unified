@@ -223,6 +223,20 @@ class RuntimeControls:
         args = args or {}
         if not isinstance(args, dict):
             raise ValueError("Control arguments must be an object")
+        if operation == "operations.cancel":
+            coordinator = self.coordinator
+            target = args.get("runtimeSessionId")
+            if target != self.session.session_id:
+                children = coordinator.get_capability("live.children")
+                child = children.sessions.get(target) if children else None
+                if child is None:
+                    raise ValueError("The operation's owning session is no longer mounted")
+                coordinator = child.coordinator
+            arguments = {"action": "terminate", "process_id": args.get("processId")}
+            return await self.invoke({"name": "bash", "arguments": arguments},
+                coordinator=coordinator, bound_arguments=arguments,
+                provenance={"source": "operations.cancel", "actor": args.get("actor", "ui"),
+                            "operation_id": args.get("operationId")}, checkpoint=False)
         async with self.lock:
             return await self._perform(operation, args)
 
@@ -582,18 +596,20 @@ class RuntimeControls:
         await self.checkpoint()
         return await self.mode("mode.list", {})
 
-    async def invoke(self, args):
+    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True):
+        coordinator = coordinator or self.coordinator
+        bound_arguments = copy.deepcopy(bound_arguments)
         import jsonschema
         name, arguments = args.get("name"), args.get("arguments", {})
-        tool = (self.coordinator.get("tools") or {}).get(name)
+        tool = (coordinator.get("tools") or {}).get(name)
         if tool is None:
             raise ValueError("Tool is not mounted")
         jsonschema.validate(arguments, getattr(tool,"input_schema",{}))
         call = str(uuid.uuid4())
-        data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user"}
-        hooks = self.coordinator.hooks
+        data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user", "tool_obj":tool, **(provenance or {})}
+        hooks = coordinator.hooks
         pre = await hooks.emit("tool:pre", data)
-        pre = await self.coordinator.process_hook_result(pre,"tool:pre",name)
+        pre = await coordinator.process_hook_result(pre,"tool:pre",name)
         if pre.action == "deny":
             await hooks.emit("tool:error",{**data,"error":{"type":"Denied"}})
             return {"success":False,"error":{"message":pre.reason or "Denied by session policy"},"callId":call}
@@ -601,12 +617,16 @@ class RuntimeControls:
             arguments = pre.data["tool_input"]
             jsonschema.validate(arguments,getattr(tool,"input_schema",{}))
             data = {**data,"tool_input":arguments}
+        if bound_arguments is not None and arguments != bound_arguments:
+            await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
+            raise ValueError("A policy modification cannot redirect operation cancellation")
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
         try:
             result = await tool.execute(arguments)
             await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
-            await self.checkpoint()
+            if checkpoint:
+                await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
         except Exception as exc:
             await hooks.emit("tool:error",{**data,"error":{"type":type(exc).__name__}})
