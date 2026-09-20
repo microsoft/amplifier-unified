@@ -38,9 +38,9 @@ def test_generation_completion_keeps_delivered_and_accepted_distinct():
 
 def test_shipped_ecosystem_sources_do_not_freeze_upstream_revisions():
     import re
-    roots = [ROOT / 'amplifier_web', ROOT / 'behaviors', ROOT / 'scripts/work_profile']
+    roots = [ROOT / 'amplifier_web', ROOT / 'behaviors', ROOT / 'scripts/work_profile', ROOT / '.github']
     paths = [ROOT / 'pyproject.toml'] + [p for root in roots for p in root.rglob('*')
-        if p.suffix in {'.py', '.toml', '.yaml', '.txt'} and not any(
+        if p.suffix in {'.py', '.toml', '.yaml', '.yml', '.txt'} and not any(
             part in {'.venv', 'vendor', 'tests', 'static', '__pycache__'} for part in p.parts)]
     fixed = re.compile(r'git\+https://github.com/(?:microsoft|bkrabach)/amplifier[^\s"\'#@]*@(?:[a-f0-9]{7,40}|v?\d+\.[^\s"\']+)')
     for path in paths:
