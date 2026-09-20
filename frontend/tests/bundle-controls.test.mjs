@@ -22,3 +22,30 @@ test('default selection remains a draft until saved with an explicit scope',asyn
  let root;await renderAct(async()=>{root=create(React.createElement(BundleDefaults,{state,act}))});await renderAct(async()=>root.root.findAllByProps({id:'default-bundle'}).find(n=>n.type==='select').props.onChange({target:{value:'work'}}));assert.equal(calls.filter(row=>row.name==='bundle.default').length,0);
  await renderAct(async()=>root.root.findAllByProps({'data-action':'bundle.default'})[0].props.onClick());assert.deepEqual(calls.find(row=>row.name==='bundle.default').args,{scope:'app',bundle:'work',workspace:'/workspace'});await renderAct(async()=>root.unmount());
 });
+test('direct switch and fork need no preview and show immediate pending feedback',async()=>{
+ let release;const calls=[],act=(name,args)=>{if(name==='bundles.list')return Promise.resolve({accepted:true});calls.push({name,args});return new Promise(resolve=>{release=resolve})};
+ const session={id:'chat',bundle:'anchors'},state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}},registeredBundles:[{value:'work',label:'Work'}]};
+ let root,operation;await renderAct(async()=>{root=create(React.createElement(BundleControl,{state,session,act,working:false}))});
+ const click=()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick();
+ await renderAct(async()=>{operation=click()});
+ assert.deepEqual(calls,[{name:'bundle.switch',args:{sessionId:'chat',bundle:'work',resetModel:false}}]);
+ assert.equal(root.root.findByProps({'data-action':'bundle.preview'}).props.disabled,true);
+ assert.equal(root.root.findByProps({'data-action':'bundle.fork'}).props.disabled,true);
+ assert.ok(root.root.findAll(n=>n.type==='strong'&&n.children.join('')==='Switching bundle…').length);
+ await renderAct(async()=>click());assert.equal(calls.length,1);
+ await renderAct(async()=>{release();await operation});
+ await renderAct(async()=>{operation=root.root.findByProps({'data-action':'bundle.fork'}).props.onClick()});
+ assert.deepEqual(calls[1],{name:'bundle.fork',args:{sessionId:'chat',bundle:'work',resetModel:false}});
+ await renderAct(async()=>{release();await operation;root.unmount()});
+});
+test('an incompatible model stops direct apply until an explicit model choice',async()=>{
+ const calls=[],act=async(name,args)=>calls.push({name,args});
+ const state={view:{composerBundle:{open:true,sessionId:'chat',bundle:'work'}}},session={id:'chat',bundle:'anchors',bundlePreview:{bundle:'work',previewId:'choice',modelCompatible:false}};
+ let root;await renderAct(async()=>{root=create(React.createElement(BundleControl,{state,session,act,working:false}))});
+ assert.equal(root.root.findByProps({'data-action':'bundle.switch'}).props.disabled,true);
+ await renderAct(async()=>root.root.findByType('input').props.onChange({target:{checked:true}}));
+ assert.equal(root.root.findByProps({'data-action':'bundle.switch'}).props.disabled,false);
+ await renderAct(async()=>root.root.findByProps({'data-action':'bundle.switch'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'bundle.switch',args:{sessionId:'chat',bundle:'work',previewId:'choice',resetModel:true}});
+ await renderAct(async()=>root.unmount());
+});
