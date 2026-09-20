@@ -248,3 +248,8 @@ installing Unified. For a standalone TUI, adopt the file contract and shared
 Foundation/routing primitives. If several hosts want a common reader/writer
 package, extract the small settings layer with these fixtures rather than
 copying an entire application's runtime.
+
+See `docs/SHARED-MODEL-ADAPTER.md` for installation boundaries and verification
+evidence, including real calls through two provider families. Compatible package
+pins matter when co-installing the optional host adapter and native runtime;
+their dependency resolver must agree on the Foundation revision.
