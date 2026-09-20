@@ -191,6 +191,8 @@ def validate_theme(css):
 
 from .smart_canvas import definitions as smart_tool_definitions
 ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
+from .outputs import definitions as output_definitions
+ACTION_DEFINITIONS.update(output_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
@@ -329,6 +331,8 @@ class AppService:
         recover_views(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
+        from .outputs import Outputs
+        self.outputs = Outputs(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
@@ -584,6 +588,8 @@ class AppService:
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
+        if action.startswith("outputs."):
+            return await self.outputs.dispatch(action,args,origin,command_id)
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         if action == 'runtime.control' and args.get('operation') in {'history.edit','history.rewind'}:
@@ -1186,6 +1192,7 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
                 fork_artifacts(self.state,source['id'],session)
+                self.outputs.fork(source['id'],session)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
@@ -1683,6 +1690,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'].startswith('outputs.'):
+                if action_args.get('sessionId',session_id)!=session_id:
+                    raise AppError('Output actions must target the calling conversation.',409)
+                action_args['sessionId']=session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':

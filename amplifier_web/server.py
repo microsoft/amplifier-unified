@@ -130,6 +130,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                                   'filename': snapshot['filename'], 'mimeType': snapshot['mimeType']},
                                  headers={'Cache-Control': 'no-store'})
 
+    async def output_content(request):
+        from urllib.parse import quote
+        record=service.outputs.store.read(request.match_info['identity'])
+        data=service.outputs.content(record)
+        if data is None:
+            raise AppError('This output is an external reference without saved content.',404)
+        filename=Path(record.get('filename','output')).name
+        return web.Response(body=data,content_type='application/octet-stream',headers={
+            'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
+            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+
     async def actions(request):
         if request.method == "GET":
             return web.json_response(service.get_actions())
@@ -334,6 +345,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/canvas/{identity}/document", canvas_document)
     app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
+    app.router.add_get("/api/outputs/{identity}/content", output_content)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
