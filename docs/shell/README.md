@@ -325,6 +325,20 @@ shows the standard viewer and exposes recovery. A live render failure stays
 within its view. `?shell=recovery` bypasses optional renderer imports as well as
 optional navigation modules; explicit recovery can discard module-local edits.
 
+Opening Library hides the workspace with `hidden` and `inert` while retaining
+both mounted viewers and their local state. The action host refuses parent
+panel-close operations if either viewer has declared dirty edits. It also
+refuses primary artifact/tab, chat, workspace, fork/edit and tool-app transitions
+that would replace a dirty primary viewer, before changing the selection,
+composer target, binding or generation. These parent operations return HTTP 409
+with code `canvas_view_dirty`; existing view-specific replacements return their
+deferred result. A dirty pinned secondary can remain mounted through primary
+artifact and chat navigation. Shared chat deletion checks affected clients too,
+and MCP App loading rechecks after asynchronous resource I/O. Finish or cancel
+the edit in its renderer before retrying, or explicitly recover that view to
+discard its local edit while retaining the saved artifact. Dirty state is a
+navigation guard, not persistence of arbitrary React state across a page reload.
+
 Source and iframe document requests also carry the view target. Each HTML
 bridge receives only its own frame messages, even when both views show the same
 artifact. Ordinary artifact bodies are fetched on binding changes, not on each
@@ -337,6 +351,7 @@ After the dependencies and production build described above:
 
 ```sh
 npm run test:canvas-renderers-browser --prefix frontend
+npm run test:canvas-dirty-browser --prefix frontend
 npm run test:smart-tools-browser --prefix frontend
 uv run pytest tests/test_canvas_views.py -q
 ```
@@ -348,6 +363,12 @@ preserved composer draft and conversation target, renderer changes, appearance
 changes, reload, stale HTTP reads/actions and failed-render recovery. Desktop
 and narrow-layout screenshots and structured evidence are written under
 `output/canvas-proof/`.
+
+The dirty-view proof validates and loads a minimal editor whose text exists only
+in React state. It verifies Library hide/show retains the same input element,
+panel-close refusal, a pinned dirty edit surviving primary/chat navigation,
+primary transitions leaving drafts and binding generations unchanged, and
+explicit targeted recovery followed by close/reopen.
 
 The MCP proof uses an independently authored official-SDK counter app and a
 real local MCP tool server. A delayed accepted tool action finishes once while

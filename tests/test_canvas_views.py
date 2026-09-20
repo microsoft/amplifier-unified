@@ -336,3 +336,104 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
             assert canvas['resourceRevision'] == current['resourceRevision']
     finally:
         await restored.close()
+
+
+@pytest.mark.parametrize('action', [
+    'canvas.close', 'canvas.select', 'canvas.tabClose', 'canvas.show',
+    'session.select', 'session.create', 'session.fork', 'session.delete', 'message.edit',
+    'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove', 'smartTools.open',
+])
+async def test_dirty_primary_blocks_parent_transitions_before_any_side_effect(app, action):
+    other = await show(app, 'text', 'Other saved source')
+    current = await show(app)
+    sid = current['resource']['sessionId']
+    await command(app, 'session.create', client='two')
+    other_sid = app.clients.records['two']['selectedSessionId']
+    await command(app, 'view.update', {'patch': {'draft': 'Keep the composer target'}})
+    await command(app, 'canvas.views.dirty', {**target(current), 'dirty': True})
+    args = {
+        'canvas.close': {}, 'canvas.select': {'id': other['resourceId']},
+        'canvas.tabClose': {'id': current['resourceId']},
+        'canvas.show': {'kind': 'text', 'content': 'Never published'},
+        'session.select': {'id': other_sid}, 'session.create': {},
+        'session.fork': {'id': sid}, 'session.delete': {'id': sid},
+        'message.edit': {'sessionId': sid, 'messageId': 'missing', 'text': 'Never sent'},
+        'workspace.select': {'id': 'other'}, 'workspace.remove': {'id': 'other'},
+        'workspace.add': {'path': str(app.data_dir / 'never-created')},
+        'workspace.create': {'path': str(app.data_dir / 'never-created')},
+        'smartTools.open': {'id': 'missing', 'tool': 'never-opened'},
+    }[action]
+    before = deepcopy(app.clients.records['one'])
+    artifacts = deepcopy(app.state['canvasArtifacts'])
+    sessions = deepcopy(app.state['sessions'])
+    with pytest.raises(AppError, match='primary viewer edit'):
+        await command(app, action, args)
+    assert app.clients.records['one'] == before
+    assert app.state['canvasArtifacts'] == artifacts
+    assert app.state['sessions'] == sessions
+    assert not (app.data_dir / 'never-created').exists()
+    assert target(view(app)) == target(current)
+    # The refusal isn't a successful receipt: retry after finishing the edit.
+    await command(app, 'canvas.views.dirty', {**target(current), 'dirty': False})
+    await command(app, 'canvas.select', {'id': other['resourceId']})
+    assert view(app)['resourceId'] == other['resourceId']
+
+
+async def test_dirty_secondary_blocks_panel_close_but_survives_primary_and_chat_navigation(app):
+    current = await show(app)
+    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
+    secondary = view(app, 'secondary')
+    await command(app, 'canvas.views.dirty', {**target(secondary), 'dirty': True})
+    with pytest.raises(AppError, match='secondary viewer edit'):
+        await command(app, 'canvas.close')
+    await show(app, 'text', 'New primary')
+    await command(app, 'session.create')
+    assert target(view(app, 'secondary')) == target(secondary)
+    assert view(app, 'secondary')['dirty']
+    # Deleting this selected chat from another client would close the parent.
+    sid = app.clients.records['one']['selectedSessionId']
+    with pytest.raises(AppError, match='secondary viewer edit'):
+        await command(app, 'session.delete', {'id': sid}, client='two')
+    await command(app, 'canvas.views.recover', target(secondary))
+    assert not view(app, 'secondary')['dirty']
+    await command(app, 'canvas.close')
+
+
+async def test_dirty_primary_allows_background_publication_and_unrelated_client_navigation(app):
+    current = await show(app)
+    await command(app, 'canvas.views.dirty', {**target(current), 'dirty': True})
+    await command(app, 'session.create', client='two')
+    sid = app.clients.records['two']['selectedSessionId']
+    await command(app, 'canvas.show', {'kind': 'text', 'content': 'Background source', 'sessionId': sid})
+    await command(app, 'session.select', {'id': current['resource']['sessionId']})
+    assert target(view(app)) == target(current)
+    assert view(app)['dirty']
+    assert len(app.state['canvasArtifacts']) == 2
+
+
+async def test_mcp_open_rechecks_dirty_primary_after_resource_io(app, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_web.smart_canvas import SmartCanvas
+
+    current = await show(app)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def read_app(*args):
+        started.set()
+        await finish.wait()
+        return {'html': '<p>Tool app</p>', 'tools': []}
+
+    monkeypatch.setattr(app, 'smart_tools', SimpleNamespace(read_app=read_app, close=AsyncMock()))
+    app.state.setdefault('smartTools', {})['servers'] = [{'id': 'test', 'name': 'Test', 'tools': [
+        {'name': 'open', '_meta': {'ui': {'resourceUri': 'ui://test'}}}]}]
+    with app.clients.bind('one'):
+        task = asyncio.create_task(SmartCanvas(app).open({'id': 'test', 'tool': 'open'}))
+    await started.wait()
+    await command(app, 'canvas.views.dirty', {**target(current), 'dirty': True})
+    finish.set()
+    with pytest.raises(AppError, match='primary viewer edit'):
+        await task
+    assert target(view(app)) == target(current)
+    assert len(app.state['canvasArtifacts']) == 1

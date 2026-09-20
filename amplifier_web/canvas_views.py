@@ -51,6 +51,44 @@ class CanvasViews:
             fail('Attach a client before addressing canvas views.', 409)
         return client.setdefault('canvasViews', {'secondary': None, 'preferences': {}})
 
+    def guard_transition(self, action, args):
+        """Reject parent actions before they can discard a mounted dirty view.
+
+        This runs under the action lock, before selection, drafts, tabs, or
+        external work change. View-specific replacements retain their existing
+        deferred receipts; explicit recovery is the deliberate discard route.
+        """
+        from .service import AppError
+
+        def check(client, view_ids):
+            if not client or not client.get('canvas', {}).get('open'):
+                return
+            views = client.get('canvasViews', {})
+            for view_id in view_ids:
+                identity = client['canvas'].get('id') if view_id == 'primary' else views.get('secondary')
+                if identity and views.get('preferences', {}).get(view_id + ':' + identity, {}).get('dirty'):
+                    raise AppError('Finish or cancel the ' + view_id + ' viewer edit before leaving it. '
+                                   'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
+
+        # Deleting shared history can unmount another client's whole canvas.
+        if action == 'session.delete':
+            for client in self.service.clients.records.values():
+                if client.get('selectedSessionId') == args['id']:
+                    check(client, ('primary', 'secondary'))
+            return
+        client = self.service.clients.record()
+        if client is None:
+            return
+        if action == 'canvas.close':
+            check(client, ('primary', 'secondary'))
+        elif (action in {'session.create', 'session.fork', 'message.edit',
+                         'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
+              or action == 'session.select' and args['id'] != client.get('selectedSessionId')
+              or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
+              or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
+              or action in {'canvas.show', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
+            check(client, ('primary',))
+
     def artifact(self, identity):
         row = next((r for r in self.service.state.get('canvasArtifacts', []) if r['id'] == identity), None)
         if row is None:

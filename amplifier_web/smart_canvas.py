@@ -137,6 +137,8 @@ class SmartCanvas:
             if not latest or configuration_key(latest) != key:
                 raise api.AppError('The server changed while loading its view. Try again.')
             self.service._session(sid)
+            # Loading the app awaits I/O; a viewer can become dirty meanwhile.
+            self.service.canvas_views.guard_transition('smartTools.open', {'sessionId': sid})
             canvas = {'id':uuid.uuid4().hex,'kind':'mcp-app','open':True,'title':tool.get('title') or server['name'],
                       'content':app['html'],'sessionId':sid,'workspaceId':workspace['id'],
                       'view':{},'events':[],'renderReports':{},'createdAt':time.time(),

@@ -98,8 +98,9 @@ function ResourceView({view,state,dispatch,recovery}){
  </section>;
 }
 
-export function CanvasWorkspace({state,dispatch}){
+export function CanvasWorkspace({state,dispatch,hidden=false}){
  const views=state.canvasWorkspace?.views||[];
  const recovery=typeof location!=='undefined'&&new URLSearchParams(location.search).get('shell')==='recovery';
- return <div className="a-canvas-workspace" data-split={views.length>1}>{views.map(view=><ResourceView key={view.viewId} view={view} state={state} dispatch={dispatch} recovery={recovery}/>)}</div>;
+ // Passive Library navigation must not destroy renderer-local edits or frames.
+ return <div className="a-canvas-workspace" hidden={hidden} inert={hidden} data-split={views.length>1}>{views.map(view=><ResourceView key={view.viewId} view={view} state={state} dispatch={dispatch} recovery={recovery}/>)}</div>;
 }
