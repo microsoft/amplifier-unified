@@ -213,6 +213,17 @@ class AppService:
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        from .settings_migration import migrate_settings
+        migrate_settings(self.data_dir, {self.default_workspace, *[s["workspace"] for s in self.state["sessions"] if not s.get("historyManaged") and s.get("workspace")]})
+        if row and not self.state.get("sharedVoiceMigration"):
+            from .preferences import SettingsStore
+            def migrate_voice(settings):
+                voice = settings.setdefault("voice", {})
+                for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model")):
+                    if self.state["settings"].get(old):
+                        voice.setdefault(key, self.state["settings"][old])
+            SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
+        self.state["sharedVoiceMigration"] = True
         self._view_cache = {}
         from .session_projection import hydrate
         hydrate(self.data_dir, self.state, self.db)
@@ -254,6 +265,7 @@ class AppService:
         self.diagnostics = Diagnostics(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
+        self._refresh_shared_preferences()
         self._save()
 
     def default_theme(self):
@@ -263,11 +275,34 @@ class AppService:
                 return path.read_text()
         return "/* Converge uses the app's bundled default styling. */"
 
+    def _refresh_shared_preferences(self):
+        from .shared_settings import read_settings, settings_paths
+        workspace = self.state["settings"]["workspace"]
+        paths = settings_paths(workspace)
+        def stamp(path):
+            try:
+                st = path.stat()
+                return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+            except (FileNotFoundError, NotADirectoryError):
+                return (str(path), None)
+        stamp_value = tuple(stamp(path) for path in paths.values())
+        if getattr(self, "_shared_preferences_stamp", None) == stamp_value:
+            return
+        settings = read_settings(workspace)
+        voice = settings.get("voice", {})
+        self.state["settings"].update(
+            bundle=settings.get("bundle", {}).get("active") or "anchors",
+            preferredVoice=voice.get("preferred_model", "gpt-live-1"),
+            fallbackVoice=voice.get("fallback_model", "gpt-realtime-2.1"))
+        self._shared_preferences_stamp = stamp_value
+        self._browser_snapshot = None
+
     def state_context(self):
         """Read-only full catalog with derived, bounded navigation projections."""
         from .attention import snapshot
         from .workspace_navigation import snapshot as workspace_snapshot
         from .browser_state import navigation
+        self._refresh_shared_preferences()
         result = dict(self.state)
         result.update(navigation(self.state))
         result["attention"] = snapshot(self.state)
@@ -280,6 +315,7 @@ class AppService:
         return copy.deepcopy(self.state_context())
 
     def browser_state(self, session_id=None):
+        self._refresh_shared_preferences()
         cached = getattr(self, '_browser_snapshot', None)
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
@@ -393,6 +429,7 @@ class AppService:
         raise AppError("Select or create a conversation first.", 404)
 
     def _new_session(self, args):
+        from .shared_settings import read_settings
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
         if not args.get('workspace') and selected.get('available') is False:
             raise AppError('This project folder is unavailable. Choose an existing workspace to start work.')
@@ -400,7 +437,7 @@ class AppService:
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
         now = time.time()
-        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or self.state["settings"]["bundle"], "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
+        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or read_settings(workspace).get("bundle", {}).get("active") or "anchors", "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -837,8 +874,9 @@ class AppService:
                 patch = args["patch"]
                 if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates"}:
                     raise AppError("Unknown setting.")
-                if "preferredVoice" in patch and patch["preferredVoice"] not in {"gpt-live-1", "gpt-realtime-2.1"}:
-                    raise AppError("Select a supported voice model.")
+                for key in ("preferredVoice", "fallbackVoice"):
+                    if key in patch and patch[key] not in {"gpt-live-1", "gpt-realtime-2.1"}:
+                        raise AppError("Select a supported voice model.")
                 if "bundle" in patch and (not isinstance(patch["bundle"],str) or not patch["bundle"].strip()):
                     raise AppError("Enter a default bundle.")
                 if "updates" in patch:
@@ -852,7 +890,17 @@ class AppService:
                     patch = {**patch, "updates": {**self.state["settings"].get("updates",{}), **options}}
                     if patch["updates"].get("autoInstall") and not patch["updates"].get("autoCheck"):
                         raise AppError("Enable automatic checking before automatic installation.")
+                if {"preferredVoice", "fallbackVoice", "bundle"}.intersection(patch):
+                    from .preferences import SettingsStore
+                    def save_shared(settings):
+                        for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model")):
+                            if old in patch:
+                                settings.setdefault("voice", {})[key] = patch[old]
+                        if "bundle" in patch:
+                            settings.setdefault("bundle", {})["active"] = patch["bundle"]
+                    SettingsStore(self.data_dir).update(self.state["settings"]["workspace"], "global", save_shared)
                 self.state["settings"].update(copy.deepcopy(patch))
+                self._refresh_shared_preferences()
             elif action == "theme.apply":
                 validate_theme(args["css"])
                 self.state["theme"] = {"name": args["name"] or "Custom skin", "css": args["css"]}

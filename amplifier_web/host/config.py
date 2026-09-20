@@ -1,14 +1,8 @@
-"""App-owned settings with an explicit, one-time import of existing setup.
-
-The compatibility reader understands the old YAML file format; it never imports
-or invokes the former application. Imported sources and credentials are private
-local configuration, not part of the distribution.
-"""
+"""Shared configuration and application-owned runtime source caches."""
 from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
@@ -17,10 +11,10 @@ import shlex
 import shutil
 
 from filelock import FileLock
-import yaml
 
 from ..deployment import write_private
-from ..shared_state import workspace_snapshot_path
+from ..shared_settings import read_yaml, read_settings
+from ..session_files import amplifier_home
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@b3bdab2adcc2a8fe477aca64c20b77528a95e1df"
 _KEY_FILE_VALUES = {}
@@ -51,50 +45,24 @@ def merge(base, overlay):
     return copy.deepcopy(overlay)
 
 
-def read_yaml(path):
-    if not path.exists():
-        return {}
-    value = yaml.safe_load(path.read_text()) or {}
-    if not isinstance(value, dict):
-        raise ValueError(f"Settings must be a mapping: {path}")
-    return value
-
-
-def _copy_private(source: Path, target: Path):
-    if source.is_file() and not target.exists():
-        write_private(target, source.read_text())
-
-
-def _import_global(home: Path, legacy: Path):
-    target = home / "config" / "settings.yaml"
-    if target.exists():
-        return
-    settings = read_yaml(legacy / "settings.yaml")
-    # Registry URIs remain useful without any registry implementation from the
-    # prior host. App ownership of the source cache preserves pinned checkouts.
-    old_registry = legacy / "registry.json"
-    registry = json.loads(old_registry.read_text()) if old_registry.is_file() else {"version": 1, "bundles": {}}
+def _import_registry(home: Path, shared: Path):
+    # Runtime checkouts remain isolated from the CLI. Configuration is never
+    # copied: the original shared files are authoritative on every mount.
     foundation_home = home / "foundation"
-    old_cache = legacy / "cache"
-    new_cache = foundation_home / "cache"
+    if (foundation_home / "registry.json").exists():
+        return
+    old_registry = shared / "registry.json"
+    registry = json.loads(old_registry.read_text()) if old_registry.is_file() else {"version": 1, "bundles": {}}
+    old_cache, new_cache = shared / "cache", foundation_home / "cache"
     if old_cache.is_dir() and not new_cache.exists():
         shutil.copytree(old_cache, new_cache, symlinks=True)
     for row in registry.get("bundles", {}).values():
-        local = row.get("local_path")
-        if local:
+        if local := row.get("local_path"):
             try:
-                relative = Path(local).resolve().relative_to(old_cache.resolve())
-                row["local_path"] = str(new_cache / relative)
+                row["local_path"] = str(new_cache / Path(local).resolve().relative_to(old_cache.resolve()))
             except ValueError:
-                # Explicit local workspace bundles remain user-owned sources.
                 pass
     write_private(foundation_home / "registry.json", json.dumps(registry, indent=2))
-    _copy_private(legacy / "keys.env", home / "config" / "keys.env")
-    # Routing matrix content is user-authored configuration, copied once.
-    if (legacy / "routing").is_dir() and not (foundation_home / "routing").exists():
-        shutil.copytree(legacy / "routing", foundation_home / "routing")
-    settings["_migration"] = {"source": str(legacy), "importedAt": datetime.now(UTC).isoformat(), "version": 1}
-    write_private(target, yaml.safe_dump(settings, sort_keys=False))
 
 
 def _load_keys(path):
@@ -127,6 +95,17 @@ def _load_keys(path):
             _KEY_FILE_VALUES[name] = value
 
 
+def worker_environment():
+    """Let a fresh worker load file-managed keys itself, so remounts can refresh.
+
+    Explicit launch-environment credentials remain authoritative. File-managed
+    values must not become indistinguishable from explicit credentials merely
+    because a worker inherited the server's environment.
+    """
+    return {name: value for name, value in os.environ.items()
+            if name not in _KEY_FILE_VALUES or value != _KEY_FILE_VALUES[name]}
+
+
 def expand_environment(value, *, environment=None):
     values = os.environ if environment is None else environment
     if isinstance(value, dict):
@@ -143,7 +122,7 @@ def expand_environment(value, *, environment=None):
             return current
         if fallback is not None:
             return fallback[1:] if shell_default else fallback
-        raise ValueError(f"Configured environment variable {name} is not set; update the app's config/keys.env or environment.")
+        raise ValueError(f"Configured environment variable {name} is not set; update the shared Amplifier keys.env or environment.")
     return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}", substitute, value)
 
 
@@ -153,6 +132,11 @@ class HostConfig:
     workspace: Path
     settings: dict
     registry_home: Path
+    config_home: Path | None = None
+
+    @property
+    def settings_file(self):
+        return (self.config_home or amplifier_home()) / "settings.yaml"
 
     @property
     def active_bundle(self):
@@ -165,8 +149,7 @@ class HostConfig:
     @property
     def providers(self):
         rows=self.settings.get("config", {}).get("providers", [])
-        order={identity:index for index,identity in enumerate(self.settings.get("provider_order",[]))}
-        return sorted(rows,key=lambda row:order.get(row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-"),len(order)))
+        return sorted(rows, key=lambda row: row.get("config", {}).get("priority", 100))
 
     @property
     def module_sources(self):
@@ -200,32 +183,21 @@ class HostConfig:
         return None
 
 
-def load_config(workspace, *, home=None, legacy_home=None):
+def prepare_registry(config):
+    """Copy a runtime cache only in the worker preparing its first session."""
+    (config.home / "config").mkdir(parents=True, exist_ok=True, mode=0o700)
+    with FileLock(str(config.home / "config" / ".migration.lock")):
+        _import_registry(config.home, config.config_home or amplifier_home())
+
+
+def load_config(workspace, *, home=None, legacy_home=None, session_id=None):
     home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
-    legacy = Path(legacy_home or os.environ.get("AMPLIFIER_UNIFIED_IMPORT_HOME", Path.home() / ".amplifier")).expanduser().resolve()
-    (home / "config").mkdir(parents=True, exist_ok=True, mode=0o700)
-    project_snapshot = workspace_snapshot_path(workspace, home)
-    with FileLock(str(home / "config" / ".migration.lock")):
-        _import_global(home, legacy)
-        if not project_snapshot.exists():
-            project = merge(read_yaml(workspace / ".amplifier" / "settings.yaml"), read_yaml(workspace / ".amplifier" / "settings.local.yaml"))
-            project["_workspace"] = str(workspace)
-            write_private(project_snapshot, yaml.safe_dump(project, sort_keys=False))
-    _load_keys(home / "config" / "keys.env")
-    global_settings = read_yaml(home / "config" / "settings.yaml")
-    settings = merge(global_settings, read_yaml(project_snapshot))
-    # The app's own workspace file is live configuration; imported legacy files
-    # above are only read once. Explicit local project sources remain supported.
-    settings = merge(settings, read_yaml(workspace / ".amplifier-unified" / "settings.yaml"))
-    settings = merge(settings, read_yaml(workspace / ".amplifier-unified" / "settings.local.yaml"))
-    managed = settings.get("web_bundles", {})
-    entries = [row for row in managed.get("entries", []) if row.get("role") in {"behavior", "app"}]
-    if entries or managed.get("excluded"):
-        excluded = set(managed.get("excluded", [])) | {row["uri"] for row in entries if not row.get("enabled", True)}
-        ordered = [row["uri"] for row in entries if row.get("enabled", True) and row["uri"] not in excluded]
-        inherited = settings.get("bundle", {}).get("app", [])
-        settings.setdefault("bundle", {})["app"] = list(dict.fromkeys(ordered + [uri for uri in inherited if uri not in excluded]))
+    # legacy_home remains an explicit path alias for older embedding callers;
+    # the former one-time-import environment variable no longer selects config.
+    shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
+    _load_keys(shared / "keys.env")
+    settings = read_settings(workspace, shared_home=shared, session_id=session_id)
     from ..updates import foundation_home
     registry_home = foundation_home(home)
     # Keep explicit app-cache source overrides aligned with the active snapshot.
@@ -234,4 +206,4 @@ def load_config(workspace, *, home=None, legacy_home=None):
         if isinstance(value, list): return [relocate(v) for v in value]
         if isinstance(value, str): return value.replace(str(home / "foundation"), str(registry_home))
         return value
-    return HostConfig(home, workspace, relocate(settings), registry_home)
+    return HostConfig(home, workspace, relocate(settings), registry_home, shared)

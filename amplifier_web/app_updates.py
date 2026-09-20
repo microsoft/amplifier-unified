@@ -236,8 +236,9 @@ with open(logpath,'a') as log:
  os.chmod(logpath,0o600)
  subprocess.Popen(args,start_new_session=True,stdout=log,stderr=log)
 ''')
+    from .host.config import worker_environment
     try:
-        await manager.diagnostics.run('restart-helper',asyncio.create_subprocess_exec,str(helper_python),str(helper),str(os.getpid()),json.dumps(options),str(manager.directory/'restart.log'),start_new_session=True,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+        await manager.diagnostics.run('restart-helper',asyncio.create_subprocess_exec,str(helper_python),str(helper),str(os.getpid()),json.dumps(options),str(manager.directory/'restart.log'),start_new_session=True,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL,env=worker_environment())
     except (OSError,ValueError):
         await manager.publish(phase='activating',error='The update installed, but its restart helper could not start. Restart Amplifier Unified from the terminal.',
                               detail='Waiting for a healthy restarted host. New work remains paused.')
