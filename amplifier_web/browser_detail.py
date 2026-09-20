@@ -13,7 +13,7 @@ SUMMARY_LIMIT=512
 def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
-    fields = {'id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error'}
+    fields = {'id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle'}
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     for field in ('text','summary','detail','report','result','input','output','error'):
         text=row.get(field)

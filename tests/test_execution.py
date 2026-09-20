@@ -76,3 +76,17 @@ def test_model_payloads_never_enter_public_tree():
     session={};ensure_turn(session,'turn')
     ingest(session,{'id':'model','kind':'llm','phase':'completed','input':'private prompt','output':'private response','error':'private trace'})
     assert all(field not in session['execution']['nodes'][0] for field in ('input','output','error'))
+
+
+def test_process_exit_cannot_settle_another_process_background_call_or_new_turn():
+    from amplifier_web.execution import finish_background
+    session={};ensure_turn(session,'old')
+    ingest(session,{'id':'old-name','kind':'llm','lifecycle':'background','phase':'running','sessionId':'root','rootSessionId':'root','startedAt':1})
+    ensure_turn(session,'new')
+    ingest(session,{'id':'new-name','kind':'llm','lifecycle':'background','phase':'running','sessionId':'root','rootSessionId':'root','startedAt':2})
+    finish_background(session,['old-name'],'interrupted')
+    old,new=session['execution']['nodes']
+    assert old['phase']=='interrupted' and old['endedAt']>=1
+    assert new['phase']=='running' and not new.get('endedAt')
+    assert session['execution']['turns'][1]['phase']=='running'
+    assert session['execution']['aggregateUsage']['tokenPendingCalls']==1

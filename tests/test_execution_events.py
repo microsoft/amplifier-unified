@@ -144,3 +144,18 @@ def test_repeated_tool_completion_preserves_end_time_and_retry_clears_old_result
     ingest(session,row)
     assert session['execution']['nodes'][0]['endedAt'] is None
     assert session['execution']['nodes'][0]['error'] is None
+
+
+async def test_unwrappable_provider_hook_fallback_preserves_background_lifecycle():
+    from amplifier_web.execution_events import CALL_PURPOSE
+    events=ExecutionEvents('root',lambda event:None)
+    events.turn_id='foreground'
+    token=CALL_PURPOSE.set({'label':'Auxiliary call','turnId':'earlier','lifecycle':'background'})
+    try:
+        events.hook('root','llm:request',{'model':'fixture'})
+        pending=next(iter(events.nodes.values()))
+        assert pending['lifecycle']=='background' and pending['turnId']=='earlier'
+        events.hook('root','llm:response',{'usage':{'input_tokens':2,'output_tokens':1}})
+        assert events.nodes[pending['id']]['phase']=='completed'
+        assert events.nodes[pending['id']]['lifecycle']=='background'
+    finally:CALL_PURPOSE.reset(token)

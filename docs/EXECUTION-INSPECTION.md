@@ -29,8 +29,13 @@ browser advances from the host HTTP response clock (second precision); final
 elapsed time comes from the recorded timestamps. Queued/retrying phases remain
 labelled as such; elapsed is total time since the recorded start, not an invented
 queue/active-time breakdown. Unknown terminal end times are not animated forever.
-Root completion/stop/error settles dangling root calls without ending independently
-running workers. Independent workers keep their own lifecycle.
+Root completion/stop/error settles dangling foreground calls without ending
+independently running workers or background session naming. Naming carries an
+explicit background lifecycle from its scheduler through provider instrumentation
+and remains pending on its original turn until its own completion/error/cancellation.
+If its worker process exits without a final provider event, the host settles only
+the background call IDs observed in that process; ordinary turn status cannot
+invent a background completion.
 
 Usage is counted once per model-call identity. Missing metrics on running calls
 are pending; missing metrics after completion are unavailable, with an explanation

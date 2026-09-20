@@ -61,7 +61,7 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error'}
+    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle'}
     safe={k:v for k,v in event.items() if k in allowed}
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)
@@ -98,8 +98,18 @@ def finish(session,status='completed'):
     for turn in tree.get('turns',[]):
         if turn.get('phase') in LIVE_PHASES:turn.update(phase=status,endedAt=ended)
     for node in tree.get('nodes',[]):
-        # Root lifecycle settles dangling root calls; independently running
-        # delegated workers retain their own lifecycle and may report later.
-        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
+        # Foreground turn settlement cannot end separately scheduled naming
+        # or delegated work. Background calls settle from their own provider
+        # lifecycle, or after the host confirms their worker process exited.
+        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt') and node.get('lifecycle')!='background':
             node.update(phase='interrupted' if status=='completed' else status,endedAt=ended)
     if 'nodes' in tree:refresh_usage(tree)
+
+
+def finish_background(session,identities,status='interrupted'):
+    """Settle only calls observed in the process whose exit was confirmed."""
+    tree=session.get('execution',{});targets=set(identities);changed=False;ended=time.time()
+    for node in tree.get('nodes',[]):
+        if node['id'] in targets and node.get('lifecycle')=='background' and node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
+            node.update(phase=status,endedAt=ended);changed=True
+    if changed:refresh_usage(tree)

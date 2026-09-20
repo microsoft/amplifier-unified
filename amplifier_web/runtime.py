@@ -50,7 +50,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
-            "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error")
+            "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle")
         return "execution.event", {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
     if kind == "runtime.activity":
         allowed = {"model", "processing", "waiting-workers", "tools", "retrying", "compacting"}
@@ -318,6 +318,8 @@ class RuntimeManager:
                 else:
                     if data.get('type') == 'execution.event' and isinstance(data.get('event'), dict):
                         data = {**data, 'event': dict(data['event'])}
+                        if data['event'].get('lifecycle') == 'background' and data['event'].get('id'):
+                            row.setdefault('backgroundCalls', set()).add(data['event']['id'])
                         for key in ('sessionId', 'rootSessionId'):
                             if data['event'].get(key) == row.get('runtime_id'):
                                 data['event'][key] = sid
@@ -332,6 +334,7 @@ class RuntimeManager:
                 await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 if not row["ready"].done():
                     row["ready"].set_exception(RuntimeError(error))
+            await self._execution_ended(sid, row, "stopped" if row["closing"] else "interrupted")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -344,6 +347,14 @@ class RuntimeManager:
             for future in row["pending"].values():
                 if not future.done():
                     future.set_exception(RuntimeError("Amplifier worker disconnected"))
+
+    async def _execution_ended(self, sid, row, status):
+        """Only a confirmed process exit settles independent background calls."""
+        if row.get("executionEnded"): return
+        await row["emit"]("runtime.ended", {"sessionId": sid, "status": status, "backgroundCallIds": sorted(row.get("backgroundCalls", ()))})
+        # The reader can be cancelled while delivery waits for the service
+        # lock. Only successful delivery suppresses the stop-path retry.
+        row["executionEnded"] = True
 
     async def _request(self, sid, op, **args):
         row = self.workers.get(sid)
@@ -535,6 +546,7 @@ class RuntimeManager:
             if not task.done():
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
+        await self._execution_ended(session_id, row, "stopped")
         await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         self.workers.pop(session_id, None)

@@ -107,7 +107,7 @@ class ExecutionEvents:
                    "rootSessionId":self.root_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
                    "provider":str(getattr(info,"id",type(provider).__name__))[:160],
                    "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
-                   "startedAt":time.time()}
+                   "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
             token = CURRENT_CALL.set(row["id"])
             self.publish(row)
             try:
@@ -171,6 +171,9 @@ class ExecutionEvents:
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 return
+            purpose = CALL_PURPOSE.get() or {}
+            if purpose: parent, turn = None, purpose.get("turnId", turn)
+            scope = {"label": purpose.get("label", "Model call"), "lifecycle": "background" if purpose.get("lifecycle")=="background" else "turn"}
             task = asyncio.current_task()
             if task is None:
                 return
@@ -178,7 +181,7 @@ class ExecutionEvents:
             if event == "llm:request":
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
                     "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "phase": "running",
-                    "label": "Model call", "startedAt": now,
+                    **scope, "startedAt": now,
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)}}
                 self.requests[task] = row
             elif row is None:
@@ -187,7 +190,7 @@ class ExecutionEvents:
                 if event != "llm:response":
                     return
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
-                    "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "label": "Model call"}
+                    "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", **scope}
             row = dict(row)
             if event == "llm:response":
                 row.update(phase="error" if data.get("status") == "error" else "completed", endedAt=now,
