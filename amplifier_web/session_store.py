@@ -270,6 +270,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
                 if prepare_only and cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') in {'unknown','sending'}:
                     # The owned idle worker has no outstanding input. A final
                     # unconfirmed browser input may never have entered context.
+                    user_boundaries(messages, visible[:cut])
                     boundary = len(messages)
                 else:
                     raise

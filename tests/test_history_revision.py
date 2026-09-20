@@ -135,3 +135,13 @@ async def test_last_unconfirmed_message_can_be_edited_after_owned_idle_check(tmp
     result=await rewind(controls,{'source':src,'messageId':'missing','operationId':'unconfirmed-edit'})
     assert [row['text'] for row in result['messages']]==['First user turn','First answer']
     assert controls.rows==transcript()[:6]
+
+
+async def test_unconfirmed_tail_does_not_bypass_an_unreliable_compacted_boundary(tmp_path,monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path));src=source(tmp_path)
+    src['messages']=src['messages'][:2]+[{'id':'missing','role':'user','text':'Unconfirmed','delivery':{'status':'unknown'}}]
+    rows=[{'role':'user','content':'Summary of earlier work'}]
+    controls=Controls(tmp_path,src,rows);await controls.checkpoint()
+    with pytest.raises(ValueError,match='boundary'):
+        await rewind(controls,{'source':src,'messageId':'missing','operationId':'compacted-edit'})
+    assert controls.rows==rows
