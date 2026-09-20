@@ -97,6 +97,14 @@ jobs:
       - name: Verify shared drawing, resize and save recovery
         working-directory: frontend
         run: npm run test:canvas-drawing-browser
+      - name: Verify conversation diagnosis and recovery
+        if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:session-health-browser
+      - name: Verify activity feedback and dismissal
+        if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:activity-feedback-browser
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}

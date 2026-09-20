@@ -70,8 +70,8 @@ ACTION_DEFINITIONS = {
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
-    "message.edit": ("Fork before a user message and generate a new reply from its edited text. Original history remains available; external tool effects are not undone.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000)})),
-    "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
+    "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":string(200),"name":string(200),"base64":string(12000000)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":string(200),"id":string(32)},["id"])),
     "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
@@ -316,6 +316,12 @@ class AppService:
         self.feedback = Feedback(self)
         from .diagnostics import Diagnostics
         self.diagnostics = Diagnostics(self)
+        for session in self.state['sessions']:
+            for message in session.get('messages', []):
+                if message.get('delivery', {}).get('status') == 'sending':
+                    self._delivery(session, message.get('inputId'), 'unknown')
+        from .history_revision import recover_views
+        recover_views(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
         from .client_views import ClientViews
@@ -575,6 +581,8 @@ class AppService:
                 raise AppError('The canvas view command targets a different client.')
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
+        if action == 'runtime.control' and args.get('operation') in {'history.edit','history.rewind'}:
+            raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
         if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
@@ -586,7 +594,7 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action!='conversation.send' else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -857,24 +865,39 @@ class AppService:
                     raise AppError('The Amplifier runtime is unavailable.')
                 if work_paused(self.state):
                     raise AppError('An update is activating. Please retry in a moment.',409)
-                session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
-                from .session_store import fork_session
-                try:
-                    session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id']))
-                except ValueError as exc:
-                    raise AppError(str(exc),409) from exc
-                session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
-                input_id = command_id or str(uuid.uuid4())
-                self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])))
-                self._activity(session,'queued','Generating from your edited message.',reset=True)
-                session['status']='working'
-                ensure_turn(session,input_id,text)
-                self.state['sessions'].insert(0,session)
-                self.state['selectedSessionId']=session['id']
-                self.state['view']['messageEdit']=None
-                from .workspace_canvas import select_session_workspace
-                select_session_workspace(self.state,session)
-                pending.append((self._send,(copy.deepcopy(session),text,input_id)))
+                if args.get('mode', 'fork') == 'current':
+                    if source['status'] in {'working','running','starting','stopping','busy'} or any(
+                            row.get('status') in {'working','running','starting','stopping','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
+                            for row in source.get('workers', [])) or any(row.get('status', 'pending')=='pending' for row in source.get('approvals', [])):
+                        raise AppError('Finish active work and pending interactions before editing history.',409)
+                    if source.get('ownership', {}).get('status') in {'blocked','yielding','yielded','yield-failed','taking-over'}:
+                        raise AppError('Choose Continue here before editing this conversation.',409,code='session_busy')
+                    session = source
+                    session['historyManaged'] = False
+                    session['configurationBusy'] = True
+                    session['historyEdit'] = {'operationId':command_id or str(uuid.uuid4()),'messageId':original['id'],
+                        'text':text,'via':'text' if original.get('via')=='text' else 'chat',
+                        'attachments':copy.deepcopy(original.get('attachments',[])), 'phase':'working'}
+                    pending.append((self._edit_current,(copy.deepcopy(session),)))
+                else:
+                    session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
+                    from .session_store import fork_session
+                    try:
+                        session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id']))
+                    except ValueError as exc:
+                        raise AppError(str(exc),409) from exc
+                    session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
+                    input_id = command_id or str(uuid.uuid4())
+                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])))
+                    self._activity(session,'queued','Generating from your edited message.',reset=True)
+                    session['status']='working'
+                    ensure_turn(session,input_id,text)
+                    self.state['sessions'].insert(0,session)
+                    self.state['selectedSessionId']=session['id']
+                    self.state['view']['messageEdit']=None
+                    from .workspace_canvas import select_session_workspace
+                    select_session_workspace(self.state,session)
+                    pending.append((self._send,(copy.deepcopy(session),text,input_id)))
             elif action == 'session.inspect':
                 diagnostic_result = prepared_health
                 if self._session(args['id']).get('errorAt') == snapshot.get('errorAt'):
@@ -953,14 +976,14 @@ class AppService:
                 previous_activity = recent_activity(session)
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
+                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments,delivery={'status':'sending'})
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
                 session["status"] = "working"
                 session.pop("error", None)
                 ensure_turn(session,input_id,text)
-                pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity)))
+                pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
                 session["status"] = "stopping"
@@ -1145,7 +1168,7 @@ class AppService:
             if action in {'session.create','session.fork','session.recover','message.edit'}:
                 from .naming import persist
                 persist(self.data_dir,session)
-            if action in {'session.fork','session.recover','message.edit'}:
+            if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
                 fork_artifacts(self.state,source['id'],session)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
@@ -1185,6 +1208,7 @@ class AppService:
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or view_action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
+            if action == 'conversation.send':receipt['delivery']='sending'
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
@@ -1203,7 +1227,7 @@ class AppService:
             self._publish_smart_tool_update(defer_publish=defer_publish)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send:
+            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current:
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 await fn(*values)
@@ -1215,6 +1239,7 @@ class AppService:
                     task.add_done_callback(self.smart_tool_tasks.discard)
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
+        if action == 'conversation.send':result['delivery']='accepted'
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def wait_smart_tool(self, identity, timeout=300):
@@ -1253,7 +1278,59 @@ class AppService:
     async def history_page(self, session_id, before, limit):
         await self.history.load(session_id, before=before, limit=limit)
 
-    async def _send(self, session, text, input_id, previous_activity=None):
+    async def _edit_current(self, source):
+        edit = source['historyEdit']
+        from .history_revision import apply_revision, receipt_path
+        from .runtime import SessionInUseError
+        try:
+            await self.runtime.start(source, self.on_runtime_event)
+            result = await self.runtime.control(source['id'], 'history.edit', {
+                'source':source,'messageId':edit['messageId'],'operationId':edit['operationId'],
+                'text':edit['text'],'attachments':edit['attachments']})
+            async with self.lock:
+                current = self._session(source['id'])
+                apply_revision(self, current, result)
+                current['configurationBusy'] = False
+                if (self.state['view'].get('messageEdit') or {}).get('messageId') == edit['messageId']:
+                    self.state['view']['messageEdit'] = None
+                self._publish()
+        except Exception as exc:
+            async with self.lock:
+                current = self._session(source['id'])
+                path = receipt_path(self.data_dir, source.get('runtimeSessionId') or source['id'], edit['operationId'])
+                try:
+                    if path.exists():
+                        saved = json.loads(path.read_text())
+                        if saved.get('phase') == 'committed':
+                            apply_revision(self, current, saved['result'], interrupted=True)
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass  # Keep interrupted evidence; never guess or replay.
+                current['configurationBusy'] = False
+                current['historyEdit'].update(phase='error', error=str(exc))
+                if isinstance(exc, SessionInUseError):
+                    from .session_ownership import blocked
+                    blocked(current, exc.owner)
+                elif current['historyEdit'].get('applied'):
+                    current['status'] = 'error'
+                    current['error'] = 'The edit was saved but its response was not confirmed. No work was automatically replayed.'
+                receipt = {'accepted':False,'error':str(exc),'status':409,'code':'session_busy' if isinstance(exc,SessionInUseError) else 'edit_failed'}
+                self.db.execute('UPDATE commands SET receipt=? WHERE id=?',(json.dumps(receipt),edit['operationId']))
+                self._publish()
+            raise AppError(str(exc),409,code=receipt['code']) from exc
+
+    def _delivery(self, session, input_id, status):
+        message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
+        if message is None or 'delivery' not in message:
+            return
+        if message['delivery'].get('status') == 'accepted' and status == 'unknown':
+            return
+        message['delivery'] = {'status':status}
+        row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+        if row:
+            receipt = json.loads(row[0])
+            self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
+
+    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .runtime import SessionInUseError
@@ -1281,20 +1358,27 @@ class AppService:
                     json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
                 self._publish()
             raise AppError(str(exc), 409, code="session_busy") from exc
+        except Exception:
+            async with self.lock:
+                current = self._session(session['id'])
+                self._delivery(current, input_id, 'unknown')
+                self._publish()
+            raise
         async with self.lock:
             current = self._session(session["id"])
+            self._delivery(current, input_id, 'accepted')
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
             attached = {row["id"] for row in sent.get("attachments", [])}
             draft_attachments = self.clients.attachments(current)
             draft_attachments[:] = [row for row in draft_attachments if row["id"] not in attached]
             client = self.clients.record()
             if client is not None:
-                if client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
+                if not preserve_draft and client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
                     self.clients.draft(current['id'], '')
-            elif (self.state["selectedSessionId"] == current["id"]
+            elif (not preserve_draft and self.state["selectedSessionId"] == current["id"]
                     and self.state["view"].get("draft", "").strip() == text.strip()):
                 self.state["view"]["draft"] = ""
-            if current.get('draft', '').strip() == text.strip():
+            if not preserve_draft and current.get('draft', '').strip() == text.strip():
                 current['draft'] = ''
             current.pop("lockOwner", None)
             self._publish()
@@ -1370,7 +1454,10 @@ class AppService:
             self.diagnostics.runtime_event(kind,payload,session)
             from .chat_navigation import runtime_activity
             runtime_activity(session, kind, payload)
-            if kind == 'session.naming':
+            if kind == 'history.revised':
+                from .history_revision import apply_revision
+                apply_revision(self, session, payload)
+            elif kind == 'session.naming':
                 from .naming import automatic,persist
                 name=payload.get('name');description=payload.get('description')
                 if automatic(session) and isinstance(name,str) and name.strip():
@@ -1408,6 +1495,8 @@ class AppService:
                 if payload['status'] == 'warm' and session['status'] == 'ready':
                     session['status'] = 'idle'
             elif kind == "runtime.status":
+                if payload.get('event') == 'input.delivered' and payload.get('inputId'):
+                    self._delivery(session, payload['inputId'], 'accepted')
                 # Provider requests/retries describe current work; only lifecycle
                 # events or accepted input can start work. Late/background notices
                 # must not lock a finished conversation's fork/edit controls.

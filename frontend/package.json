@@ -48,7 +48,9 @@
     "test:canvas-drawing-browser": "node tests/canvas-drawing-browser.mjs",
     "test:surface-context-browser": "node tests/surface-context-browser.mjs",
     "test:activity-feedback-browser": "node tests/activity-feedback-browser.mjs",
-    "test:export-browser": "node tests/conversation-export-browser.mjs"
+    "test:export-browser": "node tests/conversation-export-browser.mjs",
+    "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
+    "test:session-health-browser": "node tests/session-health-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

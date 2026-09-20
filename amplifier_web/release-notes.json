@@ -2,6 +2,36 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.17.2",
+      "title": "Use the shared Amplifier CLI session ID",
+      "changes": [
+        "Chat flyouts show and copy one Session ID matching Amplifier CLI, including chats first created in the CLI. Internal app keys are no longer labeled as session IDs in the flyout.",
+        "Find chats by their shared session ID or its prefix. Conversation details use the same ID, and the flyout clarifies that CLI session lists belong to the shown workspace.",
+        "Existing session files, saved history, pins and selection are preserved.",
+        "This release also includes immediate message delivery feedback and editing within the current conversation, with an explicit option to start a new conversation instead."
+      ],
+      "notices": [
+        {
+          "id": "current-conversation-message-edits",
+          "title": "Message edits stay in the current conversation",
+          "detail": "Editing a sent message now revises the current conversation by default. Saved revision evidence is retained; external tool effects are not undone or replayed.",
+          "action": "Select Start a new conversation instead in the edit dialog when you want a separate conversation."
+        }
+      ]
+    },
+    {
+      "version": "0.17.1",
+      "title": "Work patch editing and clearer conversation recovery",
+      "changes": [
+        "Work includes contextual patch editing alongside existing file tools. Shared file-access choices apply to both, including older settings and delegated workers.",
+        "Agents receive clearer guidance for finding and reading other conversations and using the existing shared app, workspace, voice and permission controls.",
+        "Inspect a stopped conversation, copy its session ID or diagnostics, and create a recovery copy that preserves readable history without repeating work. The original conversation is kept.",
+        "Updates identify unresolved sources and workspaces. Unregistered bundles in older conversations are shown separately from current configuration problems.",
+        "Activity appears beside the action that is running. Dialogs support outside dismissal while preserving in-progress drafts and reporting failures."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.17.0",
       "title": "Stable workspace and chat navigation",
       "changes": [
