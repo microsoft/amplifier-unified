@@ -27,9 +27,11 @@ UNKNOWN_FILES = "Files may have been stored in the private repository, and an is
 
 
 def definitions(schema, string):
+    from .feedback_followup import definitions as followup_definitions
     request_id = {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,100}$"}
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
     return {
+        **followup_definitions(schema, string),
         "feedback.submit": (
             "Create a GitHub issue in bkrabach/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
@@ -73,7 +75,7 @@ async def github_api(endpoint, payload):
         # after a request may already have reached GitHub.
         raise RuntimeError("GitHub did not acknowledge the request")
     result = json.loads(output)
-    if not isinstance(result, dict):
+    if not isinstance(result, (dict, list)):
         raise ValueError("GitHub returned an invalid receipt")
     return result
 
@@ -96,6 +98,8 @@ class Feedback:
             if receipt["status"] in {"queued", "sending"}:
                 receipt.update(status="unknown", message=UNKNOWN_FILES if receipt.get("attachments") else UNKNOWN, updatedAt=time.time())
                 service.db.execute("UPDATE feedback_requests SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
+        from .feedback_followup import Followups
+        self.followups = Followups(self)
         self.refresh()
 
     def refresh(self, identity=None):
@@ -110,6 +114,7 @@ class Feedback:
         self.service.state["feedback"] = {"repository": REPOSITORY, "issuesUrl": ISSUES_URL,
             "diagnostics": feedback_diagnostics.build_facts(),
             "requests": receipts}
+        self.followups.refresh()
 
     def attachment_command(self, action, args):
         """Local-only staging; identical accepted add retries never resurrect removals."""

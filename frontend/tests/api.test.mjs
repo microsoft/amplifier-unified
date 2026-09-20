@@ -24,3 +24,24 @@ test('icon tooltips mirror accessible labels without replacing richer authored t
  applyIconTooltips(root);
  assert.equal(automatic.title,'Rename selected conversation');
 });
+
+test('live timers anchor to the host response clock instead of a skewed device clock',async()=>{
+ const {hostNow}=await import('../src/api.js'),original=globalThis.fetch;
+ try{
+  globalThis.fetch=async()=>new Response('{}',{headers:{date:'Sun, 20 Sep 2026 12:00:00 GMT'}});
+  await request('/api/state');const anchored=Date.parse('2026-09-20T12:00:00Z')/1000;
+  assert.ok(Math.abs(hostNow()-anchored)<1);
+ }finally{globalThis.fetch=original}
+});
+
+test('an older host date arriving after a newer response cannot rewind elapsed time',async()=>{
+ const {hostNow}=await import('../src/api.js'),{elapsedLabel}=await import('../src/timeline-data.js'),original=globalThis.fetch;
+ let finishSlow;
+ try{
+  globalThis.fetch=path=>path==='/api/slow'?new Promise(resolve=>finishSlow=resolve):Promise.resolve(new Response('{}',{headers:{date:'Thu, 20 Jan 2050 12:00:10 GMT'}}));
+  const slow=request('/api/slow');await request('/api/fast');
+  const before=hostNow(),record={phase:'running',startedAt:Date.parse('2050-01-20T12:00:00Z')/1000},elapsed=elapsedLabel(record,before);
+  finishSlow(new Response('{}',{headers:{date:'Thu, 20 Jan 2050 12:00:05 GMT'}}));await slow;
+  assert.ok(hostNow()>=before);assert.equal(elapsedLabel(record,hostNow()),elapsed);
+ }finally{globalThis.fetch=original}
+});

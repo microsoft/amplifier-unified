@@ -442,3 +442,72 @@ async def test_parked_native_history_invalidation_keeps_authority_and_releases_o
     finally:
         if worker.shared_handle:
             worker.shared_handle.release()
+
+
+@pytest.mark.parametrize('termination',['stop','crash'])
+async def test_confirmed_process_exit_settles_independent_naming(tmp_path,termination):
+    from amplifier_web.service import AppService
+    from amplifier_web.execution import ensure_turn
+    worker=tmp_path/'background.py'
+    worker.write_text('''
+import json,os,sys,time
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        sid=data['session']['id']
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+        print(json.dumps({'type':'execution.event','event':{'id':'naming','kind':'llm','lifecycle':'background','label':'Renaming fixture','phase':'running','sessionId':sid,'rootSessionId':sid,'turnId':'turn','startedAt':time.time()}}),flush=True)
+        print(json.dumps({'type':'session.idle'}),flush=True)
+    elif data['op']=='stop':break
+    elif data['op']=='crash':os._exit(7)
+''')
+    app=AppService(tmp_path/'app',workspace=tmp_path)
+    manager=RuntimeManager(command=[sys.executable,str(worker)],startup_timeout=3)
+    idle=asyncio.Event();ended=asyncio.Event();events=[]
+    try:
+        await app.dispatch('session.create',{})
+        session=app._session();ensure_turn(session,'turn')
+        async def emit(kind,payload):
+            events.append((kind,payload));await app.on_runtime_event(kind,payload)
+            if kind=='runtime.status' and payload.get('status')=='idle':idle.set()
+            if kind=='runtime.ended':ended.set()
+        await manager.start(session,emit);await asyncio.wait_for(idle.wait(),3)
+        row=session['execution']['nodes'][0];process=manager.workers[session['id']]['process']
+        assert process.returncode is None and row['phase']=='running' and not row.get('endedAt')
+        assert row['aggregateUsage']['costPendingCalls']==1
+        if termination=='stop':await manager.stop(session['id'])
+        else:await manager._write(manager.workers[session['id']],{'op':'crash'})
+        await asyncio.wait_for(ended.wait(),3)
+        assert process.returncode is not None
+        assert row['phase']==('stopped' if termination=='stop' else 'interrupted') and row['endedAt']>=row['startedAt']
+        assert row['aggregateUsage']['costPendingCalls']==row['aggregateUsage']['tokenPendingCalls']==0
+        assert len([event for event in events if event[0]=='runtime.ended'])==1
+    finally:
+        await manager.close();await app.close()
+
+
+async def test_cancelled_process_exit_delivery_remains_retryable():
+    from amplifier_web.execution import ensure_turn,ingest,finish_background
+    session={};ensure_turn(session,'turn')
+    ingest(session,{'id':'naming','kind':'llm','lifecycle':'background','phase':'running','startedAt':1})
+    waiting=asyncio.Event();release=asyncio.Event();attempts=0
+    async def emit(kind,payload):
+        nonlocal attempts
+        attempts+=1;waiting.set();await release.wait()
+        finish_background(session,payload['backgroundCallIds'],payload['status'])
+    row={'emit':emit,'backgroundCalls':{'naming'}}
+    manager=RuntimeManager(command=[sys.executable,'-c','pass'])
+    try:
+        reader=asyncio.create_task(manager._execution_ended('root',row,'stopped'))
+        await waiting.wait()
+        # _stop_row cancels and gathers the reader before retrying delivery.
+        reader.cancel();await asyncio.gather(reader,return_exceptions=True)
+        assert not row.get('executionEnded')
+        assert session['execution']['nodes'][0]['phase']=='running'
+        release.set();await manager._execution_ended('root',row,'stopped')
+        assert row['executionEnded'] is True
+        assert session['execution']['nodes'][0]['phase']=='stopped'
+        assert session['execution']['aggregateUsage']['costPendingCalls']==0
+        await manager._execution_ended('root',row,'stopped')
+        assert attempts==2
+    finally:await manager.close()

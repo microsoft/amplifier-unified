@@ -18,11 +18,17 @@ export function attachClient(signal){
   return attachment;
 }
 
+// Host response time anchors live elapsed displays even when a device clock differs.
+let hostClock;
+export function hostNow(){return hostClock?hostClock.seconds+(performance.now()-hostClock.received)/1000:Date.now()/1000}
 export async function request(path, options = {}) {
   const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
   const res=await fetch(path,{...options,body,headers,credentials:'same-origin'});
+  const dated=Date.parse(res.headers?.get?.('date'));
+  // Second-precision or delayed responses cannot wind an active timer back.
+  if(Number.isFinite(dated)&&(!hostClock||dated/1000>hostNow()))hostClock={seconds:dated/1000,received:performance.now()};
   const content=await res.text(); let data;
   try { data=content?JSON.parse(content):{}; } catch { throw new Error(`The server returned an unexpected response (${res.status}).`); }
   if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${res.status})`),{code:data.code,state:data.state,status:res.status});
