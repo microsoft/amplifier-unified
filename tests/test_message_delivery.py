@@ -217,3 +217,20 @@ async def test_late_acceptance_during_check_is_never_downgraded(recovery):
     runtime.delivery = probe
     result = await app.dispatch('conversation.delivery', recovery_args(app))
     assert result['result']['delivery'] == 'accepted'
+
+
+async def test_worker_retry_requires_ownership_but_check_does_not():
+    from amplifier_foundation.session import SessionBusyError
+    worker = Worker()
+    worker.execution = object()
+    worker.runtime = SimpleNamespace(accepted={'original': object()}, submit=AsyncMock())
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: None))
+    worker.acquire_for_mutation = AsyncMock(side_effect=SessionBusyError({'app': 'amplifier-cli', 'pid': 123}))
+    with patch('amplifier_web.runtime_worker.publish') as publish:
+        await worker.command({'op': 'delivery', 'id': 'check', 'input_id': 'original'})
+        assert publish.call_args.args[0]['result']['delivery'] == 'accepted'
+        worker.acquire_for_mutation.assert_not_awaited()
+        await worker.command({'op': 'retry', 'id': 'retry', 'input_id': 'original', 'text': 'Request'})
+        assert publish.call_args.args[0]['code'] == 'session_busy'
+    worker.acquire_for_mutation.assert_awaited_once()
+    worker.runtime.submit.assert_not_awaited()
