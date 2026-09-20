@@ -27,8 +27,9 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  if(command)return {...base,kind:'command',title:verb('Ran','Running','Run'),target:command,command,preview:typeof out.stdout==='string'?concise(out.stdout.trim().split('\n').filter(Boolean).at(-1))+(exit!=null?` · exit ${exit}`:''):concise(output)};
  if(patch||(/edit_file|apply_patch/.test(name)&&(before||after))){
   const diff=patch||['@@',...before.split('\n').map(line=>'-'+line),...after.split('\n').map(line=>'+'+line)].join('\n');
-  const rows=diffRows(diff),files=[...new Set(rows.filter(row=>row.file).map(row=>row.file))];
-  return {...base,kind:'patch',title:verb('Edited','Editing','Edit'),target:path||files.join(', ')||tool,diff,rows,added:rows.filter(row=>row.type==='add').length,removed:rows.filter(row=>row.type==='remove').length,preview:concise(output)};
+  const rows=diffRows(diff),fileRows=rows.filter(row=>row.file),files=[...new Set(fileRows.map(row=>row.file))];
+  const title=fileRows.length&&fileRows.every(row=>row.operation==='Delete')?verb('Deleted','Deleting','Delete'):fileRows.length&&fileRows.every(row=>row.operation==='Add')?verb('Created','Creating','Create'):verb('Edited','Editing','Edit');
+  return {...base,kind:'patch',title,target:path||files.join(', ')||tool,diff,rows,added:rows.filter(row=>row.type==='add').length,removed:rows.filter(row=>row.type==='remove').length,preview:concise(output)};
  }
  if(tasks)return {...base,kind:'tasks',title:verb('Updated task list','Updating task list','Task list update'),tasks,preview:`${tasks.filter(task=>task?.status==='completed').length} of ${tasks.length} complete`};
  if(/read(_file)?$/.test(name)&&path)return {...base,kind:'read',title:verb('Read','Reading','Read'),target:path,content:typeof output==='string'?output:first(out,['content','text']),preview:args.offset!=null?`From line ${args.offset}${args.limit!=null?` · up to ${args.limit} lines`:''}`:concise(fallback)};
@@ -42,8 +43,8 @@ export function diffRows(text){
  let oldLine=null,newLine=null,inHunk=false,oldRemaining=null,newRemaining=null;
  const reset=()=>{oldLine=newLine=oldRemaining=newRemaining=null;inHunk=false};
  return String(text).split('\n').map(text=>{
-  const file=text.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/);
-  if(file){reset();return {type:'header',text,file:file[1]}}
+  const file=text.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
+  if(file){reset();return {type:'header',text,file:file[2],operation:file[1]}}
   if(/^(?:diff --git |\*\*\*)/.test(text)){reset();return {type:'header',text}}
   if(!inHunk&&/^(?:--- |\+\+\+ )/.test(text))return {type:'header',text,...(text.startsWith('+++ ')&&text.slice(4)!=='/dev/null'?{file:text.slice(4).replace(/^b\//,'')}: {})};
   const hunk=text.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);

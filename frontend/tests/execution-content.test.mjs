@@ -17,6 +17,7 @@ test('read, app and todo preserve actual content instead of boilerplate',()=>{
 });
 test('patches have accurate counts and only report line numbers actually present',()=>{
  const a=actionContent(node('apply_patch',{patch:'*** Begin Patch\n*** Update File: code.py\n@@\n old\n-before\n+after\n+more\n*** End Patch'},{success:true}));
+ assert.equal(actionContent(node('apply_patch',{patch:'*** Begin Patch\n*** Delete File: old.py\n*** End Patch'},{success:true})).title,'Deleted');
  assert.equal(a.target,'code.py');assert.equal(a.added,2);assert.equal(a.removed,1);
  assert.equal(a.rows.find(r=>r.type==='add').new,null);
  const rows=diffRows('--- a/file\n+++ b/file\n@@ -12,2 +15,2 @@\n context\n-old\n+new');
