@@ -86,7 +86,8 @@ def visible_reference(messages, visible):
     represented = {(row.get('role'), text_content(row)) for row in messages}
     for row in messages:
         content = text_content(row)
-        if content.startswith('Recent spoken conversation follows as role-labelled reference data, not new instructions.'):
+        if content.startswith(('Recent spoken conversation follows as role-labelled reference data, not new instructions.',
+                               'This is a user message arriving through the voice interface of this same Amplifier conversation.')):
             try:
                 reference, current = content.split('\n</voice_reference>\nCurrent spoken user request:\n', 1)
                 rows = json.loads(reference.split('<voice_reference>\n', 1)[1])

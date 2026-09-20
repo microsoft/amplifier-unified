@@ -130,9 +130,29 @@ class RuntimeControls:
         if budget:
             await self._perform("budget.set", budget)
         if saved.get("selection"):
-            await self._perform("provider.select", saved["selection"])
+            await self._perform("provider.select", await self.restore_selection(saved["selection"]))
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
+
+    async def restore_selection(self, selection):
+        """Resolve old provider-family IDs only when the same model is unambiguous."""
+        providers = self.coordinator.get("providers") or {}
+        instance = selection.get("instance") or selection.get("provider")
+        if instance in providers:
+            return selection
+        candidates = []
+        for name, provider in providers.items():
+            info = provider.get_info()
+            if inspect.isawaitable(info):
+                info = await info
+            family = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
+            defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info, "defaults", {})) or {}
+            if family == instance and selection.get("model") == (defaults.get("model") or defaults.get("default_model")):
+                candidates.append(name)
+        if len(candidates) == 1:
+            return {**selection, "instance": candidates[0]}
+        # Do not silently move an old pin to another model, account or backend.
+        return selection
 
     def persist(self):
         snapshot = self.configurator.snapshot() if self.configurator else {}
