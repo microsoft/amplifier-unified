@@ -8,7 +8,8 @@ import {useShell} from './shell/runtime';
 import {ownershipState,actionErrorMessage} from './ownership.js';
 import {ArtifactLinks} from './canvas-library';
 import {MessageEntry,completedTurnEnds} from './message-actions';
-import {WorkspaceRail,AgentCanvas,SessionHistoryControls} from './shell-panels';
+import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
+import {MoreAppActions} from './app-toolbar';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,ModelControl,readAttachment} from './chat-controls';
 import {BundleControl} from './bundle-controls';
@@ -16,7 +17,7 @@ import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
 import {FileDrop,PathField,BundlePicker} from './settings-ui';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Bug,Phone,MessageCircle,Bell,ArrowUp,Plus,Palette,ScanEye,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines} from 'lucide-react';
+import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
 import {createPendingView} from './pending-view';
 import {createConversationNavigation} from './conversation-navigation';
@@ -51,7 +52,7 @@ const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 const initialSetup={title:'A new conversation',bundle:'work',workspace:''};
 function App(){
- const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false);
+ const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
@@ -189,11 +190,11 @@ function App(){
  },[state,connected,act]);
  useEffect(()=>{voiceClient.current=new VoiceClient({request,onState:setVoice,onError:e=>setError(e.message||String(e))});return()=>{voiceClient.current?.dispose()}},[]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
- const open=p=>{setError('');if(p==='new-session'){const next={title:'A new conversation',bundle:state.settings?.bundle||'work',workspace:state.settings?.workspace||''};setSetup(next);act('view.update',{patch:{panel:p,sessionSetup:next}})}else act('view.update',{patch:{panel:p}})};
+ const open=p=>{if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');if(p==='new-session'){const next={title:'A new conversation',bundle:state.settings?.bundle||'work',workspace:state.settings?.workspace||''};setSetup(next);act('view.update',{patch:{panel:p,sessionSetup:next,toolbarMenuOpen:false}})}else act('view.update',{patch:{panel:p,toolbarMenuOpen:false}})};
  const close=()=>{setPreview(false);act('view.update',{patch:{panel:null}})};
  useEffect(()=>{
   if(!panel)return;
-  const previous=document.activeElement;
+  const previous=panelReturnFocus.current||document.activeElement;
   const dialog=root.current?.querySelector('[role=dialog]');
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
   controls()[0]?.focus();
@@ -202,7 +203,7 @@ function App(){
    if(e.key==='Tab'){const items=controls(),first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}
   };
   window.addEventListener('keydown',handler);
-  return()=>{window.removeEventListener('keydown',handler);if(previous?.isConnected)previous.focus()};
+  return()=>{window.removeEventListener('keydown',handler);panelReturnFocus.current=null;if(previous?.isConnected)previous.focus()};
  },[panel,act]);
  function preserveOtherDraft(sessionId){
   const payload=stagedDraftPayload.current;
@@ -277,7 +278,7 @@ function App(){
  if(!state)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||'Connecting to your workspace…'}</p>{error&&<button onClick={()=>setBootAttempt(value=>value+1)}>Retry connection</button>}</div>;
  return <div id="amp-one" className="a-chat-shell" ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-part="app">
   {activeCss&&<style>{activeCss}</style>}
-  <header className="a-top" data-part="header"><div className="a-brand" data-part="brand"><img src={logo} alt="Amplifier logo"/><span>Amplifier</span></div><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected to your local Amplifier':'Reconnecting…'}/><ConversationSelect state={state} session={session} choices={conversationChoices} onSelect={id=>{stickToBottom.current=true;act('session.select',{id})}}/><div className="a-top-end"><button className="a-soft a-new-chat" onClick={()=>{stickToBottom.current=true;act('session.create',{})}} data-action="session.create" disabled={state.workspaces?.find(w=>w.id===state.selectedWorkspaceId)?.available===false} aria-label="New conversation"><Plus/><span>New conversation</span></button><button className="a-icon" aria-label="Session details" data-action="view.update" onClick={()=>open('session-details')}><Info/></button><button className="a-icon" onClick={()=>open('appearance')} data-action="view.update" aria-label="Customize appearance"><Palette/></button><button className="a-icon" onClick={()=>open('agent')} data-action="view.update" aria-label="What the agent sees"><ScanEye/></button><button className="a-icon" onClick={()=>open('feedback')} data-action="view.update" aria-label="Send feedback"><Bug/><AttentionBadge state={state} section="feedback"/></button><button className="a-icon" onClick={()=>open('activity')} data-action="view.update" aria-label="Activity"><Bell/><AttentionBadge state={state}/></button><button className="a-icon" onClick={()=>open('settings')} data-action="view.update" aria-label="Settings"><Settings/><AttentionBadge state={state} settings/></button></div></header>
+  <header className="a-top" data-part="header"><div className="a-brand" data-part="brand"><img src={logo} alt="Amplifier logo"/><span>Amplifier</span></div><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected to your local Amplifier':'Reconnecting…'}/><ConversationSelect state={state} session={session} choices={conversationChoices} onSelect={id=>{stickToBottom.current=true;act('session.select',{id})}}/><div className="a-top-end"><button className="a-soft a-new-chat" onClick={()=>{stickToBottom.current=true;act('session.create',{})}} data-action="session.create" disabled={state.workspaces?.find(w=>w.id===state.selectedWorkspaceId)?.available===false} aria-label="New conversation"><Plus/><span>New conversation</span></button><button className="a-icon" aria-label="Session details" data-action="view.update" onClick={()=>open('session-details')}><Info/></button><button className="a-icon" onClick={()=>open('activity')} data-action="view.update" aria-label="Activity"><Bell/><AttentionBadge state={state}/></button><button className="a-icon" onClick={()=>open('settings')} data-action="view.update" aria-label="Settings"><Settings/><AttentionBadge state={state} settings/></button><MoreAppActions state={state} act={act} openPanel={open}/><CanvasToggle state={state} act={act} layout={presentation.layout}/></div></header>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   <ConversationError state={state} session={session} act={act}/>{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <WorkspaceLayout state={state} act={act} presentation={presentation}><WorkspaceRail shell={shell} state={state} session={session} act={act} selectSession={id=>{stickToBottom.current=true;act('session.select',{id})}} newSession={workspace=>{stickToBottom.current=true;act('session.create',workspace?{workspace}:{})}}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation">
