@@ -132,3 +132,40 @@ async def test_branch_movement_after_check_does_not_activate(environment):
 def test_cold_inventory_does_not_prepare_worker(tmp_path):
     assert environments.inventory(tmp_path) == []
     assert not (tmp_path / 'runtime').exists()
+
+
+async def test_update_manager_installs_runtime_only_and_manifest_updates(environment, monkeypatch):
+    from amplifier_web import app_updates
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    manager, current, row, old, new, repo = environment
+    closed = []
+    class Runtime:
+        async def close(self):
+            closed.append(True)
+    async def app_check():
+        return {'id': 'application', 'status': 'current'}
+    monkeypatch.setattr(app_updates, 'check', app_check)
+    app = AppService(manager.home, Runtime(), workspace=manager.home.parent)
+    updater = UpdateManager(app)
+    async def validate(stage, release):
+        await environments.stage(updater, release, [r for r in updater.inventory if r.get('status') == 'update'])
+    updater.validate = validate
+    try:
+        await updater.check()
+        assert any(r['id'] == 'runtime:fixture-runtime' and r['status'] == 'update' for r in updater.inventory)
+        await updater.install()
+        assert app.state['updates']['phase'] == 'installed'
+        assert environments.inventory(manager.home)[0]['current'] == new
+        assert closed
+        # A changed application manifest is a local update, not a Git URL.
+        path = environments.manifest_path()
+        path.write_text(path.read_text().replace('version="0.1.0"', 'version="0.1.1"'))
+        await updater.check()
+        assert any(r['id'] == 'runtime:environment' and r['status'] == 'update' for r in updater.inventory)
+        await updater.install()
+        assert app.state['updates']['phase'] == 'installed'
+        await updater.rollback()
+        assert any(r['kind'] == 'runtime environment' for r in environments.inventory(manager.home))
+    finally:
+        await app.close()
