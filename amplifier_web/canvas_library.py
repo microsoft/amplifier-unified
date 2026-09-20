@@ -8,14 +8,14 @@ import uuid
 from .state_storage import resource
 
 
-def restore_body(canvas, db):
+def restore_body(canvas, db, *, inline_documents=False):
     """Restore a client's compact saved body for its ordinary viewer.
 
     HTML and Babylon already read their source through the document endpoint;
     keep those potentially large bodies out of browser snapshots.
     """
     reference = canvas.get('contentResource')
-    if not reference or canvas.get('kind') in {'html', 'babylon', 'canvas-app'}:
+    if not reference or (not inline_documents and canvas.get('kind') in {'html', 'babylon', 'canvas-app'}):
         return
     try:
         body = resource(db, reference['$resource'])

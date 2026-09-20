@@ -17,7 +17,9 @@ def hydrate(home, state, db):
     if reference and not canvas.get('contentResource'):
         from .canvas_library import restore_body
         canvas['contentResource'] = reference
-        restore_body(canvas, db)
+        # Global legacy snapshots kept small document bodies inline. Preserve
+        # that contract; explicitly compact large documents stay indirect.
+        restore_body(canvas, db, inline_documents=True)
     for index, session in enumerate(state.get('sessions', [])):
         if session.pop('$native', False):
             session.update(messages=[], workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)

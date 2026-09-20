@@ -170,13 +170,14 @@ async def test_unavailable_retained_source_suspends_pruning_unknown_nested_refer
 
 
 @pytest.mark.parametrize('missing', ['index', 'blob'])
-async def test_missing_global_canvas_body_does_not_prevent_host_restart(tmp_path, missing):
+@pytest.mark.parametrize('kind', ['markdown', 'html'])
+async def test_missing_global_canvas_body_does_not_prevent_host_restart(tmp_path, missing, kind):
     import sqlite3
     from amplifier_web.resource_files import root
     home = tmp_path / 'app'
     app = AppService(home, workspace=tmp_path)
     await app.dispatch('session.create', {})
-    await app.dispatch('canvas.show', {'kind': 'markdown', 'content': '# Preserve its reference'})
+    await app.dispatch('canvas.show', {'kind': kind, 'content': '# Preserve its reference'})
     aid = app.state['canvas']['id']
     sid = app.state['selectedSessionId']
     body = app.state['canvasArtifacts'][0]['body'].copy()
