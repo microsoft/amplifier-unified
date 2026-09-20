@@ -1,6 +1,3 @@
-# Attractor's loop-agent at 8626a21 requires the old package path via @main.
-# Upstream main no longer contains that directory. Pin its dependency to the
-# matching bundle revision; do not mutate the user's configured bundle/cache.
-amplifier-unified-llm-client @ git+https://github.com/microsoft/amplifier-bundle-attractor@8626a21c63a3bb88957e8e9f656abbc91e4d4a6b#subdirectory=modules/unified-llm-client
-# Module activators use separate uv invocations; retain the host's shared-state API.
-amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@695f875c0908f45f8dc78b1fcde80ecddebffd7c
+# Module activators run separately from the worker project. Follow the same
+# Foundation branch; the worker lock records the installed revision for rollback.
+amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main

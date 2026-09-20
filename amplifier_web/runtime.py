@@ -130,28 +130,22 @@ class RuntimeManager:
         self.retention.settings = updated
         self.retention.wake()
 
-    def _command(self, release=None):
+    def _command(self, release=None, *, home=None):
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
         uv = shutil.which("uv")
         if not uv:
-            raise RuntimeError("Install uv to prepare the pinned Amplifier runtime.")
+            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
-        import hashlib
-        manifest = Path(__file__).with_name("runtime_deps") / "pyproject.toml"
-        content = manifest.read_bytes()
-        digest = hashlib.sha256(content)
         from .updates import active_release
-        home = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
+        from .runtime_environment import prepare_project, receipt_directory
+        home = Path(home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
         generation = release if release is not None else active_release(home).get("current")
-        if generation:
-            digest.update(generation.encode())
-        cache = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")) / "runtime" / digest.hexdigest()[:16]
-        cache.mkdir(parents=True, exist_ok=True)
-        (cache / "pyproject.toml").write_bytes(content)
-        return [uv, "run", "--project", str(cache), "--python", "3.13", "python", str(worker)]
+        cache = prepare_project(home, generation)
+        recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
+        return [uv, "run", *(["--locked"] if recorded else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
 
     async def start(self, session: dict, emit: Emitter):
         sid = session["id"]

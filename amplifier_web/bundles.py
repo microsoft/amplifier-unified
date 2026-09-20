@@ -436,7 +436,7 @@ class BundleManager:
                         result["source"] = replacement
                     elif result.get("module") == "loop-live":
                         result["module"] = "loop-streaming"
-                        result["source"] = "git+https://github.com/microsoft/amplifier-module-loop-streaming@603aa6eefacd28367fc886d58eb89de993c58dea"
+                        result["source"] = "git+https://github.com/microsoft/amplifier-module-loop-streaming@main"
                         result.get("config", {}).pop("configured_bundle", None)
                         result.get("config", {}).pop("background_delegate", None)
                         warnings.append("Amplifier Unified reapplies its live engine when this bundle loads; other hosts use the portable streaming engine.")

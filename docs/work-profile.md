@@ -14,7 +14,7 @@ installs Unified from this checkout, with the app's normal packaged worker.
 Unified v0.13.1 includes **Work** in the standalone bundle picker by default,
 alongside Anchors. Select it using **Conversation bundle**, or set it as an app,
 workspace, or shared default. Existing registrations and source overrides take
-precedence over the built-in pinned source. The private repository requires
+precedence over the built-in branch-tracking source. The private repository requires
 GitHub access when first loaded; listing the choices does not download it.
 
 In Unified v0.12.0 or later, use **Conversation bundle** beside the model to choose
@@ -45,7 +45,7 @@ uv run --project scripts/work_profile --locked --group browser python scripts/wo
   --output /absolute/private/new-run-directory
 ```
 
-The runner uses a pinned Work bundle source. `--bundle` overrides it with another
+The runner uses a branch-tracking Work bundle source. `--bundle` overrides it with another
 reviewed Git URI or an absolute local bundle path. It resolves the bundle through
 Foundation, without assuming sibling repositories or a particular working directory.
 

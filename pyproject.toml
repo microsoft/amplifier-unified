@@ -6,8 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
-    "amplifier-core==1.6.1",
-    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@3796a32351d32a93ccbb5e230c9ffe02964db42e",
+    "amplifier-core>=1.6.1",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
     "cryptography>=44,<46",
     "python-pam>=2.0.2,<3",
@@ -18,7 +18,7 @@ dependencies = [
     "filelock>=3.20,<4",
     "mcp>=2.2,<3",
     "httpx>=0.28,<1",
-    "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@9d9759d6357ffc99fdbfb9e040136996b6c4ca9c",
+    "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
 ]
 
 [project.scripts]
