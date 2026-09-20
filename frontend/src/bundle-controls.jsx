@@ -2,6 +2,7 @@ import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useState,useEffect,useRef} from 'react';
 import {Layers,ChevronDown,X} from 'lucide-react';
 import {BundlePicker,ResultNotice} from './settings-ui';
+import {newChatSetup} from './new-chat';
 
 export const bundleLabel=(state,value)=>state.registeredBundles?.find(row=>row.value===value)?.label||value||'Bundle';
 const EMPTY={};
@@ -21,7 +22,7 @@ export function BundleControl({state,session,act,working}){
  const progress=activeAction==='bundle.preview'?'Previewing bundle changes…':activeAction==='bundle.fork'?'Creating a conversation with this bundle…':'Switching bundle…';
  async function run(action){
   if(submittingRef.current)return;submittingRef.current=true;setSubmitting(action);
-  try{await act(action,action==='session.create'?{bundle:draft.bundle}:{sessionId:session.id,bundle:draft.bundle,...(action!=='bundle.preview'?{...(ready?{previewId:preview.previewId}:{}),resetModel:!!draft.resetModel}:{})})}
+  try{await act(action,action==='view.update'?{patch:{newSessionDraft:{...newChatSetup(state),bundle:draft.bundle},composerBundle:{},panel:null}}:{sessionId:session.id,bundle:draft.bundle,...(action!=='bundle.preview'?{...(ready?{previewId:preview.previewId}:{}),resetModel:!!draft.resetModel}:{})})}
   finally{submittingRef.current=false;setSubmitting(null)}
  }
  return <div className="a-model-control a-bundle-control" ref={popover}>
@@ -45,7 +46,7 @@ export function BundleControl({state,session,act,working}){
     </div>
     {working&&<p>Finish this turn and its workers to preview or switch bundles.</p>}
     {(pending||operation)&&<ResultNotice phase={pending?'working':operation.phase} message={pending?progress:operation.error||(operation.phase==='ready'?operation.action==='bundle.preview'?'Preview ready':operation.action==='bundle.fork'?'Fork created':'Bundle switched':'')}/>}
-   </>:<button type="button" className="a-primary" disabled={disabled} data-action="session.create" onClick={()=>run('session.create')}>Start with this bundle</button>}
+   </>:<button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use for this draft</button>}
   </section>}
  </div>;
 }

@@ -170,12 +170,13 @@ try{
  // The All view retains an explicit workspace target for new chats.
  await row(beta.id).locator('.a-nav-chat-select').click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,beta.id);
- const newChat=page.getByRole('button',{name:'New chat in workspace',exact:true});
- assert.ok((await newChat.getAttribute('title')).includes(paths.two));
+ const newChat=page.getByRole('button',{name:'New chat',exact:true});
+ assert.equal(await newChat.getAttribute('title'),'New chat');
  await newChat.click();
- await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId!==id,beta.id);
+ await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId===null&&window.amplifier.getShellState()?.snapshots?.chats?.selectedSessionId===null);
  current=await state();
- assert.equal(current.sessions.find(chat=>chat.id===current.selectedSessionId).workspace,paths.two);
+ assert.equal(current.selectedSessionId,null);
+ assert.equal(current.view.newSessionDraft.workspace,paths.two);
  assert.equal(current.view.navChatScope,'all');
  assert.deepEqual((await info()).runtimeSends,[quiet]);
 
