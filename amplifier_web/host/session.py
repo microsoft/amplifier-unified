@@ -243,20 +243,78 @@ def _expand_module_configuration(node, in_provider=False):
 
 
 def _apply_host_policy(bundle, config):
-    """Host filesystem boundaries also apply to a portable snapshot's tools."""
+    """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
+    def paths(values):
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError('File-access paths must be lists of strings.')
+        result = []
+        for value in values:
+            path = Path(value).expanduser()
+            result.append((path if path.is_absolute() else Path(config.workspace) / path).resolve())
+        return result
+
+    # Settings support both legacy module lists and current config/overrides.
+    # Resolve their precedence before sharing any writer's effective boundary.
+    configured = merge(settings.get("modules", {}).get("tools", []), settings.get("config", {}).get("tools", []))
+    policies = {"tool-filesystem": {}}
+    overrides = settings.get("overrides", {})
+    def discover(rows, children):
+        for row in rows:
+            if isinstance(row, dict) and row.get('module') == 'tool-filesystem':
+                policies.setdefault(row.get('id') or row.get('instance_id') or 'tool-filesystem', {})
+        for child in children.values():
+            if isinstance(child, dict):
+                discover(child.get('tools', []), child.get('agents', {}))
+    discover(bundle.tools, bundle.agents)
+    for row in configured:
+        if isinstance(row, dict) and row.get("module") == "tool-filesystem":
+            policies[row.get("id") or row.get("instance_id") or "tool-filesystem"] = row.get("config", {})
+    for identity, values in policies.items():
+        values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
+        if identity != "tool-filesystem":
+            values = merge(values, overrides.get(identity, {}).get("config", {}))
+        policies[identity] = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+
+    def restrict(current, policy):
+        policy = copy.deepcopy(policy)
+        if "allowed_write_paths" in policy and "allowed_write_paths" in current:
+            shared, patch = paths(policy['allowed_write_paths']), paths(current['allowed_write_paths'])
+            policy['allowed_write_paths'] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
+                for a in shared for b in patch if a.is_relative_to(b) or b.is_relative_to(a)))
+        elif "allowed_write_paths" in policy:
+            policy['allowed_write_paths'] = [str(path) for path in paths(policy['allowed_write_paths'])]
+        if "denied_write_paths" in policy:
+            policy['denied_write_paths'] = list(dict.fromkeys(str(path) for path in
+                paths(current.get('denied_write_paths', [])) + paths(policy['denied_write_paths'])))
+        return merge(current, policy)
+
     def apply(rows):
         if not isinstance(rows, list):
             return
         for row in rows:
-            if not isinstance(row, dict) or row.get("module") != "tool-filesystem":
+            if not isinstance(row, dict) or row.get("module") not in {"tool-filesystem", "tool-apply-patch"}:
                 continue
-            generic = settings.get("overrides", {}).get("tool-filesystem", {}).get("config", {})
-            specific = settings.get("overrides", {}).get(row.get("id") or row.get("instance_id"), {}).get("config", {})
-            policy = {key:value for key,value in {**generic, **specific}.items() if key in policy_keys}
-            if policy:
-                row["config"] = merge(row.get("config", {}), expand_environment(policy))
+            current = copy.deepcopy(row.get("config", {}))
+            # Snapshot and child module settings have not been expanded yet.
+            # Normalize paths only after resolving their environment references.
+            for key in policy_keys & current.keys():
+                current[key] = expand_environment(current[key])
+            if row["module"] == "tool-filesystem":
+                identity = row.get("id") or row.get("instance_id") or "tool-filesystem"
+                policy = policies.get(identity, policies["tool-filesystem"])
+                # Keep the existing instance-override semantics for snapshots.
+                specific = overrides.get(identity, {}).get("config", {})
+                policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
+                row["config"] = merge(current, policy)
+            else:
+                # Intersect each effective filesystem policy with any explicitly
+                # narrower patch policy, retaining every denied subtree.
+                for policy in policies.values():
+                    if policy:
+                        current = restrict(current, policy)
+                row["config"] = current
     def agents(values):
         for agent in values.values():
             if isinstance(agent, dict):
