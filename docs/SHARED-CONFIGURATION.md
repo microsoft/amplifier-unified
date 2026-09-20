@@ -109,8 +109,12 @@ shared file contract, optional adapter interface and cross-host adoption checks.
 
 ## Root bundle defaults in Unified
 
-The conversation bundle picker uses registered standalone roots, independently of
-provider/model selection. New conversations use an explicit bundle choice first,
+The conversation bundle picker uses built-in conversation profiles and explicit
+standalone registrations (`bundle.added`), independently of provider/model selection.
+Cached namespace roots and source overrides alone do not make a bundle selectable:
+add-ons remain in capability management. The shared `bundles.list` catalog applies
+this policy to both UI and agent clients, without fetching or mounting bundles.
+New conversations use an explicit bundle choice first,
 then the workspace's shared local/project default, then Unified's optional app
 preference, then the shared user default (falling back to `anchors`). Existing
 conversations retain their saved root.

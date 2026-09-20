@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.12.1",
+      "title": "Show standalone bundles in conversation pickers",
+      "changes": [
+        "Conversation and default bundle pickers now show built-in conversation profiles and explicit standalone registrations, excluding cached add-ons and source-only aliases.",
+        "Capability bundles remain available under Add capabilities. Existing conversations and defaults retain their selections."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.12.0",
       "title": "Choose bundles per conversation and set scoped defaults",
       "changes": [
