@@ -17,6 +17,7 @@ try{
  await openSettingsPage(page,'notifications');
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
+ assert.equal(await page.locator('.a-dialog-head').evaluate(el=>getComputedStyle(el).paddingLeft),'24px');
  await page.getByLabel('Notification server',{exact:true}).fill('https://notify.example');
  await page.getByLabel(/^Topic/).fill('fixture-private-topic');
  await page.getByLabel(/^Access token/).fill('fixture-private-token');
