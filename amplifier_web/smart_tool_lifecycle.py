@@ -87,6 +87,11 @@ class Lifecycle:
             raise ValueError("The selected installation no longer exists.")
         previous = next((item for item in self.state["servers"] if item["id"] == identity), None)
         if previous:
+            for field in ("accountBinding", "accountRevision", "lastAccountDecision"):
+                if field in previous:
+                    row[field] = copy.deepcopy(previous[field])
+            if row.get('accountBinding'):
+                row['account'] = {'status': 'unconfirmed', 'expected': copy.deepcopy(row['accountBinding']), 'revision': row.get('accountRevision', 0)}
             if configuration_key(previous) != configuration_key(row):
                 await self.oauth.forget(identity)
             else:
@@ -111,7 +116,11 @@ class Lifecycle:
             await self._change(lambda _: row.update(catalogState="stale", loadedSchemas={}, updatedAt=time.time()))
         else:
             self.schemas.pop(identity, None)
-            await self._change(lambda _: row.update(status="disconnected", connectionState="disconnected", catalogState="stale", loadedSchemas={}, error="The connection closed. Reconnect explicitly; previous work was not replayed."))
+            from .mcp_account import AccountReviewRequired
+            review = isinstance(event, AccountReviewRequired) or isinstance(connection.failure, AccountReviewRequired)
+            if review and row.get('account', {}).get('status') == 'verified':
+                await self.accounts.changed(row, {'status': 'unconfirmed', 'expected': copy.deepcopy(row.get('accountBinding')), 'detail': 'Authorization changed after account verification. Reconnect explicitly to confirm the account.'})
+            await self._change(lambda _: row.update(status="disconnected", connectionState="account-review" if review else "disconnected", catalogState="stale", loadedSchemas={}, error=str(connection.failure) if review else "The connection closed. Reconnect explicitly; previous work was not replayed."))
 
     async def _refresh(self, identity, connection):
         from .smart_tools import MAX_TOOLS, _bounded, _ui
@@ -163,6 +172,7 @@ class Lifecycle:
             self.connections[identity] = connection
             try:
                 info = self._redact(_bounded(await asyncio.wait_for(asyncio.shield(connection.ready), auth_timeout), 128_000))
+                await self.accounts.bind(row, connection, info)
                 await self._refresh(identity, connection)
                 await self._change(lambda _: row.update(status="connected", connectionState="ready", **info, error=None, lastVerifiedAt=time.time(), updatedAt=time.time()))
                 return copy.deepcopy(row)
@@ -171,7 +181,8 @@ class Lifecycle:
                 await connection.close()
                 if connection.ready.done() and not connection.ready.cancelled():
                     connection.ready.exception()
-                phase = "disconnected" if isinstance(exc, asyncio.CancelledError) else "auth-required" if isinstance(exc, AuthenticationRequired) else "error"
+                from .mcp_account import AccountReviewRequired
+                phase = "account-review" if isinstance(exc, AccountReviewRequired) else "disconnected" if isinstance(exc, asyncio.CancelledError) else "auth-required" if isinstance(exc, AuthenticationRequired) else "error"
                 message = "The request was interrupted. Work was not replayed." if isinstance(exc, asyncio.CancelledError) else "The MCP server did not become ready within 30 seconds." if isinstance(exc, TimeoutError) else self._redact(str(exc))[:1000]
                 await self._change(lambda _: row.update(status=phase, connectionState=phase, catalogState="stale", loadedSchemas={}, error=message,
                     **({"authorization": connection.challenge} if connection.challenge else {})))

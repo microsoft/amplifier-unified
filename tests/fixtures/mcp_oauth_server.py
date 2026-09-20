@@ -1,5 +1,6 @@
 """Local OAuth + MCP fixture. Real SDK servers, synthetic credentials only."""
 import asyncio
+import json
 import secrets
 import socket
 import time
@@ -7,6 +8,8 @@ from urllib.parse import urlencode
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
+from mcp.server.extension import Extension
+from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, AuthorizationCode, RefreshToken
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.shared.auth import OAuthToken
@@ -14,11 +17,22 @@ from starlette.responses import HTMLResponse, RedirectResponse
 import uvicorn
 
 
+ACCOUNT_URI = "amplifier-account://current"
+
+
+class AccountExtension(Extension):
+    identifier = "io.amplifier/account-identity"
+
+    def settings(self):
+        return {"version": 1, "resourceUri": ACCOUNT_URI}
+
+
 class Provider:
     def __init__(self, origin):
         self.origin = origin
         self.clients, self.pending, self.codes, self.access, self.refresh = {}, {}, {}, {}, {}
         self.exchanges = self.refreshes = 0
+        self.principal = "fixture-user"
 
     async def get_client(self, identity):
         return self.clients.get(identity)
@@ -39,7 +53,7 @@ class Provider:
     def mint(self, client_id, scopes, resource):
         token, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.access[token] = AccessToken(token=token, client_id=client_id, scopes=scopes,
-            expires_at=int(time.time())+3600, resource=resource, subject="fixture-user")
+            expires_at=int(time.time())+3600, resource=resource, subject=self.principal)
         self.refresh[refresh] = RefreshToken(token=refresh, client_id=client_id, scopes=scopes, resource=resource)
         return OAuthToken(access_token=token, refresh_token=refresh, expires_in=3600, scope=" ".join(scopes))
 
@@ -65,7 +79,8 @@ class Provider:
 
 
 class Fixture:
-    def __init__(self):
+    def __init__(self, *, identity=False):
+        self.identity_override = None
         self.socket = socket.socket()
         self.socket.bind(("127.0.0.1", 0))
         self.port = self.socket.getsockname()[1]
@@ -73,10 +88,20 @@ class Fixture:
         self.provider = Provider(self.origin)
         self.calls = 0
         self.mcp = MCPServer("Local account fixture", auth_server_provider=self.provider,
+            extensions=[AccountExtension()] if identity else [],
             auth=AuthSettings(issuer_url=self.origin, resource_server_url=self.origin + "/mcp",
                 validate_token_resource=True, required_scopes=["records:read"],
                 client_registration_options=ClientRegistrationOptions(enabled=True,
                     valid_scopes=["records:read"], default_scopes=["records:read"])))
+
+        if identity:
+            @self.mcp.resource(ACCOUNT_URI, mime_type="application/json")
+            def account_identity() -> str:
+                token = get_access_token()
+                assert token is not None
+                value = {"schemaVersion": 1, "issuer": self.origin,
+                         "subject": token.subject, "displayName": "Fixture " + token.subject}
+                return json.dumps(self.identity_override if self.identity_override is not None else value)
 
         @self.mcp.tool(structured_output=True)
         def read_record(key: str) -> dict[str, str]:

@@ -131,6 +131,8 @@ class SmartToolsManager(Lifecycle):
         self.schemas = {}
         from .mcp_oauth import Authorization
         self.oauth = Authorization(self)
+        from .mcp_account import Accounts
+        self.accounts = Accounts(self)
         self.connection_locks = {}
         self.install_lock = asyncio.Lock()
         self.closed = False
@@ -140,7 +142,7 @@ class SmartToolsManager(Lifecycle):
         for field in ("servers", "operations", "catalog", "installations"):
             state.setdefault(field, [])
         for server in state["servers"]:
-            server.update(status="disconnected", connectionState="disconnected", tools=[], loadedSchemas={}, catalogState="stale", account={"status":"unknown"}, login={"id":server["id"],"phase":"idle"})
+            server.update(status="disconnected", connectionState="disconnected", tools=[], loadedSchemas={}, catalogState="stale", account={"status":"unconfirmed", "expected":copy.deepcopy(server["accountBinding"]), "revision":server.get("accountRevision", 0)} if server.get("accountBinding") else {"status":"unknown"}, login={"id":server["id"],"phase":"idle"})
         for operation in state["operations"]:
             # The receipt may be newer than the last coalesced app snapshot.
             # Import legacy overview-only records, never overwrite a durable result.
@@ -302,6 +304,8 @@ class SmartToolsManager(Lifecycle):
             return await self.oauth.cancel(args["id"])
         if name == "authForget":
             return await self.oauth.forget(args["id"])
+        if name == "accountAccept":
+            return await self.accounts.accept(args, origin)
         if name == "configure":
             return await self.configure(args)
         if name == "result":

@@ -57,7 +57,7 @@ class Storage:
         await self.owner.manager._change(lambda _: self.owner.manager._server(self.identity).update(
             authorization={"consent":"granted", "grantedScopes":tokens.scope.split()[:50] if tokens.scope else None,
                            "requestedScopes": self.owner.sessions.get(self.identity, {}).get("public", {}).get("requestedScopes", []),
-                           "source":"oauth-token-response"}, account={"status":"unknown"}))
+                           "source":"oauth-token-response"}))
 
     async def get_client_info(self):
         from mcp.shared.auth import OAuthClientInformationFull
@@ -74,7 +74,8 @@ class Authorization:
 
     def status(self, identity):
         self.manager._server(identity)
-        return copy.deepcopy(self.sessions.get(identity, {}).get("public", {"id":identity, "phase":"idle"}))
+        return {**copy.deepcopy(self.sessions.get(identity, {}).get("public", {"id":identity, "phase":"idle"})),
+                "account": copy.deepcopy(self.manager._server(identity).get("account", {"status":"unknown"}))}
 
     def origin(self, value=None):
         config = getattr(self.manager.service, "server_config", {})
@@ -212,8 +213,9 @@ class Authorization:
         await self.manager.disconnect(identity)
         Storage(self, identity).path.unlink(missing_ok=True)
         self.sessions.pop(identity, None)
-        await self.manager._change(lambda _: self.manager._server(identity).update(account={"status":"unknown"},
-            authorization={"consent":"unknown", "requestedScopes":[], "grantedScopes":None}, login={"id":identity,"phase":"idle"}))
+        row = self.manager._server(identity)
+        await self.manager.accounts.changed(row, {"status": "unconfirmed" if row.get("accountBinding") else "unknown", **({"expected": copy.deepcopy(row["accountBinding"]), "detail": "Local sign-in was removed. The previously accepted account remains bound; sign in explicitly to confirm it."} if row.get("accountBinding") else {})})
+        await self.manager._change(lambda _: row.update(authorization={"consent":"unknown", "requestedScopes":[], "grantedScopes":None}, login={"id":identity,"phase":"idle"}))
         return {"id":identity, "localCredentials":"removed", "remoteRevocation":"not-attempted"}
 
     def secret_values(self):

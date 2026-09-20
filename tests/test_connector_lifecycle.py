@@ -69,7 +69,7 @@ async def test_oauth_real_protocol_private_store_refresh_and_forget(manager, rem
     await wait_for(lambda: manager.oauth.status("remote")["phase"] == "ready")
     server = manager._server("remote")
     assert server["connectionState"] == "ready"
-    assert server["account"] == {"status":"unknown"}
+    assert server["account"]["status"] == "unknown"
     assert server["authorization"]["grantedScopes"] == ["records:read"]
     assert all("inputSchema" not in t for t in server["tools"])
     result = await manager.call_tool("remote", "read_record", {"key":"first"})

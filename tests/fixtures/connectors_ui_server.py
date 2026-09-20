@@ -21,7 +21,7 @@ async def main(home):
     os.environ["AMPLIFIER_UNIFIED_IMPORT_HOME"] = str(home / "legacy")
     workspace = home / "workspace"
     workspace.mkdir()
-    fixture = await Fixture().start()
+    fixture = await Fixture(identity=True).start()
     app = await create_app(home, workspace=workspace, runtime=Runtime(), voice=False,
         preload_providers=False, background_updates=False, server_config={"port":8989})
     app["control_token"] = "fixture-browser-control-token"
@@ -33,6 +33,13 @@ async def main(home):
             "exchanges":fixture.provider.exchanges, "registrations":len(fixture.provider.clients),
             "packageExists":(service.smart_tools.root / "installs" / ("d"*16)).exists(),
             "externalWorkExists":(workspace / "saved-tool-work").exists()})
+
+    async def principal(request):
+        payload = await request.json()
+        assert payload['subject'] in {'fixture-user', 'principal-two'}
+        for token in fixture.provider.access.values():
+            token.subject = payload['subject']
+        return web.json_response({'changed': True})
 
     async def package(request):
         identity = "d"*16
@@ -57,6 +64,7 @@ async def main(home):
     app.router.add_get("/fixture/info", info)
     app.router.add_post("/fixture/agent", agent)
     app.router.add_post("/fixture/package", package)
+    app.router.add_post("/fixture/principal", principal)
 
     async def cleanup(app):
         await fixture.close()

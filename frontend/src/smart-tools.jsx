@@ -13,7 +13,7 @@ const list = value => Array.isArray(value) ? value : Object.values(value || {});
 const title = name => name.replace(/[_.-]+/g, ' ').replace(/^./, character => character.toUpperCase());
 const sourceOf = row => row?.repository || row?.repo || row?.url || '';
 const phaseOf = operation => working(operation) ? 'working' : failed(operation) ? 'error' : 'ready';
-const actionMessages = {'smartTools.catalog':'Catalog refreshed', 'smartTools.inspect':'Source inspected', 'smartTools.install':'Installation complete', 'smartTools.configure':'Connection saved', 'smartTools.connect':'Connected', 'smartTools.disconnect':'Disconnected', 'smartTools.remove':'Connection removed', 'smartTools.call':'Tool finished', 'smartTools.open':'Opened in canvas', 'smartTools.reconnect':'Reconnected', 'smartTools.schemas':'Tool fields loaded', 'smartTools.discover':'Tool definitions found', 'smartTools.uninstall':'Package uninstalled', 'smartTools.authStart':'Sign-in started', 'smartTools.authCancel':'Sign-in cancelled', 'smartTools.authForget':'Local sign-in removed'};
+const actionMessages = {'smartTools.catalog':'Catalog refreshed', 'smartTools.inspect':'Source inspected', 'smartTools.install':'Installation complete', 'smartTools.configure':'Connection saved', 'smartTools.connect':'Connected', 'smartTools.disconnect':'Disconnected', 'smartTools.remove':'Connection removed', 'smartTools.call':'Tool finished', 'smartTools.open':'Opened in canvas', 'smartTools.reconnect':'Reconnected', 'smartTools.schemas':'Tool fields loaded', 'smartTools.discover':'Tool definitions found', 'smartTools.uninstall':'Package uninstalled', 'smartTools.authStart':'Sign-in started', 'smartTools.authCancel':'Sign-in cancelled', 'smartTools.authForget':'Local sign-in removed', 'smartTools.accountAccept':'Account change accepted; reconnect explicitly'};
 
 function useEditor(state, act) {
   const shared = state.view?.smartToolsEditor;
@@ -155,7 +155,7 @@ export function SmartToolsSettings({state, act}) {
   }, [opening, operations, state.selectedSessionId, state.view?.panel, editor.page, editor.serverId, editor.toolName]);
   const toolSchema = tool?.inputSchema || {type:'object',properties:{}};
   const rawOnly = !toolSchema.properties || !!(toolSchema.oneOf || toolSchema.anyOf || toolSchema.$ref);
-  const lastConnectionOperation = ['smartTools.configure','smartTools.connect','smartTools.reconnect','smartTools.disconnect','smartTools.remove','smartTools.authForget'].map(action => operation(action, {id:server?.id})).filter(Boolean).sort((a,b) => (b.updatedAt || b.createdAt || Infinity) - (a.updatedAt || a.createdAt || Infinity))[0];
+  const lastConnectionOperation = ['smartTools.configure','smartTools.connect','smartTools.reconnect','smartTools.disconnect','smartTools.remove','smartTools.authForget','smartTools.accountAccept'].map(action => operation(action, {id:server?.id})).filter(Boolean).sort((a,b) => (b.updatedAt || b.createdAt || Infinity) - (a.updatedAt || a.createdAt || Infinity))[0];
 
   return <section className="a-settings-section a-smart-tools" data-part="smart-tools-settings">
     {editor.page !== 'home' && <button type="button" className="a-link a-smart-back" data-action="view.update" onClick={() => navigate(back)}><ArrowLeft/>Back to {back === 'server' ? server?.name || 'connection' : 'Smart Tools'}</button>}
@@ -218,7 +218,18 @@ export function SmartToolsSettings({state, act}) {
     {(editor.page === 'server' || editor.page === 'tool') && !server && <ResultNotice phase="neutral" message="This connection is no longer configured."/>}
     {editor.page === 'server' && server && <ActivityRegion name={'smart-tool-connection-'+server.id} busy={working(lastConnectionOperation)}>
       <div className="a-smart-heading"><div><h4>{server.name}</h4><p>{server.connectionState || server.status || 'Not connected'} · {tools.length} tools</p></div><button type="button" className="a-icon" aria-label={'Edit '+server.name} data-action="view.update" onClick={() => openConnection(server)}><Settings2/></button></div>
-      <p className="a-caption">Account identity: {server.account?.status === 'verified' ? server.account.displayName : 'Unknown — the server has not supplied verified account details.'}</p>
+      <div className="a-smart-source-summary" data-part="connector-account">
+        <p>Account identity: {['verified','accepted'].includes(server.account?.status) ? (server.account.displayName || server.account.subject) : server.account?.status === 'changed' ? 'Changed — review required' : server.account?.status === 'unconfirmed' ? 'Unconfirmed — reconnect is blocked' : 'Unknown — the server has not supplied supported account details.'}</p>
+        {server.account?.subject && <p className="a-caption">{server.account.issuer} · {server.account.subject}</p>}
+        {server.account?.provenance && <p className="a-caption">Server-attested through authenticated transport. This is not independent identity verification. Last observed: {new Date(server.account.observedAt*1000).toLocaleString()}.</p>}
+        {server.account?.detail && <p>{server.account.detail}</p>}
+        {server.account?.status === 'changed' && <>
+          <p>Previously accepted: {server.account.expected.issuer} · {server.account.expected.subject}</p>
+          <p>Reported now: {server.account.candidate.displayName || server.account.candidate.subject} · {server.account.candidate.issuer} · {server.account.candidate.subject}</p>
+          <p className="a-caption">The connector attests this identity through its authenticated transport. Accepting saves this account choice; it does not reconnect or call a tool.</p>
+          <button type="button" className="a-soft" data-action="smartTools.accountAccept" disabled={anyPending} onClick={() => run('smartTools.accountAccept',{id:server.id,expectedRevision:server.account.revision,issuer:server.account.candidate.issuer,subject:server.account.candidate.subject})}>Accept this account change</button>
+        </>}
+      </div>
       {server.authorization?.requestedScopes?.length > 0 && <p className="a-caption">Requested access: {server.authorization.requestedScopes.join(', ')}</p>}
       <p className="a-caption">Granted access: {server.authorization?.grantedScopes?.join(', ') || 'Not reported'} · Consent: {server.authorization?.consent || 'Unknown'}</p>
       {server.auth === 'oauth' && <div className="a-smart-source-summary">

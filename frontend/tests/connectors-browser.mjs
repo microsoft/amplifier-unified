@@ -45,7 +45,7 @@ try {
   await consent.getByText('Authorization response received.',{exact:false}).waitFor();
   assert.equal(new URL(consent.url()).pathname,'/oauth/mcp/complete');assert.equal(new URL(consent.url()).search,'');
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].connectionState==='ready');
-  await expect(page.getByText(/Account identity: Unknown/)).toBeVisible();
+  await expect(page.getByText(/Account identity: Fixture fixture-user/)).toBeVisible();
   await expect(page.getByText(/Granted access: records:read/)).toBeVisible();
   let server=(await state()).smartTools.servers[0];
   assert.ok(server.tools.every(t=>!t.inputSchema));assert.deepEqual(server.loadedSchemas,{});
@@ -74,6 +74,24 @@ try {
   await page.getByRole('button',{name:'Reconnect',exact:true}).click();
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].connectionState==='ready');
   assert.equal((await info()).exchanges,1,'Reconnect must reuse the authorized account without new consent or replay');
+  await fetch(origin+'/fixture/principal',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({subject:'principal-two'})});
+  await agent('smartTools.call',{id:server.id,name:'read_record',arguments:{key:'wrong-account'}});
+  await page.getByText('Account identity: Changed — review required',{exact:true}).waitFor();
+  assert.equal((await info()).calls,2,'Different account must not execute the tool');
+  await page.getByRole('button',{name:'Accept this account change',exact:true}).click();
+  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].account.status==='accepted');
+  assert.equal((await info()).calls,2);
+  await agent('smartTools.reconnect',{id:server.id});
+  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].account.status==='verified');
+  assert.equal((await state()).smartTools.servers[0].account.subject,'principal-two');
+  // A second change is accepted through the same public agent action.
+  await fetch(origin+'/fixture/principal',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({subject:'fixture-user'})});
+  await agent('smartTools.reconnect',{id:server.id});
+  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].account.status==='changed');
+  const review=(await state()).smartTools.servers[0].account;
+  await agent('smartTools.accountAccept',{id:server.id,expectedRevision:review.revision,issuer:review.candidate.issuer,subject:review.candidate.subject});
+  await agent('smartTools.reconnect',{id:server.id});
+  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].account.status==='verified');
   await page.reload();await page.waitForSelector('#amp-one');
   assert.equal((await state()).selectedSessionId,selected);
   assert.equal((await state()).view.draft,'Unsent draft stays here');
@@ -82,7 +100,7 @@ try {
   if(artifacts){await mkdir(artifacts,{recursive:true});await page.screenshot({path:artifacts+'/connector-lifecycle-desktop.png',fullPage:true});}
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
-  if(artifacts){await page.locator('.a-smart-source-summary').scrollIntoViewIfNeeded();await page.screenshot({path:artifacts+'/connector-lifecycle-mobile.png',fullPage:true});}
+  if(artifacts){await page.locator('[data-part=connector-account]').scrollIntoViewIfNeeded();await page.screenshot({path:artifacts+'/connector-lifecycle-mobile.png',fullPage:true});}
   await page.getByRole('button',{name:'Forget local sign-in',exact:true}).click();
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers[0].authorization.consent==='unknown');
   await agent('smartTools.authStart',{id:server.id,redirectOrigin:origin});await authorize.waitFor();
@@ -105,7 +123,7 @@ try {
   assert.equal((await info()).packageExists,false);
   assert.equal((await info()).externalWorkExists,true);
   assert.deepEqual(errors,[]);
-  const evidence={passed:true,realMcpAndOAuth:true,realAccounts:false,userAndAgentCalls:2,consentExchanges:1,agentSignInUserCancel:true,staleCallRejected:true,configureInert:true,reloadNoReplay:true,draftAndSelectionPreserved:true,mobileOverflow:false,uninstallDependencyGuard:true,uninstallExternalWorkPreserved:true};
+  const evidence={passed:true,realMcpAndOAuth:true,realAccounts:false,accountProvenance:"server-attested authenticated MCP resource",twoPrincipals:true,identityMismatchBlocked:true,explicitUserAndAgentAccept:true,userAndAgentCalls:2,consentExchanges:1,agentSignInUserCancel:true,staleCallRejected:true,configureInert:true,reloadNoReplay:true,draftAndSelectionPreserved:true,mobileOverflow:false,uninstallDependencyGuard:true,uninstallExternalWorkPreserved:true};
   if(artifacts)await writeFile(artifacts+'/connector-lifecycle-browser.json',JSON.stringify(evidence,null,2)+'\n');
   console.log(JSON.stringify(evidence));
 } finally {await browser?.close();fixture.kill('SIGTERM');}

@@ -6,6 +6,7 @@ import copy
 from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 import logging
+import json
 import os
 import re
 from urllib.parse import urlsplit
@@ -87,6 +88,10 @@ class Connection:
         self.failure = None
         self.challenge = None
         self.catalog_epoch = 0
+        self.account_guard = None
+        self.account_resource_uri = None
+        self.account_authorization = None
+        self.last_identity_authorization = None
         self.task = asyncio.create_task(self._run())
 
     async def _message(self, message):
@@ -97,7 +102,7 @@ class Connection:
         if isinstance(message, Exception):
             self.failure = message
             if self.changed:
-                await self.changed(self, "transport")
+                await self.changed(self, message)
 
     async def _catalog_changed(self):
         self.catalog_epoch += 1
@@ -121,6 +126,23 @@ class Connection:
         if parsed.username or parsed.password or (parsed.scheme != "https" and not (
                 parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"})):
             raise ValueError("MCP authorization endpoints require HTTPS except on loopback.")
+        if getattr(self, 'account_resource_uri', None) and request.method == 'POST' and str(request.url) == self.config.get('url'):
+            try:
+                body = json.loads(request.content)
+            except (ValueError, TypeError):
+                return
+            if not isinstance(body, dict):
+                return
+            authorization = request.headers.get('authorization')
+            if body.get('method') == 'resources/read' and body.get('params', {}).get('uri') == self.account_resource_uri:
+                self.last_identity_authorization = authorization
+            elif body.get('method') in {'tools/call', 'resources/read'} and authorization != self.account_authorization:
+                # SDK refresh may happen after the identity read or following a
+                # challenge. Do not let its retry dispatch under an unconfirmed grant.
+                from .mcp_account import AccountReviewRequired
+                error = AccountReviewRequired('Authorization changed after account verification. Reconnect to confirm the current account; the request was not sent under the new authorization.')
+                await self._message(error)
+                raise error
 
     async def _listen(self, client):
         from mcp.client.subscriptions import ListenNotSupportedError
@@ -160,7 +182,8 @@ class Connection:
                         args=self.config.get("args", []), env=self.secrets,
                         cwd=self.config.get("cwd") or None), errlog=errlog)
                 client = await stack.enter_async_context(Client(observed(transport, self), read_timeout_seconds=self.handshake_timeout,
-                    extensions=[advertise("io.modelcontextprotocol/ui", {"mimeTypes": [APP_MIME]})],
+                    extensions=[advertise("io.modelcontextprotocol/ui", {"mimeTypes": [APP_MIME]}),
+                                advertise("io.amplifier/account-identity", {"version": 1})],
                     message_handler=self._message, cache=None))
                 instructions = client.instructions or ""
                 self.ready.set_result({"protocolVersion": client.protocol_version,
@@ -176,6 +199,8 @@ class Connection:
                         try:
                             if expected_epoch is not None and expected_epoch != self.catalog_epoch:
                                 raise ValueError("The tool catalog changed before execution. Refresh discovery and review the current schema.")
+                            if self.account_guard and method in {"call_tool", "read_resource"}:
+                                await self.account_guard(client)
                             result = await getattr(client, method)(*args, **kwargs)
                             if not current.done():
                                 current.set_result(_json(result))
@@ -184,6 +209,12 @@ class Connection:
                                 current.set_exception(ValueError("The MCP connection closed. The tool outcome is unconfirmed; work was not replayed."))
                             raise
                         except Exception as exc:
+                            from .mcp_account import AccountReviewRequired
+                            if isinstance(exc, AccountReviewRequired):
+                                if not current.done():
+                                    current.set_exception(exc)
+                                await self._message(exc)
+                                return
                             from mcp_types import CONNECTION_CLOSED, REQUEST_TIMEOUT
                             from mcp.shared.exceptions import MCPError
                             if isinstance(exc, MCPError) and exc.code in {CONNECTION_CLOSED, REQUEST_TIMEOUT}:

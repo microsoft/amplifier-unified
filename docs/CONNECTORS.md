@@ -55,7 +55,7 @@ appropriate app-backed location. External runtimes are managed by their own inst
 
 ## Truthful state and authorization
 
-`connectionState` is `disconnected`, `connecting`, `auth-required`, `ready` or `error`.
+`connectionState` is `disconnected`, `connecting`, `auth-required`, `ready`, `account-review` or `error`.
 The older `status: connected` remains for compatibility when `connectionState` is
 `ready`. `lastVerifiedAt` records the last completed connection handshake. Readiness
 describes the current client connection, not a guarantee about a remote service's
@@ -66,9 +66,15 @@ response/event stream using Last-Event-ID; this does not replay a tool call or a
 a disconnected registration.
 Host restart marks connections disconnected and discards cached callable schemas.
 
-`account.status` remains `unknown`: ordinary MCP metadata and OAuth access tokens do
-not supply verified human account identity. The host does not decode opaque tokens,
-infer account names from server titles, or claim an unreported identity. Requested
+`account.status` is `unknown` unless the connector supports the explicit
+[authenticated account resource contract](CONNECTOR-IDENTITY.md). Supported OAuth
+connections bind the resource's exact issuer and subject; `verified` means
+**server-attested through authenticated transport**, not independently verified
+legal or human identity. A mismatch becomes `changed` and blocks dispatch until
+an exact `smartTools.accountAccept` receipt is followed by explicit reconnect.
+Previously bound but unavailable identity is `unconfirmed` and also blocks dispatch.
+Ordinary MCP metadata and opaque OAuth access tokens do not establish identity.
+The host never infers account names from server titles or decodes tokens. Requested
 scopes and consent progress are separate from scopes actually returned in the token
 response; absent granted scopes are `null`, not an empty grant. Header authentication
 cannot establish that provider consent was granted. A 401/403 reports authorization
@@ -124,7 +130,7 @@ proof that a remote mutation stopped or rolled back. Queued work is never replay
 
 ## Executable acceptance
 
-`pytest tests/test_connector_lifecycle.py tests/test_smart_tools.py
+`pytest tests/test_connector_identity.py tests/test_connector_lifecycle.py tests/test_smart_tools.py
 tests/test_smart_canvas.py tests/test_auth.py tests/test_server_auth.py` exercises
 real local MCP stdio/HTTP, official SDK authorization/token endpoints, browser consent
 fixture, PKCE/resource checks, refresh, denial, cancellation, wrong/replayed callback,
