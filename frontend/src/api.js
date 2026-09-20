@@ -1,5 +1,25 @@
+// A page owns one presentation identity. Reload/duplicate restores a copy of
+// the previous view, never the same writable client as another live tab.
+export const clientId=crypto.randomUUID();
+let attachment;
+export function clientUrl(path){
+  if(!path.startsWith('/api/'))return path;
+  const url=new URL(path,location.origin);url.searchParams.set('clientId',clientId);
+  return url.pathname+url.search;
+}
+export function attachClient(){
+  if(!attachment){
+    let resumeClientId;try{resumeClientId=sessionStorage.getItem('amplifier.clientId')||undefined}catch{}
+    attachment=request('/api/clients/attach',{method:'POST',body:{clientId,resumeClientId,kind:'web',protocolVersion:1}}).then(result=>{
+      try{sessionStorage.setItem('amplifier.clientId',clientId)}catch{}
+      return result;
+    }).catch(error=>{attachment=null;throw error});
+  }
+  return attachment;
+}
+
 export async function request(path, options = {}) {
-  const headers = { ...options.headers };
+  const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
   const res=await fetch(path,{...options,body,headers,credentials:'same-origin'});

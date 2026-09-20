@@ -1,3 +1,4 @@
+import {clientUrl} from './api';
 import React,{useEffect,useRef,useState} from 'react';
 import {AppBridge,PostMessageTransport} from '@modelcontextprotocol/ext-apps/app-bridge';
 import {AlertCircle,Check,Loader,RefreshCw} from 'lucide-react';
@@ -75,7 +76,7 @@ export function McpAppViewer({canvas,act}){
    bridge.onerror=error=>report('error',error.message);
    await bridge.connect(new PostMessageTransport(frame.current.contentWindow,frame.current.contentWindow));
    // Connect before navigation so even a fast inline App.initialize is heard.
-   if(live)frame.current.src=`/api/canvas/${canvas.id}/document`;
+   if(live)frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
   };
   report('loading','Connecting tool view…');start().catch(error=>report('error',error.message));
   const timeout=setTimeout(()=>{if(live&&!initialized)setStatus(s=>s.phase==='loading'?{phase:'error',text:'The tool view has not connected. Check that this server supplies a self-contained MCP App.'}:s)},15000);

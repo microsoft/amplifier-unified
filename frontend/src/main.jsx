@@ -1,3 +1,4 @@
+import {clientId,clientUrl,attachClient} from './api';
 import {ownershipState,actionErrorMessage} from './ownership.js';
 import {ArtifactLinks} from './canvas-library';
 import {MessageEntry,completedTurnEnds} from './message-actions';
@@ -34,7 +35,7 @@ const logo='/branding/icons/amplifier-icon-128.png';
 import defaultSkin from './converge.css?raw';
 import './base.css';
 import './converge.css';
-const clientId=crypto.randomUUID();
+
 const icons={call:Phone,text:Bell,chat:MessageCircle};
 const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
@@ -71,7 +72,7 @@ function App(){
  effectHandler.current=handleEffects;
  const acceptState=useCallback(next=>{
   if(!next||typeof next!=='object')return;
-  if(latest.current && next.revision<latest.current.revision)return;
+  if(latest.current && next.client?.hostInstanceId===latest.current.client?.hostInstanceId && next.revision<latest.current.revision)return;
   if(!latest.current){for(const effect of next.deviceCommands||[])if(effect.id)seenEffects.current.add(effect.id);for(const m of notificationMessages(next))lastNotify.current.add(m.id)}
   else effectHandler.current(next.deviceCommands);
   const previousSession=latest.current?.sessions?.find(s=>s.id===latest.current.selectedSessionId),nextSession=next.sessions?.find(s=>s.id===next.selectedSessionId);
@@ -95,7 +96,14 @@ function App(){
  },[acceptState,handleEffects]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
  const publishView=useCallback(()=>{if(latest.current)request('/api/view',{method:'POST',body:{...visibleView(root.current,clientId),voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'}}).catch(()=>{});},[]);
- useEffect(()=>{let alive=true;Promise.all([request('/api/state'),request('/api/actions')]).then(([data,actions])=>{if(alive){acceptState(data.state||data);setCatalog(Array.isArray(actions)?actions:actions.actions||[]);setConnected(true)}}).catch(e=>alive&&setError(actionErrorMessage(e)));const source=new EventSource('/api/events');source.addEventListener('state',e=>{try{acceptState(JSON.parse(e.data));setConnected(true)}catch{}});source.onopen=()=>setConnected(true);source.onerror=()=>setConnected(false);return()=>{alive=false;source.close()};},[acceptState]);
+ useEffect(()=>{let alive=true,source;
+  attachClient().then(()=>Promise.all([request('/api/state'),request('/api/actions')])).then(([data,actions])=>{
+   if(!alive)return;acceptState(data.state||data);setCatalog(Array.isArray(actions)?actions:actions.actions||[]);
+   source=new EventSource(clientUrl('/api/events'));source.addEventListener('state',e=>{try{acceptState(JSON.parse(e.data));setConnected(true)}catch{}});
+   source.onopen=()=>setConnected(true);source.onerror=()=>setConnected(false);
+  }).catch(e=>alive&&setError(actionErrorMessage(e)));
+  return()=>{alive=false;source?.close()};
+ },[acceptState]);
  useEffect(()=>{window.amplifier=Object.freeze({getState:()=>({...latest.current,renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch]);
  useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView]);
