@@ -50,13 +50,13 @@ jobs:
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
       - name: Verify first launch with empty storage
-        if: hashFiles('frontend/tests/empty-host-browser.mjs') != ''
+        if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
       - name: Verify review during a pending send
-        if: hashFiles('frontend/tests/review-during-send-browser.mjs') != ''
+        if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:review-during-send-browser
       - name: Build and verify distributions
