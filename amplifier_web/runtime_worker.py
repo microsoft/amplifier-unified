@@ -151,6 +151,7 @@ class Worker:
             return not CALL_PURPOSE.get()
         coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
+            coordinator.register_capability('web.provider_observe', lambda provider: self.telemetry.instrument_provider(coordinator.session_id,provider))
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
@@ -313,10 +314,12 @@ class Worker:
                     if coordinator:
                         host.install_activity(coordinator)
                         await install_app_access(coordinator, surface_bridge(coordinator))
-                        from amplifier_web.surface_delivery import SurfaceProvider
-                        delivery = coordinator.get_capability('web.surface_delivery')
+                        from amplifier_web.host.session import SelectedProvider
+                        transform = coordinator.get_capability('web.provider_transform')
+                        if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
+                            loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
-                        return runtime, {name: SurfaceProvider(host.telemetry.instrument_provider(coordinator.session_id, value), delivery) for name, value in selected.items()}, scope
+                        return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing

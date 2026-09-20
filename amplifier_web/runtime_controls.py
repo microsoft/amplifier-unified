@@ -394,7 +394,7 @@ class RuntimeControls:
                     selection = dict(current.selection) if isinstance(current,SelectedProvider) else {}
                     original = current.original if isinstance(current,SelectedProvider) else current
                     selection["max_output_tokens"] = args["maxOutputTokens"]
-                    loop.root_provider = SelectedProvider(original,selection)
+                    loop.root_provider = SelectedProvider(original,selection,self.coordinator.get_capability('web.provider_transform'))
                     self.max_output_tokens = args["maxOutputTokens"]
                 self.persist()
             return {"maxIterations":getattr(loop,"max_iterations",None), "contextTokens":getattr(context,"max_tokens",None),
@@ -411,7 +411,7 @@ class RuntimeControls:
                 if self.max_output_tokens is not None and providers:
                     automatic = loop._select_provider(providers)
                     if automatic is not None:
-                        loop.root_provider = SelectedProvider(automatic, {'max_output_tokens': self.max_output_tokens})
+                        loop.root_provider = SelectedProvider(automatic, {'max_output_tokens': self.max_output_tokens},self.coordinator.get_capability('web.provider_transform'))
             except Exception:
                 loop.root_provider = previous
                 raise
@@ -428,7 +428,7 @@ class RuntimeControls:
                 raise ValueError("Select an available provider instance and model")
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
-            self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective)
+            self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
             self.selection = selected
             self.selection_cleared = False
             self.persist()

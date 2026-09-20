@@ -119,3 +119,45 @@ async def test_exact_model_catalog_advertises_vision_when_provider_metadata_does
     assert not await catalog.supports(request.model_copy(update={'model':'missing'}),provider)
     provider.selection={'model':'text'}
     assert not await catalog.supports(request.model_copy(update={'model':'visual'}),provider)
+
+
+async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved):
+    from amplifier_core import ProviderInfo
+    from amplifier_web.app_guidance import install_app_access
+    from amplifier_web.host.session import SelectedProvider
+    app,sid,row,image,path=saved
+    capabilities={};tools={}
+    async def mount(kind,tool,name):tools[name]=tool
+    coordinator=SimpleNamespace(get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,
+        hooks=SimpleNamespace(register=lambda *args,**kwargs:None))
+    async def bridge(operation,args):
+        if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
+        return await app.app_bridge(operation,args,sid)
+    await install_app_access(coordinator,bridge)
+    tool_result=await tools['app_control'].execute({'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}})
+    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(tool_result.model_dump()))],tools=[ToolSpec(name='app_control',parameters={})])
+    calls=[]
+    class Provider:
+        def get_info(self):return ProviderInfo(id='test',display_name='Test',credential_env_vars=[],capabilities=['vision'],defaults={'model':'base'})
+        async def list_models(self):return [SimpleNamespace(id='selected',capabilities=['vision'])]
+        async def complete(self,request,**kwargs):calls.append(('complete',request,kwargs));return request
+        async def request_budget(self,request,**kwargs):calls.append(('budget',request,kwargs));return request
+        async def stream(self,request,**kwargs):
+            try: calls.append(('stream',request,kwargs));yield request
+            finally:calls.append(('closed',None,None))
+    original=Provider();transform=capabilities['web.provider_transform']
+    selected=SelectedProvider(original,{'model':'selected','effort':'high','max_output_tokens':1234},transform)
+    assert selected.original is original and selected.get_info().defaults['model']=='selected'
+    await selected.request_budget(request)
+    await selected.complete(request)
+    stream=selected.stream(request);await anext(stream);await stream.aclose()
+    # A fresh UI selection gets the same adapter while the live loop stays open.
+    replacement=SelectedProvider(original,{'model':'selected','effort':'high','max_output_tokens':1234},transform)
+    await replacement.complete(request)
+    assert [name for name,_,_ in calls]==['budget','complete','stream','closed','complete']
+    for name,sent,kwargs in calls:
+        if name=='closed':continue
+        assert sent.model=='selected' and sent.reasoning_effort=='high' and sent.max_output_tokens==1234
+        assert kwargs['model']=='selected'
+        assert sent.messages[-1].content[-1].type=='image'
+        assert base64.b64decode(sent.messages[-1].content[-1].source['data'])==image

@@ -121,11 +121,14 @@ class _NativeTranscriptGuard:
 
 class SelectedProvider:
     """Root-only model preference; worker routing remains bundle-owned."""
-    def __init__(self, provider, selection):
+    def __init__(self, provider, selection, execution_adapter=None):
         self.original, self.selection = provider, selection
+        self.execution_adapter = execution_adapter
+    def _execution_provider(self):
+        return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
-        method = getattr(self.original, name)
-        if name == "stream" and callable(method):
+        method = getattr(self._execution_provider() if name in {'stream','request_budget'} else self.original, name)
+        if name in {"stream", "request_budget"} and callable(method):
             # Keep feature detection honest: providers without stream still
             # raise AttributeError, while streaming providers receive the same
             # root-only overrides as complete().
@@ -151,7 +154,7 @@ class SelectedProvider:
 
     async def complete(self, request, **kwargs):
         request, kwargs = self._selected_request(request, kwargs)
-        return await self.original.complete(request, **kwargs)
+        return await self._execution_provider().complete(request, **kwargs)
 
 
 _copilot_credential = None

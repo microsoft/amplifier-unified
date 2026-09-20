@@ -43,6 +43,20 @@ async def install_app_access(coordinator, bridge):
     from .output_image_delivery import OutputImageDelivery
     delivery = OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
+    from .surface_delivery import SurfaceProvider
+    transformed = []
+    def transform(provider):
+        if isinstance(provider, SurfaceProvider) and provider.delivery is delivery:
+            return provider
+        observe = coordinator.get_capability('web.provider_observe')
+        if callable(observe):provider = observe(provider)
+        for original, wrapped in transformed:
+            if original is provider:return wrapped
+        wrapped = SurfaceProvider(provider, delivery)
+        transformed.append((provider, wrapped))
+        del transformed[:-16]
+        return wrapped
+    coordinator.register_capability('web.provider_transform', transform)
 
     class AppControl:
         name = 'app_control'
