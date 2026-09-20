@@ -44,11 +44,22 @@ class LiveSessionNaming:
                     from .storage import SessionStore
                     saved=adapter.store.load(coordinator.session_id)
                     return {**(saved[1] if saved else {}),**read(session_dir)}
+                def _save_metadata(self,session_dir,metadata):
+                    # Cached bundles can still supply an older naming hook.
+                    # Enforce the shared writer even before that cache updates.
+                    from amplifier_foundation.session.metadata import SessionMetadataStore
+                    store=SessionMetadataStore(session_dir)
+                    if metadata.get('name'):
+                        return store.set_name(metadata['name'],source='generated',
+                            description=metadata.get('description'),
+                            expected_revision=metadata.get('name_revision',0))
+                    return store.update({key:metadata[key] for key in ('description','description_updated_at') if key in metadata})
             self.hook=AppNamingHook(coordinator,settings)
             async def result(event,data):
                 from amplifier_core import HookResult
                 if data.get('session_id')==coordinator.session_id:
-                    self.publish({'type':'session.naming','name':data.get('name'),'description':data.get('description'),'nameRevision':data.get('name_revision')})
+                    accepted=read(adapter.directory)
+                    self.publish({'type':'session.naming','name':accepted.get('name'),'description':accepted.get('description'),'nameRevision':accepted.get('name_revision')})
                 return HookResult()
             coordinator.hooks.register('session-naming:set',result,name='unified-session-naming')
             coordinator.register_cleanup(self.close)

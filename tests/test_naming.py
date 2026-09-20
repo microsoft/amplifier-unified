@@ -125,3 +125,36 @@ async def test_instrumented_background_naming_keeps_its_own_lifecycle(monkeypatc
         if namer and namer.pending and not namer.pending.done():
             namer.pending.cancel();await asyncio.gather(namer.pending,return_exceptions=True)
         await app.close()
+
+
+async def test_cached_old_hook_cannot_replace_newer_native_rename(tmp_path, monkeypatch):
+    import sys
+    from amplifier_foundation.session.metadata import SessionMetadataStore
+    from amplifier_web.host.naming import LiveSessionNaming
+    callbacks = {}
+    events = []
+    class Config:
+        initial_trigger_turn = 2
+        update_interval_turns = 5
+        def __init__(self, **kwargs): pass
+    class OldHook:
+        def __init__(self, *args): pass
+        def _save_metadata(self, directory, metadata):
+            raise AssertionError('Older whole-metadata writer must not run')
+    monkeypatch.setitem(sys.modules, 'amplifier_module_hooks_session_naming',
+                        SimpleNamespace(SessionNamingConfig=Config, SessionNamingHook=OldHook))
+    coordinator = SimpleNamespace(session_id='existing', config={'project_dir':str(tmp_path),
+        'hooks':[{'module':'hooks-session-naming'}]}, register_cleanup=lambda *a:None,
+        hooks=SimpleNamespace(register=lambda event, handler, **kw: callbacks.update({event:handler})))
+    namer = LiveSessionNaming(coordinator, tmp_path / 'app', events.append)
+    namer.store.save('existing', [], {'unrelated':'keep'})
+    store = SessionMetadataStore(namer.directory)
+    snapshot = namer.hook._load_metadata(namer.directory)
+    store.set_name('New CLI choice', description='New description')
+    namer.hook._save_metadata(namer.directory, {**snapshot, 'name':'Late name', 'description':'Late description'})
+    await callbacks['session-naming:set']('session-naming:set',
+        {'session_id':'existing', 'name':'Late name', 'description':'Late description'})
+    assert store.read()['name'] == 'New CLI choice'
+    assert store.read()['unrelated'] == 'keep'
+    assert events == [{'type':'session.naming', 'name':'New CLI choice',
+                      'description':'New description', 'nameRevision':1}]
