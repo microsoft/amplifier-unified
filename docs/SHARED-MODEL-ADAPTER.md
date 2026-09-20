@@ -2,7 +2,7 @@
 
 This host extension supplies shared Amplifier model configuration to an explicit
 native runtime. It implements the companion Converge runtime proposal's optional
-adapter interface. It is not enabled by installing or updating Unified.
+adapter interface. It ships in Unified v0.11.8 and is not enabled by installing or updating Unified.
 
 ## Scope and adoption
 
@@ -54,7 +54,7 @@ reference is not a content lock.
 
 ## Verification
 
-- Unified suite after rebasing onto v0.11.5: **934 passed, 10 skipped**.
+- Unified v0.11.8 release candidate on the published v0.11.7 base: **1,028 passed, 11 skipped**. Frontend: **154 passed**. Empty-host and pending-review browser checks, distribution verification and a fresh installed-wheel readiness check passed.
 - Companion Converge runtime suite on the published v0.2.2 base:
   **122 passed**, including real Foundation history compatibility.
 - A clean environment resolved and installed both built packages with ordinary
