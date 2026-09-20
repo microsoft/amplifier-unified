@@ -61,7 +61,7 @@ test('model selector uses provider catalog and falls back only when no list exis
  assert.equal(root.root.findAllByType('input').length,0);
  assert.equal(root.root.findByType('select').props.value,'saved-model');
  await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'working',models:[]}})));
- assert.equal(root.root.findByType('select').props.disabled,true);
+ assert.equal(root.root.findByType('select').props.disabled,false);
  assert.ok(root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Keep same-provider options during refresh');
  const changed=[],committed=[];
  await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,onChange:value=>changed.push(value),onCommit:value=>committed.push(value),entry:{phase:'error',models:[]}})));

@@ -210,6 +210,7 @@ class SmartToolsManager:
         self.connections = {}
         self.connection_locks = {}
         self.install_lock = asyncio.Lock()
+        self.batch_lock = asyncio.Lock()
         self.closed = False
         service.db.execute("CREATE TABLE IF NOT EXISTS smart_tool_operations (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         service.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -228,6 +229,8 @@ class SmartToolsManager:
             operation = json.loads(value)
             if operation.get("status") in {"running", "queued"}:
                 operation.update(status="interrupted", error="The app restarted. Work was not replayed.", updatedAt=time.time())
+                for item in operation.get("items",[]):
+                    if item.get("status") in {"running","queued"}:item.update(status="interrupted",error="The app restarted. Work was not replayed.")
                 self.persist_operation(operation)
         state['operations'] = [json.loads(row[0]) for row in reversed(service.db.execute(
             "SELECT value FROM smart_tool_operations ORDER BY json_extract(value,'$.updatedAt') DESC, rowid DESC LIMIT 50"
@@ -351,7 +354,7 @@ class SmartToolsManager:
             if getattr(self.service,'diagnostics',None):
                 self.service.diagnostics.record('smartTools',{'event':'smart-tool:operation','data':{'operationId':command_id,'action':action,'origin':origin,'status':operation['status'],'serverId':args.get('id'),'durationMs':round((time.time()-operation['createdAt'])*1000)}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
         try:
-            result = self._redact(_bounded(await self.execute(action, args, origin=origin)))
+            result = self._redact(_bounded(await (self.install_batch(args, operation) if action == "smartTools.installBatch" else self.execute(action, args, origin=origin))))
             is_error = isinstance(result, dict) and result.get("isError") is True
             error = " ".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")[:1500] if is_error else None
             await self._change(lambda _: finish(status="failed" if is_error else "completed", result=result, error=error), defer_publish=defer_publish)
@@ -363,6 +366,45 @@ class SmartToolsManager:
             error = self._redact(str(exc))[:1500]
             await self._change(lambda _: finish(status="failed", error=error), defer_publish=defer_publish)
             return None
+
+    async def install_batch(self, args, operation):
+        # The batch is a shared, durable action. It continues when the browser closes.
+        async with self.batch_lock:
+            if args.get('retryOperationId'):
+                previous=self.operation(args['retryOperationId'])
+                if not previous or previous.get('action')!='smartTools.installBatch' or previous.get('status') in {'running','queued'}:
+                    raise ValueError('Choose a finished or interrupted installation batch.')
+                items=[{**row,'status':'queued','error':None} for row in previous.get('items',[]) if row.get('status')!='completed']
+            else:
+                ids=args.get('ids',[])
+                if not ids or len(ids)!=len(set(ids)):
+                    raise ValueError('Select one or more different catalog items.')
+                catalog={row['id']:row for row in self.state['catalog']}
+                if any(identity not in catalog for identity in ids):
+                    raise ValueError('The catalog changed. Refresh it before installing.')
+                items=[{'id':identity,'name':catalog[identity]['name'],'source':{key:catalog[identity][key] for key in ('repository','ref','path') if key in catalog[identity]},'status':'queued'} for identity in ids]
+                for item in items:
+                    if args.get('extrasById',{}).get(item['id']):item['source']['extras']=args['extrasById'][item['id']]
+            def progress():
+                operation.update(items=copy.deepcopy(items),updatedAt=time.time())
+                self.persist_operation(operation)
+            await self._change(lambda _:progress())
+            for item in items:
+                item['status']='running'
+                await self._change(lambda _:progress())
+                try:
+                    result=await self.install(item['source'])
+                    item.update(status='completed',installationId=result.get('id'))
+                except asyncio.CancelledError:
+                    for unfinished in items:
+                        if unfinished['status'] in {'running','queued'}:unfinished.update(status='interrupted',error='Installation interrupted. Review before retrying.')
+                    await self._change(lambda _:progress())
+                    raise
+                except Exception as exc:
+                    item.update(status='failed',error=self._redact(str(exc))[:500])
+                await self._change(lambda _:progress())
+            failed=sum(row['status']!='completed' for row in items)
+            return {'completed':len(items)-failed,'failed':failed,'isError':bool(failed),'content':[{'type':'text','text':f"{len(items)-failed} installed; {failed} need attention."}]}
 
     async def execute(self, action, args, origin="ui"):
         if self.closed:

@@ -52,7 +52,7 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().settings.fallbackVoice==='gpt-live-1');
  await page.reload();await page.locator('#preferred-voice').waitFor();
  assert.equal(await page.locator('#preferred-voice').inputValue(),'gpt-realtime-2.1');assert.equal(await page.locator('#fallback-voice').inputValue(),'gpt-live-1');
- await openSettingsPage(page,'providers');await page.locator('#provider-key-source').selectOption('private');
+ await openSettingsPage(page,'providers');await page.locator('.a-provider-access summary').click();await page.locator('#provider-key-source').selectOption('private');
  await page.locator('#provider-key').fill('fixture-unsaved-key');
  await openSettingsPage(page,'routing');await openSettingsPage(page,'providers');
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
@@ -76,7 +76,7 @@ try{
  await page.getByRole('button',{name:'Browse catalog',exact:true}).click();
  await page.getByRole('button',{name:/Fixture catalog tool/}).waitFor();
  await page.locator('#filter-smart-tool-catalog').fill('fixture*');
- await page.getByRole('button',{name:/Fixture catalog tool/}).click();
+ await page.getByRole('button',{name:/Fixture catalog tool/}).click();await page.getByRole('button',{name:'Inspect source and setup',exact:true}).click();
  await page.getByText('Python 3.13',{exact:true}).waitFor();
  await page.locator('#smart-tool-extras').fill('mcp');
  await page.getByRole('button',{name:'Install package',exact:true}).click();
