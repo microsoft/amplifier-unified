@@ -70,6 +70,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:draft-switch-browser
+      - name: Verify history paging in live conversations
+        working-directory: frontend
+        run: npm run test:live-history-browser
       - name: Verify unsaved artifact edits survive navigation
         if: ${{ hashFiles('frontend/tests/canvas-dirty-browser.mjs') != '' }}
         working-directory: frontend

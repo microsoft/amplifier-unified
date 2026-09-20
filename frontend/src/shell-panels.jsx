@@ -49,9 +49,9 @@ export function SessionHistoryControls({session,act,onLoadEarlier}){
   {(unavailable||readOnly)&&<p role="status"><FolderOpen/>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</p>}
   {recovered&&<p role="status"><AlertCircle/>Showing a recovered history backup. Original files are unchanged.</p>}
   {partial&&<p role="status"><AlertCircle/>Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.</p>}
-  {pending&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
+  {pending&&!session.messages?.length&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
   {session.historyError&&<div className="a-session-history-error" role="alert"><AlertCircle/><span>{session.historyError}</span><button type="button" className="a-link" data-action="session.select" disabled={pending} onClick={retry}>Try again</button></div>}
-  {earlier&&<button type="button" className="a-soft" data-action="session.history" disabled={pending} onClick={loadEarlier}>Load earlier messages</button>}
+  {earlier&&<button type="button" className="a-soft" data-action="session.history" disabled={pending} onClick={loadEarlier}>{pending?'Loading earlier messages…':'Load earlier messages'}</button>}
  </div>;
 }
 
