@@ -199,14 +199,16 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False):
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, recovery=False):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
     approvals, active goals, and runtime ownership are never copied.
     """
-    if source.get("status") in {"starting","working","stopping"}:
+    if source.get("status") in {"starting","working","running","stopping"}:
         raise ValueError("Wait for the conversation to finish before forking its transcript")
+    if recovery and any(worker.get('status') in {'queued', 'starting', 'running', 'working', 'stopping'} for worker in source.get('workers', [])):
+        raise ValueError('Wait for delegated work to stop before creating a recovery copy.')
     home = Path(home)
     store = SessionStore.for_app(home, source.get("workspace") or Path.cwd())
     source_id = source.get("runtimeSessionId") or source["id"]
@@ -265,14 +267,18 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     retained = [(index, row) for index, row in enumerate(messages)
                 if not (row.get('metadata') or {}).get('amplifier_visible_reference')]
     target_positions = {}
-    messages = complete_tool_exchanges([row for _, row in retained], positions=target_positions)
-    index_map = {original: target_positions[position] for position, (original, _) in enumerate(retained)}
+    if recovery:
+        from .session_health import recovery_context
+        messages, target_positions = recovery_context([row for _, row in retained])
+    else:
+        messages = complete_tool_exchanges([row for _, row in retained], positions=target_positions)
+    index_map = {original: target_positions[position] for position, (original, _) in enumerate(retained) if position in target_positions}
     for row in visible:
         original_index = row.pop('nativeIndex', None)
         if original_index in index_map:
             row['nativeIndex'] = index_map[original_index]
     from .host.session import repair_interrupted_receipts
-    messages = repair_interrupted_receipts(messages)
+    messages = messages if recovery else repair_interrupted_receipts(messages)
     references = visible_reference(messages, visible)
     messages.extend(references)
     through_turn = user_offset + sum(row.get('role') == 'user' for row in visible)
@@ -281,6 +287,9 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
         "preserve_system":True,"fork":{"source_session_id":source_id,"through_user_turn":through_turn, "before_user_turn":before_turn,
                                      "created":now,"jobs_replayed":False},
         "turn_count":through_turn}
+    if recovery:
+        metadata['preserve_system'] = False
+        metadata['recovery'] = {'source_session_id': source_id, 'mode': 'readable_history', 'work_replayed': False}
     if bundle:
         metadata.update(bundle_name=bundle, bundle=bundle, preserve_system=False)
         retained = [(index, row) for index, row in enumerate(messages) if row.get('role') not in {'system', 'developer'}]
@@ -305,7 +314,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
-    store.save(target_id,messages,metadata,preserve_system=not bool(bundle))
+    store.save(target_id,messages,metadata,preserve_system=not bool(bundle or recovery))
     for name,value in copied.items():
         write_private(target_dir / name,value)
     if source.get('sharedHistoryOffset', 0) or user_offset:
@@ -313,6 +322,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     from .session_files import project_slug
     stamp = (store.directory(target_id) / 'transcript.jsonl').stat()
     return {"messages":visible,"parentId":source["id"],"forkContext":False,
+            **({"recovery": {"sourceSessionId": source["id"], "mode": "readable_history", "workReplayed": False}, "deferRuntimeUntilInteraction": True} if recovery else {}),
             'runtimeSessionId': target_id, 'nativeIdentity': target_id, 'nativeProject': project_slug(source.get('workspace') or Path.cwd()),
             'nativeRevision': [stamp.st_mtime_ns, stamp.st_size], 'historyLoaded': True, 'historyManaged': False,
             'shared': True, 'sharedHistoryOffset': 0, 'sharedHistoryUserTurnOffset': 0,

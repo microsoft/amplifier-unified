@@ -177,3 +177,27 @@ def test_unresolved_local_name_still_reports_incomplete_configuration(service, t
     service.state['settings'].update(workspace=str(workspace), bundle='missing-lane')
     _, incomplete = configured_sources(service)
     assert incomplete
+
+async def test_configuration_warning_identifies_affected_source_and_session(service, tmp_path):
+    service.state['sessions'].append({'id':'broken-root','workspace':str(tmp_path),'bundle':'missing-work-bundle'})
+    rows=await service.update_manager.inventory_sources()
+    warning=next(row for row in rows if row['id']=='source-configuration')
+    issue=next(row for row in warning['sourceIssues'] if row.get('sessionId')=='broken-root')
+    assert issue['reference']=='missing-work-bundle'
+    assert issue['workspace']==str(tmp_path)
+    assert 'Choose an available bundle' in issue['reason']
+    assert not warning['eligible']
+
+async def test_old_unregistered_bundle_is_historical_until_selected(service, tmp_path):
+    source={'id':'old-app-id','runtimeSessionId':'old-runtime-id','workspace':str(tmp_path),'bundle':'converge-w4','historyManaged':True}
+    service.state['sessions'].append(source)
+    rows=await service.update_manager.inventory_sources()
+    assert not any(row['id']=='source-configuration' for row in rows)
+    history=next(row for row in rows if row['kind']=='history')
+    assert history['sourceIssues'][0]['appSessionId']=='old-app-id'
+    assert history['sourceIssues'][0]['sessionId']=='old-runtime-id'
+    assert history['status']=='historical' and not history['eligible']
+    assert source['bundle']=='converge-w4'
+    service.state['selectedSessionId']=source['id']
+    rows=await service.update_manager.inventory_sources()
+    assert any(row['id']=='source-configuration' for row in rows)
