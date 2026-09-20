@@ -4,7 +4,7 @@ Settings now has a persistent sidebar with 24 destinations in 11 sections. Appea
 
 ## Completeness contract
 
-The [inventory](settings-inventory.csv) tracks all 321 requirements from the settings audit across 25 feature areas. Each row has an explicit destination, ownership boundary and validation evidence for its area. Area validation does not imply that every listed backend outcome was separately induced in a browser. The source review verifies that the original controls and handlers remain; automated tests check their contracts and affected workflows.
+The [inventory](settings-inventory.csv) tracks all 321 requirements from the settings audit plus six conversation diagnosis/recovery requirements added to main during implementation across 25 feature areas. Each row has an explicit destination, ownership boundary and validation evidence for its area. Area validation does not imply that every listed backend outcome was separately induced in a browser. The source review verifies that the original controls and handlers remain; automated tests check their contracts and affected workflows.
 
 | Area | Destination | Native implementation |
 | --- | --- | --- |

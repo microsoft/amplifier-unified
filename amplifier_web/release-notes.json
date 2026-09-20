@@ -7,7 +7,7 @@
       "changes": [
         "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
         "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
-        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Unsaved private fields survive moving between settings sections while the dialog is open.",
+        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Conversation diagnosis and safe recovery copies remain available from Current conversation. Unsaved private fields survive moving between settings sections while the dialog is open.",
         "Actions show immediate feedback, background work marks only the affected controls, and nested dialogs support outside-click and Escape dismissal. Mobile layouts and shared/custom skins remain supported."
       ],
       "notices": []

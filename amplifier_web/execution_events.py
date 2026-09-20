@@ -115,7 +115,9 @@ class ExecutionEvents:
                 self.publish({**row,"phase":"completed","endedAt":time.time(),"usage":public_usage(getattr(response,"usage",None))})
                 return response
             except BaseException as exc:
-                self.publish({**row,"phase":"cancelled" if isinstance(exc,asyncio.CancelledError) else "error","endedAt":time.time()})
+                from .session_health import exception_details
+                failure = {} if isinstance(exc, asyncio.CancelledError) else {'failure': exception_details(exc)}
+                self.publish({**row,"phase":"cancelled" if isinstance(exc,asyncio.CancelledError) else "error","endedAt":time.time(), **failure})
                 raise
             finally:
                 CURRENT_CALL.reset(token)

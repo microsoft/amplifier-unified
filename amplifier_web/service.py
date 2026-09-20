@@ -65,6 +65,8 @@ ACTION_DEFINITIONS = {
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
     "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
+    "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
+    "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
@@ -573,16 +575,22 @@ class AppService:
             return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
-            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
-                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
+                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        prepared_health = None
+        if action == 'session.inspect':
+            from .session_health import inspect_session
+            async with self.lock:
+                snapshot = copy.deepcopy(self._session(args['id']))
+            prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
         prepared_export = None
         if action == 'session.export' and args.get('format') == 'markdown':
             from .conversation_export import markdown
@@ -622,9 +630,9 @@ class AppService:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
                 checked = self._session(checked_session)
-                if action not in {'session.takeover', 'session.fork', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
+                if action not in {'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
                     raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
-                if checked.get('nativeProject'):
+                if checked.get('nativeProject') and action != 'session.inspect':
                     reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
                     if reason:
                         raise AppError(reason, 409)
@@ -792,6 +800,8 @@ class AppService:
                     raise AppError('An ownership change is already in progress.', 409)
                 session['ownership'] = {'status': 'taking-over'}
                 session.pop('error', None)
+                session.pop('failure', None)
+                session.pop('health', None)
                 pending.append((self._takeover, (copy.deepcopy(session),)))
             elif action == "session.pin":
                 from .session_navigation import is_top_level
@@ -863,22 +873,28 @@ class AppService:
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
                 pending.append((self._send,(copy.deepcopy(session),text,input_id)))
-            elif action == "session.fork":
+            elif action == 'session.inspect':
+                diagnostic_result = prepared_health
+                if self._session(args['id']).get('errorAt') == snapshot.get('errorAt'):
+                    self._session(args['id'])['health'] = diagnostic_result
+            elif action in {"session.fork", "session.recover"}:
                 source = self._session(args["id"])
                 if source.get("configurationBusy"):
                     raise AppError("Wait for configuration changes to finish before forking.",409)
-                session = self._new_session({"title": source["title"] + " · fork", "workspace": source["workspace"], "bundle": source["bundle"]})
+                session = self._new_session({"title": source["title"] + (" · recovery" if action == "session.recover" else " · fork"), "workspace": source["workspace"], "bundle": source["bundle"]})
                 # loop-live checkpoints before publishing idle. Fork that full
                 # context (including tool receipts), never reconstruct a running
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn")))
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"), recovery=action == "session.recover"))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
                 self.state["sessions"].insert(0, session)
                 self.state["selectedSessionId"] = session["id"]
                 self.state['view']['messageEdit']=None
+                if action == 'session.recover':
+                    diagnostic_result = {'sessionId': session['id'], 'sourceSessionId': source['id'], 'workReplayed': False, 'status': 'idle'}
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
             elif action == 'session.export' and args.get('format') == 'markdown':
@@ -1122,10 +1138,10 @@ class AppService:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
-            if action in {'session.create','session.fork','message.edit'}:
+            if action in {'session.create','session.fork','session.recover','message.edit'}:
                 from .naming import persist
                 persist(self.data_dir,session)
-            if action in {'session.fork','message.edit'}:
+            if action in {'session.fork','session.recover','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
@@ -1366,6 +1382,9 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+                if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background':
+                    session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
+                    session.pop('health', None)
             elif kind == "runtime.ended":
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
@@ -1420,6 +1439,7 @@ class AppService:
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
                 session["error"] = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
                 event = {**payload, "at": time.time()}
