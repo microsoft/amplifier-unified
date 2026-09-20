@@ -47,8 +47,9 @@
     "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
     "test:activity-feedback-browser": "node tests/activity-feedback-browser.mjs",
     "test:export-browser": "node tests/conversation-export-browser.mjs",
-    "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
-    "test:session-health-browser": "node tests/session-health-browser.mjs"
+    "test:settings-completeness-browser": "node tests/settings-completeness-browser.mjs",
+    "test:session-health-browser": "node tests/session-health-browser.mjs",
+    "test:message-outbox-browser": "node tests/message-outbox-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

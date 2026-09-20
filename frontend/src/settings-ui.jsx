@@ -1,5 +1,5 @@
 import {AttentionBadge,AttentionReview} from './attention';
-import React,{useRef,useState,useEffect} from 'react';
+import React,{useRef,useState,useEffect,createContext,useContext} from 'react';
 import {activityRegion,beginRegionActivity} from './activity-feedback';
 import {ActivityRegion,useRefreshValue} from './activity-region';
 import {useOutsideDismiss} from './use-outside-dismiss';
@@ -11,10 +11,13 @@ export function ResultNotice({phase,message,detail}){
  if(!message)return null;
  return <div ref={ref} className={`a-check-result ${working||phase==='neutral'?'pending':failed?'error':'success'}`} role={failed?'alert':'status'} aria-live="polite"><Icon aria-hidden="true" className={working?'a-progress-spinner':undefined}/><div><strong>{message}</strong>{detail&&<small>{detail}</small>}</div></div>;
 }
+export const SettingsPageContext=createContext(null);
 export function SettingsGroup({id,title,summary,state,act,children}){
+ const scopedPage=useContext(SettingsPageContext);
  const pages={setup:['loaded-modules','providers','routing','defaults','conversation'],capabilities:['smart-tools','add-bundles','app-bundles','loaded-modules','registries','share-bundle'],maintenance:['ready-conversations','updates','diagnostics','history','permissions','notifications','automation','repair','reset']};
- const page=state.view?.settingsExpanded?.find(key=>!state.view?.settingsSection||pages[state.view.settingsSection]?.includes(key)),open=page===id,heading=useRef();
- useEffect(()=>{if(open){heading.current?.focus({preventScroll:true});heading.current?.closest('.a-dialog')?.scrollTo(0,0)}},[open]);
+ const page=scopedPage||state.view?.settingsExpanded?.find(key=>!state.view?.settingsSection||pages[state.view.settingsSection]?.includes(key)),open=page===id,heading=useRef();
+ useEffect(()=>{if(open&&!scopedPage){heading.current?.focus({preventScroll:true});heading.current?.closest('.a-dialog')?.scrollTo(0,0)}},[open,scopedPage]);
+ if(scopedPage)return open?<section className="a-settings-page" data-settings-page={id}><div id={'settings-group-'+id} className="a-settings-page-body">{children}</div></section>:null;
  if(page&&!open)return null;
  const navigate=()=>act('view.update',{patch:{settingsExpanded:open?[]:[id]}});
  return open?<section className="a-settings-page" key={id}><button type="button" className="a-link a-settings-back" data-action="view.update" onClick={navigate}><ArrowLeft/>Back to {({setup:'Setup',capabilities:'Capabilities',maintenance:'Maintenance'})[state.view?.settingsSection||'setup']}</button><h3 ref={heading} tabIndex={-1}>{title}</h3><AttentionReview state={state} act={act} page={id}/><div id={'settings-group-'+id} className="a-settings-page-body">{children}</div></section>:<section className="a-settings-group"><button type="button" className="a-settings-group-title" aria-label={title+(summary?' '+summary:'')} data-action="view.update" onClick={navigate}><span><strong>{title}</strong>{summary&&<small>{summary}</small>}</span><AttentionBadge state={state} page={id}/><ChevronRight aria-hidden="true"/></button></section>;

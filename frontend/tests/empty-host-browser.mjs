@@ -50,10 +50,12 @@ try{
  await composer.fill('First input on an empty host');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('Sending message…',{exact:true})).toBeVisible();
- await expect(composer).not.toBeEditable();
+ await expect(composer).toBeEditable();
+ await expect(composer).toHaveValue('');
+ await composer.fill('Next draft while the first delivery is pending');
  release();
  await page.getByText('Synthetic first response',{exact:true}).waitFor();
- await expect(composer).toHaveValue('');
+ await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  await expect(composer).toBeEditable();
  await expect(page.getByText('Sending message…',{exact:true})).toHaveCount(0);
  assert.equal(await page.locator('.a-message.a-user').count(),1);

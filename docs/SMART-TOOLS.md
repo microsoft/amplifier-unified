@@ -6,7 +6,7 @@ The host contains no imports, routes, or special cases for individual Smart Tool
 
 ## Add a tool
 
-1. Open **Settings → Capabilities → Smart Tools**. Browse the community catalog or
+1. Open **Settings → Smart Tools**. Browse the community catalog or
    paste a credential-free HTTPS Git repository URL into **Add from Git**.
 2. Inspect the source. The descriptor and manifest are read from one resolved commit;
    inspection does not run a tool or interpret install instructions as commands.

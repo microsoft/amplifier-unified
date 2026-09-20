@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
@@ -16,7 +17,7 @@ try{
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){
    const body=route.request().postDataJSON();calls.push(body);
-   if(['providers.models','locations.list','session.create'].includes(body.action)){waiting.push({route,body});return}
+   if(['providers.models','locations.list','session.create','notifications.get','maintenance.backup'].includes(body.action)){waiting.push({route,body});return}
    if(body.action==='view.update')state={...state,revision:state.revision+1,view:{...state.view,...body.args.patch}};
    return route.fulfill({json:{accepted:true,state}});
   }
@@ -64,5 +65,31 @@ try{
  await page.getByRole('button',{name:'New conversation',exact:true}).click();const create=await pending('session.create');assert.equal(await page.getByRole('button',{name:'New conversation',exact:true}).getAttribute('aria-busy'),'true');
  await page.getByRole('button',{name:'New conversation',exact:true}).click();assert.equal(calls.filter(row=>row.action==='session.create').length,1);
  await create.route.fulfill({status:500,json:{error:'Fixture rejected creation'}});await page.waitForFunction(()=>!document.querySelector('[data-action="session.create"][data-action-pending]'));
+ // Maintenance actions keep lifecycle feedback after their HTTP receipt.
+ state.notificationSettings={server:'https://old.example',desktop:true};state.revision++;
+ await page.evaluate(value=>window.emitState(value),state);
+ await openSettingsPage(page,'notifications');
+ await page.getByLabel(/^Topic/).fill('unsaved-private-topic');
+ await page.getByRole('button',{name:'Load notification settings',exact:true}).click();const notification=await pending('notifications.get');
+ state.actionStatus['notifications.get']={phase:'working',commandId:notification.body.id};state.revision++;
+ await notification.route.fulfill({json:{accepted:true,state}});
+ await page.waitForFunction(()=>!document.querySelector('[data-action="notifications.get"][data-action-pending]'));
+ assert.equal(await page.locator('[data-action="notifications.get"]').getAttribute('aria-busy'),'true');
+ assert.equal(await page.locator('[data-activity-region="notifications-preferences"]').getAttribute('aria-busy'),'true');
+ assert.equal(await page.getByLabel('Notification server',{exact:true}).inputValue(),'https://old.example');
+ await openSettingsPage(page,'voice');await openSettingsPage(page,'notifications');
+ assert.equal(await page.getByLabel(/^Topic/).inputValue(),'unsaved-private-topic');
+ state.actionStatus['notifications.get'].phase='ready';state.notificationSettings.server='https://new.example';state.revision++;
+ await page.evaluate(value=>window.emitState(value),state);
+ await page.waitForFunction(()=>!document.querySelector('[data-activity-region="notifications-preferences"][data-region-pending]'));
+ assert.equal(await page.getByLabel('Notification server',{exact:true}).inputValue(),'https://new.example');
+ await openSettingsPage(page,'repair');await page.getByRole('button',{name:'Create full backup',exact:true}).click();const backup=await pending('maintenance.backup');
+ state.actionStatus['maintenance.backup']={phase:'working',commandId:backup.body.id};state.management={phase:'working',operation:'maintenance.backup'};state.revision++;
+ await backup.route.fulfill({json:{accepted:true,state}});
+ await page.waitForFunction(()=>!document.querySelector('[data-action="maintenance.backup"][data-action-pending]'));
+ assert.equal(await page.getByRole('button',{name:'Create full backup',exact:true}).getAttribute('aria-busy'),'true');
+ state.actionStatus['maintenance.backup'].phase='ready';state.management.phase='ready';state.maintenance={backup:'/fixture/private-backup.zip'};state.revision++;
+ await page.evaluate(value=>window.emitState(value),state);await page.getByText('Saved backup: /fixture/private-backup.zip',{exact:true}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Create full backup',exact:true}).getAttribute('aria-busy'),null);
  assert.deepEqual(errors,[]);console.log('Activity feedback browser passed: immediate button state, lifecycle refresh, retained options and drafts, outside dismissal, nested Escape, reduced motion, failure cleanup, duplicate suppression.');
 }finally{await browser?.close();await vite?.close()}

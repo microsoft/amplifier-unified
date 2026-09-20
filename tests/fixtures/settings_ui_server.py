@@ -8,6 +8,7 @@ from amplifier_web.host.config import write_private
 from amplifier_web.setup import SetupManager
 from amplifier_web.bundles import BundleManager
 from amplifier_web.updates import group_sources
+from amplifier_web.smart_tools import SmartToolsManager
 import yaml
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
@@ -29,6 +30,24 @@ SetupManager.probe=probe
 async def discover(self,url):
  return {'candidates':[{'name':name,'path':name+'.yaml','uri':url+'#'+name+'.yaml','kind':'behavior'} for name in ['base','dev-tools','research']]}
 BundleManager.discover=discover
+# Exercise real operation receipts and connection persistence without fetching
+# or executing third-party packages during settings acceptance.
+async def catalog(self):
+ await asyncio.sleep(.2)
+ rows=[{'id':'fixture-tool','name':'Fixture catalog tool','description':'A discoverable specialist tool','repository':'https://example.com/fixture-tool','ref':'main','path':'.'}]
+ await self._change(lambda state:state.update(catalog=rows))
+ return {'items':rows,'commit':'fixture-revision'}
+async def inspect_tool(self,args):
+ await asyncio.sleep(.2)
+ return {**args,'name':'Fixture catalog tool','description':'A discoverable specialist tool','commit':'fixture-revision','manifest':{'name':'Fixture catalog tool','version':'1.0','requires':'Python 3.13'},'pythonSupported':True}
+async def install_tool(self,args):
+ await asyncio.sleep(.2)
+ result={**args,'id':'fixture-tool','name':'Fixture catalog tool','commit':'fixture-revision','binDir':'/fixture/bin','status':'installed','guidance':'Configure the documented MCP executable.'}
+ await self._change(lambda state:state.update(installations=[result]))
+ return result
+SmartToolsManager.catalog=catalog
+SmartToolsManager.inspect=inspect_tool
+SmartToolsManager.install=install_tool
 async def main(home):
  os.environ['AMPLIFIER_HOME']=str(home/'native')
  os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'

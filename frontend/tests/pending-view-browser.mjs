@@ -65,10 +65,10 @@ try{
  const send=await nextAction();assert.equal(send.action,'conversation.send');assert.equal(send.args.text,'Submitted before debounce');await finish(send);
  await page.waitForFunction(()=>document.querySelector('textarea[aria-label="Message Amplifier"]').value==='');
  await page.getByRole('button',{name:'Settings',exact:true}).click();
- await page.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  const opening=await nextAction();assert.equal(state.view.panel,undefined,'The settings UI paints before the server accepts navigation');
- await page.getByRole('button',{name:'Maintenance',exact:true}).click();
- await page.getByRole('button',{name:/Conversation history/}).waitFor();
+ await page.locator('[data-settings-section=updates]').click();
+ await page.getByRole('heading',{name:'Updates',exact:true}).waitFor();
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('[role="dialog"]'));
  assert.equal(waiting.length,0,'Later actions retain their original serialized order');
@@ -80,9 +80,9 @@ try{
  // A rejected older request cannot discard the newer agent-issued navigation.
  await page.getByRole('button',{name:'Settings',exact:true}).click();const failing=await nextAction();
  await page.evaluate(()=>{window.laterNavigation=window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}).catch(error=>error.message)});
- await page.getByRole('heading',{name:'Make it feel like you',exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();
  await finish(failing,'Fixture rejected older navigation');const appearance=await nextAction();
- await page.getByRole('heading',{name:'Make it feel like you',exact:true}).waitFor();await finish(appearance);
+ await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();await finish(appearance);
  await page.waitForFunction(()=>window.amplifier.getState().view.panel==='appearance');
 
  // Shared updates continue under the optimistic overlay; rollback uses the latest
@@ -90,7 +90,7 @@ try{
  await page.evaluate(()=>{window.failingNavigation=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}}).catch(error=>error.message)});const pending=await nextAction();
  state={...state,revision:state.revision+1,view:{...state.view,panel:'activity'},sessions:[{...state.sessions[0],streaming:'A new streamed answer',status:'working'}]};
  await page.evaluate(state=>window.emitFixtureState(state),state);
- await page.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  await page.getByText('A new streamed answer',{exact:true}).waitFor();
  await finish(pending,'Fixture rejected latest navigation');await page.getByRole('heading',{name:'Ready for you',exact:true}).waitFor();
  await page.getByText('A new streamed answer',{exact:true}).waitFor();
@@ -102,9 +102,9 @@ try{
  const accepted={...state,revision:state.revision+1,view:{...state.view,panel:'settings'}};
  state={...state,revision:accepted.revision+1,view:{...state.view,panel:'appearance'}};
  await page.evaluate(state=>window.emitFixtureState(state),state);
- await page.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  await outdated.route.fulfill({json:{accepted:true,state:accepted}});
- await page.getByRole('heading',{name:'Make it feel like you',exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();
  assert.deepEqual(calls.filter(({action})=>!['view.update','conversation.send'].includes(action)),[]);assert.deepEqual(errors,[]);
  console.log('Pending view browser checks passed: composer debounce and send, immediate navigation, ordered shared actions, newer patches survive errors, agent parity, and streamed data survives rollback.');
 }finally{await browser?.close();await vite?.close()}

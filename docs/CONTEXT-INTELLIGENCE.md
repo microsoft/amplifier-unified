@@ -1,6 +1,6 @@
 # Diagnostics and Context Intelligence
 
-Settings → Maintenance → Diagnostics & Context Intelligence configures the same
+Settings → Diagnostics configures the same
 `diagnostics.*` actions available through the agent's app tools.
 
 The application depends on the public `amplifier-bundle-context-intelligence`
