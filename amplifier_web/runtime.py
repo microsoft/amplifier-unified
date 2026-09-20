@@ -180,15 +180,25 @@ class RuntimeManager:
             async with self._locks.setdefault(sid, asyncio.Lock()):
                 row = self.workers.get(sid)
                 retirement = row.get('retirement_task') if row else None
-                if retirement is None or retirement.done():
+                stopping = row.get('stop_task') if row else None
+                if stopping is not None:
+                    if stopping.done():
+                        # A failed shutdown cannot reopen the still-owned row.
+                        # Successful shutdown removes it before this future ends.
+                        raise RuntimeError('Worker shutdown was not confirmed. No new command was sent; inspect shutdown before retrying.')
+                    pending = stopping
+                elif retirement is not None and not retirement.done():
+                    pending = retirement
+                else:
                     yield
                     return
-            # Never send a new command to an owner that might still exit after
-            # a delayed retirement acknowledgement. Waiting does not cancel it.
+            # session.closed can be published before the OS process exits.
+            # Never admit work to that closing owner, including after a user
+            # Stop. Waiting outside the lock neither cancels nor replays it.
             try:
-                await asyncio.wait_for(asyncio.shield(retirement), self.retention.reply_timeout)
+                await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
             except TimeoutError as exc:
-                raise RuntimeError('Idle worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
+                raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
     async def _start_locked(self, session, emit):
         if self._closed:
@@ -632,7 +642,8 @@ class RuntimeManager:
         await self._execution_ended(session_id, row, "stopped")
         await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
-        self.workers.pop(session_id, None)
+        if self.workers.get(session_id) is row:
+            self.workers.pop(session_id, None)
 
     async def close(self):
         self._closed = True
