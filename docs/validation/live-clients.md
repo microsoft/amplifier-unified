@@ -61,7 +61,7 @@ Source archives exclude development environments and node dependencies.
 An initial concurrent full run had one MCP subprocess startup timeout. All 18
 MCP tests passed in isolation afterward; final release checks use a stable build
 without concurrent browser performance jobs. The final full suite passed with
-881 tests and 5 skips, and all 147 frontend tests passed.
+892 tests and 5 skips, and all 147 frontend tests passed.
 
 ## Boundaries
 
