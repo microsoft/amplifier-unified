@@ -1,3 +1,4 @@
+import {clientUrl} from './api';
 import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import DOMPurify from 'dompurify';
 import {Code,Eye,Copy,Download,ZoomIn,ZoomOut,Maximize,Check,AlertCircle} from 'lucide-react';
@@ -94,12 +95,12 @@ function HtmlPreview({canvas,act}){
   window.addEventListener('message',receive);return()=>window.removeEventListener('message',receive);
  },[canvas.id,report]);
  useEffect(()=>{const request=canvas.interaction;if(request&&sent.current!==request.requestId){sent.current=request.requestId;frame.current?.contentWindow?.postMessage({type:'canvas-interact',...request},'*')}},[canvas.interaction]);
- return <iframe ref={frame} title={canvas.title||'Interactive canvas'} className="a-canvas-html" sandbox="allow-scripts" referrerPolicy="no-referrer" src={`/api/canvas/${canvas.id}/document`}/>;
+ return <iframe ref={frame} title={canvas.title||'Interactive canvas'} className="a-canvas-html" sandbox="allow-scripts" referrerPolicy="no-referrer" src={clientUrl(`/api/canvas/${canvas.id}/document`)}/>;
 }
 
 
 function StoredSource({canvas}){
  const [result,setResult]=useState({});
- useEffect(()=>{const controller=new AbortController();setResult({});fetch(`/api/canvas/${canvas.id}/source`,{signal:controller.signal}).then(async response=>{if(!response.ok)throw Error('The saved source could not be loaded.');return response.text()}).then(text=>setResult({text})).catch(error=>{if(error.name!=='AbortError')setResult({error:error.message})});return()=>controller.abort()},[canvas.id]);
+ useEffect(()=>{const controller=new AbortController();setResult({});fetch(clientUrl(`/api/canvas/${canvas.id}/source`),{signal:controller.signal}).then(async response=>{if(!response.ok)throw Error('The saved source could not be loaded.');return response.text()}).then(text=>setResult({text})).catch(error=>{if(error.name!=='AbortError')setResult({error:error.message})});return()=>controller.abort()},[canvas.id]);
  return result.error?<p role="alert">{result.error}</p>:result.text===undefined?<p role="status">Loading saved source…</p>:<CodePreview text={result.text}/>;
 }

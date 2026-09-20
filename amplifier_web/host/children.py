@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 import uuid
 
+from .model_selection import inherited_selection
 from amplifier_module_loop_live.host import HostAdapter
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
@@ -213,6 +214,7 @@ class Children:
                 raise ValueError("Agent orchestrator must be configured as a module declaration")
             orchestrator.setdefault("config", {}).update(copy.deepcopy(orchestrator_config))
         preferences = [ProviderPreference.from_dict(p) if isinstance(p, dict) else p for p in provider_preferences or []]
+        selection = inherited_selection(parent, overlay, preferences, session_metadata)
         if preferences:
             plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
@@ -234,6 +236,8 @@ class Children:
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
                     "provider_preferences": [p.to_dict() for p in preferences], "mount_plan": plan}
+        if selection:
+            metadata["effective_selection"] = selection
         async def checkpoint(status=None):
             if not child:
                 return
@@ -249,6 +253,16 @@ class Children:
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed)
             coordinator = child.coordinator
+            if selection:
+                from .session import SelectedProvider
+                providers = coordinator.get("providers") or {}
+                provider_identity = selection.get("instance")
+                if provider_identity not in providers:
+                    raise ValueError("The inherited provider instance is unavailable in this child")
+                child_loop = coordinator.get("orchestrator")
+                if not hasattr(child_loop, "root_provider"):
+                    raise ValueError("The child orchestrator cannot apply the inherited model selection")
+                child_loop.root_provider = SelectedProvider(providers[provider_identity], selection)
             coordinator.register_capability("live.child", True)
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)

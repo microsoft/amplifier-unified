@@ -12,7 +12,7 @@ import stat
 from .config import expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
-LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@42ed17c20dc84c3f6c858b18438e3dcad49748cc"
+LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@7a2a9b9ed0ddf2f1927f5d0e7aba42698c1e4c8d"
 
 
 def redact(value):
@@ -36,7 +36,8 @@ def live_plan(plan, background_delegate=True):
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
             loop.update(module="loop-live", source=LOOP_SOURCE)
-            loop.setdefault("config", {}).update(configured_bundle=True, background_delegate=background_delegate)
+            loop.setdefault("config", {}).update(configured_bundle=True)
+            loop["config"].setdefault("background_delegate", background_delegate)
             changed.append({"path": prefix + "session.orchestrator", "from": original, "to": "loop-live"})
         for name, agent in node.get("agents", {}).items():
             if isinstance(agent, dict):

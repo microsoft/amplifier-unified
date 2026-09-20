@@ -1,3 +1,4 @@
+import {clientUrl} from './api';
 import React,{useEffect,useRef,useState} from 'react';
 import {AppBridge,PostMessageTransport} from '@modelcontextprotocol/ext-apps/app-bridge';
 import {AlertCircle,Check,Loader,RefreshCw} from 'lucide-react';
@@ -104,7 +105,7 @@ export function McpAppViewer({canvas,act}){
     const next={...hostContext.current,theme:themeRef.current};
     hostContext.current=next;
     bridge.setHostContext(next);
-    frame.current.src=`/api/canvas/${canvas.id}/document`;
+    frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
    }
   };
   report('loading','Connecting tool view…');start().catch(error=>report('error',error.message));

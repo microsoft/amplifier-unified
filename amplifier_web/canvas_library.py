@@ -8,6 +8,15 @@ import uuid
 from .state_storage import resource
 
 
+def presentation(state, row):
+    """Tabs and viewer controls belong to the attached client."""
+    tabs = state.get('canvasTabs')
+    if tabs is None:
+        return row
+    return tabs.setdefault(row['id'], {key: copy.deepcopy(row[key])
+        for key in ('view', 'tabOpen', 'lastViewedAt') if key in row})
+
+
 def remember(state, db):
     rows = state.setdefault('canvasArtifacts', [])
     canvas = state.get('canvas', {})
@@ -38,6 +47,11 @@ def remember(state, db):
         record['mcpState'] = put(db, canvas['mcp'])
     record['body'] = copy.deepcopy(reference)
     record['tabOpen'] = previous.get('tabOpen', True) if previous else True
+    if state.get('canvasTabs') is not None:
+        local = presentation(state, previous or record)
+        local['view'] = copy.deepcopy(canvas.get('view', {}))
+        if previous:
+            record['view'] = copy.deepcopy(previous.get('view', {}))
     if previous:
         previous.update(record)
     else:
@@ -53,14 +67,15 @@ def load(state, db, identity, *, open_panel=True):
     row = next((r for r in state.get('canvasArtifacts',[]) if r['id']==identity and scope(state,r)), None)
     if not row:
         raise AppError('This artifact belongs to another chat or is no longer available.')
-    canvas = {**copy.deepcopy(row), **({} if row.get('contentResource') else resource(db,row['body']['$resource'])), 'open':open_panel, 'renderReports':{}}
+    local = presentation(state, row)
+    canvas = {**copy.deepcopy(row), **copy.deepcopy(local), **({} if row.get('contentResource') else resource(db,row['body']['$resource'])), 'open':open_panel, 'renderReports':{}}
     canvas.pop('body',None)
     canvas.pop('tabOpen',None)
     mcp_state = canvas.pop('mcpState', None)
     if mcp_state:
         canvas['mcp'] = resource(db,mcp_state['$resource'])
-    row['tabOpen'] = True
-    row['lastViewedAt'] = time.time()
+    local['tabOpen'] = True
+    local['lastViewedAt'] = time.time()
     state['canvas'] = canvas
 
 
@@ -79,22 +94,22 @@ def command(state, db, action, args):
         if scope(state,current):
             current['open']=True
             row=next((r for r in state['canvasArtifacts'] if r['id']==current['id']),None)
-            if row:row['tabOpen']=True
+            if row:presentation(state, row)['tabOpen']=True
         else:
             restore(state,db,open_panel=True)
     elif action=='canvas.tabClose':
         row=next((r for r in state['canvasArtifacts'] if r['id']==args['id'] and scope(state,r)),None)
         if not row:raise AppError('Canvas tab is unavailable.')
-        row['tabOpen']=False
+        presentation(state, row)['tabOpen']=False
         if state['canvas'].get('id')==row['id']:
-            remaining=[r for r in state['canvasArtifacts'] if scope(state,r) and r.get('tabOpen')]
+            remaining=[r for r in state['canvasArtifacts'] if scope(state,r) and presentation(state, r).get('tabOpen')]
             if remaining:load(state,db,remaining[-1]['id'])
             else:empty(state,open_panel=True)
 
 
 def restore(state,db,*,open_panel=False):
-    rows=[r for r in state.get('canvasArtifacts',[]) if scope(state,r) and r.get('tabOpen')]
-    if rows:load(state,db,max(rows,key=lambda r:r.get('lastViewedAt',r.get('createdAt',0)))['id'],open_panel=open_panel)
+    rows=[r for r in state.get('canvasArtifacts',[]) if scope(state,r) and presentation(state, r).get('tabOpen')]
+    if rows:load(state,db,max(rows,key=lambda r:presentation(state, r).get('lastViewedAt',r.get('createdAt',0)))['id'],open_panel=open_panel)
     else:empty(state,open_panel=open_panel)
 
 

@@ -65,13 +65,13 @@ ACTION_DEFINITIONS = {
     "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":string(200),"name":string(200),"base64":string(12000000)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":string(200),"id":string(32)},["id"])),
-    "conversation.stop": ("Stop the current session execution", schema()),
-    "worker.spawn": ("Start a worker lane for heavier work", schema({"instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
-    "worker.stop": ("Stop one worker lane", schema({"id": string(100)})),
-    "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
+    "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
+    "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
+    "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
+    "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Optional sessionId binds draft updates to that conversation without changing selection. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "sessionId": string(100)}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Optional sessionId binds draft updates to that conversation without changing selection. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "sessionId": string(200)}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
@@ -181,7 +181,20 @@ from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
 
+from .shell_modules import ShellModules, definitions as shell_definitions
+ACTION_DEFINITIONS.update(shell_definitions(schema, string))
+
+
 class AppService:
+    @property
+    def state(self):
+        clients = getattr(self, 'clients', None)
+        return clients.state(self._state) if clients else self._state
+
+    @state.setter
+    def state(self, value):
+        self._state = value
+
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
         self.data_dir = Path(data_dir).expanduser()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -192,6 +205,7 @@ class AppService:
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.commit()
+        self.shell = ShellModules(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
@@ -200,6 +214,9 @@ class AppService:
         self.smart_tools = None
         self.smart_canvas = None
         self.queues = set()
+        self.queue_clients = {}
+        self.queue_sessions = {}
+        self.instance_id = str(uuid.uuid4())
         self.tasks = set()
         self.smart_tool_tasks = set()
         self.smart_tool_requests = {}
@@ -265,6 +282,9 @@ class AppService:
         self.diagnostics = Diagnostics(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
+        from .client_views import ClientViews
+        self.clients = ClientViews(self)
+        self._client_snapshots = {}
         self._refresh_shared_preferences()
         self._save()
 
@@ -296,6 +316,7 @@ class AppService:
             fallbackVoice=voice.get("fallback_model", "gpt-realtime-2.1"))
         self._shared_preferences_stamp = stamp_value
         self._browser_snapshot = None
+        self._client_snapshots.clear()
 
     def state_context(self):
         """Read-only full catalog with derived, bounded navigation projections."""
@@ -308,7 +329,7 @@ class AppService:
         result["attention"] = snapshot(self.state)
         result["workspaceExplorer"] = workspace_snapshot(result)
         result.pop("attentionRead", None)
-        return result
+        return self.clients.project(result)
 
     def get_state(self):
         # Explicit full reads remain compatible; browser hot paths use pages.
@@ -316,6 +337,21 @@ class AppService:
 
     def browser_state(self, session_id=None):
         self._refresh_shared_preferences()
+        client_id = self.clients.current.get()
+        if client_id is not None:
+            self.clients.reconcile(client_id)
+            cached = self._client_snapshots.get(client_id)
+            if cached is None or cached['revision'] != self.state['revision'] or session_id is not None:
+                from .browser_state import snapshot
+                context = self.state_context()
+                derived = {key: context[key] for key in ('attention', 'workspaceExplorer',
+                    'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
+                if session_id is not None:
+                    self._session(session_id)
+                cached = self.clients.project(snapshot(self.state, derived, session_id=session_id))
+                if session_id is None:
+                    self._client_snapshots[client_id] = cached
+            return cached
         cached = getattr(self, '_browser_snapshot', None)
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
@@ -336,10 +372,12 @@ class AppService:
 
     def _save(self):
         self._browser_snapshot = None
+        self._client_snapshots.clear()
         from .state_storage import normalize_state
         normalize_state(self.state, self.db)
         from .session_projection import persist
-        saved = persist(self.data_dir, self.state, self._view_cache)
+        saved = persist(self.data_dir, self._state, self._view_cache)
+        self.clients.save()
         self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(saved),))
         self.db.commit()
         from .storage_migration import maintenance
@@ -358,8 +396,12 @@ class AppService:
             self.state["revision"] = previous
             self._browser_snapshot = None
             raise
-        snapshot = self.browser_state()
         for queue in self.queues:
+            with self.clients.bind(self.queue_clients.get(queue)):
+                session_id = self.queue_sessions.get(queue)
+                if session_id and not any(row['id'] == session_id for row in self.state['sessions']):
+                    session_id = None
+                snapshot = self.browser_state(session_id=session_id)
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
@@ -413,13 +455,17 @@ class AppService:
                 return True
         return False
 
-    def subscribe(self):
+    def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
         self.queues.add(queue)
+        self.queue_clients[queue] = self.clients.current.get()
+        self.queue_sessions[queue] = session_id
         return queue
 
     def unsubscribe(self, queue):
         self.queues.discard(queue)
+        self.queue_clients.pop(queue, None)
+        self.queue_sessions.pop(queue, None)
 
     def _session(self, sid=None):
         sid = sid or self.state["selectedSessionId"]
@@ -462,7 +508,12 @@ class AppService:
         return task
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True):
-        args = args or {}
+        args = dict(args or {})
+        client_id = self.clients.current.get()
+        if client_id is not None and action in {'conversation.send', 'conversation.stop', 'worker.spawn', 'worker.stop', 'worker.steer', 'approval.respond', 'attachment.add', 'attachment.remove'}:
+            args.setdefault('sessionId', self.state.get('selectedSessionId'))
+            if not args['sessionId']:
+                raise AppError('Select a conversation first.', 404)
         defer_publish = action == 'smartTools.appCall' and not include_state
         if action.startswith("smartTools."):
             command_id = command_id or str(uuid.uuid4())
@@ -472,6 +523,8 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action.startswith("shell."):
+            return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
         implicit_session = False
         if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
@@ -483,7 +536,7 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-        fingerprint = hashlib.sha256(json.dumps([action, args, origin], sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         pending = []
         async with self.lock:
             # Flush and compare under the same lock: a queued runtime event
@@ -623,7 +676,7 @@ class AppService:
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state, session)
                 previous = next((row for row in self.state['sessions'] if row['id'] == self.state.get('selectedSessionId')), None)
-                if previous is not None and (self.state['view'].get('draft') or 'draft' in previous):
+                if client_id is None and previous is not None and (self.state['view'].get('draft') or 'draft' in previous):
                     previous['draft'] = self.state['view'].get('draft', '')
                 self.state["selectedSessionId"] = session["id"]
                 self.state["view"]["draft"] = session.get('draft', '')
@@ -738,17 +791,18 @@ class AppService:
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
                 session=self._session(args.get('sessionId'))
-                draft=session.setdefault('draftAttachments',[])
+                draft=self.clients.attachments(session)
                 if len(draft)>=MAX_FILES:raise AppError('Attach up to 8 files per message.')
                 draft.append(save(self.data_dir,args['name'],args['base64']))
             elif action == "attachment.remove":
                 session=self._session(args.get('sessionId'))
-                session['draftAttachments']=[row for row in session.get('draftAttachments',[]) if row['id']!=args['id']]
+                draft=self.clients.attachments(session)
+                draft[:]=[row for row in draft if row['id']!=args['id']]
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 text = args["text"].strip()
                 requested=args.get('attachmentIds',[])
-                available={row['id']:row for row in session.get('draftAttachments',[])}
+                available={row['id']:row for row in self.clients.attachments(session)}
                 if any(identity not in available for identity in requested):raise AppError('An attachment is no longer in this draft. Refresh and retry.')
                 attachments=[available[identity] for identity in requested]
                 if not text and not attachments:raise AppError("Enter a message or attach a file.")
@@ -768,11 +822,11 @@ class AppService:
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity)))
             elif action == "conversation.stop":
-                session = self._session()
+                session = self._session(args.get("sessionId"))
                 session["status"] = "stopping"
                 pending.append((self._stop, (session["id"],)))
             elif action == "worker.spawn":
-                session = self._session()
+                session = self._session(args.get("sessionId"))
                 text = args["instruction"].strip()
                 if not text:
                     raise AppError("Describe the worker's task.")
@@ -788,7 +842,7 @@ class AppService:
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), instruction, input_id)))
             elif action in {"worker.stop", "worker.steer"}:
-                session = self._session()
+                session = self._session(args.get("sessionId"))
                 if not self.runtime:
                     raise AppError("The execution runtime is unavailable.")
                 method = self.runtime.stop_worker if action == "worker.stop" else self.runtime.steer_worker
@@ -835,15 +889,19 @@ class AppService:
                     patch = view_patch(self.state, chat_view_patch(patch))
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
+                patch = copy.deepcopy(patch)
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
                     target = args.get('sessionId') or self.state.get('selectedSessionId')
-                    if target:
+                    if client_id is not None:
+                        self._session(target)
+                        self.clients.draft(target, patch.pop('draft'))
+                    elif target:
                         self._session(target)['draft'] = patch['draft']
                         if target != self.state.get('selectedSessionId'):
-                            patch = {key: value for key, value in patch.items() if key != 'draft'}
-                self.state["view"].update(copy.deepcopy(patch))
+                            patch.pop('draft')
+                self.state["view"].update(patch)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
                 self.feedback.attachment_command(action,args)
             elif action == "feedback.submit":
@@ -928,13 +986,15 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
-            if previous_scope[0] != self.state.get('selectedSessionId'):
+            if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
                 selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
                 self.state['view']['draft']=selected.get('draft','') if selected else ''
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
+            if client_id is not None and previous_scope[0] != self.state.get('selectedSessionId'):
+                self.clients.reconcile(client_id)
             if previous_scope[1] != self.state.get('selectedWorkspaceId') or action in {'workspace.select', 'workspace.add', 'workspace.create', 'session.select'}:
                 # An explicit selection reveals its folder, including returning
                 # to a workspace whose old browse scope otherwise still matches.
@@ -950,7 +1010,7 @@ class AppService:
             self.state["events"].append({"id": command_id, "action": action, "origin": origin, "at": time.time()})
             self.state["events"] = self.state["events"][-200:]
             for effect in effects:
-                effect.update({"id": str(uuid.uuid4()), "createdAt": time.time(), "origin": origin})
+                effect.update({"id": str(uuid.uuid4()), "createdAt": time.time(), "origin": origin, **({"clientId": client_id} if client_id else {})})
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
@@ -1054,10 +1114,13 @@ class AppService:
             current = self._session(session["id"])
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
             attached = {row["id"] for row in sent.get("attachments", [])}
-            current["draftAttachments"] = [
-                row for row in current.get("draftAttachments", []) if row["id"] not in attached
-            ]
-            if (self.state["selectedSessionId"] == current["id"]
+            draft_attachments = self.clients.attachments(current)
+            draft_attachments[:] = [row for row in draft_attachments if row["id"] not in attached]
+            client = self.clients.record()
+            if client is not None:
+                if client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
+                    self.clients.draft(current['id'], '')
+            elif (self.state["selectedSessionId"] == current["id"]
                     and self.state["view"].get("draft", "").strip() == text.strip()):
                 self.state["view"]["draft"] = ""
             if current.get('draft', '').strip() == text.strip():
@@ -1287,6 +1350,9 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == "history":
+            from .history_query import query_history
+            return await query_history(self, args, session_id)
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state
@@ -1308,7 +1374,10 @@ class AppService:
         raise AppError("Unknown app bridge operation.")
 
     async def update_device(self, payload):
-        client_id = str(payload.get("clientId") or "browser")[:100]
+        bound = self.clients.current.get()
+        if bound is not None and payload.get('clientId', bound) != bound:
+            raise AppError('Device report belongs to another client.')
+        client_id = bound or str(payload.get("clientId") or "browser")[:100]
         self.state["devices"][client_id] = {**payload, "updatedAt": time.time()}
         self._browser_snapshot = None
         # View snapshots are observational and don't invalidate command revisions.

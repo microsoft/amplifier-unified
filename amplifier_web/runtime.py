@@ -52,13 +52,16 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary")
         return "execution.event", {key:event[key] for key in allowed if key in event}
     if kind == "runtime.activity":
-        allowed = {"model", "processing", "waiting-workers", "tools", "retrying"}
+        allowed = {"model", "processing", "waiting-workers", "tools", "retrying", "compacting"}
         phase = event.get("phase")
         if phase not in allowed:
             return None
         return "runtime.status", {**base, "status": "working", "activityOnly": True, "phase": phase,
             "detail": event.get("detail", "Working"), "activeWorkers": event.get("activeWorkers", 0),
             **{key:event[key] for key in ("retryAttempt", "retryMax") if key in event}}
+    if kind == "assistant.delta":
+        return "assistant.delta", {**base, "text": event.get("text", ""),
+            "requestId": event.get("request_id"), "blockIndex": event.get("block_index")}
     if kind == "assistant.message":
         return "assistant.message", {**base, "text": event.get("text", ""),
             "inputId": (event.get("input_ids") or [input_id])[-1],

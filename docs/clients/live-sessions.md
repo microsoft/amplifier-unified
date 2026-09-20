@@ -1,0 +1,130 @@
+# Unified live session contract, version 1
+
+Unified owns execution while holding the Foundation session lock. Web, terminal,
+and native clients attach to that host. Attaching or disconnecting a client never
+acquires, releases, stops, or transfers execution ownership. Existing CLI takeover
+remains an explicit, separate operation.
+
+## Shared work and independent presentation
+
+Accepted input, replies, streaming text, tool/worker progress, approvals, session
+configuration, and ownership status belong to the session. All attached clients
+observe those changes. An approval can be answered once; a competing answer gets
+a conflict and must refresh.
+
+Each client owns its selection, per-conversation draft and pending attachments,
+panels, layout, canvas selection/tabs/controls, modular-shell composition, and
+device effects. A clipboard or permission request goes to its initiating client.
+Accepted attachments and published artifacts become shared session content.
+
+The browser creates a fresh client ID for each page load. It restores a copy of
+the prior page's presentation using `resumeClientId`; duplicate tabs therefore
+start with the same view but diverge independently. Saved client drafts are
+retained in the app database, including when no stream is connected. Client IDs
+are presentation identities, not credentials or security boundaries.
+
+## Authentication and attachment
+
+Use the host's existing authenticated browser cookie or control bearer token.
+All endpoints retain existing Host, Origin, and authentication checks. Native
+clients should verify TLS with the host's trusted certificate.
+
+1. `POST /api/clients/attach` with
+   `{"clientId":"unique-client-id","kind":"tui","protocolVersion":1}`.
+   Optional `resumeClientId` copies a prior client's view. Supported kinds:
+   `web`, `tui`, `native`, `api`.
+2. Send `X-Amplifier-Client: unique-client-id` on subsequent API requests.
+   Native browser EventSource and iframe URLs can use `?clientId=...`.
+   Conflicting header/query identities are rejected.
+3. Attachment returns `protocolVersion`, `hostInstanceId`, supported transports,
+   reconnect behavior (`snapshot`), and initial browser state.
+
+Reusing an existing client ID intentionally reconnects to that same presentation.
+Use a different ID for each concurrently independent client.
+
+## Session operations
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /api/sessions?offset=0&limit=100` | Bounded summaries, optional `workspace` path, and `nextOffset`. |
+| `GET /api/sessions/{id}` | Full current session snapshot without changing selection. |
+| `POST /api/sessions/{id}/commands` | Explicit session target and stable command ID. |
+| `GET /api/sessions/{id}/events` | SSE `snapshot` events containing the complete current session. |
+| `POST /api/actions` | Existing app operations, including creation and client-local presentation. |
+| `GET /api/actions` | Discover current action names and schemas. |
+
+Example command body:
+```json
+{
+  "id": "persist-this-id-before-sending",
+  "action": "conversation.send",
+  "args": {"text": "Continue the work"}
+}
+```
+
+Session commands include send/stop, worker spawn/stop/steer, approval responses,
+runtime controls, history loading, rename, and takeover. A session argument that
+conflicts with the URL is rejected. The SPA uses the same service dispatch through
+`/api/actions`; session operations capture their target before awaiting history or
+runtime admission.
+
+Keep the same command ID and arguments after an uncertain transport failure.
+Persisted receipts deduplicate retries by client, action, arguments, and origin.
+A changed command with the same ID is rejected. Command acceptance is distinct
+from a completed model/tool operation. Interrupted or uncertain work is never
+automatically rerun by attachment, reload, or SSE reconnection.
+
+The optional `expectedRevision` checks the app's global state revision, including
+presentation changes; it is not a per-session revision. Do not use it as a
+mandatory send precondition during active streaming.
+
+## Reconnect and lifetime
+
+An SSE ID is `<hostInstanceId>:<revision>`. Every connection starts with a complete
+current snapshot, including partial assistant text. Replace the prior projection;
+do not append the snapshot as new messages. A host restart changes
+`hostInstanceId`, so clients must accept its new revision range.
+
+Version 1 does **not** promise replay of every intermediate event or honor
+`Last-Event-ID` as an incremental cursor. Slow subscribers may receive coalesced
+snapshots. Heartbeats run every 20 seconds. Session deletion emits a final
+`deleted: true` snapshot. Reconnect uses the same attached client identity and
+does not resubmit commands or replay device effects.
+
+The browser stream remains `/api/events`, with independent client snapshots and
+the shell's `shell` invalidations. Dedicated session streams contain session
+snapshots only. An admitted command continues if its HTTP connection disappears.
+
+## Terminal adapter
+
+`amplifier_web.session_client.SessionClient` implements authenticated attachment,
+session listing/creation, explicit commands, and reconnecting SSE snapshots using
+aiohttp. It never imports an execution runtime or acquires a Foundation lock.
+
+```python
+from amplifier_web.session_client import SessionClient
+
+async def send_and_follow(url, token, session_id, command_id):
+    # Retain these IDs for retries; use a new client ID for an independent window.
+    async with SessionClient(url, token, "my-terminal") as client:
+        await client.command(
+            session_id, "conversation.send", {"text": "Hello from the terminal"},
+            command_id=command_id,
+        )
+        async for snapshot in client.snapshots(session_id):
+            render_session(snapshot["session"])  # replace the displayed projection
+```
+
+A TUI integration supplies this adapter behind its runtime interface, translates
+snapshots into its own widgets, and keeps navigation/drafts local to that client.
+Its disconnect/exit action closes the adapter; stop/cancel invokes an explicit
+session command. This change provides the shared contract and tested adapter.
+It does not modify a separately hosted amplifier-app-tui repository.
+
+## Storage and scope
+
+Conversation persistence and existing CLI history discovery remain in place.
+Client presentation is separately rebuildable app data. This change does not
+implement event-log-only runtime recovery, compaction replay, log pruning,
+execution migration to another machine, or multi-device voice-call arbitration.
+Those require their own contracts; Foundation ownership stays configurable.
