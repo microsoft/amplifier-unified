@@ -365,6 +365,13 @@ class UpdateManager:
                 await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,shutil.copytree,source,stage/'foundation',symlinks=True)
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await asyncio.to_thread(shutil.copytree,self.home/name,stage/name)
+                from .session_files import amplifier_home
+                shared_stage=stage/'shared-config'
+                shared_stage.mkdir(mode=0o700)
+                for name in ('settings.yaml','keys.env','routing'):
+                    original=amplifier_home()/name
+                    if original.is_dir():await asyncio.to_thread(shutil.copytree,original,shared_stage/name)
+                    elif original.is_file():await asyncio.to_thread(shutil.copy2,original,shared_stage/name)
                 for config_file in (stage/'config').rglob('*.yaml'):
                     config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
                 registry=stage/'foundation/registry.json'
@@ -411,7 +418,7 @@ class UpdateManager:
         configs={(s['workspace'],s['bundle']) for s in state['sessions']
                  if not s.get('historyManaged') and s.get('workspace') and s.get('bundle')}
         configs.add((state['settings']['workspace'],state['settings']['bundle']))
-        env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_UNIFIED_RELEASE':'',
+        env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'',
             'UV_OVERRIDE':str(Path(__file__).parent/'runtime_deps/compatibility.txt')}
         for workspace,bundle in sorted(configs):
             await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,env=env,timeout=900)

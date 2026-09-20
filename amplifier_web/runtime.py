@@ -140,9 +140,10 @@ class RuntimeManager:
                 return
             await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
                 "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
+            from .host.config import worker_environment
             proc = await asyncio.create_subprocess_exec(*self._command(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
-                start_new_session=os.name != "nt")
+                start_new_session=os.name != "nt", env=worker_environment())
             row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
                    "pending": {}, "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                    "started_at": time.monotonic(), "phase": "runtime-setup",

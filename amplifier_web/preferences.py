@@ -1,25 +1,22 @@
-"""Scoped application configuration; never writes another host's settings."""
+"""Scoped reads and locked writes to the shared Amplifier settings files."""
 from pathlib import Path
-import copy
-from filelock import FileLock
-import yaml
-from .host.config import read_yaml, write_private
+from .shared_settings import settings_paths, read_yaml, update_settings
+from .session_files import amplifier_home
+
 
 class SettingsStore:
-    def __init__(self,home):
-        self.home=Path(home)
-        (self.home/'config').mkdir(parents=True,exist_ok=True,mode=0o700)
-    def path(self,workspace,scope):
-        if scope=='global':return self.home/'config/settings.yaml'
-        if scope not in {'project','local'}:raise ValueError('Choose global, project, or local scope')
-        return Path(workspace).expanduser().resolve()/'.amplifier-unified'/('settings.local.yaml' if scope=='local' else 'settings.yaml')
-    def read(self,workspace,scope='global'):
-        with FileLock(str(self.home/'config/.settings.lock')):
-            return copy.deepcopy(read_yaml(self.path(workspace,scope)))
-    def update(self,workspace,scope,mutator):
-        with FileLock(str(self.home/'config/.settings.lock')):
-            path=self.path(workspace,scope);value=read_yaml(path)
-            result=mutator(value)
-            if result is not None:value=result
-            write_private(path,yaml.safe_dump(value,sort_keys=False))
-            return copy.deepcopy(value)
+    def __init__(self, home, *, shared_home=None):
+        self.home = Path(home)  # Application state, never the settings authority.
+        self.shared_home = Path(shared_home or amplifier_home()).expanduser().resolve()
+
+    def path(self, workspace, scope, *, session_id=None):
+        paths = settings_paths(workspace, shared_home=self.shared_home, session_id=session_id)
+        if scope not in paths:
+            raise ValueError("Choose global, project, or local scope (session requires an ID)")
+        return paths[scope]
+
+    def read(self, workspace, scope="global", *, session_id=None):
+        return read_yaml(self.path(workspace, scope, session_id=session_id))
+
+    def update(self, workspace, scope, mutator, *, session_id=None):
+        return update_settings(self.path(workspace, scope, session_id=session_id), mutator)

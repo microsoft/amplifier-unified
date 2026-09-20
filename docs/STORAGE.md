@@ -56,7 +56,7 @@ native activity cards and diagnostics are in-memory only and are excluded from
 `unified/view.json`; existing web-owned activity, attachments, canvas references,
 voice presentation and drafts keep their existing persistence.
 
-App settings, command IDs, operation receipts and indexes remain in the app data
+Application-specific settings, command IDs, operation receipts and indexes remain in the app data
 directory. Immutable canvas/result bodies live in `artifacts/<sha256>.json`, with
 small SQLite references. Live MCP context is separate from static HTML, preventing
 every polling update from duplicating an entire application. Reachability collection
@@ -85,8 +85,9 @@ Tool work directories. Backups are
 private but unencrypted. Shared session files survive app conversation cleanup. Removing a chat or resetting
 app conversations hides the currently listed chats from automatic discovery; it
 does not delete their CLI history. Newly created CLI chats can still appear.
-Resetting app settings creates workspace overrides only for workspaces used by
-the app, never for unresolved or untouched indexed CLI projects.
+Resetting app settings leaves shared Amplifier configuration and workspace settings untouched.
+Backups include the shared global settings, credentials, routing and saved bundles, plus
+workspace settings for conversations used in Unified. See [shared configuration](SHARED-CONFIGURATION.md).
 
 Do not run pre-0.8 against the migrated database. To roll back, stop Unified,
 preserve the post-migration app directory and shared files, restore the retained
