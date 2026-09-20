@@ -110,6 +110,13 @@ class RuntimeManager:
         self.workers: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
+    def has_pending_operations(self):
+        """Preparing a worker or waiting for its reply must defer host updates."""
+        return any(lock.locked() for lock in self._locks.values()) or any(
+            row.get("inflight") and row["process"].returncode is None
+            for row in self.workers.values()
+        )
+
     def _command(self, release=None):
         if self.command:
             return list(self.command)
@@ -148,7 +155,7 @@ class RuntimeManager:
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt", env=worker_environment())
             row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
-                   "pending": {}, "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
+                   "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                    "started_at": time.monotonic(), "phase": "runtime-setup",
                    "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
             self.workers[sid] = row
@@ -223,6 +230,7 @@ class RuntimeManager:
                     row["bridge_tasks"].add(task)
                     task.add_done_callback(row["bridge_tasks"].discard)
                 elif data.get("op") == "reply":
+                    row["inflight"].discard(data.get("id"))
                     future = row["pending"].get(data.get("id"))
                     if future and not future.done():
                         if data.get("error"):
@@ -294,8 +302,16 @@ class RuntimeManager:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         row["pending"][identity] = future
+        # A caller timing out or disconnecting does not cancel work already
+        # handed to the worker. Keep it busy until the reply or process exit.
+        row["inflight"].add(identity)
         try:
-            await self._write(row, {"op": op, "id": identity, **args})
+            try:
+                await self._write(row, {"op": op, "id": identity, **args})
+            except (ValueError, TypeError):
+                # Encoding rejected this command before writing to the pipe.
+                row["inflight"].discard(identity)
+                raise
             timeout = 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)

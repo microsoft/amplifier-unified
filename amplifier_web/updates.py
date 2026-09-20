@@ -231,13 +231,19 @@ class UpdateManager:
 
     def busy(self):
         state = self.service.state
+        pending = getattr(getattr(self.service, 'runtime', None), 'has_pending_operations', None)
+        if pending and pending():return True
         if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
         if any(op.get('status') in {'queued','running'} for op in state.get('smartTools',{}).get('operations',[])):return True
         if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('requests',[])):return True
         if state.get('voice',{}).get('status') not in {None,'disconnected','idle','ended','error'}:
             return True
         for session in state['sessions']:
-            if session.get('configurationBusy') or session['status'] in {'working','starting','ready','stopping'}: return True
+            if session.get('configurationBusy') or session['status'] in {'working','starting','stopping'}: return True
+            # Ready describes a mounted runtime, including control-only use.
+            # A cold-start send also passes through ready before delivery, so
+            # keep its already-admitted execution turn protected.
+            if session['status'] == 'ready' and any(turn.get('phase') == 'running' for turn in session.get('execution',{}).get('turns',[])):return True
             if any(w.get('status') in {'starting','running','stopping','queued'} or (w.get('persistent') and w.get('status') == 'idle') for w in session.get('workers',[])): return True
         return False
 
