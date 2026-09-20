@@ -88,7 +88,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return "worker.updated", {**base, "id": event.get("sessionId"),
             "status": event.get("status", "running"), "name": event.get("agent", "Worker"),
             "report": event.get("report", ""), "persistent": event.get("persistent", False),
-            "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time")}
+            "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
+            **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
     statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
                 "input.delivered": "working"}
     if kind in statuses:
@@ -497,6 +498,9 @@ class RuntimeManager:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
+
+    async def message_worker(self, session_id, worker_id, text, input_id=None):
+        return await self._request(session_id, "worker.message", worker_id=worker_id, text=text, input_id=input_id)
 
     async def steer_worker(self, session_id, worker_id, text):
         return await self._request(session_id, "worker.steer", worker_id=worker_id, text=text)

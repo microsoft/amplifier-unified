@@ -77,6 +77,7 @@ ACTION_DEFINITIONS = {
     "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
     "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
+    "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
@@ -201,6 +202,8 @@ from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
 from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
+from .coordination import definitions as coordination_definitions
+ACTION_DEFINITIONS.update(coordination_definitions())
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -294,7 +297,7 @@ class AppService:
                 session["status"] = "interrupted"
                 session["activity"] = {"phase": "interrupted", "label": "Previous work was interrupted; it has not been replayed.", "activeTools": [], "updatedAt": time.time()}
             for worker in session.get("workers", []):
-                if worker.get("status") in {"working", "running", "starting", "queued", "pending"}:
+                if worker.get("status") in {"working", "running", "starting", "queued", "pending", "stopping"} or worker.get("persistent") and worker.get("status") == "idle":
                     worker["status"] = "interrupted"
         if not self.state.get("defaultBundleMigration"):
             if self.state["settings"].get("bundle") == "foundation":
@@ -320,6 +323,12 @@ class AppService:
             for message in session.get('messages', []):
                 if message.get('delivery', {}).get('status') == 'sending':
                     self._delivery(session, message.get('inputId'), 'unknown')
+        # A durable request receipt is not an acknowledgement from a retired
+        # worker. Preserve uncertainty and never replay its message on restart.
+        for identity, saved_receipt in self.db.execute("SELECT id,receipt FROM commands WHERE json_extract(receipt,'$.commandAction')='worker.message' AND json_extract(receipt,'$.delivery')='requested'").fetchall():
+            receipt = json.loads(saved_receipt)
+            receipt["delivery"] = "unknown"
+            self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
         from .history_revision import recover_views
         recover_views(self)
         from .automatic_history import AutomaticHistory
@@ -327,6 +336,8 @@ class AppService:
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
+        from .coordination import Coordination
+        self.coordination = Coordination(self)
         self._refresh_shared_preferences()
         self._save()
 
@@ -453,6 +464,8 @@ class AppService:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
+        if hasattr(self, "coordination"):
+            self.coordination.notify()
         self._progress_dirty = False
         self._progress_publish_error = None
 
@@ -557,10 +570,10 @@ class AppService:
         task.add_done_callback(self.tasks.discard)
         return task
 
-    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True):
+    async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
         client_id = self.clients.current.get()
-        if client_id is not None and action in {'conversation.send', 'conversation.stop', 'worker.spawn', 'worker.stop', 'worker.steer', 'approval.respond', 'attachment.add', 'attachment.remove'}:
+        if client_id is not None and action in {'conversation.send', 'conversation.stop', 'worker.spawn', 'worker.stop', 'worker.steer', 'worker.message', 'approval.respond', 'attachment.add', 'attachment.remove'}:
             args.setdefault('sessionId', self.state.get('selectedSessionId'))
             if not args['sessionId']:
                 raise AppError('Select a conversation first.', 404)
@@ -573,6 +586,13 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action == "worker.message" and origin not in {"ui", "user"} and (not caller_session_id or args["sessionId"] != caller_session_id):
+            raise AppError("A user must explicitly message a worker in another conversation.", 403)
+        if action.startswith("coordination."):
+            try:
+                return await self.coordination.dispatch(action, args, origin, command_id, include_state, caller_session_id)
+            except ValueError as exc:
+                raise AppError(str(exc)) from None
         if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -585,7 +605,7 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+        if action in {'conversation.send', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -594,7 +614,7 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action!='conversation.send' else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -650,9 +670,9 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
-            if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
+            if action in {"conversation.send","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             from .canvas_library import remember, restore, fork_artifacts
@@ -986,6 +1006,8 @@ class AppService:
                 pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
+                session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
+                session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 session["status"] = "stopping"
                 pending.append((self._stop, (session["id"],)))
             elif action == "worker.spawn":
@@ -1004,12 +1026,20 @@ class AppService:
                 session["status"] = "working"
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), instruction, input_id)))
-            elif action in {"worker.stop", "worker.steer"}:
+            elif action in {"worker.stop", "worker.steer", "worker.message"}:
                 session = self._session(args.get("sessionId"))
                 if not self.runtime:
                     raise AppError("The execution runtime is unavailable.")
-                method = self.runtime.stop_worker if action == "worker.stop" else self.runtime.steer_worker
-                call_args = (session["id"], args["id"]) + ((args["text"],) if action == "worker.steer" else ())
+                worker = next((row for row in session["workers"] if row["id"] == args["id"]), None)
+                if not worker:
+                    raise AppError("Worker not found in this conversation.", 404)
+                if action == "worker.message" and (not worker.get("persistent") or worker.get("status") not in {"idle", "running"}):
+                    raise AppError("This worker cannot receive a follow-up.", 409)
+                if action == "worker.stop":
+                    worker["interruptionRevision"] = worker.get("interruptionRevision", 0) + 1
+                    worker["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
+                method = self.runtime.stop_worker if action == "worker.stop" else self.runtime.message_worker if action == "worker.message" else self.runtime.steer_worker
+                call_args = (session["id"], args["id"]) + ((args["text"], command_id) if action == "worker.message" else (args["text"],) if action == "worker.steer" else ())
                 pending.append((method, call_args))
             elif action == "approval.respond":
                 session = self._session(args.get("sessionId"))
@@ -1208,6 +1238,8 @@ class AppService:
             self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or view_action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
+            if action in {"worker.message", "worker.stop", "worker.steer"}:
+                receipt.update(delivery="requested", commandAction=action, target={"sessionId": args["sessionId"], "workerId": args["id"]}, completed=False, effectsState="not_rolled_back")
             if action == 'conversation.send':receipt['delivery']='sending'
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
@@ -1227,10 +1259,27 @@ class AppService:
             self._publish_smart_tool_update(defer_publish=defer_publish)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current:
+            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action == "worker.message":
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
-                await fn(*values)
+                try:
+                    acknowledged = await fn(*values)
+                except Exception:
+                    if action == "worker.message" and command_id:
+                        async with self.lock:
+                            result["delivery"] = "unknown"
+                            saved = {key: value for key, value in result.items() if key != "state"}
+                            self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(saved), command_id))
+                            self.db.commit()
+                    raise
+                if action == "worker.message":
+                    result["result"] = acknowledged
+                    result["delivery"] = "accepted"
+                    if command_id:
+                        async with self.lock:
+                            saved = {key: value for key, value in result.items() if key != "state"}
+                            self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(saved), command_id))
+                            self.db.commit()
             else:
                 kwargs = {'defer_publish': True} if defer_publish else {}
                 task = self._task(self._guard(fn, values, kwargs))
@@ -1560,7 +1609,10 @@ class AppService:
                         f"Waiting for {len(pending)} delegated tasks" if pending else "Response ready")
             elif kind == "assistant.message":
                 original = next((m for m in reversed(session["messages"]) if m.get("inputId") == payload.get("inputId") and m["role"] == "user"), {})
-                self._message(session, "assistant", payload.get("text", ""), original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), source="amplifier")
+                generation_id = payload.get("generationId")
+                repeated = generation_id and any(message.get("generationId") == generation_id for message in session["messages"] if message["role"] == "assistant")
+                if not repeated:
+                    self._message(session, "assistant", payload.get("text", ""), original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier")
                 session.pop("streaming", None)
             elif kind == "assistant.delta":
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
@@ -1569,7 +1621,12 @@ class AppService:
                 if worker:
                     worker.update(payload)
                 else:
-                    session["workers"].append(copy.deepcopy(payload))
+                    worker = copy.deepcopy(payload)
+                    task = self.coordination.task(session["id"])
+                    worker["taskId"] = task.get("id")
+                    session["workers"].append(worker)
+                from .coordination import observe_worker
+                observe_worker(worker, payload)
                 retrying = payload.get("phase") == "retrying"
                 activity = self._activity(session, "retrying" if retrying else "workers", "A worker is retrying a model request" if retrying else "Delegated work is reporting progress")
                 activity["lastEvent"] = {"worker": payload.get("name", "Worker"), "status": payload.get("status"), "at": time.time()}
@@ -1671,7 +1728,7 @@ class AppService:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
-            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
+            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
             await self._flush_pending_progress()
             if args['action'].startswith('canvas.apps.'):
                 from .agent_state import surface_context

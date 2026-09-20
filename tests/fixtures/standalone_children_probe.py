@@ -110,6 +110,15 @@ async def run():
                 await asyncio.sleep(.005)
             raise AssertionError('Persistent worker did not report idle')
         row=await wait_idle()
+        first_report=row['reportId']
+        run_id=row['runId']
+        accepted=await registry.control(row['sessionId'],'message','explicit follow-up',input_id='followup-receipt')
+        assert accepted['inputId']=='followup-receipt' and accepted['completed'] is False
+        for _ in range(200):
+            if row['report']=='Report: explicit follow-up':break
+            await asyncio.sleep(.005)
+        assert row['report']=='Report: explicit follow-up'
+        assert row['reportId']!=first_report and row['runId']==run_id
         await registry.control(row['sessionId'],'steer','new direction')
         for _ in range(200):
             if row['report']=='Report: new direction':break
@@ -118,6 +127,7 @@ async def run():
         await registry.control(row['sessionId'],'finish')
         persistent_result=await asyncio.wait_for(task,2)
         assert persistent_result.success
+        assert row['reports']==3, 'Finishing must not redeliver the last report'
         assert registry.rows[row['sessionId']]['status']=='completed'
         finite_session=next(item['session'] for item in created if item['id']=='child-session')
         finite_runtime,providers,scope=await StandaloneHostAdapter(registry).prepare_execution(None,finite_session.coordinator,{'test':'provider'})

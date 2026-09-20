@@ -112,7 +112,10 @@ class Children:
         row = self.rows.get(identity)
         if not row:
             return
-        row.update(status=status, report=str(result)[-20000:], reports=int(status == "completed"))
+        report = str(result)[-20000:]
+        if report and (report != row.get("report") or not row.get("reportId")):
+            row.update(report=report, reportId=str(uuid.uuid4()), reports=row.get("reports", 0) + 1, reportSourceChars=len(str(result)), reportTruncated=len(str(result)) > 20000, reportWindow="tail")
+        row["status"] = status
         if row.get("runtime"):
             row["runtime"].closed = True
         # Finite delegate results already return through the original tool/job
@@ -128,7 +131,7 @@ class Children:
             elif kind == "input.delivered":
                 row["status"] = "running"
             elif kind == "session.idle":
-                row.update(status="idle", report=event.get("text", "")[-20000:], reports=row["reports"] + 1)
+                row.update(status="idle", report=event.get("text", "")[-20000:], reportId=str(uuid.uuid4()), reports=row["reports"] + 1, reportSourceChars=len(event.get("text", "")), reportTruncated=len(event.get("text", "")) > 20000, reportWindow="tail")
                 self.root.inbox.put_nowait(("child_report", self._public(row)))
             elif kind == "session.closed":
                 row["status"] = event.get("status", "interrupted")
@@ -225,7 +228,7 @@ class Children:
         cwd = Path(parent.coordinator.get_capability("session.working_dir") or Path.cwd())
         persistent = _PERSISTENT.get()
         call_id = (session_metadata or {}).get("tool_call_id") or JOB_CALL.get()
-        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id,
+        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
                "task": asyncio.current_task()}
         self.rows[identity] = row

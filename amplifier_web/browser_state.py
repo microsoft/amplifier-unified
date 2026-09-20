@@ -80,6 +80,10 @@ def snapshot(state, derived, *, session_id=None):
     result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': sum(direct_child(child, row) for child in state.get('sessions', []))} if row['id'] == selected else {})}
                           for row in state.get('sessions', []) if row['id'] in visible]
+    # Report history is read through bounded coordination cursors, never copied
+    # into every browser progress snapshot. The worker's latest report remains.
+    result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+                           for worker in row.get('workers', [])]} for row in result['sessions']]
     workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
