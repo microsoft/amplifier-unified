@@ -1,6 +1,7 @@
 # Warm conversations and navigation validation
 
-This change is based on Unified 0.12.0 (`df3c0d7`). It adds idle-worker
+This change was developed from Unified 0.12.0 and integrated with the current
+0.13.0 main (`d12f8d1`). It adds idle-worker
 retention and immediate optional preparation, a bounded browser conversation
 cache, unchanged-history read avoidance, and scroll-triggered history paging.
 It does not change providers, Core, Foundation, or the runtime dependency pins.
@@ -10,24 +11,35 @@ Lazy provider loading and interchangeable worker pools remain out of scope.
 
 - Runtime retention tests cover oldest-idle eviction, expiry, active and
   unanswered-operation protection, uncertain transport writes, stale parked
-  status, bounded preparation, policy changes while queued, and input crossing
+  status, bounded preparation, startup approvals, policy changes while queued, and input crossing
   retirement. The actual worker checks parked state before accepting retirement.
 - A real Worker with the pinned runtime and an isolated deterministic provider
   handled two turns in the same instance, retired cleanly, then restored a third
   turn in a new instance. Saved accepted inputs and responses were preserved
-  without replay. One measured run took about 2.19 seconds cold and 0.095 seconds
+  without replay. The integrated run took about 7.27 seconds cold and 0.090 seconds
   for the next fixture turn while warm. These are fixture measurements, not
   model-response or production latency promises.
 - The production browser bundle displays cached history and the correct private
   draft while the selection HTTP request is deliberately blocked. Drafts typed
   during that interval survive the response and later switches. Dirty-canvas
-  browser coverage preserves the existing edit guard.
+  browser coverage preserves the existing edit guard. The integrated cached
+  switch painted in about 8.4 ms before the blocked server response.
 - Native-history browser coverage uses 5,000 synthetic conversation summaries.
   It checks bounded rendering, typing, automatic upward-scroll paging with a
   stable reading position, and read-only child histories. This does not measure
   Spark's production catalog, filesystem or network latency.
 - Readiness settings use the same shared action as agents. Tests cover numeric
   validation, persisted configuration and application to the running manager.
+  The production browser fixture passed desktop/mobile layout, save, reload,
+  and direct inspection of the actual running manager's updated settings.
+- The TUI HTTP contract test prepares an explicit chat without selecting it,
+  submits no input, and deduplicates a retried preparation command.
+
+The integrated full suites passed 1,171 Python tests (11 opt-in skips) and
+165 frontend tests. Subsequent startup-approval validation passed the focused
+runtime, retention, warmup, live-client and bundle suites. Wheel/source builds
+and packaged-source/static-asset verification passed. These checks do not
+constitute a release or deployment.
 
 Repeatable checks include `tests/test_runtime_retention.py`,
 `tests/test_session_warmup.py`, `tests/fixtures/warm_worker_probe.py`, and the

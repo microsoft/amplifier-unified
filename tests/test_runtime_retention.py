@@ -162,6 +162,34 @@ async def test_disabling_preparation_skips_starts_already_waiting_in_queue(manag
     assert not manager.workers
 
 
+async def test_startup_approval_can_resolve_before_initialization_is_ready():
+    script = r'''
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'approval.requested','id':'setup','prompt':'Initialize fixture?','options':['allow','deny']}),flush=True)
+    elif data['op']=='approval':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+        print(json.dumps({'op':'reply','id':data['id'],'result':{'resolved':True}}),flush=True)
+    elif data['op']=='stop':break
+'''
+    runtime = RuntimeManager(command=[sys.executable, '-c', script])
+    requested = asyncio.Event()
+    async def emit(kind, payload):
+        if kind == 'approval.requested': requested.set()
+    pending = asyncio.create_task(runtime.start({'id': 'approval-at-start'}, emit))
+    try:
+        await asyncio.wait_for(requested.wait(), 2)
+        reply = await asyncio.wait_for(runtime.approval('approval-at-start', 'setup', 'allow'), 2)
+        assert reply['resolved']
+        await asyncio.wait_for(pending, 2)
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await runtime.close()
+
+
 @pytest.mark.parametrize('pending', ['none', 'approval', 'bridge', 'generation', 'queued', 'inbox', 'job', 'remount', 'yielding'])
 async def test_actual_worker_retirement_requires_settled_state(pending):
     worker = Worker()

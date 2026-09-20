@@ -329,6 +329,12 @@ class RuntimeManager:
                     future.set_exception(RuntimeError("Amplifier worker disconnected"))
 
     async def _request(self, sid, op, **args):
+        row = self.workers.get(sid)
+        if op == 'approval' and row and not row['ready'].done():
+            # A module can ask for approval during initialization. start() owns
+            # the admission lock until ready, so its answer must bypass that
+            # lock. A starting worker is never eligible for idle retirement.
+            return await self._request_unlocked(sid, op, **args)
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._locks.setdefault(sid, asyncio.Lock()):
