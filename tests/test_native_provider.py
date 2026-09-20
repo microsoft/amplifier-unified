@@ -66,6 +66,10 @@ async def test_supported_instance_wrap_is_opt_in_and_preserves_root_selection(tm
     assert c.loop.root_provider.original is host.provider
     assert c.loop.root_provider.selection==selection
     assert host.provider._api_key=='fixture' and provider._client is None
+    # Transparent surface/observation wrappers preserve the selected instance.
+    from amplifier_web.surface_delivery import SurfaceProvider
+    c.loop.root_provider=SurfaceProvider(c.loop.root_provider,SimpleNamespace())
+    assert host.status()['supported'] and host.selected_mount()[1] is host.provider
     # An explicit model/effort change must not use the previous identity's state.
     c.loop.root_provider.selection['effort']='low'
     assert host.status()['steering']=='request_boundary'

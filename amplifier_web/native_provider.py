@@ -33,17 +33,26 @@ class NativeProviderHost:
     def save(self):
         write_private(self.path, json.dumps(self.state, ensure_ascii=False))
 
-    def selected_identity(self):
+    def selected_mount(self):
         providers = self.coordinator.get("providers") or {}
         selected = self.loop._select_provider(providers)
-        original = getattr(selected, "original", selected)
+        current, visited, link = selected, set(), None
+        while current is not None and id(current) not in visited:
+            for name, mounted in providers.items():
+                if current is mounted:
+                    return selected, mounted, name, link
+            visited.add(id(current))
+            link, current = current, getattr(current, "original", None)
+        return selected, None, None, None
+
+    def selected_identity(self):
+        selected, original, instance, _ = self.selected_mount()
         info = selected.get_info() if selected else None
         if inspect.isawaitable(info):
             if inspect.iscoroutine(info):
                 info.close()
             info = None
         defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info, "defaults", {})) or {}
-        instance = next((name for name, value in providers.items() if value is original), None)
         return {"instance": instance, "model": defaults.get("model"),
                 "selection": copy.deepcopy(getattr(selected, "selection", {}))}
 
@@ -111,8 +120,7 @@ async def install_native(loop, coordinator, providers):
     except ImportError:
         host.reason = "The installed provider does not include its optional native transport."
         return providers
-    selected = loop._select_provider(providers)
-    original = getattr(selected, "original", selected)
+    selected, original, _, link = host.selected_mount()
     identity = host.selected_identity()
     if type(original) is not OpenAIProvider or identity["model"] != "gpt-6-astra":
         host.reason = "Native steering is available only for the selected OpenAI gpt-6-astra model."
@@ -142,6 +150,6 @@ async def install_native(loop, coordinator, providers):
         except (OSError, ValueError, KeyError, TypeError):
             host.provider._discard_checkpoint("unavailable")
     await coordinator.mount("providers", host.provider, name=identity["instance"])
-    if selected is not original:
-        selected.original = host.provider
+    if link is not None:
+        link.original = host.provider
     return coordinator.get("providers") or providers
