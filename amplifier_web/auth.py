@@ -7,6 +7,7 @@ import html
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import time
@@ -172,6 +173,11 @@ async def auth_required(request: web.Request, handler):
               "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",
               "/branding/pwa/pwa-192.png", "/branding/pwa/pwa-512.png"}
     if request.path in public and request.method in {"GET", "HEAD"}:
+        return await handler(request)
+    # Deliberately published snapshots have their own unguessable bearer link.
+    # This exemption grants no app/API/file authority; the handler checks expiry
+    # and revocation on every request and serves escaped inert snapshot content.
+    if request.method in {'GET', 'HEAD'} and re.fullmatch(r'/share/[A-Za-z0-9_-]{43}', request.path):
         return await handler(request)
     if request.path == "/login" and request.method == "POST":
         csrf = request.cookies.get(CSRF_COOKIE)

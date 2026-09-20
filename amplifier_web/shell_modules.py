@@ -61,7 +61,7 @@ DEFAULT = {'instances': [
 ], 'presentation': {}}
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
-VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -70,6 +70,8 @@ COMMAND_CAPABILITIES = {
     'session.select': 'navigation.select', 'workspace.select': 'navigation.select',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
     'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.delete': 'chats.manage', 'session.pin': 'chats.manage',
+    'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
+    **{f'collection.{name}': 'chats.manage' for name in ('create', 'rename', 'remove', 'reorder', 'assign', 'order')},
     'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
 
@@ -247,6 +249,7 @@ class ShellModules:
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
     def navigation(self, client, instance):
+        from .conversation_library import projection as organization_projection
         from .chat_navigation import snapshot as chats
         from .workspace_navigation import snapshot as workspaces
         from .attention import snapshot as attention
@@ -260,6 +263,7 @@ class ShellModules:
         return {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
                 'chatNavigation': chat_page, 'workspaceExplorer': workspaces(scoped),
+                'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error']},
                 'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},

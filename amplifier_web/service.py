@@ -191,6 +191,9 @@ def validate_theme(css):
 
 from .smart_canvas import definitions as smart_tool_definitions
 ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
+from .conversation_library import definitions as library_definitions
+LIBRARY_ACTIONS = library_definitions(schema, string)
+ACTION_DEFINITIONS.update(LIBRARY_ACTIONS)
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
@@ -281,6 +284,8 @@ class AppService:
         upgrade(self)
         from .chat_navigation import initialize as initialize_chat_navigation
         initialize_chat_navigation(self.state)
+        from .conversation_library import ConversationLibrary
+        self.conversation_library = ConversationLibrary(self)
         self.state["voice"] = {"status": "disconnected"}
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
         from .session_ownership import restore
@@ -602,6 +607,21 @@ class AppService:
                 snapshot = copy.deepcopy(self._session(args['id']))
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
         prepared_export = None
+        prepared_share = None
+        if action == 'session.sharePreview':
+            from .conversation_export import markdown
+            async with self.lock:
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                source = copy.deepcopy(self._session(args['sessionId']))
+                artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
+            try:
+                prepared_share = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from exc
         if action == 'session.export' and args.get('format') == 'markdown':
             from .conversation_export import markdown
             async with self.lock:
@@ -663,7 +683,12 @@ class AppService:
             previous_open=self.state.get('canvas',{}).get('open',False)
             effects = []
             diagnostic_result = None
-            if action == 'diagnostics.export':
+            if action in LIBRARY_ACTIONS:
+                try:
+                    diagnostic_result = self.conversation_library.perform(action, args, prepared_share)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from exc
+            elif action == 'diagnostics.export':
                 page=self.state.get('diagnostics',{}).get('lastResult',{})
                 if page.get('action')!='diagnostics.records':raise AppError('Inspect the records to export first.')
                 lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],'timestamp':r['data']['timestamp'],'data':r['data']}) for r in reversed(page.get('items',[]))]
@@ -1035,6 +1060,7 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
+                allowed.update({'navArchive', 'navCollection'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -1667,7 +1693,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
+            if args['action'] in {'canvas.show','smartTools.call','smartTools.open','session.sharePreview','session.shareList'}:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
