@@ -76,6 +76,37 @@ def test_worker_report_and_tool_failure_are_visible_without_raw_payloads():
     assert events.nodes['worker:child']['summary']=='Completed the requested review.'
 
 
+def test_streaming_hook_result_survives_transport_and_browser_projection():
+    """loop-streaming publishes `result`, unlike app-control's `tool_result`."""
+    from amplifier_web.execution import ingest
+    from amplifier_web.browser_detail import page, read_text
+    events=ExecutionEvents('root',lambda event:None)
+    arguments={'command':'python -m pytest -q','cwd':'/workspace'}
+    events.hook('root','tool:pre',{'tool_call_id':'stream','tool_name':'bash','tool_input':arguments})
+    events.hook('root','tool:post',{'tool_call_id':'stream','tool_name':'bash','tool_input':arguments,
+        'result':{'success':False,'output':{'stdout':'line\n'*6000,'stderr':'test failed','returncode':1},'error':{'message':'test failed','authorization':'secret'}}})
+    row=events.nodes['tool:root:stream']
+    assert row['phase']=='error' and 'test failed' in row['error']
+    assert 'python -m pytest' in row['summary']
+    assert 'secret' not in row['output']
+    session={'id':'root'}
+    ingest(session,normalize_event({'type':'execution.event','event':row},'root')[1])
+    projected=page(session,'nodes')['items'][0]
+    assert 'outputDetail' in projected
+    reference=projected['outputDetail'];offset=0;full=''
+    while offset is not None:
+        result=read_text(session,{**reference,'offset':offset});full+=result['value'];offset=result['nextOffset']
+    assert full==row['output'] and 'returncode' in full
+
+
+def test_post_only_streaming_event_retains_arguments_and_falsey_result():
+    events=ExecutionEvents('root',lambda event:None)
+    events.hook('root','tool:post',{'tool_call_id':'missed-pre','tool_name':'bash',
+        'tool_input':{'command':'true'},'result':''})
+    row=events.nodes['tool:root:missed-pre']
+    assert 'true' in row['input'] and row['output']=='' and row['phase']=='completed'
+
+
 def test_public_tool_details_redact_credentials_and_private_blocks(monkeypatch):
     monkeypatch.setenv('FIXTURE_API_KEY','unique-fixture-credential')
     events=ExecutionEvents('root',lambda event:None)

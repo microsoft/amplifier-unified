@@ -18,6 +18,7 @@
     "test:artifact-browser": "node tests/artifact-browser.mjs",
     "test:timeline-browser": "node tests/timeline-browser.mjs",
     "test:execution-browser": "node tests/execution-inspection-browser.mjs",
+    "test:execution-actions-browser": "node tests/execution-actions-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
     "test:panel-browser": "node tests/panel-layout-browser.mjs",

@@ -144,23 +144,26 @@ class ExecutionEvents:
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
-            arguments=data.get("tool_input",{})
-            if event=="tool:pre" and isinstance(arguments,dict):
+            arguments=data.get("tool_input")
+            if event=="tool:pre":
                 row.update(endedAt=None, output=None, error=None)
+            # Streaming hooks use `result`; app-side controls use `tool_result`.
+            # A post hook also carries arguments when the pre hook was missed.
+            if arguments is not None and (event=="tool:pre" or "input" not in row):
                 row["input"] = tool_detail(arguments)
                 try: public_arguments = json.loads(row["input"])
                 except (ValueError, TypeError): public_arguments = {}
-                operation = next((public_arguments.get(key) for key in ("description", "action", "operation", "file_path", "path") if isinstance(public_arguments, dict) and isinstance(public_arguments.get(key), str)), "")
+                operation = next((public_arguments.get(key) for key in ("command", "file_path", "path", "action", "operation", "description") if isinstance(public_arguments, dict) and isinstance(public_arguments.get(key), str)), "")
                 row["purpose"] = tool_detail(operation)[:200]
                 row["summary"] = "Running " + row["label"] + (" · " + row["purpose"] if row["purpose"] else "")
             if event != "tool:pre":
                 if row.get("endedAt") is None: row["endedAt"] = now
-                result=data.get("tool_result",{})
+                result=data.get("result") if "result" in data else data.get("tool_result",{})
                 if hasattr(result,"model_dump"):result=result.model_dump()
                 failed=event=="tool:error" or (isinstance(result,dict) and result.get("success") is False)
                 if failed:row["phase"]="error"
                 row["summary"] = ("Failed " if failed else "Completed ") + row["label"] + (" · " + row.get("purpose", "") if row.get("purpose") else "")
-                if "tool_result" in data: row["output"] = tool_detail(result)
+                if "result" in data or "tool_result" in data: row["output"] = tool_detail(result)
                 error = data.get("error") or data.get("error_message") or (result.get("error") if isinstance(result, dict) else None)
                 if error is not None: row["error"] = tool_detail(error)
 

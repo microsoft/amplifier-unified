@@ -94,10 +94,43 @@ async def main():
                 ensure_turn(row,'inspect');row['execution']['turns'][0].update(startedAt=now-3,anchorMessageId='question')
                 emitted=[];events=ExecutionEvents(aid,emitted.append);events.turn_id='inspect'
                 events.hook(aid,'tool:pre',{'tool_call_id':'inspect-tool','tool_name':'fixture.read','tool_input':{'action':'inspect fixture','path':'/fixture/public.txt','authorization':'Bearer never-publish-this','text':'input '*150}})
-                events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','tool_result':{'success':True,'output':'Result line. '*2000+'RESULT-END','url':'https://example.com/artifact'}})
+                events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','result':{'success':True,'output':'Result line. '*2000+'RESULT-END','url':'https://example.com/artifact'}})
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2})
+            elif op=='inspection-actions':
+                from amplifier_web.execution_events import ExecutionEvents
+                from amplifier_web.runtime import normalize_event
+                emitted=[];events=ExecutionEvents(aid,emitted.append);events.turn_id='inspect'
+                examples=[
+                    ('command','bash',{'command':'python -m pytest retirement/test_retire.py -q'},
+                     {'success':True,'output':{'stdout':'............ [100%]\n12 passed in 0.21s','stderr':'','returncode':0}}),
+                    ('patch','apply_patch',{'patch':'*** Begin Patch\n*** Update File: retirement/test_retire.py\n@@ -40,2 +40,3 @@\n def test_retry():\n-    retry(operation)\n+    result = retry(operation)\n+    assert result.status == "committed"\n*** End Patch'},
+                     {'success':True,'output':'Updated retirement/test_retire.py'}),
+                    ('read','read_file',{'file_path':'retirement/test_retire.py','offset':40,'limit':3},
+                     {'success':True,'output':{'content':'40  def test_retry():\n41      result = retry(operation)\n42      assert result.status == "committed"'}}),
+                    ('tasks','todo',{'todos':[{'content':'Inspect original behavior','status':'completed'},{'content':'Review the patch','status':'in_progress'}]},
+                     {'success':True,'output':{'completed':1,'in_progress':1,'count':2}}),
+                    ('app','app_control',{'action':'session.rename','title':'Retry operation ID check'},
+                     {'success':True,'output':{'title':'Retry operation ID check'}}),
+                    ('empty','bash',{'command':'git diff --check'},
+                     {'success':True,'output':{'stdout':'','stderr':'','returncode':0}}),
+                    ('failed','bash',{'command':'python failing_test.py'},
+                     {'success':False,'output':{'stdout':'','stderr':'AssertionError: expected committed','returncode':1},'error':{'message':'Exit code 1'}}),
+                    ('malformed','todo',{'todos':[{'content':{'unexpected':'shape'},'status':42}]},
+                     {'success':False,'output':'Invalid task input'}),
+                    ('delegate','delegate',{'agent':'code-reviewer','instruction':'Review the retry test'},
+                     {'success':True,'output':'No findings.'}),
+                ]
+                for identity,name,arguments,result in examples:
+                    events.hook(aid,'tool:pre',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments})
+                    events.hook(aid,'tool:post',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments,'result':result})
+                events.lifecycle({'type':'child.updated','sessionId':'review-worker','parentSessionId':aid,'callId':'delegate','agent':'code-reviewer','status':'completed','report':'No findings. The assertion checks committed status.'})
+                events.hook('review-worker','tool:pre',{'tool_call_id':'nested','tool_name':'bash','tool_input':{'command':'git diff --check'}})
+                events.hook('review-worker','tool:post',{'tool_call_id':'nested','tool_name':'bash','result':{'success':True,'output':{'stdout':'','stderr':'','returncode':0}}})
+                for event in emitted:
+                    kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
+                await service.on_runtime_event('execution.event',{'id':'legacy','kind':'tool','turnId':'inspect','label':'legacy.tool','phase':'completed','summary':'Tool completed. Expand any delegated actions below for their progress and results.'})
             elif op=='inspection-finish':
                 now=time.time()
                 await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'completed','endedAt':now,'usage':{'inputTokens':100,'outputTokens':20,'totalTokens':120,'costUsd':.004,'costType':'reported'}})
