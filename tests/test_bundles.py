@@ -157,3 +157,20 @@ async def test_picker_lists_standalone_registrations_not_namespace_roots(tmp_pat
     names={row['name'] for row in result['registeredBundles']}
     assert names == {'anchors','foundation','anchors-amp-dev','my-root','work','anchors-work'}
     assert any(row['role']=='behavior' and row['uri']=='foundation:behaviors/addon' for row in result['bundles'])
+
+
+async def test_builtin_work_and_catalog_order_use_displayed_names_without_loading(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_UNIFIED_IMPORT_HOME', str(tmp_path/'legacy'))
+    manager = BundleManager(tmp_path)
+    # Raw identifier order puts Zulu before anchors. Display-label order also
+    # differs from identifier order for aliases, and must be shared with agents.
+    manager.store.update(tmp_path, 'global', lambda _: {'bundle': {'added': {
+        'Zulu': 'file:///unavailable/zulu.md', 'alpha': 'file:///unavailable/alpha.md',
+        'anchors-amp-dev': 'file:///unavailable/dev.md',
+        'anchors-work': 'file:///unavailable/work.md',
+    }}})
+    result = await manager.perform('bundles.list', {'workspace': str(tmp_path)})
+    assert [row['name'] for row in result['registeredBundles']] == [
+        'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'foundation', 'work', 'Zulu']
+    assert next(row for row in result['registeredBundles'] if row['name']=='work')['label']=='Work'
+    assert not (tmp_path/'foundation/registry.json').exists()

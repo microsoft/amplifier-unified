@@ -308,19 +308,10 @@ async def load_root_bundle(config, chosen):
     if "foundation" in registry.list_registered():
         registrations.pop("foundation", None)
     registry.register(registrations)
-    # Search app-owned named bundle files before registry aliases. Direct paths
-    # are resolved from the chosen workspace, matching community bundle usage.
-    candidate = Path(chosen).expanduser()
-    if not candidate.is_absolute():
-        candidate = config.workspace / candidate
-    if candidate.exists():
+    from .bundle_paths import local_bundle_path
+    candidate = local_bundle_path(config, chosen)
+    if candidate is not None:
         chosen = str(candidate)
-    else:
-        for path in (config.home / "bundles" / chosen, config.home / "bundles" / (chosen + ".md"),
-                     config.workspace / ".amplifier-unified" / "bundles" / chosen):
-            if path.exists():
-                chosen = str(path)
-                break
     loaded = await registry.load(chosen)
     loaded = await compose_configured_bundle(registry, loaded, config)
     return registry, loaded, chosen

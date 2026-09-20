@@ -24,7 +24,7 @@ MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
 # Conversation profiles known to the host/ecosystem. Other roots are explicitly
 # registered through bundle.added (the standalone role in the management UI).
-STANDALONE_PROFILES = {"foundation", "anchors", "anchors-amp-dev", "amplifier-dev", "exp-delegation"}
+STANDALONE_PROFILES = {"foundation", "anchors", "anchors-amp-dev", "amplifier-dev", "exp-delegation", "work"}
 SECRET_KEYS = {"api_key", "apikey", "token", "access_token", "refresh_token", "id_token", "auth_token", "secret", "client_secret", "password", "passwd", "authorization", "cookie", "cookies", "credentials", "private_key", "bearer_token"}
 
 
@@ -279,7 +279,9 @@ class BundleManager:
 
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
                 from .bundle_selection import catalog_entry
-                return {"bundles": self.public_entries(settings), "registeredBundles":[catalog_entry(name) for name in sorted(names-disabled)]}
+                catalog = sorted((catalog_entry(name) for name in names-disabled),
+                                 key=lambda row: (row['label'].casefold(), row['name'].casefold(), row['name']))
+                return {"bundles": self.public_entries(settings), "registeredBundles": catalog}
             def mutate(current):
                 entries = self.entries(current)
                 excluded = set(current.get("web_bundles", {}).get("excluded", []))

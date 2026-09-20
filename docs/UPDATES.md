@@ -47,6 +47,13 @@ The source inventory groups identical repository/ref/revision/status/usage/evide
 
 Unread attention counts lead from Settings through Maintenance to Updates. Users and agents can mark items reviewed through `attention.read`; the underlying condition stays visible until resolved, and a new version or changed error becomes unread again.
 
+Source classification recognizes local bundle files and directories in the standard
+project `.amplifier/bundles` and shared user bundle folders, using the same lookup
+as conversation preparation. Local bundles remain unknown for remote dependency
+usage: checks do not execute them or guess their transitive includes. Historical
+workspace entries without a resolved directory are retained but skipped during
+source classification, just like directories that are no longer available.
+
 
 ## Update diagnostics
 

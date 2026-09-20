@@ -1,7 +1,9 @@
 # Warm conversations and navigation validation
 
 This change was developed from Unified 0.12.0 and integrated with the current
-0.13.0 main (`d12f8d1`). It adds idle-worker
+0.13.1 main (`0ea0566`). The final integration preserved the local CLI bundle
+resolution and bundle-choice fixes; only generated browser assets conflicted
+and were rebuilt from the combined source. It adds idle-worker
 retention and immediate optional preparation, a bounded browser conversation
 cache, unchanged-history read avoidance, and scroll-triggered history paging.
 It does not change providers, Core, Foundation, or the runtime dependency pins.
@@ -23,7 +25,7 @@ Lazy provider loading and interchangeable worker pools remain out of scope.
   draft while the selection HTTP request is deliberately blocked. Drafts typed
   during that interval survive the response and later switches. Dirty-canvas
   browser coverage preserves the existing edit guard. The integrated cached
-  switch painted in about 8.4 ms before the blocked server response.
+  switch painted in about 5.7 ms before the blocked server response.
 - Native-history browser coverage uses 5,000 synthetic conversation summaries.
   It checks bounded rendering, typing, automatic upward-scroll paging with a
   stable reading position, and read-only child histories. This does not measure
@@ -35,7 +37,7 @@ Lazy provider loading and interchangeable worker pools remain out of scope.
 - The TUI HTTP contract test prepares an explicit chat without selecting it,
   submits no input, and deduplicates a retried preparation command.
 
-The final backend suite passed 1,177 Python tests (11 opt-in skips), including
+The final backend suite passed 1,188 Python tests (11 opt-in skips), including
 the startup-approval and retirement-review corrections. The unchanged frontend
 passed 165 tests. Wheel/source builds
 and packaged-source/static-asset verification passed. These checks do not

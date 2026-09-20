@@ -9,12 +9,21 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
 
 class HostSettingsTests(unittest.TestCase):
+    def test_work_is_available_without_changing_default_or_overriding_user_sources(self):
+        config = HostConfig(Path('/app'), Path('/workspace'), {}, Path('/registry'))
+        self.assertEqual(config.active_bundle, 'anchors')
+        self.assertEqual(config.registrations['work'], WORK_SOURCE)
+        config.settings['bundle'] = {'added': {'work': 'file:///custom/work.md'}}
+        self.assertEqual(config.registrations['work'], 'file:///custom/work.md')
+        config.settings['sources'] = {'bundles': {'work': 'file:///override/work.md'}}
+        self.assertEqual(config.registrations['work'], 'file:///override/work.md')
+
     def test_app_home_honors_the_data_directory_override(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
                 os.environ, {"AMPLIFIER_WEB_DATA_DIR": directory}, clear=True):
