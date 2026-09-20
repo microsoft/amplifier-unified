@@ -504,6 +504,13 @@ class RuntimeControls:
                     result["routingMatrix"]["baseRoles"] = list(value.get("roles",{}))
                     break
         namespaces = {}
+        # Packaged behavior resources live outside Foundation's Git cache.
+        from .builtin_behaviors import resource_root, SHELL_BEHAVIOR_URI
+        builtin_root = resource_root().resolve()
+        if any(Path(value).resolve() == builtin_root for value in
+               (getattr(bundle, "source_base_paths", {}) or {}).values()):
+            roots.append((builtin_root, SHELL_BEHAVIOR_URI.split("#", 1)[0]))
+            result["warnings"].append("Unified skill sources in this export follow the repository's main branch; pin that source to a published revision for reproducible skill content.")
         for namespace,value in (getattr(bundle,"source_base_paths",{}) or {}).items():
             path = Path(value).resolve()
             match = next(((root,uri) for root,uri in roots if path.is_relative_to(root)),None)

@@ -17,6 +17,8 @@ import uuid
 
 import yaml
 
+from .builtin_behaviors import SHELL_BEHAVIOR_URI, app_behaviors, resource_root
+
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
 MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
@@ -159,9 +161,9 @@ class BundleManager:
             previous = next((row for row in metadata if row.get("uri") == uri and row.get("role") == role and (role != "standalone" or row.get("name") == name)), {})
             return {**copy.deepcopy(previous), "id": previous.get("id") or uuid.uuid5(uuid.NAMESPACE_URL, role + ":" + uri + (":" + name if role == "standalone" else "")).hex,
                     "uri": uri, "name": previous.get("name", name) if role == "behavior" else name, "role": role, "enabled": True}
-        for uri in settings.get("bundle", {}).get("app", []):
+        for uri in app_behaviors(settings):
             if isinstance(uri, str):
-                rows.append(entry(uri, "behavior", uri.split("/")[-1]))
+                rows.append(entry(uri, "behavior", "Unified shell" if uri == SHELL_BEHAVIOR_URI else uri.split("/")[-1]))
         for name, uri in settings.get("bundle", {}).get("added", {}).items():
             if isinstance(uri, str):
                 rows.append(entry(uri, "standalone", name))
@@ -263,7 +265,8 @@ class BundleManager:
                 config = load_config(workspace, home=self.home)
                 path = config.registry_home / 'registry.json'
                 registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
-                names = {name for name,row in registry.items() if isinstance(row,dict) and row.get('is_root')}
+                names = {name for name,row in registry.items() if isinstance(row,dict) and row.get('is_root')
+                         and row.get('uri') != resource_root().as_uri()}
                 names.update(config.registrations)
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
                 return {"bundles": self.public_entries(settings), "registeredBundles":[{"name":name,"value":name} for name in sorted(names-disabled)]}
