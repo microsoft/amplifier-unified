@@ -17,6 +17,8 @@ import uuid
 
 import yaml
 
+from .builtin_behaviors import SHELL_BEHAVIOR_URI, app_behaviors
+
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
 MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
@@ -162,9 +164,9 @@ class BundleManager:
             previous = next((row for row in metadata if row.get("uri") == uri and row.get("role") == role and (role != "standalone" or row.get("name") == name)), {})
             return {**copy.deepcopy(previous), "id": previous.get("id") or uuid.uuid5(uuid.NAMESPACE_URL, role + ":" + uri + (":" + name if role == "standalone" else "")).hex,
                     "uri": uri, "name": previous.get("name", name) if role == "behavior" else name, "role": role, "enabled": True}
-        for uri in settings.get("bundle", {}).get("app", []):
+        for uri in app_behaviors(settings):
             if isinstance(uri, str):
-                rows.append(entry(uri, "behavior", uri.split("/")[-1]))
+                rows.append(entry(uri, "behavior", "Unified shell" if uri == SHELL_BEHAVIOR_URI else uri.split("/")[-1]))
         for name, uri in settings.get("bundle", {}).get("added", {}).items():
             if isinstance(uri, str):
                 rows.append(entry(uri, "standalone", name))
@@ -274,6 +276,7 @@ class BundleManager:
                 available = set(registry) | set(config.registrations)
                 names = STANDALONE_PROFILES & available
                 names.update(config.settings.get('bundle', {}).get('added', {}))
+
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
                 from .bundle_selection import catalog_entry
                 return {"bundles": self.public_entries(settings), "registeredBundles":[catalog_entry(name) for name in sorted(names-disabled)]}

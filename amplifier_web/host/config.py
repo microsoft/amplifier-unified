@@ -144,7 +144,8 @@ class HostConfig:
 
     @property
     def app_bundles(self):
-        return self.settings.get("bundle", {}).get("app", [])
+        from ..builtin_behaviors import app_behaviors
+        return app_behaviors(self.settings)
 
     @property
     def providers(self):

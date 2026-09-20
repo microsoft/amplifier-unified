@@ -10,6 +10,7 @@ def test_discovery_rejects_unsafe_sources(uri):
 @pytest.mark.asyncio
 async def test_registration_order_disable_remove_persist(tmp_path):
     manager = BundleManager(tmp_path)
+    manager.store.update(tmp_path, "global", lambda settings: settings.update(bundle={"app": []}))
     args = {'workspace':str(tmp_path)}
     a = (await manager.perform('bundles.add', {**args,'uri':'foundation:a','name':'A'}))['bundles'][0]
     b = (await manager.perform('bundles.add', {**args,'uri':'foundation:b','name':'B'}))['bundles'][1]
@@ -128,6 +129,7 @@ async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_
 @pytest.mark.asyncio
 async def test_drag_reorder_moves_atomically_and_persists_composition_order(tmp_path):
     manager=BundleManager(tmp_path);args={'workspace':str(tmp_path)}
+    manager.store.update(tmp_path, "global", lambda settings: settings.update(bundle={"app": []}))
     for name in ['a','b','c']:
         result=await manager.perform('bundles.add',{**args,'uri':'foundation:'+name,'name':name})
     a,b,c=result['bundles']
