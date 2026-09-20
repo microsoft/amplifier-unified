@@ -13,10 +13,30 @@
         "Inspect attributed usage and enforce supported model-call budgets, with optional native provider direction and compaction where available."
       ],
       "notices": [
-        "Work features require their corresponding updated modules. Persistent computation requires a trusted execution configuration; creating a runtime does not relax tool permissions.",
-        "Schedules require an available capable host. Budgets cover recorded supported model-call boundaries, not all account spending or already-started work.",
-        "Native provider features depend on model and account support. Browser visual capture does not provide a native foreground-app bridge.",
-        "Interrupted work with an unknown result is retained for inspection. Restart does not automatically rerun commands or computation cells."
+        {
+          "id": "work-module-requirements",
+          "title": "Review Work modules and execution settings",
+          "detail": "Work features require their corresponding updated modules. Persistent computation requires a trusted execution configuration; creating a runtime does not relax tool permissions.",
+          "action": "Update the corresponding Work modules and review trusted execution settings before using these features."
+        },
+        {
+          "id": "schedule-and-budget-limits",
+          "title": "Keep scheduling and budget limits in view",
+          "detail": "Schedules require an available capable host. Budgets cover recorded supported model-call boundaries, not all account spending or already-started work.",
+          "action": "Keep the host available for scheduled work and inspect recorded usage alongside account usage."
+        },
+        {
+          "id": "provider-and-visual-support",
+          "title": "Check provider and visual-context support",
+          "detail": "Native provider features depend on model and account support. Browser visual capture does not provide a native foreground-app bridge.",
+          "action": "Check the selected model's supported features and explicitly select browser content when sharing visual context."
+        },
+        {
+          "id": "interrupted-work-results",
+          "title": "Inspect interrupted work before retrying",
+          "detail": "Interrupted work with an unknown result is retained for inspection. Restart does not automatically rerun commands or computation cells.",
+          "action": "Inspect the saved operation state and any external effects before deciding whether to retry."
+        }
       ]
     },
     {
