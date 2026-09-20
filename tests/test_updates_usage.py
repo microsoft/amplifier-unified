@@ -1,7 +1,9 @@
 """Usage evidence follows shared runtime settings without treating history as errors."""
 import copy
+import asyncio
 import json
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -9,6 +11,48 @@ from test_updates_cache import cached, repository, service
 from amplifier_web.host import config
 from amplifier_web.shared_settings import settings_paths
 from amplifier_web.updates import configured_sources
+
+
+@pytest.mark.parametrize('historical,read_only', [(True, True), (True, False), (False, True)])
+async def test_only_explicit_read_only_native_history_skips_runtime_id_validation(service, tmp_path, historical, read_only):
+    service.state['sessions'].append({
+        'id': 'legacy-view', 'nativeIdentity': 'old-child_foundation:file-ops',
+        'workspace': str(tmp_path), 'bundle': 'unregistered-historical-composition',
+        'historyManaged': historical,
+        'historyReadOnlyReason': 'Worker sessions are read-only.' if read_only else None,
+    })
+    before = copy.deepcopy(service.state)
+    _, incomplete = configured_sources(service)
+    assert incomplete == (not (historical and read_only))
+    assert service.state == before
+
+
+async def test_source_classification_leaves_event_loop_free_and_uses_detached_selection_snapshot(service, monkeypatch):
+    main_thread = threading.get_ident()
+    entered, release = threading.Event(), threading.Event()
+    before = service.state['settings']['bundle']
+    service.state['sessions'].append({'id': 'original', 'workspace': '/original', 'bundle': 'original'})
+    service.state['workspaces'].append({'path': '/original'})
+    captured = {}
+    def classify(snapshot):
+        entered.set()
+        assert threading.get_ident() != main_thread
+        assert release.wait(3), 'The event loop must remain available during settings reads'
+        captured.update(snapshot.state)
+        return {}, False
+    monkeypatch.setattr('amplifier_web.updates.configured_sources', classify)
+    pending = asyncio.create_task(service.update_manager.inventory_sources())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        service.state['settings']['bundle'] = 'changed'
+        service.state['sessions'][-1]['bundle'] = 'changed'
+        service.state['workspaces'][-1]['path'] = '/changed'
+    finally:
+        release.set()
+        await pending
+    assert captured['settings']['bundle'] == before
+    assert captured['sessions'][-1]['bundle'] == 'original'
+    assert captured['workspaces'][-1]['path'] == '/original'
 
 
 @pytest.mark.parametrize('identity_field', ['runtimeSessionId', 'nativeIdentity', 'id'])

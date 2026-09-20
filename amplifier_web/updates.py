@@ -14,6 +14,7 @@ import shutil
 import stat
 import time
 import tomllib
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
@@ -89,8 +90,11 @@ def configured_sources(service):
     sources, incomplete = {}, False
     state, home = service.state, service.data_dir
     selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
+    # Native child/legacy history can be viewable without a resumable identity.
+    # Its workspace is still inspected below; it is not a broken root selection.
     selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
-                      for s in state['sessions'])
+                      for s in state['sessions']
+                      if not (s.get('historyManaged') and s.get('historyReadOnlyReason')))
     selections.update((w['path'], None, None) for w in state.get('workspaces', [])
                       if isinstance(w.get('path'), str) and w['path'].strip())
     try:
@@ -409,7 +413,18 @@ class UpdateManager:
 
     async def inventory_sources(self):
         base = foundation_home(self.home)
-        configured, incomplete = configured_sources(self.service)
+        # Capture only selection metadata before yielding. The history catalog
+        # can change while filesystem/settings reads run outside the event loop.
+        state = self.service.state
+        snapshot = SimpleNamespace(data_dir=self.home, state={
+            'settings': {key: state['settings'][key] for key in ('workspace', 'bundle')},
+            'sessions': [{key: row[key] for key in (
+                'id', 'workspace', 'bundle', 'runtimeSessionId', 'nativeIdentity',
+                'historyManaged', 'historyReadOnlyReason') if key in row}
+                for row in state['sessions']],
+            'workspaces': [{'path': row.get('path')} for row in state.get('workspaces', [])],
+        })
+        configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
         rows = []
         for meta in sorted((base/'cache').rglob('.amplifier_cache_meta.json')):
             # Each cache may include nested skills copies. All are app-owned;
