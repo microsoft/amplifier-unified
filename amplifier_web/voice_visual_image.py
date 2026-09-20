@@ -3,9 +3,9 @@ import struct
 import zlib
 
 
-def validate_png(data):
-    if not data.startswith(b'\x89PNG\r\n\x1a\n') or len(data) > 500000:
-        raise ValueError('Use a PNG frame up to 500 KB.')
+def validate_png(data, *, max_bytes=500000, max_dimension=1280):
+    if not data.startswith(b'\x89PNG\r\n\x1a\n') or len(data) > max_bytes:
+        raise ValueError('Use a PNG image within the advertised byte limit.')
     offset, width, height, channels = 8, 0, 0, 0
     compressed = bytearray()
     while offset+12 <= len(data):
@@ -21,7 +21,7 @@ def validate_png(data):
             if kind != b'IHDR' or size != 13:
                 break
             width,height,depth,color,compression,filtering,interlace = struct.unpack('>IIBBBBB',body)
-            if not 1 <= width <= 1280 or not 1 <= height <= 1280 or depth != 8 or color not in (2,6) or compression or filtering or interlace:
+            if not 1 <= width <= max_dimension or not 1 <= height <= max_dimension or depth != 8 or color not in (2,6) or compression or filtering or interlace:
                 break
             channels = 3 if color == 2 else 4
         elif kind == b'IHDR':

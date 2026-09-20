@@ -155,6 +155,16 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
             'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
 
+    async def output_image(request):
+        import base64
+        record=service.outputs.store.read(request.match_info['identity'])
+        try:
+            value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
+        except ValueError as exc:
+            raise AppError(str(exc),409) from None
+        return web.Response(body=base64.b64decode(value['_image']),content_type='image/png',headers={
+            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'; sandbox"})
+
     async def actions(request):
         if request.method == "GET":
             return web.json_response(service.get_actions())
@@ -369,6 +379,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
     app.router.add_get("/api/outputs/{identity}/content", output_content)
+    app.router.add_get("/api/outputs/{identity}/image", output_image)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)

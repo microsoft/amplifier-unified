@@ -25,6 +25,7 @@ def definitions(schema,string):
     return {
         'outputs.list':('List exact saved output relationships without opening or sending anything.',schema({**common,'includeUnlinked':{'type':'boolean'},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':50}},['sessionId'])),
         'outputs.read':('Read bounded immutable content, provenance, lineage and local review comments. External links are references only unless version evidence is supplied.',schema({**identity,'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':4000},'commentOffset':{'type':'integer','minimum':0},'commentLimit':{'type':'integer','minimum':1,'maximum':10}},['sessionId','id'])),
+        'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; an agent call requests typed pixels for its next vision-capable model request. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
         'outputs.review':('Snapshot a bounded read-only local Git diff for review. No changes applied; untracked and binary content excluded. Branch mode resolves existing base and HEAD commits.',schema({**common,**origin,'mode':{'enum':['unstaged','staged','branch']},'base':string(200),'path':string(4000),'title':string(200)},['sessionId','mode'])),
@@ -77,6 +78,19 @@ class Outputs:
             raise ValueError('Saved output content no longer matches its evidence hash.')
         return data
 
+    def image(self,sid,identity,expected_hash):
+        self.app._session(sid)
+        record=self.record(sid,identity)
+        if record.get('sha256')!=expected_hash or record.get('kind') not in {'file','dataset'}:
+            raise ValueError('Choose the exact saved file snapshot and content hash.')
+        data=self.content(record)
+        if data is None:raise ValueError('This output has no saved image bytes.')
+        from .voice_visual_image import validate_png
+        width,height=validate_png(data,max_bytes=MAX_FILE,max_dimension=4096)
+        return {'id':identity,'sha256':expected_hash,'title':record['title'],'width':width,'height':height,
+            'mimeType':'image/png','bytes':len(data),'evidence':'immutable-output-snapshot','untrustedData':True,
+            'imageUrl':'/api/outputs/'+identity+'/image','_image':base64.b64encode(data).decode()}
+
     def fork(self,source_id,target):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
@@ -100,6 +114,10 @@ class Outputs:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':
                     return {'accepted':True,'result':self.store.list(session['id'],include_unlinked=args.get('includeUnlinked',False),offset=args.get('offset',0),limit=args.get('limit',20))}
+                if action=='outputs.image':
+                    result=self.image(session['id'],args['id'],args['sha256']);result.pop('_image')
+                    result['imageDelivery']='Agent requests receive typed pixels at the next supported model boundary; this receipt is not pixels.'
+                    return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id']);data=self.content(record)
                     comments=self.store.comments(record['id']);start=args.get('commentOffset',0);count=args.get('commentLimit',5)

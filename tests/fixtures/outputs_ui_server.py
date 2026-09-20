@@ -1,5 +1,6 @@
 """Real host/assets and private Git fixture; no external provider or publication."""
 import asyncio
+import base64
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ async def main(home):
     from aiohttp import web
     from amplifier_web.server import create_app
     root=home/'workspace';root.mkdir();(root/'report.txt').write_text('Original report bytes.')
+    (root/'page.png').write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'))
     def git(*args):subprocess.run(['git','-C',str(root),*args],check=True,capture_output=True)
     git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.test')
     (root/'design.txt').write_text('before\n');git('add','design.txt');git('commit','-qm','Initial');(root/'design.txt').write_text('after\n')
