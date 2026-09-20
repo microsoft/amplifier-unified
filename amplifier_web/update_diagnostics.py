@@ -81,7 +81,8 @@ class UpdateDiagnostics:
         else:self.state.pop('revision',None)
         return identity
 
-    def record(self,phase,status,**facts):
+    def record(self,phase,status,*,preserve_last_failure=False,**facts):
+        prior_failure=self.state.get('lastFailure') if preserve_last_failure else None
         event={'id':uuid.uuid4().hex,'at':time.time(),'attemptId':self.state.get('attemptId'),
                'kind':self.state.get('kind'),'phase':phase,'status':status}
         if self.state.get('revision'):event['revision']=self.state['revision']
@@ -99,7 +100,8 @@ class UpdateDiagnostics:
             if probe:event['probe']=probe
         self.state['events']=(self.state['events']+[event])[-50:]
         self.state['latest']=event
-        if status in {'failed','interrupted'}:self.state['lastFailure']=event
+        if status in {'failed','interrupted'}:
+            self.state['lastFailure']=prior_failure if prior_failure is not None else event
         collector=getattr(self.manager.service,'diagnostics',None)
         delivered=False
         if collector:
