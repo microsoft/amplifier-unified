@@ -428,8 +428,13 @@ class EventLogView:
                     (node.get('sessionId') == row.get('sessionId') or node.get('sessionId') in aliases and row.get('sessionId') in aliases)
                     for node in nodes):
                     continue  # Ambiguous parallel IDs: show the canonical calls, never both sets.
-                nodes.append({key: value for key, value in row.items() if key not in
-                              {'input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields'}})
+                if row.get('liveObservation'):
+                    nodes.append({key: value for key, value in row.items() if key not in
+                                  {'input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields'}})
+                else:
+                    # Do not erase older saved history when its native log is
+                    # incomplete. This is pre-existing data, never a new capture.
+                    nodes.append(copy.deepcopy(row))
         nodes.sort(key=lambda row: (row.get('startedAt') or 0, row.get('eventOrder', 0)))
         for turn in turns.values():
             members = [row for row in nodes if row.get('turnId') == turn['id']]

@@ -206,3 +206,15 @@ def test_native_model_keeps_observed_identity_across_repeated_reads(source):
     for _ in range(3):
         session['execution']=view.read(session)
         assert [row['id'] for row in session['execution']['nodes']]==['observed-stable-id']
+
+
+def test_unmatched_legacy_history_is_preserved_when_log_is_incomplete(source,tmp_path):
+    session,path=source
+    legacy={'id':'legacy','kind':'tool','turnId':'old','input':'original saved input','output':'original saved result','phase':'completed'}
+    session['execution']={'nodes':[legacy],'turns':[{'id':'old','anchorMessageId':'user'}]}
+    append(path,'tool:post',{'tool_call_id':'new','result':'new log result'})
+    session['execution']=EventLogView(None).read(session)
+    persist(tmp_path/'app',{'sessions':[session]}, {})
+    saved=json.loads((path.parent.parent/'unified/view.json').read_text())
+    retained,=saved['execution']['nodes']
+    assert retained['input']==legacy['input'] and retained['output']==legacy['output']

@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.6",
+      "title": "Work details from your event log",
+      "changes": [
+        "Expanded work reads recorded tool inputs and results from native event logs, without another redaction pass, new payload copies or the old Tool completed placeholder.",
+        "Work sections appear between assistant replies in their actual order. Brief groups stay open, and actions no longer have nested disclosure controls or duplicate raw input/results.",
+        "Code blocks show all content through 15 lines, then preview the first 10. Copy keeps the complete content, and unavailable reads offer retry.",
+        "Choose time only, time with tokens and cost, or those details with tool/model call counts in Appearance. Group totals include earlier action pages and count cache writes once.",
+        "Live timing and usage survive delayed log writes and reloads. Existing native logs and historical saved content remain intact."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.5",
       "title": "Keep conversations ready after ecosystem updates",
       "changes": [
@@ -118,8 +130,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
         }
       ]
     },
@@ -139,7 +151,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
       ],
       "notices": []
     },
@@ -158,7 +170,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [
