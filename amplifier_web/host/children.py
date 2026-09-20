@@ -76,6 +76,9 @@ class StandaloneHostAdapter(HostAdapter):
     async def prepare_execution(self, loop, coordinator, providers):
         if coordinator and coordinator.get_capability("live.child_mode") == "finite":
             return None, providers, coordinator.session_id
+        if coordinator:
+            from ..native_provider import install_native
+            providers = await install_native(loop, coordinator, providers)
         return coordinator.get_capability("live.runtime") if coordinator else None, providers, None
 
     def finite_finished(self, scope, coordinator, status, result=""):

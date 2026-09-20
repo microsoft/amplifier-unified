@@ -72,6 +72,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return "runtime.generation", {**base, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
                 "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
+    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
+        return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
+            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}

@@ -1887,6 +1887,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith('native.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Native provider actions belong to the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
             if args['action'].startswith(('operations.', 'kernels.')):
