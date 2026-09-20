@@ -128,3 +128,14 @@ Client presentation is separately rebuildable app data. This change does not
 implement event-log-only runtime recovery, compaction replay, log pruning,
 execution migration to another machine, or multi-device voice-call arbitration.
 Those require their own contracts; Foundation ownership stays configurable.
+
+### Drafts before a conversation exists
+
+An attached client may save its empty-composer draft with
+`view.update {sessionId: null, patch: {draft: "..."}}`. The explicit null target
+means its private pre-conversation draft, even if selection changes before the
+request arrives. This does not create a conversation or start work. The draft
+survives reload and host restart; creating the first conversation carries it
+forward. A string targets that conversation; omitting the target uses the
+client's current selection. Other session commands still require string IDs
+when a target is supplied.

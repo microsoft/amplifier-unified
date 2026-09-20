@@ -30,6 +30,37 @@ def snapshot(service, client):
     with service.clients.bind(client):
         return service.browser_state()
 
+async def test_pre_conversation_drafts_are_private_and_survive_reload_and_restart(tmp_path):
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    for identity in ("browser-a", "browser-b"):
+        service.clients.attach(identity)
+    for identity, draft in (("browser-a", "Private first draft"), ("browser-b", "Other draft")):
+        await command(service, identity, "view.update", {"sessionId": None, "patch": {"draft": draft}})
+    assert snapshot(service, "browser-a")["sessions"] == []
+    assert snapshot(service, "browser-a")["view"]["draft"] == "Private first draft"
+    assert snapshot(service, "browser-b")["view"]["draft"] == "Other draft"
+    service.clients.attach("reloaded", resume="browser-a")
+    assert snapshot(service, "reloaded")["view"]["draft"] == "Private first draft"
+    await service.close()
+    restored = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    try:
+        assert snapshot(restored, "reloaded")["view"]["draft"] == "Private first draft"
+        assert snapshot(restored, "browser-b")["view"]["draft"] == "Other draft"
+        await command(restored, "reloaded", "session.create", {})
+        selected = snapshot(restored, "reloaded")
+        sid = selected["selectedSessionId"]
+        assert selected["view"]["draft"] == "Private first draft"
+        assert restored.clients.records["reloaded"]["drafts"].get("", "") == ""
+        # A delayed empty-composer autosave must not overwrite the new chat.
+        await command(restored, "reloaded", "view.update", {"sessionId": None, "patch": {"draft": "Late empty draft"}})
+        assert snapshot(restored, "reloaded")["view"]["draft"] == "Private first draft"
+        assert restored.clients.records["reloaded"]["drafts"][sid] == "Private first draft"
+        assert snapshot(restored, "browser-b")["selectedSessionId"] is None
+        assert snapshot(restored, "browser-b")["view"]["draft"] == "Other draft"
+        assert restored.runtime.sent == []
+    finally:
+        await restored.close()
+
 
 async def test_views_drafts_selection_and_device_effects_are_independent(live):
     service, first, second = live

@@ -25,6 +25,20 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeEditable();
  await expect(page.getByText('Sending message…',{exact:true})).toHaveCount(0);
+ // Pause before sending so the empty composer's debounced autosave really runs.
+ const autosaved=page.waitForResponse(response=>{
+  const request=response.request();
+  return new URL(response.url()).pathname==='/api/actions'&&request.method()==='POST'&&
+   request.postDataJSON()?.action==='view.update'&&Object.hasOwn(request.postDataJSON()?.args?.patch||{},'draft');
+ });
+ await composer.fill('Unsent before any conversation');
+ const saved=await autosaved;
+ assert.equal(saved.status(),200,await saved.text());
+ await expect(page.getByRole('alert')).toHaveCount(0);
+ assert.equal((await page.evaluate(()=>window.amplifier.getState())).sessions.length,0);
+ await page.reload();
+ await expect(composer).toHaveValue('Unsent before any conversation');
+ assert.ok(!(await page.evaluate(()=>window.amplifier.getState())).selectedSessionId);
  // The first send creates its conversation. Hold its HTTP acknowledgement to
  // exercise the genuine pending-send state as well as the empty idle state.
  let release;
@@ -55,5 +69,5 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  assert.deepEqual(errors,[]);
- console.log('Empty host passed: editable first launch, no false sending status, first send creates one chat, pending send feedback, draft and selection after reload; synthetic runtime only.');
+ console.log('Empty host passed: debounced draft before any conversation, no validation errors, draft survives reload, first send creates one chat, pending send feedback, draft and selection after reload; synthetic runtime only.');
 }finally{await browser?.close();fixture.kill();}

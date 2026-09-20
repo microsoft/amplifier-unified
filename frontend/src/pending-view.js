@@ -9,7 +9,7 @@ export function createPendingView(){
   apply(state){
    if(!state||!patches.size)return state;
    let view={...state.view};
-   for(const {patch,sessionId} of patches.values()){const values={...patch};if(sessionId&&sessionId!==state.selectedSessionId)delete values.draft;view={...view,...values}};
+   for(const {patch,sessionId} of patches.values()){const values={...patch};if(sessionId!==undefined&&sessionId!==state.selectedSessionId)delete values.draft;view={...view,...values}};
    return {...state,view};
   },
  };
