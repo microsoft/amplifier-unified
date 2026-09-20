@@ -54,11 +54,17 @@ def reset_controls(value, *, reset_model=False):
 
 
 async def preview(controls, workspace, bundle):
+    checked, _ = await inspect_bundle(controls, workspace, bundle)
+    return checked
+
+
+async def inspect_bundle(controls, workspace, bundle):
     from .host.config import load_config
-    from .host.session import load_root_bundle, live_plan
+    from .host.session import load_root_bundle, live_plan, ResolvedRoot
     from .runtime_controls import public_config, validate_plan, identity
     config = load_config(workspace, session_id=controls.session.session_id)
-    _, loaded, resolved = await load_root_bundle(config, bundle)
+    root = await load_root_bundle(config, bundle)
+    _, loaded, resolved = root
     plan, _ = live_plan(loaded.to_mount_plan())
     validate_plan(plan)
     current = controls.configuration()['plan']
@@ -84,7 +90,7 @@ async def preview(controls, workspace, bundle):
             'changes': changes, 'modelCompatible': compatible,
             'selection': public_config(selection), 'instructionsChange': True,
             'overridesReset': controls.state_path().with_name('configuration.json').exists(),
-            'appCapabilities': list(config.app_bundles)}
+            'appCapabilities': list(config.app_bundles)}, ResolvedRoot(config, bundle, root)
 
 
 class BundleTransaction:
@@ -140,13 +146,14 @@ class BundleTransaction:
 async def switch(worker, args):
     """Called under the worker's command lock and Foundation writer ownership."""
     worker.controls.require_idle()
-    checked = await preview(worker.controls, worker.workspace, args['bundle'])
+    checked, resolved_root = await inspect_bundle(worker.controls, worker.workspace, args['bundle'])
     expected = getattr(worker, 'bundle_preview', None)
-    if not expected or expected['previewId'] != args.get('previewId') or any(
-            checked[key] != expected[key] for key in ('bundle', 'fingerprint', 'selection')):
+    if args.get('previewId') and (not expected or expected['previewId'] != args['previewId'] or any(
+            checked[key] != expected[key] for key in ('bundle', 'fingerprint', 'selection'))):
         raise ValueError('The bundle selection changed. Preview it again before applying.')
     if not checked['modelCompatible'] and not args.get('resetModel'):
-        raise ValueError('The selected model is unavailable in this bundle. Choose Use bundle model before switching.')
+        worker.bundle_preview = {**checked, 'previewId': str(uuid.uuid4())}
+        return {'requiresModelChoice': True, 'preview': worker.bundle_preview}
     await worker.controls.checkpoint()
     old_config = copy.deepcopy(worker.start_config)
     journal = BundleTransaction(worker.home, worker.workspace, worker.runtime.session_id)
@@ -168,7 +175,8 @@ async def switch(worker, args):
         journal.select(args['bundle'], reset_model=args.get('resetModel', False))
         new_config = {**old_config, 'bundle': args['bundle']}
         new_config.pop('selection', None)  # The current pin is in control-state.json.
-        await asyncio.wait_for(worker.start(new_config, raise_errors=True, recover_bundle=False), 600)
+        await asyncio.wait_for(worker.start(new_config, raise_errors=True, recover_bundle=False,
+                                            resolved_root=resolved_root), 600)
         journal.commit()
         worker.bundle_preview = None
         return {'bundle': args['bundle'], 'configuration': worker.controls.configuration(),
