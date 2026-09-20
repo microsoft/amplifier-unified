@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.3",
+      "title": "Canvas within reach",
+      "changes": [
+        "Open or close Canvas from a stable toggle at the far right of the top toolbar. Its active state follows the panel, and its icon follows the selected Canvas side.",
+        "Customize appearance, What the agent sees and Send feedback are grouped under More app options, with feedback attention indicators, keyboard navigation and focus return.",
+        "Narrow screens use accessible icon controls with touch targets. Saved artifacts, conversation drafts and unsaved Canvas edits retain the same shared user and agent protections."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.2",
       "title": "Keep Work and its ecosystem current",
       "changes": [
