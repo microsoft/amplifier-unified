@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 import uuid
 
+from .model_selection import inherited_selection
 from amplifier_module_loop_live.host import HostAdapter
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
@@ -358,19 +359,6 @@ class Children:
             row["status"] = "stopping"
         self._emit(row)
         return {"accepted": True, "sessionId": identity, "action": action, "inputId": command.id, "completed": False, "effects": "not_rolled_back"}
-
-
-def inherited_selection(parent, overlay, preferences, saved=None):
-    """Snapshot an opted-in parent's UI model choice unless a specialist wins."""
-    if preferences or overlay.get("providers") or overlay.get("model_role"):
-        return None
-    if saved and saved.get("effective_selection"):
-        return copy.deepcopy(saved["effective_selection"])
-    loop = parent.coordinator.get("orchestrator")
-    if not (getattr(loop, "config", {}) or {}).get("inherit_effective_model"):
-        return None
-    selected = getattr(loop, "root_provider", None)
-    return copy.deepcopy(getattr(selected, "selection", None))
 
 
 class PersistentDelegate:

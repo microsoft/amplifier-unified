@@ -18,8 +18,9 @@ const context=await browser.newContext({viewport:{width:1440,height:1050},extraH
 const page=await context.newPage(),errors=[];
 page.on('pageerror',error=>errors.push(error.message));
 const base=`http://127.0.0.1:${port}`;
+let actionClientId;
 const api=async(path,body)=>{
- const response=await context.request.fetch(base+path,{method:body===undefined?'GET':'POST',data:body});
+ const response=await context.request.fetch(base+path,{method:body===undefined?'GET':'POST',data:body,headers:actionClientId?{'X-Amplifier-Client':actionClientId}:{}});
  const data=await response.json();if(!response.ok())throw Error(data.error||JSON.stringify(data));return data;
 };
 const agent=async(action,args)=>api('/api/fixture/agent',{args:{action,args}});
@@ -27,7 +28,8 @@ const action=async(action,args)=>api('/api/actions',{action,args});
 try{
  await page.goto(base);
  await page.locator('[data-shell-instance="chats"] .a-nav-chat').first().waitFor();
- const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
+ let clientId=await page.evaluate(()=>window.amplifier.shellClientId);
+ actionClientId=clientId;
  const inspect=()=>action('shell.inspect',{clientId}).then(r=>r.result);
  const original=(await inspect()).composition;
  const info=await api('/api/fixture/info');
@@ -141,6 +143,8 @@ try{
  await page.getByText('Shell controls',{exact:true}).click();
  await page.getByRole('button',{name:'Restore default shell',exact:true}).click();
  await page.waitForURL(base+'/');
+ await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
+ clientId=await page.evaluate(()=>window.amplifier.shellClientId);actionClientId=clientId;
  await page.locator('[data-shell-instance="chats"] .a-nav-chat').first().waitFor();
  assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),persisted);
  await page.getByRole('button',{name:'Customize appearance'}).click();

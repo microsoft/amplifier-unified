@@ -170,3 +170,125 @@ async def test_client_state_is_not_an_authentication_bypass(authenticated_client
     response = await client.post("/api/clients/attach", json={"clientId": "not-authenticated"})
     assert response.status in {401, 403}
     assert "not-authenticated" not in app["service"].clients.records
+
+
+async def test_delayed_send_survives_navigation_disconnect_and_late_drafts(live):
+    service, first, second = live
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.runtime.send
+    async def delayed(*args):
+        entered.set()
+        await release.wait()
+        await original(*args)
+    service.runtime.send = delayed
+    await command(service, "browser-a", "session.select", {"id": first})
+    await command(service, "browser-a", "view.update", {"patch": {"draft": "Sent from first"}})
+    task = asyncio.create_task(command(service, "browser-a", "conversation.send",
+        {"text": "Sent from first"}, command_id="slow-input"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await command(service, "browser-a", "session.select", {"id": second})
+        await command(service, "browser-a", "view.update", {"sessionId": second, "patch": {"draft": "Keep second"}})
+        await command(service, "browser-b", "session.select", {"id": first})
+        await command(service, "browser-b", "view.update", {"patch": {"draft": "Keep other device"}})
+    finally:
+        release.set()
+        await task
+    assert service.runtime.sent[0][0] == first
+    assert snapshot(service, "browser-a")["view"]["draft"] == "Keep second"
+    await command(service, "browser-a", "session.select", {"id": first})
+    assert snapshot(service, "browser-a")["view"]["draft"] == ""
+    assert snapshot(service, "browser-b")["view"]["draft"] == "Keep other device"
+
+
+async def test_concurrent_approval_answers_accept_only_one(live):
+    service, first, _ = live
+    accepted = []
+    async def approve(*args):
+        accepted.append(args)
+    service.runtime.approval = approve
+    await service.on_runtime_event("approval.requested", {"sessionId": first, "id": "permission", "prompt": "Allow tool?"})
+    outcomes = await asyncio.gather(*[
+        command(service, client, "approval.respond", {"sessionId": first, "id": "permission", "decision": decision},
+                command_id="answer-" + client)
+        for client, decision in (("browser-a", "allow"), ("browser-b", "deny"))
+    ], return_exceptions=True)
+    await asyncio.gather(*service.tasks)
+    assert sum(isinstance(result, AppError) and result.status == 409 for result in outcomes) == 1
+    assert len(accepted) == 1
+    for client in ("browser-a", "browser-b"):
+        with service.clients.bind(client):
+            state = service.browser_state(session_id=first)
+        assert next(s for s in state["sessions"] if s["id"] == first)["approvals"][0]["status"] == accepted[0][2]
+
+
+async def test_attachments_and_canvas_controls_stay_with_client(live):
+    service, first, _ = live
+    for client in ("browser-a", "browser-b"):
+        await command(service, client, "session.select", {"id": first})
+    result = await command(service, "browser-a", "attachment.add",
+        {"sessionId": first, "name": "private.txt", "base64": "cHJpdmF0ZQ=="})
+    attached = next(s for s in result["state"]["sessions"] if s["id"] == first)["draftAttachments"][0]["id"]
+    assert next(s for s in snapshot(service, "browser-b")["sessions"] if s["id"] == first)["draftAttachments"] == []
+    with pytest.raises(AppError):
+        await command(service, "browser-b", "conversation.send", {"sessionId": first, "text": "Other", "attachmentIds": [attached]})
+    await command(service, "browser-a", "canvas.show", {"kind": "text", "title": "Shared artifact", "content": "Shared contents"})
+    identity = snapshot(service, "browser-a")["canvas"]["id"]
+    await command(service, "browser-b", "canvas.select", {"id": identity})
+    await command(service, "browser-a", "canvas.view", {"id": identity, "patch": {"reload": 77}})
+    assert snapshot(service, "browser-b")["canvas"].get("view", {}).get("reload") != 77
+    await command(service, "browser-a", "canvas.tabClose", {"id": identity})
+    a, b = snapshot(service, "browser-a"), snapshot(service, "browser-b")
+    assert not next(row for row in a["canvasArtifacts"] if row["id"] == identity)["tabOpen"]
+    assert next(row for row in b["canvasArtifacts"] if row["id"] == identity)["tabOpen"]
+    assert b["canvas"]["id"] == identity
+
+
+async def test_shell_shares_client_identity_and_does_not_pollute_session_stream(live):
+    service, first, second = live
+    await command(service, "browser-a", "session.select", {"id": first})
+    await command(service, "browser-b", "session.select", {"id": second})
+    for client, selected in (("browser-a", first), ("browser-b", second)):
+        result = await command(service, client, "shell.query", {"clientId": client, "instanceId": "chats"})
+        assert result["result"]["selectedSessionId"] == selected
+    with service.clients.bind("browser-a"):
+        stream = service.subscribe(session_id=first)
+        shell_stream = service.subscribe()
+    try:
+        await command(service, "browser-a", "shell.view.update",
+            {"clientId": "browser-a", "instanceId": "chats", "patch": {"navFilter": "First"}})
+        assert stream.empty()
+        assert shell_stream.get_nowait()["shellClientId"] == "browser-a"
+        service.clients.attach("reloaded-shell", resume="browser-a")
+        result = await command(service, "reloaded-shell", "shell.query", {"clientId": "reloaded-shell", "instanceId": "chats"})
+        assert result["result"]["view"]["navFilter"] == "First"
+        with pytest.raises(AppError, match="different client"):
+            await command(service, "browser-b", "shell.query", {"clientId": "browser-a", "instanceId": "chats"})
+    finally:
+        service.unsubscribe(stream)
+        service.unsubscribe(shell_stream)
+
+
+async def test_python_terminal_adapter_uses_real_http_without_owning_runtime(authenticated_client, tmp_path):
+    from amplifier_web.session_client import SessionClient
+    runtime = Runtime()
+    app = await create_app(tmp_path / "app", workspace=tmp_path, runtime=runtime,
+                           voice=False, background_updates=False, preload_providers=False)
+    transport = await authenticated_client(app)
+    async with SessionClient(str(transport.make_url("")).rstrip("/"), app["control_token"], "python-tui") as client:
+        created = await client.create_session({"title": "Terminal session"}, command_id="create-terminal")
+        identity = created["state"]["selectedSessionId"]
+        assert any(row["id"] == identity for row in (await client.sessions())["items"])
+        stream = client.snapshots(identity, reconnect=False)
+        assert (await anext(stream))["session"]["id"] == identity
+        await stream.aclose()
+        for _ in range(2):
+            await client.command(identity, "conversation.send", {"text": "Terminal input"}, command_id="terminal-once")
+        await app["service"].on_runtime_event("assistant.message", {"sessionId": identity, "text": "Large 雪" * 40000})
+        stream = client.snapshots(identity, reconnect=False)
+        large = await anext(stream)
+        await stream.aclose()
+        assert large["session"]["messages"][-1]["text"] == "Large 雪" * 40000
+        current = await client.snapshot(identity)
+        assert sum(message["text"] == "Terminal input" for message in current["session"]["messages"]) == 1
+    assert len(runtime.sent) == 1 and runtime.stopped == []

@@ -26,7 +26,8 @@ try{
  const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  const api=(path,body)=>page.evaluate(async([path,body])=>{
-  const response=await fetch(path,body===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const headers={'X-Amplifier-Client':window.amplifier.getState().client.id};
+  const response=await fetch(path,body===undefined?{headers}:{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!response.ok)throw Error(await response.text());return response.json();
  },[path,body]);
  const info=()=>api('/api/fixture/info');

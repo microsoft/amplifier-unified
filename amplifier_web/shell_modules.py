@@ -120,6 +120,10 @@ class ShellModules:
         # Multiplex on the existing transport. A full client reconciliation on
         # every normal state event also repairs a dropped invalidation.
         for queue in self.service.queues:
+            if self.service.queue_sessions.get(queue) is not None:
+                continue
+            if self.service.queue_clients.get(queue) not in {None, identity}:
+                continue
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait({'shellClientId': identity})
@@ -277,6 +281,13 @@ class ShellModules:
         return receipt
 
     async def dispatch(self, action, args, origin, command_id):
+        bound = self.service.clients.current.get()
+        identity = args.get("clientId")
+        if bound is None and identity in self.service.clients.records:
+            with self.service.clients.bind(identity):
+                return await self.dispatch(action, args, origin, command_id)
+        if bound is not None and args.get("clientId", bound) != bound:
+            fail("The shell command targets a different client.", 400)
         # Separate receipts avoid coupling composition CAS to streamed chat
         # revisions. There is no await inside the synchronous commit section.
         fingerprint = hashlib.sha256(encoded([action, args, origin]).encode()).hexdigest()

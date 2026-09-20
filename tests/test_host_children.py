@@ -6,7 +6,7 @@ import pytest
 
 def test_model_selection_inheritance_is_opt_in_and_specialists_win():
     from types import SimpleNamespace
-    from amplifier_web.host.children import inherited_selection
+    from amplifier_web.host.model_selection import inherited_selection
     choice = {"instance": "provider-instance", "model": "chosen-model", "effort": "high"}
     loop = SimpleNamespace(config={"inherit_effective_model": True}, root_provider=SimpleNamespace(selection=choice))
     parent = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: loop))

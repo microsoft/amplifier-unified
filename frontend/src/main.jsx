@@ -88,6 +88,8 @@ function App(){
   latest.current=next;setState(pendingView.current.apply(next));stateListeners.current.forEach(fn=>fn(next));
  },[]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
+  if(action==='view.update'&&Object.hasOwn(args.patch||{},'draft'))args={sessionId:latest.current?.selectedSessionId,...args};
   const pending=action==='view.update'?pendingView.current.add(args.patch||{},args.sessionId):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
   const settleTracking=trackAction();
@@ -98,7 +100,7 @@ function App(){
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
    handleEffects(result.effects);return result;
   };
-  const navigation=['session.select','workspace.select'].includes(action);
+  const navigation=['session.select','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','workspace.select'].includes(args.action));
   const promise=(navigation?navigationQueue.current.then(execute,execute):commandQueue.current.then(execute,execute)).catch(error=>{if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(settleTracking);if(navigation)navigationQueue.current=promise.catch(()=>{});else commandQueue.current=promise.catch(()=>{});return promise;
  },[acceptState,handleEffects]);
  const shell=useShell(state,dispatch,clientId);

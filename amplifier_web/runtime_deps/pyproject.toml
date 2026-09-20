@@ -27,10 +27,10 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-amplifier-module-loop-live = { git = "https://github.com/bkrabach/amplifier-module-loop-live", rev = "3ceb44ee6fb0476461c9b03c4a3e76e866f2f9b1" }
+amplifier-module-loop-live = { git = "https://github.com/bkrabach/amplifier-module-loop-live", rev = "2f08207b1aede0cebd789d86907dd3e4ef2d8fa5" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "695f875c0908f45f8dc78b1fcde80ecddebffd7c" }
-amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "2feefe4ba0c4cb50fc0c6b33648a8ef6a2908820" }
-amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "2d1bdc4d9c1803491fe39820c8d503dd764d32de" }
+amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "603aa6eefacd28367fc886d58eb89de993c58dea" }
+amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6" }
 amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "12fffb6ad2bafb1bb7999ab02245a35e42ca8672" }
 amplifier-module-provider-openai = { git = "https://github.com/microsoft/amplifier-module-provider-openai", rev = "c9b0e8e60702269c7a637875b89d011facfde020" }
 amplifier-module-provider-openai-chatgpt = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt", rev = "b522d4fb57b8c5aebd03cb4cf4eacb7d5e64bd19" }

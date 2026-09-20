@@ -14,7 +14,7 @@ import re
 import time
 
 
-LOCAL_KEYS = frozenset({"view", "selectedSessionId", "selectedWorkspaceId", "canvas", "deviceCommands"})
+LOCAL_KEYS = frozenset({"view", "selectedSessionId", "selectedWorkspaceId", "canvas", "canvasTabs", "deviceCommands"})
 
 
 class ClientState(MutableMapping):
@@ -36,6 +36,9 @@ class ClientState(MutableMapping):
     def __len__(self):
         return len(set(self))
 
+    def copy(self):
+        return dict(self)
+
     def __deepcopy__(self, memo):
         return copy.deepcopy(dict(self), memo)
 
@@ -46,9 +49,11 @@ class ClientViews:
         self.current = ContextVar("amplifier_client", default=None)
         self.records = {}
         self.saved = {}
+        self.dirty = set()
         service.db.execute("CREATE TABLE IF NOT EXISTS client_views (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for identity, value in service.db.execute("SELECT id,value FROM client_views"):
             self.records[identity] = json.loads(value)
+            self.records[identity]["canvasTabs"] = self.records[identity].get("canvasTabs") or {}
             self.saved[identity] = value
 
     @staticmethod
@@ -66,15 +71,6 @@ class ClientViews:
         if resume is not None:
             self.validate(resume)
         if identity not in self.records:
-            if len(self.records) >= 256:
-                active = set(self.service.queue_clients.values()) | {self.current.get(), resume}
-                candidates = [(row.get('updatedAt', 0), key) for key, row in self.records.items() if key not in active]
-                if not candidates:
-                    raise AppError("Too many attached clients. Close an unused client first.", 409)
-                _, oldest = min(candidates)
-                self.records.pop(oldest)
-                self.saved.pop(oldest, None)
-                self.service.db.execute("DELETE FROM client_views WHERE id=?", (oldest,))
             previous = self.records.get(resume)
             if previous:
                 record = copy.deepcopy(previous)
@@ -99,12 +95,20 @@ class ClientViews:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
+            record["canvasTabs"] = record.get("canvasTabs") or {}
             self.records[identity] = record
+            self.dirty.add(identity)
+            if resume:
+                shell = self.service.shell.get("client", resume)
+                if shell:
+                    shell.update(preview=None, reported=None)
+                    self.service.shell.put("client", identity, shell)
         self.reconcile(identity)
         return self.records[identity]
 
     def reconcile(self, identity):
         record = self.records[identity]
+        self.dirty.add(identity)
         sessions = {row["id"]: row for row in self.service._state.get("sessions", [])}
         sid = record.get("selectedSessionId")
         if sid is not None and sid not in sessions:
@@ -113,7 +117,10 @@ class ClientViews:
         workspaces = {row["id"] for row in self.service._state.get("workspaces", [])}
         if record.get("selectedWorkspaceId") not in workspaces:
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
-        record["view"]["draft"] = record.get("drafts", {}).get(record.get("selectedSessionId"), "")
+        draft = record.get("drafts", {}).get(record.get("selectedSessionId"), "")
+        if record["view"].get("draft") != draft:
+            record["view"]["draft"] = draft
+            self.dirty.add(identity)
 
     @contextmanager
     def bind(self, identity):
@@ -131,10 +138,15 @@ class ClientViews:
 
     def state(self, shared):
         identity = self.current.get()
-        return ClientState(shared, self.records[identity]) if identity is not None else shared
+        if identity is not None:
+            self.dirty.add(identity)
+            return ClientState(shared, self.records[identity])
+        return shared
 
     def record(self):
         identity = self.current.get()
+        if identity is not None:
+            self.dirty.add(identity)
         return self.records.get(identity) if identity is not None else None
 
     def draft(self, session_id, text):
@@ -153,6 +165,10 @@ class ClientViews:
         record = self.record()
         if record is None:
             return snapshot
+        snapshot.pop("canvasTabs", None)
+        from .canvas_library import presentation
+        snapshot["canvasArtifacts"] = [{**row, **copy.deepcopy(presentation(self.service.state, row))}
+                                       for row in snapshot.get("canvasArtifacts", [])]
         snapshot["client"] = {"id": self.current.get(), "kind": record["kind"], "protocolVersion": 1,
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
         snapshot["sessions"] = [dict(row) for row in snapshot.get("sessions", [])]
@@ -162,8 +178,9 @@ class ClientViews:
         return snapshot
 
     def save(self):
-        for identity, record in self.records.items():
-            value = copy.deepcopy(record)
+        pending = set(self.dirty)
+        for identity in pending:
+            value = copy.deepcopy(self.records[identity])
             # The artifact store already owns large bodies. A presentation
             # record keeps only the currently selected artifact and controls.
             canvas = value.get("canvas", {})
@@ -176,3 +193,4 @@ class ClientViews:
             if self.saved.get(identity) != encoded:
                 self.service.db.execute("INSERT OR REPLACE INTO client_views VALUES (?,?)", (identity, encoded))
                 self.saved[identity] = encoded
+        self.dirty.difference_update(pending)
