@@ -189,17 +189,35 @@ def merge_web_history(session, incoming):
         cursor = match[0] + 1
         start = next((number + 1 for number in range(len(current) - 1, -1, -1)
                       if current[number].get('nativeIndex') == boundary), len(current))
-    merged = current[:start]
-    for message in current[start:]:
-        match = next((number for number in range(cursor, len(incoming))
+    # Steering inputs are displayed as soon as submitted, but enter the native
+    # transcript at the next model boundary. User/assistant order can therefore
+    # cross. Align each role one-to-one before inserting native-only messages;
+    # otherwise a later user match inserts a second copy of a live reply.
+    matches = {}
+    claimed = set()
+    role_cursors = {}
+    for position, message in enumerate(current[start:], start):
+        role = message.get('role')
+        begin = role_cursors.get(role, cursor)
+        anchor = indexed.get(message.get('nativeIndex'))
+        if anchor and (anchor[1]['role'], anchor[1]['text']) != (role, message.get('text')):
+            raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
+        match = anchor[0] if anchor else next((number for number in range(begin, len(incoming))
                       if (incoming[number]['role'], incoming[number]['text']) ==
-                         (message.get('role'), message.get('text'))), None)
+                         (role, message.get('text'))), None)
         if match is not None:
-            merged.extend(incoming[cursor:match])
+            matches[position] = match
+            claimed.add(match)
+            role_cursors[role] = max(begin, match + 1)
+    merged = current[:start]
+    for position, message in enumerate(current[start:], start):
+        match = matches.get(position)
+        if match is not None:
+            merged.extend(incoming[number] for number in range(cursor, match) if number not in claimed)
             message['nativeIndex'] = incoming[match]['nativeIndex']
-            cursor = match + 1
+            cursor = max(cursor, match + 1)
         merged.append(message)
-    merged.extend(incoming[cursor:])
+    merged.extend(incoming[number] for number in range(cursor, len(incoming)) if number not in claimed)
     for message in merged:
         match=indexed.get(message.get('nativeIndex'))
         if match and (match[1]['role'],match[1]['text'])==(message.get('role'),message.get('text')) and match[1].get('observation'):

@@ -53,6 +53,8 @@ class Worker:
         self.command_lock = asyncio.Lock()
         self.start_config = None
         self.remounting = False
+        self.context_bindings = {}
+        self.context_inputs = []
         if __package__:
             from .ownership import WorkerOwnership
         else:
@@ -88,6 +90,11 @@ class Worker:
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
+        if event.get('type') == 'generation.started':
+            self.context_inputs = []
+        if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
+            if event['input_id'] not in self.context_inputs:
+                self.context_inputs = (self.context_inputs + [event['input_id']])[-8:]
         if self.naming:self.naming.observe(event)
         if self.telemetry:
             self.telemetry.lifecycle(event)
@@ -245,7 +252,26 @@ class Worker:
                 report["fork_context_messages"] = len(messages)
             host = self
             from amplifier_web.app_guidance import install_app_access
-            await install_app_access(self.session.coordinator, host.bridge)
+            def surface_bridge(coordinator):
+                # Workers inherit the originating inputs at assignment, never
+                # another client's later input or another coordinator's receipts.
+                assigned = None if coordinator is host.session.coordinator else list(host.context_inputs)
+                watched = set()
+                async def bridge(operation, args):
+                    ids = host.context_inputs if assigned is None else assigned
+                    if operation.startswith('context.'):
+                        bindings = [host.context_bindings[i] for i in ids if i in host.context_bindings]
+                        if assigned is not None:
+                            if operation == 'context.read':
+                                watched.add(args.get('surfaceId'))
+                            bindings = [{**b, 'targets': [t for t in b.get('targets', []) if t['surfaceId'] in watched]} for b in bindings]
+                            if not bindings:
+                                bindings = [{'clientId': 'detached-worker', 'targets': []}]
+                        args = {**args, '_contextInputs': ids,
+                                '_contextBindings': bindings}
+                    return await host.bridge(operation, args)
+                return bridge
+            await install_app_access(self.session.coordinator, surface_bridge(self.session.coordinator))
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
                 def __getattr__(self, name):
@@ -254,7 +280,11 @@ class Worker:
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
-                        await install_app_access(coordinator, host.bridge)
+                        await install_app_access(coordinator, surface_bridge(coordinator))
+                        from amplifier_web.surface_delivery import SurfaceProvider
+                        delivery = coordinator.get_capability('web.surface_delivery')
+                        runtime, selected, scope = result
+                        return runtime, {name: SurfaceProvider(value, delivery) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing
@@ -488,6 +518,8 @@ class Worker:
                 raise RuntimeError("Session is not ready")
             elif op == "send":
                 from amplifier_module_loop_live.runtime import Input
+                self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
+                self.context_bindings = dict(list(self.context_bindings.items())[-64:])
                 input_id = await self.runtime.submit(Input(
                     "user", data["text"], id=data["input_id"],
                     attachments=tuple(data.get("attachments", [])),

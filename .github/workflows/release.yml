@@ -49,12 +49,21 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
+      - name: Verify typed surface context through Core and loop-live
+        run: |
+          mkdir -p "$RUNNER_TEMP/surface-runtime"
+          cp amplifier_web/runtime_deps/pyproject.toml "$RUNNER_TEMP/surface-runtime/pyproject.toml"
+          uv sync --project "$RUNNER_TEMP/surface-runtime"
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
+      - name: Verify live surface awareness and draft checkpoints
+        working-directory: frontend
+        run: npm run test:surface-context-browser
       - name: Verify settings navigation and retained capabilities
         working-directory: frontend
         run: |
@@ -95,6 +104,9 @@ jobs:
       - name: Verify shared conversation surfaces and isolation
         working-directory: frontend
         run: npm run test:canvas-apps-browser
+      - name: Verify shared drawing, resize and save recovery
+        working-directory: frontend
+        run: npm run test:canvas-drawing-browser
       - name: Verify conversation diagnosis and recovery
         if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
         working-directory: frontend

@@ -45,6 +45,8 @@
     "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
     "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
     "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
+    "test:canvas-drawing-browser": "node tests/canvas-drawing-browser.mjs",
+    "test:surface-context-browser": "node tests/surface-context-browser.mjs",
     "test:activity-feedback-browser": "node tests/activity-feedback-browser.mjs",
     "test:export-browser": "node tests/conversation-export-browser.mjs",
     "test:settings-completeness-browser": "node tests/settings-completeness-browser.mjs",

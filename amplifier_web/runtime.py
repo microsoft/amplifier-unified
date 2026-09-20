@@ -96,7 +96,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **({"inputId": event["input_id"]} if "input_id" in event else {})}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
-                                  "event": kind}
+                                  "event": kind, "errorType": event.get("error_type")}
     if kind in {"tool.pre", "tool.post", "tool.error"}:
         return "runtime.tool", {**base, "tool": event.get("tool"), "callId": event.get("call_id"), "phase": kind[5:]}
     return None
@@ -438,7 +438,9 @@ class RuntimeManager:
 
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id, attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+        return await self._request(session["id"], "send", text=text, input_id=input_id,
+            context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
+            attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
     async def takeover(self, session, emit, expected_owner=None, timeout=30):
         """One deliberate request; a competing successor is never asked to yield."""
