@@ -11,3 +11,6 @@ frontend/public/branding/
 frontend/public/favicon.ico
 frontend/public/licenses/
 frontend/public/sw.js
+
+# Local artifacts from modular shell browser acceptance.
+/output/shell-proof/

@@ -1,0 +1,11 @@
+#amp-one .a-shell-modules {display:flex;flex-direction:column;gap:10px;min-width:0}
+#amp-one .a-shell-instance {min-width:0}
+#amp-one .a-shell-instance[hidden] {display:none}
+#amp-one .a-shell-recovery {font-size:12px;margin-top:16px;padding:8px}
+#amp-one .a-shell-recovery button,#amp-one .a-shell-recovery a {display:block;margin-top:8px}
+#amp-one[data-density="compact"] .a-nav-chat {min-height:30px}
+#amp-one[data-density="compact"] .a-workspace-select {padding-top:4px;padding-bottom:4px}
+/* CSS ordering keeps the actual conversation and iframe nodes mounted. */
+#amp-one.a-chat-shell[data-layout="work"] .a-layout>.a-canvas-panel {order:1}
+#amp-one.a-chat-shell[data-layout="work"] .a-layout>.a-conversation {order:2}
+#amp-one.a-chat-shell[data-layout="work"] .a-canvas-resize {left:auto;right:-9px}

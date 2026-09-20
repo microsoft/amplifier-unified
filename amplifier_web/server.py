@@ -173,7 +173,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             queue = service.subscribe()
             snapshot = service.browser_state()
             while True:
-                await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
+                if "shellClientId" in snapshot:
+                    await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())
+                else:
+                    await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
                 try:
                     snapshot = await asyncio.wait_for(queue.get(), 20)
                 except TimeoutError:
@@ -300,6 +303,25 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/events", events)
     from .live_clients import setup_routes as setup_clients
     setup_clients(app, streams)
+
+    async def shell_state(request):
+        from .shell_modules import IDENTITY
+        from jsonschema import validate, ValidationError
+        client_id = request.query.get('clientId', '')
+        try:
+            validate(client_id, IDENTITY)
+        except ValidationError:
+            raise AppError('A valid shell clientId is required.') from None
+        return web.json_response(service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1'))
+
+    async def shell_package(request):
+        digest = request.match_info['digest']
+        service.shell.manifest(digest)
+        return web.Response(text=service.shell.source(digest), content_type='text/javascript', headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/shell', shell_state)
+    app.router.add_get('/api/shell/packages/{digest}.mjs', shell_package)
+
     if voice:
         from .voice import setup_routes
         service.voice_service = setup_routes(app)

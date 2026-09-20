@@ -20,6 +20,7 @@ class ObservedRuntime:
     def __init__(self):
         self.started = []
         self.sent = []
+        self.jobs = {}
 
     async def start(self, session, emit):
         self.started.append(session['id'])
@@ -28,6 +29,9 @@ class ObservedRuntime:
     async def send(self, session, text, input_id, emit):
         self.sent.append(session['id'])
         await emit('runtime.status', {'sessionId': session['id'], 'status': 'working'})
+        if os.environ.get('AMPLIFIER_SHELL_PROOF') == '1' and text == 'Hold work during shell changes':
+            self.jobs[session['id']] = asyncio.create_task(asyncio.Event().wait())
+            return
         await emit('assistant.message', {'sessionId': session['id'], 'text': 'Fixture reply to a real submitted turn.', 'inputId': input_id})
         await emit('runtime.generation', {'sessionId': session['id'], 'event': 'generation.finished',
                    'generation_id': 'fixture-turn', 'input_ids': [input_id], 'active_job_ids': [], 'disposition': 'manager_turn_finished'})
@@ -40,7 +44,9 @@ class ObservedRuntime:
         pass
 
     async def close(self):
-        pass
+        for task in self.jobs.values():
+            task.cancel()
+        await asyncio.gather(*self.jobs.values(), return_exceptions=True)
 
 
 def native_chat(home, workspace, identity, title, at, *, exists=True, worker=False):
@@ -107,7 +113,7 @@ async def main():
             async def info(request):
                 return web.json_response({'paths': {key: str(value) for key, value in paths.items()},
                     'initialSession': initial, 'quietSession': quiet, 'generation': generation,
-                    'runtimeStarts': runtime.started, 'runtimeSends': runtime.sent, 'state': service.get_state()})
+                    'runtimeJobs': [key for key, task in runtime.jobs.items() if not task.done()], 'runtimeStarts': runtime.started, 'runtimeSends': runtime.sent, 'state': service.get_state()})
 
             async def agent(request):
                 payload = await request.json()

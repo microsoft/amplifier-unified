@@ -1,3 +1,4 @@
+import {shellFor} from './shell-host.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import React,{act as renderAct} from 'react';
@@ -8,8 +9,9 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {AttentionBadge,ActivityPanel,readItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
 const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
-const {WorkspaceRail}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkspaceRail:Rail}=await server.ssrLoadModule('/src/shell-panels.jsx');
 test.after(()=>server.close());
+function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const render=(Component,props)=>renderToStaticMarkup(React.createElement(Component,props));
 test('completion badges roll up across workspaces, collapsed navigation, activity and chat rows',()=>{

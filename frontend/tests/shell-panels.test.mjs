@@ -1,10 +1,12 @@
+import {shellFor} from './shell-host.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {WorkspaceRail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
+const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
+function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const initial=()=>({view:{navExpanded:true},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
@@ -82,7 +84,7 @@ test('chat rename opens the editor for that conversation and submits its new tit
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Rename Another plan'}).props.onClick());
  await renderAct(async()=>root.update(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]})));
- const input=root.root.findByProps({id:'nav-workspace-name'});
+ const input=root.root.findByProps({id:'nav-chats-name'});
  assert.equal(input.props.value,'Another plan');
  await renderAct(async()=>input.props.onChange({target:{value:'Renamed plan'}}));
  await renderAct(async()=>root.root.findByType(ChatRename).findByType('form').props.onSubmit({preventDefault(){}}));
