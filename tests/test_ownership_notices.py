@@ -6,7 +6,7 @@ import pytest
 
 from amplifier_web.runtime import RuntimeManager, SessionInUseError
 from amplifier_web.server import create_app
-from amplifier_web.service import AppService
+from amplifier_web.service import AppError, AppService
 
 OWNER = {'app': 'amplifier-cli', 'hostname': 'fixture-host', 'pid': 123,
          'handoff': {'version': 1, 'transport': 'unix'}}
@@ -101,7 +101,15 @@ async def test_takeover_conflict_stays_inline_and_true_failure_stays_visible(tmp
         await app.dispatch('session.takeover', {'id': sid})
         await asyncio.gather(*app.tasks)
         assert row['error'] == 'Bundle preparation failed'
+        assert row['ownership'] == {'status': 'blocked', 'reason': 'takeover-failed', 'detail': row['error']}
+        with pytest.raises(AppError, match='read-only'):
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Do not bypass the failed takeover'})
         assert app.get_state()['attention']['items'][0]['detail'] == row['error']
+        app.runtime.takeover.side_effect = None
+        await app.dispatch('session.takeover', {'id': sid})
+        await asyncio.gather(*app.tasks)
+        assert row['ownership']['status'] == 'available'
+        assert not row.get('error')
     finally:
         await app.close()
 

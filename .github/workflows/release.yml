@@ -73,6 +73,9 @@ jobs:
       - name: Verify history paging in live conversations
         working-directory: frontend
         run: npm run test:live-history-browser
+      - name: Verify composer ownership and explicit takeover
+        working-directory: frontend
+        run: npm run test:ownership-browser
       - name: Verify unsaved artifact edits survive navigation
         if: ${{ hashFiles('frontend/tests/canvas-dirty-browser.mjs') != '' }}
         working-directory: frontend
