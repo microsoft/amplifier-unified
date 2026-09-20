@@ -85,7 +85,7 @@ def persist(home, session, *, shared_rename=False, expected_revision=None):
         return  # Unified's view retains the title until the first native save.
     source = session.get('titleSource', 'automatic')
     title = session.get('title', '')
-    if title and title not in PLACEHOLDERS:
+    if title and (shared_rename or title not in PLACEHOLDERS):
         store.set_name(title[:200], source='manual' if shared_rename else
                        ('generated' if source == 'generated' else 'fallback'),
                        description=session.get('description'), expected_revision=expected_revision)

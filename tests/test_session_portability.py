@@ -23,6 +23,9 @@ async def test_fallback_is_visible_in_native_metadata_and_reverse_rename_survive
         assert names.read()["name"] == "A useful first prompt"
         assert names.read()["name_source"] == "fallback"
         await app.dispatch("session.rename", {"id": sid, "title": "Web choice"})
+        await app.dispatch("session.rename", {"id": sid, "title": "New conversation"})
+        assert names.read()["name"] == "New conversation"
+        assert names.read()["name_source"] == "manual"
         stale = store.load(sid)[1]
         names.set_name("CLI choice")
         store.save(sid, messages, stale)
