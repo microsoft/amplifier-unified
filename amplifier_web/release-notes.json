@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.4",
+      "title": "Reliable drafts before the first conversation",
+      "changes": [
+        "Typing before the first conversation now saves your draft without a validation error or creating a chat.",
+        "The unsent draft survives reload and stays private to that browser. Creating the first conversation carries the draft forward.",
+        "Delayed draft saves remain attached to their original composer and cannot overwrite a newly selected conversation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.3",
       "title": "Release history and important update notices",
       "changes": [

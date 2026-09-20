@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPendingView} from '../src/pending-view.js';
 
+test('an empty-composer draft stays scoped when a conversation is selected',()=>{
+ const pending=createPendingView();
+ pending.add({draft:'Before any conversation'},null);
+ assert.equal(pending.apply({selectedSessionId:null,view:{draft:''}}).view.draft,'Before any conversation');
+ assert.equal(pending.apply({selectedSessionId:'chat',view:{draft:'This chat'}}).view.draft,'This chat');
+});
+
 test('navigation paints without changing the authoritative snapshot or session data',()=>{
  const pending=createPendingView(),state={revision:1,view:{panel:null},sessions:[{id:'chat',messages:[]}]};
  const token=pending.add({panel:'settings'}),shown=pending.apply(state);

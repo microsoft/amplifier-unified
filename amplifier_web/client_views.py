@@ -88,8 +88,8 @@ class ClientViews:
                             record["drafts"][session["id"]] = session["draft"]
                         if session.get("draftAttachments"):
                             record["attachments"][session["id"]] = copy.deepcopy(session["draftAttachments"])
-                    if record["selectedSessionId"] and record["view"].get("draft"):
-                        record["drafts"][record["selectedSessionId"]] = record["view"]["draft"]
+                    if record["view"].get("draft"):
+                        record["drafts"][record["selectedSessionId"] or ""] = record["view"]["draft"]
                     shared["clientViewsMigrated"] = True
                 else:
                     record["view"]["draft"] = ""
@@ -117,7 +117,9 @@ class ClientViews:
         workspaces = {row["id"] for row in self.service._state.get("workspaces", [])}
         if record.get("selectedWorkspaceId") not in workspaces:
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
-        draft = record.get("drafts", {}).get(record.get("selectedSessionId"), "")
+        # The empty key is the client's pre-conversation draft. Unlike None,
+        # it keeps its identity through JSON persistence and reload.
+        draft = record.get("drafts", {}).get(record.get("selectedSessionId") or "", "")
         if record["view"].get("draft") != draft:
             record["view"]["draft"] = draft
             self.dirty.add(identity)
@@ -151,7 +153,7 @@ class ClientViews:
 
     def draft(self, session_id, text):
         record = self.record()
-        record.setdefault("drafts", {})[session_id] = text
+        record.setdefault("drafts", {})[session_id or ""] = text
         if session_id == record.get("selectedSessionId"):
             record["view"]["draft"] = text
 
