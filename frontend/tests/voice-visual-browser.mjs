@@ -41,5 +41,20 @@ try {
  await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
  await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');assert.deepEqual(errors,[]);
- console.log('Visual voice acceptance passed: synthetic real frames, permission denial, UI and agent action, private saved pixels, preserved draft/selection, no automatic model turn, revoke/end cleanup. No native OS or provider audio claim.');
+ await page.getByRole('button',{name:'Start voice call',exact:true}).click();
+ await page.getByRole('button',{name:'Check desktop host',exact:true}).waitFor();
+ assert.deepEqual((await inspect()).nativeCalls,[]);
+ await page.getByRole('button',{name:'Check desktop host',exact:true}).click();
+ const allow=page.getByRole('button',{name:/Allow foreground snapshots from/});await expect(allow).toBeVisible();
+ assert.deepEqual((await inspect()).nativeCalls,['status']);assert.equal((await inspect()).grant,null);
+ await allow.click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
+ const grant=(await inspect()).grant;assert.equal(grant.source.kind,'native-foreground');assert.equal(grant.source.host.identitySource,'foundation-owner-hostname');
+ await new Promise(r=>setTimeout(r,2100));
+ await page.getByRole('button',{name:'Capture screen',exact:true}).click();
+ await expect.poll(async()=>(await inspect()).receipts.length).toBe(3);
+ const native=(await inspect()).receipts[2];assert.equal(native.nativeForeground,true);assert.equal(native.observation.window.application,'Fixture application');
+ assert.deepEqual((await inspect()).nativeCalls,['status','status','capture']);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent draft');assert.equal((await inspect()).sent.length,0);
+ await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);assert.deepEqual(errors,[]);
+ console.log('Visual voice acceptance passed: synthetic real frames, permission denial, UI and agent action, private saved pixels, preserved draft/selection, no automatic model turn, revoke/end cleanup. Explicit native host check/grant/capture via synthetic backend also passed. No native OS or provider audio claim.');
 } finally {await browser?.close();fixture.kill('SIGTERM')}

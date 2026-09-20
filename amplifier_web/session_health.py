@@ -5,6 +5,19 @@ import re
 
 def failure_details(error, error_type=None):
     """Classify public errors without retaining arbitrary SDK payloads or secrets."""
+    field = (lambda name: error.get(name)) if isinstance(error, dict) else (lambda name: getattr(error, name, None))
+    if field('code') == 'computer_result_not_image':
+        result = {'category': 'computer_capture_stop', 'code': 'computer_result_not_image',
+                  'errorType': 'InvalidRequestError', 'summary': 'The computer tool returned an error or safety stop instead of a usable screenshot.',
+                  'guidance': 'Inspect the original tool result and resolve any safety stop. An explicit recovery copy preserves readable history without replaying the failed call. Recovery does not clear any tool or provider halt.',
+                  'replayed': False, 'retryable': False}
+        identity = field('tool_call_id')
+        if isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', identity):
+            result['toolCallId'] = identity
+        kind = field('result_kind')
+        if isinstance(kind, str) and kind in {'unvalidated_image', 'text_or_invalid_image', 'error', 'structured_result', 'content_blocks', 'unsupported_result'}:
+            result['resultKind'] = kind
+        return result
     text = str(error).lower()
     kind = error_type or type(error).__name__
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
