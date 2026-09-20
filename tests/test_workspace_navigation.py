@@ -35,8 +35,9 @@ def test_folder_index_shows_only_paths_to_roots_and_separates_selection_from_bro
     assert initial['rootPath'] == '/home/me'
     assert initial['path'] == '/home/me/dev'
     assert initial['parentPath'] == '/home/me'
-    assert initial['rows'] == [{'path': '/home/me/dev/app', 'name': 'app', 'workspaceId': 'app',
-                                'chatCount': 1, 'descendantWorkspaceCount': 1, 'canBrowse': True, 'unread': 0}]
+    assert initial['rows'] == [{'path': '/home/me/dev/app', 'parentPath': '/home/me/dev', 'name': 'app', 'workspaceId': 'app',
+                                'chatCount': 1, 'descendantWorkspaceCount': 1, 'canBrowse': True, 'unread': 0,
+                                'recentActivityAt': 0, 'activityCounts': {'attention': 0, 'working': 0, 'unread': 0, 'idle': 1}, 'pathLabel': 'app'}]
     inside = browse(value, navWorkspacePath='/home/me/dev/app')
     assert value['selectedWorkspaceId'] == 'app'
     assert inside['rows'][0]['workspaceId'] is None

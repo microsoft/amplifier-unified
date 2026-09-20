@@ -46,7 +46,7 @@ def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     assert page['scope']=={'mode':'all','workspaceId':None,'filter':'','selectedSessionId':None}
     assert page['items'][0]['workspace']=='/projects/two/shared'
     assert page['items'][0]['pinned'] and not page['items'][2]['pinned']
-    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt'}
+    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt'}
     state['view']['navChatScope']='workspace'
     assert ids(chat_navigation.snapshot(state))==['old-pin','newest','same-first']
 

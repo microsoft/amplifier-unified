@@ -455,7 +455,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 /* Shell surfaces inherit every color from the active single-file skin. */
 #amp-one.a-chat-shell .a-layout{position:relative}
-#amp-one .a-nav-slot{--nav-width:260px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
+#amp-one .a-nav-slot{--nav-width:320px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
 #amp-one .a-nav-slot.is-pinned{flex-basis:var(--nav-width);width:var(--nav-width)}
 #amp-one .a-nav-rail{position:absolute;inset:0 auto 12px 0;width:52px;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:7px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:16px;transition:width .16s ease,box-shadow .16s ease}
 #amp-one .a-nav-slot.is-expanded .a-nav-rail{width:var(--nav-width);box-shadow:8px 10px 30px #18244118}
