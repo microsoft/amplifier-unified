@@ -1,5 +1,5 @@
 import {filterList} from './list-filter.js';
-import {activityFor} from './navigation-presentation.js';
+import {activityFor,sessionIdentity} from './navigation-presentation.js';
 
 export const CHAT_PAGE_SIZE=100;
 export function visibleWorkspaces(state){
@@ -49,7 +49,7 @@ export function chatPage(state,workspace){
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
- let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,chat.workspace,chat.workspaceName]);
+ let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
  const activityCounts={attention:0,working:0,unread:0,idle:0};
  chats=chats.map(chat=>({...chat,activity:activityFor(chat,state)}));
  for(const chat of chats)activityCounts[chat.activity.kind]++;

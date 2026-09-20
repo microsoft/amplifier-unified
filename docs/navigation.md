@@ -53,3 +53,17 @@ Agents use the same `shell.view.update` and `shell.command` paths as the UI:
 
 Hover state and flyout placement are ephemeral browser presentation. Viewing
 these summaries does not mark an approval, error, or completion as reviewed.
+
+## Session identity
+
+**Session ID** in the flyout and conversation details is the shared native ID used
+by Amplifier CLI and the session directory. Imported CLI sessions also have an
+internal Unified record key; it stays unchanged for selection, pins, artifacts
+and app commands, and is only identified as **App ID** in diagnostic details.
+Unified-created sessions normally use the same UUID for both. Chat search accepts
+the shared ID (including a prefix), as well as existing internal keys.
+
+The CLI's `amplifier session list` is scoped to its current project directory.
+Run it from the full workspace path shown in the flyout, or pass that path using
+`amplifier session list --project /path/to/workspace`. A list from a different
+folder does not determine whether this workspace's session was saved.

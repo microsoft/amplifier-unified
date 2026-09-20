@@ -358,6 +358,29 @@ async def test_python_terminal_adapter_uses_real_http_without_owning_runtime(aut
     assert len(runtime.sent) == 1 and runtime.stopped == []
 
 
+async def test_terminal_adapter_preserves_rejection_in_duplicate_http_receipt(authenticated_client, tmp_path):
+    from amplifier_web.session_client import SessionClient, SessionClientError
+    from amplifier_web.runtime import SessionInUseError
+    class LockedRuntime(Runtime):
+        async def send(self, *args):
+            self.sent.append(args)
+            raise SessionInUseError({'app':'fixture-cli'})
+    runtime = LockedRuntime()
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=runtime,
+                           voice=False, background_updates=False, preload_providers=False)
+    transport = await authenticated_client(app)
+    async with SessionClient(str(transport.make_url('')).rstrip('/'), app['control_token'], 'retry-tui') as client:
+        created = await client.create_session({}, command_id='create-rejected')
+        identity = created['state']['selectedSessionId']
+        for attempt in range(2):
+            with pytest.raises(SessionClientError) as rejected:
+                await client.command(identity, 'conversation.send', {'text':'Rejected input'}, command_id='rejected-once')
+            assert rejected.value.status == 409 and rejected.value.payload['code'] == 'session_busy'
+            if attempt:
+                assert rejected.value.payload['duplicate'] is True
+    assert len(runtime.sent) == 1
+
+
 async def test_shared_configuration_refresh_invalidates_all_client_views(live):
     from amplifier_web.preferences import SettingsStore
     service, first, _ = live
@@ -375,3 +398,54 @@ async def test_shared_configuration_refresh_invalidates_all_client_views(live):
     created = next(row for row in result["state"]["sessions"] if row["id"] == result["state"]["selectedSessionId"])
     assert created["bundle"] == "changed-by-cli"
     assert snapshot(service, "browser-b")["selectedSessionId"] == first
+
+
+async def test_send_retry_after_client_reload_does_not_repeat_and_preserves_new_identical_draft(live):
+    service, first, _ = live
+    await command(service, 'browser-a', 'session.select', {'id':first})
+    await command(service, 'browser-b', 'session.select', {'id':first})
+    await command(service, 'browser-a', 'view.update', {'patch':{'draft':'Same text typed for the next request'}})
+    args={'sessionId':first,'text':'Same text typed for the next request','preserveDraft':True}
+    await command(service, 'browser-a', 'conversation.send', args, command_id='reload-safe-send')
+    assert snapshot(service,'browser-a')['view']['draft']=='Same text typed for the next request'
+    duplicate=await command(service, 'browser-b', 'conversation.send', args, command_id='reload-safe-send')
+    assert duplicate['duplicate'] is True
+    assert len(service.runtime.sent)==1
+
+
+async def test_tentative_send_receipt_is_not_runtime_confirmation(live):
+    service, first, _ = live
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.runtime.send
+    async def delayed(*args):
+        entered.set()
+        await release.wait()
+        await original(*args)
+    service.runtime.send = delayed
+    args={'sessionId':first,'text':'One input','preserveDraft':True}
+    task=asyncio.create_task(command(service,'browser-a','conversation.send',args,command_id='pending-delivery'))
+    await entered.wait()
+    duplicate=await command(service,'browser-b','conversation.send',args,command_id='pending-delivery')
+    assert duplicate['duplicate'] and duplicate['delivery']=='sending'
+    assert service._session(first)['messages'][-1]['delivery']['status']=='sending'
+    release.set();result=await task
+    assert result['delivery']=='accepted'
+    duplicate=await command(service,'browser-b','conversation.send',args,command_id='pending-delivery')
+    assert duplicate['delivery']=='accepted' and len(service.runtime.sent)==1
+
+
+async def test_uncertain_send_restart_never_replays_input(tmp_path):
+    class Disconnect(Runtime):
+        async def send(self,*args):raise RuntimeError('Disconnected before acknowledgement')
+    service=AppService(tmp_path,Disconnect(),workspace=tmp_path)
+    await service.dispatch('session.create',{})
+    sid=service._session()['id'];args={'sessionId':sid,'text':'Unknown result','preserveDraft':True}
+    with pytest.raises(RuntimeError):await service.dispatch('conversation.send',args,command_id='uncertain')
+    assert service._session()['messages'][-1]['delivery']['status']=='unknown'
+    await service.close()
+    restored=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    try:
+        duplicate=await restored.dispatch('conversation.send',args,command_id='uncertain')
+        assert duplicate['delivery']=='unknown' and duplicate['duplicate']
+        assert restored.runtime.sent==[]
+    finally:await restored.close()

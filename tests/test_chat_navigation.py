@@ -33,6 +33,27 @@ def chat(identity,workspace='one',recent=1,**fields):
 def ids(page):return [row['id'] for row in page['items']]
 
 
+def test_shared_session_id_search_keeps_app_keys_and_workspace_scope():
+    state = state_fixture()
+    shared_id = '11111111-1111-4111-8111-111111111111'
+    state['sessions'] = [chat('internal-one', runtimeSessionId=shared_id),
+                         chat('internal-two', 'two', nativeIdentity=shared_id),
+                         chat('22222222-2222-4222-8222-222222222222')]
+    state['selectedSessionId'] = 'internal-one'
+    state['pinnedSessionIds'] = ['internal-one']
+    state['view'].update(navChatScope='all', navFilter=shared_id[:8])
+    before = deepcopy(state)
+    page = chat_navigation.snapshot(state)
+    assert ids(page) == ['internal-one', 'internal-two']
+    assert page['items'][0]['runtimeSessionId'] == shared_id
+    assert page['items'][0]['pinned'] is True
+    assert state == before
+    state['view']['navChatScope'] = 'workspace'
+    assert ids(chat_navigation.snapshot(state)) == ['internal-one']
+    state['view']['navFilter'] = '22222222'
+    assert ids(chat_navigation.snapshot(state)) == ['22222222-2222-4222-8222-222222222222']
+
+
 def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     state=state_fixture();state['view']['navChatScope']='all'
     state['sessions']=[chat('old-pin',recent=2),chat('newest',recent=90),chat('same-first',recent=50),

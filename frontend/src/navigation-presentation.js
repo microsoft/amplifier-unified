@@ -1,3 +1,9 @@
+// Native imports have a separate app record key. Show the shared disk/CLI ID;
+// keep chat.id unchanged for selection, pinning and other app actions.
+export function sessionIdentity(chat){
+ return chat.runtimeSessionId||chat.nativeIdentity||chat.id;
+}
+
 export function activityFor(chat,state){
  if(chat.activity)return chat.activity;
  if(chat.approvals?.some(row=>row.status==null||row.status==='pending'))return {kind:'attention',label:'Approval requested'};

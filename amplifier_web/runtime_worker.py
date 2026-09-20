@@ -209,6 +209,8 @@ class Worker:
             if recover_bundle:
                 from amplifier_web.bundle_selection import BundleTransaction
                 BundleTransaction(self.home, workspace, config["id"]).restore()
+            from amplifier_web.history_revision import recover_pending
+            recover_pending(self.home, workspace, config['id'])
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -499,6 +501,15 @@ class Worker:
                     self.bundle_preview = {**await asyncio.wait_for(preview(self.controls, self.workspace, arguments['bundle']), 150),
                                            'previewId': str(uuid.uuid4())}
                     result = self.bundle_preview
+                elif data["operation"] == "history.edit":
+                    if self.approvals or self.bridges or not self.runtime.inbox.empty():
+                        raise ValueError('Finish pending interactions before editing history.')
+                    from amplifier_web.history_revision import rewind
+                    result = await rewind(self.controls, arguments)
+                    publish({'type': 'history.revised', **result})
+                    from amplifier_module_loop_live.runtime import Input
+                    await self.runtime.submit(Input('user', arguments['text'], id=arguments['operationId'],
+                        attachments=tuple(arguments.get('attachments', [])), activation=self.activation))
                 elif data["operation"] == "bundle.switch":
                     from amplifier_web.bundle_selection import switch
                     result = await switch(self, arguments)
