@@ -33,7 +33,7 @@ export function useConversationDetail(source,beforeApply){
  const extra=saved?.id===source?.id?saved:null;
  const session=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.messageOffset,before:extra.messages[0].id}:{} )},
-  execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])])},
+  execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:source;
  async function earlier(part){
   if(busy||!session)return;const id=session.id,window=part==='messages'?session.messageWindow:session.executionWindow;
@@ -42,7 +42,7 @@ export function useConversationDetail(source,beforeApply){
    if(current.current!==id)return;
    beforeApply?.();
    setSaved(old=>{const previous=old?.id===id?old:{id,messages:[],nodes:[],turns:[]};return {...previous,[part]:unique([...result.items,...previous[part]]),
-    ...(part==='messages'?{messageOffset:result.offset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...result.turns,...previous.turns])})}});
+    ...(part==='messages'?{messageOffset:result.offset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...result.turns,...previous.turns]),segments:unique([...(result.segments||[]),...(previous.segments||[])])})}});
   }catch(e){if(current.current===id)setError(e.message)}finally{if(current.current===id)setBusy('')}
  }
  const controls=<>{session?.messageWindow?.offset>0&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier('messages')}>Load earlier messages</button>}{session?.executionWindow?.offset>0&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier('nodes')}>Load earlier activity</button>}{busy&&<span role="status">Loading earlier {busy==='nodes'?'activity':'messages'}…</span>}{error&&<p role="alert">{error}</p>}</>;

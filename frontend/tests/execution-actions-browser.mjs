@@ -6,15 +6,15 @@ const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('..
 let log='';fixture.stderr.on('data',chunk=>log+=chunk);
 const port=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out: '+log)),30000);fixture.stdout.on('data',chunk=>{output+=chunk;const line=output.split('\n').find(row=>row.startsWith('{"port":'));if(line){clearTimeout(timer);resolve(JSON.parse(line).port)}});fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+': '+log))})});
 const base=`http://127.0.0.1:${port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
-const control=async body=>(await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)})).json();
+const control=async body=>{const response=await fetch(base+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text()+' '+log);return response.json()};
 await control({op:'inspection'});await control({op:'inspection-actions'});await control({op:'inspection-finish'});
 const browser=await chromium.launch({headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
- const turn=page.locator('[data-turn-id="inspect"]');await turn.locator('.a-execution-turn-line').click();
- const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.locator(':scope > .a-execution-line').click();return row};
+ const turn=page.locator('[data-turn-id="inspect"]').filter({has:page.locator('button.a-execution-turn-line')});await turn.locator('.a-execution-turn-line').click();
+ const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();return row};
  const patch=await open('patch');await patch.locator('.a-execution-diff').waitFor();
  assert.equal(await patch.locator('.a-execution-diff-row.add').count(),2);assert.equal(await patch.locator('.a-execution-diff-row.remove').count(),1);
  assert.match(await patch.innerText(),/result = retry\(operation\)/);
@@ -27,19 +27,19 @@ try{
  const failed=await open('failed');assert.match(await failed.innerText(),/AssertionError: expected committed/);assert.match(await failed.innerText(),/Exit 1/);assert.equal(await failed.locator('.a-execution-warning').count(),1);
  const malformed=await open('malformed');assert.match(await malformed.innerText(),/unknown/);assert.match(await malformed.innerText(),/Invalid task input/);
  const delegated=await open('delegate');assert.match(await delegated.innerText(),/Review the retry test/);
- await delegated.locator('[data-kind="worker"] > .a-execution-line').click();
+ assert.equal(await delegated.locator('[data-kind="worker"] > button').count(),0);
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
- await turn.locator('[data-node-id="legacy"] > .a-execution-line').click();assert.match(await turn.innerText(),/Action content was not saved/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
+ assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/No action content is available in the event log/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
  // Agent-facing view update uses exactly the same expansion path as buttons.
  const expanded=await page.evaluate(()=>window.amplifier.getState().view.executionExpanded);
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:[]}}));
- await page.waitForFunction(()=>!document.querySelector('[data-kind="tool"]'));
+ await page.waitForFunction(()=>!document.querySelector('[data-group-id="inspect@long-answer"] [data-kind="tool"]'));
  await page.evaluate(expanded=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:expanded}}),expanded);
  await patch.locator('.a-execution-diff').waitFor();
  await page.reload();await patch.locator('.a-execution-diff').waitFor();assert.match(await command.innerText(),/12 passed/);
  // Capture the two primary action views together at a reviewable size.
  const ids=await page.evaluate(()=>{const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===state.selectedSessionId);return session.execution.nodes.filter(n=>n.toolCallId==='patch'||n.toolCallId==='command').map(n=>n.id)});
- await page.evaluate(ids=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:['turn:inspect',...ids],navPinned:false,navExpanded:false}}),ids);
+ await page.evaluate(ids=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:['turn:inspect@long-answer',...ids],navPinned:false,navExpanded:false}}),ids);
  await patch.locator('.a-execution-diff').waitFor();await patch.scrollIntoViewIfNeeded();await page.mouse.move(1250,20);
  await page.screenshot({path:'/tmp/amplifier-execution-actions.png'});
  await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:'/tmp/amplifier-execution-actions-dark.png'});
@@ -47,5 +47,5 @@ try{
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await page.screenshot({path:'/tmp/amplifier-execution-actions-mobile.png'});
  assert.deepEqual(errors,[]);
- console.log('Real hook-shaped command/result, patch, read, todo, app and nested worker payloads render; empty, error and legacy states are honest; shared expansion survives reload and mobile fits.');
-}finally{await browser.close();fixture.kill()}
+ console.log('Canonical event-log command/result, patch, read, todo, app and nested worker payloads render; empty, error and legacy states are honest; shared expansion survives reload and mobile fits.');
+}catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

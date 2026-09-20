@@ -329,6 +329,8 @@ class AppService:
         recover_views(self)
         from .automatic_history import AutomaticHistory
         self.history = AutomaticHistory(self)
+        from .event_log_view import EventLogView
+        self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
@@ -1794,6 +1796,7 @@ class AppService:
         self.closed = True
         await self.warmup.close()
         await self.history.close()
+        await self.event_log_view.close()
         if self.update_manager:
             await self.update_manager.close()
         if self.management and self.management.setup_manager:

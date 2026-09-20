@@ -73,12 +73,13 @@ def persist(home, state, cache):
             continue
         path = view_path(home, session)
         # Native event activity is a lazy view, never another persisted event
-        # or message cache. Runtime-owned execution nodes retain their history.
+        # or message cache. Preserve pre-existing legacy records, but never write
+        # new live observations or event-log-derived action bodies here.
         value = {key: item for key, item in session.items() if key != 'historyActivity'}
         if 'execution' in value:
             value['execution'] = {**value['execution'],
-                'nodes': [row for row in value['execution'].get('nodes', []) if not row.get('nativeHistory')],
-                'turns': [row for row in value['execution'].get('turns', []) if not row.get('nativeHistory')]}
+                'nodes': [row for row in value['execution'].get('nodes', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
+                'turns': [row for row in value['execution'].get('turns', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
         text = json.dumps(value, ensure_ascii=False)
         if cache.get(str(path)) != text:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
