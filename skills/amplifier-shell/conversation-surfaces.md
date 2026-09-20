@@ -23,6 +23,8 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    pending note or failed sketch. Preserve failed local strokes when drawing
    again, and preserve pending field values after focus changes. Sliders must
    participate in the same save path.
+   Include completed strokes in that map too; separate form and sketch saves
+   must not independently commit the whole surface's edit version.
 4. Inspect current state and both revisions before acting as the user or
    refining the design. Use `canvas.apps.event` for the same interaction as a
    click. Revision conflicts require reconciliation, not blind overwrite.

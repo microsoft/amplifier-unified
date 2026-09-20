@@ -96,6 +96,9 @@ capture every pending field and the edit version together, then submit one
 `patch(fields, {commit})`. Retain fields edited after that capture and retain
 all failed writes for explicit retry. Do not flush while a pointer stroke is
 unfinished. Render pending field values even after focus moves elsewhere.
+Put completed strokes in that same pending-field map as notes, sliders and
+palette choices. Separate form and sketch save functions must not each commit
+the whole surface's edit version independently.
 Single-field events may omit `commit`; only the complete save acknowledges the
 surface's unfinished work. Every editable field, including sliders, needs this
 save path. Never replace a failed local drawing when starting another stroke.
