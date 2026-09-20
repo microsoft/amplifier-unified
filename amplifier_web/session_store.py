@@ -199,7 +199,7 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False):
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -212,7 +212,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     source_id = source.get("runtimeSessionId") or source["id"]
     source_dir = home / "sessions" / source_id
     target_dir = home / "sessions" / target_id
-    if target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists():
+    if not prepare_only and (target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists()):
         raise ValueError("Fork target already exists")
     if source.get('nativeProject') and source.get('nativeRevision'):
         from .automatic_history import revision
@@ -258,7 +258,19 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     if cut < len(visible):
         # Only the requested boundary matters. A later failed or uncheckpointed
         # submission must not prevent branching an earlier completed exchange.
-        boundary = user_boundaries(messages, visible[:cut + 1])[-1]
+        if cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') == 'failed':
+            # An explicitly rejected input never entered runtime context.
+            boundary = len(messages)
+        else:
+            try:
+                boundary = user_boundaries(messages, visible[:cut + 1])[-1]
+            except ValueError:
+                if prepare_only and cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') in {'unknown','sending'}:
+                    # The owned idle worker has no outstanding input. A final
+                    # unconfirmed browser input may never have entered context.
+                    boundary = len(messages)
+                else:
+                    raise
         messages = messages[:boundary]
         visible = visible[:cut]
     # Native indices refer to the saved file, before removing UI-only reference rows.
@@ -305,6 +317,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
+    if prepare_only:
+        return {'messages': visible, 'context': messages, 'throughTurn': through_turn}
     store.save(target_id,messages,metadata,preserve_system=not bool(bundle))
     for name,value in copied.items():
         write_private(target_dir / name,value)
