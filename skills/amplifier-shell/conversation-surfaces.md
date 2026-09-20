@@ -22,7 +22,9 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    revisions. Never clear a dirty view on the user's behalf. Restoration
    changes the design while preserving current compatible inputs.
 6. For a host change, declare and queue a supported request. Preview/apply/
-   revert themes use the host's normal validated action path. Pending requests
+   revert themes use the host's normal validated action path. Prefer small
+   `{name, tokens}` palette requests; the host preserves the existing skin, so
+   do not copy its entire stylesheet into the surface. Pending requests
    do nothing until reviewed and resolved outside the sandbox. Agents can
    resolve already-authorized changes on the explicit target client; the
    surface itself cannot grant permission.

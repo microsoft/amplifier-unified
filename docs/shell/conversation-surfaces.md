@@ -110,7 +110,9 @@ publish separate immutable snapshots; use it for documents, not iterative UX.
 
 ## Host actions and theme context
 
-HTML runs in an opaque-origin iframe with scripts allowed. It cannot read
+HTML runs in an opaque-origin iframe with scripts allowed, inside a trusted
+container whose CSP permits only the exact surface document path. This blocks
+self-navigation to external URLs as well as to other host endpoints. It cannot read
 host DOM/cookies, fetch the network, access arbitrary files, run tools or
 dispatch arbitrary app actions. Parent messages are checked against the exact
 frame, bridge channel and definition revision. The bridge exposes only state,
@@ -118,7 +120,13 @@ declared events and declared requests. Host approval is outside the iframe.
 
 The initial action allowlist is `theme.preview`, `theme.apply`, `theme.revert`.
 Declare a request with `action` and an input `schema`. Preview/apply inputs
-are `{name, css}` with complete, self-contained shell CSS; revert uses `{}`.
+are preferably `{name, tokens}` for palette changes. `tokens` is a nonempty
+map of the host token names below to six-digit hex colors, for example
+`{name: "Forest", tokens: {accent: "#3e7052", bg: "#eef3eb"}}`. The host
+retains the complete applied skin and materializes the exact CSS for review;
+authors do not need to copy the existing stylesheet. For deeper changes,
+`{name, css}` accepts complete, self-contained shell CSS. Supply tokens or CSS,
+not both. Revert uses `{}`.
 The host validates both the declared schema and the actual action schema.
 Queued requests have no effect until resolved. The host's review controls
 show exact CSS, scope and approve/decline actions. They use the same theme

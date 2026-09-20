@@ -72,7 +72,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  const args=()=>({id:canvas.id,sessionId:canvas.sessionId,expectedRevision:latest.current.app.revision,expectedStateRevision:latest.current.app.stateRevision});
  const run=async(action,extra)=>{try{const result=await dispatch(action,{...args(),...extra});setError('');return result}catch(e){setError(e.message)}};
  const preview=async request=>{const result=await dispatch('canvas.apps.inspect',{id:canvas.id,sessionId:canvas.sessionId,requestId:request.id});setReview({request,input:result.result.requestInput})};
- const url=clientUrl(`/api/canvas/${mounted.id}/document?`+new URLSearchParams(targetOf(mounted)));
+ const url=clientUrl(`/api/canvas/${mounted.id}/app-host?`+new URLSearchParams(targetOf(mounted)));
  return <section className="a-canvas-app" aria-label="Interactive conversation surface">
   <div className="a-canvas-app-bar"><span>Revision {app.revision}{dirty?' · Unsaved input':''}</span>
    <details><summary>History & shared state</summary><p>Restoring a design keeps compatible current inputs and never repeats actions.</p>
@@ -84,6 +84,6 @@ export function CanvasAppViewer({canvas,dispatch}){
   {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{await declare(false);mount(canvas);setError('')}}>Discard unfinished input and load revision {app.revision}</button></p>}
   {app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
   {review&&app.requests.some(r=>r.id===review.request.id&&r.status==='pending')&&<section className="a-canvas-app-review" aria-label="Review requested theme change"><strong>{review.request.summary}</strong><p>{review.request.action==='theme.apply'?'Applying changes the shell for all connected clients.':'This action uses this device’s theme controls.'}</p><pre>{review.input.css||'End the preview, or undo the last applied theme if it is still current.'}</pre><button type="button" onClick={async()=>{if(await run('canvas.apps.resolve',{requestId:review.request.id,approve:true}))setReview(null)}}>Approve theme change</button><button type="button" onClick={()=>setReview(null)}>Back</button></section>}
-  <iframe key={mounted.app.revision} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts" onLoad={()=>send()}/>
+  <iframe key={mounted.app.revision} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts allow-same-origin" onLoad={()=>send()}/>
  </section>;
 }

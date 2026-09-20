@@ -69,6 +69,7 @@ def validate(value, spec):
 
 
 HOST_ACTIONS = {'theme.preview', 'theme.apply', 'theme.revert'}
+THEME_TOKENS = ('bg', 'surface', 'soft', 'ink', 'muted', 'line', 'accent', 'tint', 'green', 'danger')
 
 
 def manifest(value):
@@ -134,11 +135,22 @@ def theme_fingerprint(theme):
     return hashlib.sha256(json.dumps(theme, sort_keys=True).encode()).hexdigest()
 
 
+def theme_input(service, args):
+    if 'tokens' not in args:
+        return args
+    # A small palette change retains the complete applied skin. This avoids
+    # making authors copy the whole stylesheet into every generated surface.
+    declarations = ';'.join('--a-' + key + ':' + value for key, value in args['tokens'].items())
+    css = service.state['theme']['css'] + '\n#amp-one{' + declarations + '}'
+    return {'name': args['name'], 'css': css}
+
+
 def theme_command(service, action, args):
     """Same implementation for ordinary controls, app_control and approved requests."""
     from .service import validate_theme
     view = service.state['view']
     if action in {'theme.apply', 'theme.preview'}:
+        args = theme_input(service, args)
         validate_theme(args['css'])
         theme = {'name': args['name'] or 'Custom skin', 'css': args['css']}
         if action == 'theme.preview':
@@ -268,6 +280,7 @@ def command(service, action, args, origin):
         from .service import ACTION_DEFINITIONS, validate_theme
         validate(payload, ACTION_DEFINITIONS[entry['action']][1])
         if entry['action'] in {'theme.preview', 'theme.apply'}:
+            payload = bounded(theme_input(service, payload), 300_000)
             validate_theme(payload['css'])
         app['requests'] = (app['requests'] + [{'id': uuid.uuid4().hex, 'name': args['name'],
             'action': entry['action'], 'input': put(db, payload), 'status': 'pending', 'origin': origin,

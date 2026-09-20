@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.13.0",
+      "title": "Interactive surfaces that grow with the conversation",
+      "changes": [
+        "Agents can create interactive interfaces for a conversation and refine them in one tab, with shared controls for users and agents.",
+        "Selections and notes survive compatible design updates, restoration and refresh. Unfinished inputs remain protected when changes arrive at the same time.",
+        "Review and approve theme previews, application and reversal through host controls. Small palette changes preserve the existing shell skin.",
+        "The Unified shell behavior includes repository-owned skills and guides for layouts, extensions and conversation surfaces."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.12.0",
       "title": "Choose bundles per conversation and set scoped defaults",
       "changes": [

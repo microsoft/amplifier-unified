@@ -241,6 +241,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         canvas={**row, **({} if row.get('contentResource') else resource(service.db,row['body']['$resource']))}
         return web.Response(text=raw_source(canvas,service.db),content_type='text/plain',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
+    async def canvas_app_host(request):
+        canvas = canvas_view_target(request, request.query.get('viewId', 'primary'))
+        if canvas.get('id') != request.match_info['identity'] or not canvas.get('app'):
+            raise AppError('Interactive surface no longer available.', 404)
+        from .canvas_app_host import document_response
+        return document_response(canvas, request)
+
+    app.router.add_get('/api/canvas/{identity}/app-host', canvas_app_host)
+
     async def canvas_document(request):
         canvas = (canvas_view_target(request, request.query['viewId']) if request.query.get('viewId')
                   else service.state.get("canvas", {}))

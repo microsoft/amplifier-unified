@@ -23,7 +23,7 @@ try{
  const source=themeSurface(base),row=(await action('canvas.apps.create',source)).result,id=row.id;
  const inspect=()=>action('canvas.apps.inspect',{id}).then(r=>r.result);
  const cas=async()=>{const r=await inspect();return {id,sessionId:r.sessionId,expectedRevision:r.app.revision,expectedStateRevision:r.app.stateRevision}};
- const frame=()=>page.locator('[data-canvas-view="primary"]').frameLocator('iframe');
+ const frame=()=>page.locator('[data-canvas-view="primary"]').frameLocator('iframe').frameLocator('iframe');
  await frame().getByRole('radio',{name:'Fern',exact:true}).check();
  await expect.poll(async()=>(await inspect()).app.state.selected).toBe('fern');
  await frame().getByRole('textbox').fill('Keep the green, soften the contrast');
@@ -83,5 +83,25 @@ try{
  assert.deepEqual(errors,[]);
  await mkdir(root+'output/canvas-proof',{recursive:true});await page.screenshot({path:root+'output/canvas-proof/conversation-surface.png',fullPage:true});
  await writeFile(root+'output/canvas-proof/conversation-surface.json',JSON.stringify({passed:true,checks:['one tab','shared controls','input preservation','revision restore','theme preview/apply/revert','refresh','composer draft','sandbox isolation']},null,2));
+ // A sandboxed document must not leak state by navigating its own frame.
+ let navigationRequests=0;
+ await page.route('https://canvas-network.invalid/**',async route=>{navigationRequests++;await route.fulfill({body:'unexpected navigation'})});
+ const container=page.frames().find(f=>f.url().includes('/app-host'))||page.mainFrame();
+ await container.evaluate(()=>{window.blockedSurfaceNavigation=0;addEventListener('securitypolicyviolation',()=>window.blockedSurfaceNavigation++)});
+ const sandbox=page.frames().find(f=>f.url().includes('/document'));
+ await sandbox.evaluate(()=>{location.href='https://canvas-network.invalid/probe'});
+ await expect.poll(async()=>navigationRequests+await container.evaluate(()=>window.blockedSurfaceNavigation)).toBeGreaterThan(0);
+ assert.equal(navigationRequests,0,'Sandbox self-navigation must be blocked before any network request');
+ await action('canvas.apps.restore',{...await cas(),version:1});
+ await expect(frame().getByRole('heading',{name:'A different kind of atmosphere.'})).toBeVisible();
+ const sameOriginProbe=url+'/api/state?surface-probe=1';let hostNavigationRequests=0;
+ await page.route(sameOriginProbe,async route=>{hostNavigationRequests++;await route.fulfill({body:'unexpected host navigation'})});
+ const protectedHost=page.frames().find(f=>f.url().includes('/app-host'));
+ await protectedHost.evaluate(()=>{window.blockedSurfaceNavigation=0;addEventListener('securitypolicyviolation',()=>window.blockedSurfaceNavigation++)});
+ const protectedChild=page.frames().find(f=>f.url().includes('/document'));
+ assert.equal(await protectedChild.evaluate(()=>{try{parent.location.href='/';return 'navigated'}catch{return 'blocked'}}),'blocked');
+ await protectedChild.evaluate(url=>{location.href=url},sameOriginProbe);
+ await expect.poll(()=>protectedHost.evaluate(()=>window.blockedSurfaceNavigation)).toBeGreaterThan(0);
+ assert.equal(hostNavigationRequests,0,'Sandbox navigation cannot access other host endpoints');
  console.log('Conversation surface browser acceptance passed.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

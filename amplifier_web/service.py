@@ -190,10 +190,18 @@ from .shell_modules import ShellModules, definitions as shell_definitions
 ACTION_DEFINITIONS.update(shell_definitions(schema, string))
 from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
-from .canvas_apps import definitions as canvas_app_definitions
+from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
+for theme_action in ('theme.apply', 'theme.preview'):
+    theme_spec = ACTION_DEFINITIONS[theme_action][1]
+    theme_spec['properties']['tokens'] = {'type': 'object', 'minProperties': 1, 'additionalProperties': False,
+        'properties': {key: {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'} for key in THEME_TOKENS}}
+    theme_spec['required'] = ['name']
+    theme_spec['oneOf'] = [{'required': ['css'], 'not': {'required': ['tokens']}},
+                           {'required': ['tokens'], 'not': {'required': ['css']}}]
+
 
 
 class AppService:

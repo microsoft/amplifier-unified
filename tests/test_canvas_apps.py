@@ -199,3 +199,22 @@ async def test_invalid_data_and_events_do_not_mutate_surface(app):
         with pytest.raises(AppError):
             await edit(app, row, action, **args)
         assert app.state['canvasArtifacts'][0]['app'] == row['app']
+
+
+async def test_palette_requests_preserve_the_skin_and_review_exact_css(app):
+    row = await create(app)
+    before = deepcopy(app.state['theme'])
+    row = await edit(app, row, 'request', name='preview', input={'name': 'Forest', 'tokens': {'accent': '#3e7052'}})
+    request = row['app']['requests'][-1]
+    reviewed = (await dispatch(app, 'canvas.apps.inspect', {'id': row['id'], 'requestId': request['id']}))['result']['requestInput']
+    assert reviewed['css'] == before['css'] + '\n#amp-one{--a-accent:#3e7052}'
+    row = await edit(app, row, 'resolve', requestId=request['id'], approve=True)
+    assert app.clients.records['one']['view']['themeDraft'] == reviewed['css']
+    assert app.state['theme'] == before
+    await dispatch(app, 'theme.apply', {'name': 'Forest', 'tokens': {'accent': '#3e7052'}})
+    assert app.state['theme']['css'] == reviewed['css']
+    for values in ({'accent': 'red;display:none'}, {'unknown': '#aabbcc'}, {}):
+        with pytest.raises(AppError):
+            await dispatch(app, 'theme.apply', {'name': 'Invalid', 'tokens': values})
+    with pytest.raises(AppError):
+        await dispatch(app, 'theme.apply', {'name': 'Ambiguous', 'tokens': {'accent': '#aabbcc'}, 'css': '#amp-one{}'})
