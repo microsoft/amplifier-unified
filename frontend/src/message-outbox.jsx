@@ -9,7 +9,7 @@ export function outboxMessages(messages,entries,sessionId){
  return [...confirmed,...pending.filter(row=>!messages.some(message=>message.inputId===row.commandId)).map(row=>({id:row.id,inputId:row.commandId,role:'user',text:row.text,via:row.via,createdAt:row.createdAt,attachments:row.attachments,localDelivery:row}))];
 }
 export function useMessageOutbox(){
- const [entries,setEntries]=useState(()=>readOutbox(typeof sessionStorage==='undefined'?null:sessionStorage)),current=useRef(entries),[storageError,setStorageError]=useState(false);
+ const [entries,setEntries]=useState(()=>{try{return readOutbox(sessionStorage)}catch{return []}}),current=useRef(entries),[storageError,setStorageError]=useState(false);
  const update=useCallback((id,patch)=>{
   const rows=current.current,found=rows.some(row=>row.id===id);
   if(!found&&patch!==null&&!patch.commandId)return; // A late reply cannot recreate an already acknowledged entry.
