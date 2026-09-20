@@ -1,3 +1,4 @@
+import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useState,useEffect,useRef} from 'react';
 import {Layers,ChevronDown,X} from 'lucide-react';
 import {BundlePicker,ResultNotice} from './settings-ui';
@@ -9,6 +10,7 @@ export function BundleControl({state,session,act,working}){
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
  const current=session?.bundle||state.settings?.bundle||'work',open=draft.open&&draft.sessionId===(session?.id||null);
+ const popover=useRef(null);useOutsideDismiss(open,popover,()=>edit({open:false}));
  const operation=session?.bundleChange,preview=session?.bundlePreview;
  const pending=!!submitting||!!session?.configurationBusy||operation?.phase==='working';
  const ready=preview?.bundle===draft.bundle&&preview?.previewId;
@@ -22,7 +24,7 @@ export function BundleControl({state,session,act,working}){
   try{await act(action,action==='session.create'?{bundle:draft.bundle}:{sessionId:session.id,bundle:draft.bundle,...(action!=='bundle.preview'?{...(ready?{previewId:preview.previewId}:{}),resetModel:!!draft.resetModel}:{})})}
   finally{submittingRef.current=false;setSubmitting(null)}
  }
- return <div className="a-model-control a-bundle-control">
+ return <div className="a-model-control a-bundle-control" ref={popover}>
   <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current,resetModel:false})}><Layers/><span>{bundleLabel(state,current)}</span><ChevronDown/></button>
   {open&&<section className="a-model-popover a-bundle-popover" aria-label="Choose conversation bundle">
    <div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>

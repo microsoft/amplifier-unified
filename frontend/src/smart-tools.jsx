@@ -1,3 +1,4 @@
+import {ActivityRegion,useRefreshValue} from './activity-region';
 import React, {useEffect, useRef, useState} from 'react';
 import {ArrowLeft, ArrowRight, Box, Cable, Check, ChevronRight, Code2, Download, ExternalLink, Globe, Play, Plus, RefreshCw, Settings2, Trash2, Unplug} from 'lucide-react';
 import {useListFilter} from './list-filter.jsx';
@@ -120,10 +121,12 @@ export function SmartToolsSettings({state, act}) {
   const sourceTarget = {repository:editor.repository.trim(),ref:editor.ref.trim(),path:editor.path.trim()};
   const inspectionOp = operation('smartTools.inspect', sourceTarget);
   const installationOp = operation('smartTools.install', sourceTarget);
-  const inspection = !working(inspectionOp) && !failed(inspectionOp) ? inspectionOp?.result : null;
+  const sourceKey=JSON.stringify(sourceTarget);
+  const inspection=useRefreshValue(sourceKey,inspectionOp?.result,working(inspectionOp)||failed(inspectionOp));
   const installed = installations.find(item => sourceOf(item) === editor.repository.trim());
   const installation = !working(installationOp) && !failed(installationOp) ? installationOp?.result || installed : installed;
   const callOperation = operation('smartTools.call', {id:server?.id,name:tool?.name,sessionId:state.selectedSessionId});
+  const callResult=useRefreshValue(JSON.stringify([state.selectedSessionId,server?.id,tool?.name]),callOperation,working(callOperation)||failed(callOperation));
   const latestViewCall = [...operations].reverse().find(item => item.action === 'smartTools.call' && item.status === 'completed' && item.target?.id === server?.id && item.target?.name === tool?.name && item.target?.sessionId === state.selectedSessionId);
   const openView = async () => {
     const sessionId = state.selectedSessionId;
@@ -157,24 +160,24 @@ export function SmartToolsSettings({state, act}) {
       <OperationNotice operation={operation('smartTools.remove')}/>
     </>}
 
-    {editor.page === 'catalog' && <>
-      <div className="a-smart-heading"><h4>Smart Tools catalog</h4><button type="button" className="a-icon" aria-label="Refresh Smart Tools catalog" data-action="smartTools.catalog" disabled={working(operation('smartTools.catalog'))} onClick={() => run('smartTools.catalog')}><RefreshCw/></button></div>
+    {editor.page === 'catalog' && <ActivityRegion name="smart-tool-catalog" busy={working(operation('smartTools.catalog'))}>
+      <div className="a-smart-heading"><h4>Smart Tools catalog</h4><button type="button" className="a-icon" aria-label="Refresh Smart Tools catalog" data-operation-pending={working(operation('smartTools.catalog'))||undefined} aria-busy={working(operation('smartTools.catalog'))||undefined} data-action="smartTools.catalog" disabled={working(operation('smartTools.catalog'))} onClick={() => run('smartTools.catalog')}><RefreshCw/></button></div>
       <p>Explore the community catalog, then inspect a source before installing it.</p>
       <OperationNotice operation={operation('smartTools.catalog')} busyMessage="Loading the catalog…"/>
       {catalogFilter}<div className="a-smart-list">{shownCatalog.map(item => <button type="button" key={item.id || sourceOf(item)} className="a-smart-list-row" data-action="view.update" onClick={() => {navigate('source',{repository:sourceOf(item),ref:item.ref||'',path:item.path||'',extras:''});run('smartTools.inspect',{repository:sourceOf(item),...(item.ref ? {ref:item.ref}:{}),...(item.path ? {path:item.path}: {})});}}><Box/><span><strong>{item.name || item.id}</strong><small>{item.description || sourceOf(item)}</small></span><ChevronRight/></button>)}</div>
       {!catalog.length && !working(operation('smartTools.catalog')) && <p className="a-smart-empty">The catalog has not loaded yet. Refresh to try again, or add a tool from a Git URL.</p>}
-    </>}
+    </ActivityRegion>}
 
     {editor.page === 'source' && <>
       <h4>Add from Git</h4><p>Inspect the tool’s manifest and source revision, then install the Python package into its own environment.</p>
       <label htmlFor="smart-tool-repository">Repository URL</label><input id="smart-tool-repository" type="url" value={editor.repository} placeholder="https://github.com/owner/tool" data-action="view.update" onChange={event => edit({repository:event.target.value})}/>
       <div className="a-form-grid"><div><label htmlFor="smart-tool-ref">Branch, tag or commit (optional)</label><input id="smart-tool-ref" value={editor.ref} placeholder="Repository default" data-action="view.update" onChange={event => edit({ref:event.target.value})}/></div><div><label htmlFor="smart-tool-path">Package folder (optional)</label><input id="smart-tool-path" value={editor.path} placeholder="Repository root" data-action="view.update" onChange={event => edit({path:event.target.value})}/></div></div>
-      <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="smartTools.inspect" disabled={!editor.repository.trim() || anyPending} onClick={() => run('smartTools.inspect',sourceArgs())}><RefreshCw/>Inspect source</button></div><OperationNotice operation={inspectionOp} busyMessage="Reading the tool manifest…"/>
+      <ActivityRegion name="smart-tool-inspection" busy={working(inspectionOp)}><div className="a-dialog-actions"><button type="button" className="a-soft" data-operation-pending={working(inspectionOp)||undefined} aria-busy={working(inspectionOp)||undefined} data-action="smartTools.inspect" disabled={!editor.repository.trim() || anyPending} onClick={() => run('smartTools.inspect',sourceArgs())}><RefreshCw/>Inspect source</button></div><OperationNotice operation={inspectionOp} busyMessage="Reading the tool manifest…"/>
       {inspection && <div className="a-smart-source-summary"><strong>{inspection.name || inspection.manifest?.name || inspection.metadata?.name || 'Tool source'}</strong><p>{inspection.description || inspection.manifest?.description || inspection.metadata?.description}</p><dl><div><dt>Revision</dt><dd><code>{inspection.commit?.slice(0,12) || inspection.revision || editor.ref || 'Default branch'}</code></dd></div>{inspection.version || inspection.manifest?.version ? <div><dt>Version</dt><dd>{inspection.version || inspection.manifest?.version}</dd></div> : null}</dl>{(inspection.manifest?.requires || inspection.requires) && <div className="a-smart-requirements"><h5>Requirements from the tool author</h5><pre>{typeof (inspection.manifest?.requires || inspection.requires) === 'string' ? (inspection.manifest?.requires || inspection.requires) : pretty(inspection.manifest?.requires || inspection.requires)}</pre></div>}</div>}
-      <label htmlFor="smart-tool-extras">Optional package extras</label><input id="smart-tool-extras" value={editor.extras} placeholder="For example, mcp" data-action="view.update" onChange={event => edit({extras:event.target.value})}/><p className="a-caption">Use extras documented by the tool author, separated by commas. An MCP adapter may be an optional extra.</p>
-      <div className="a-dialog-actions"><button type="button" className="a-primary" data-action="smartTools.install" disabled={!editor.repository.trim() || anyPending} onClick={() => run('smartTools.install',{...sourceArgs(),...(editor.extras.trim() ? {extras:editor.extras.split(',').map(value => value.trim()).filter(Boolean)} : {})})}><Download/>{installed ? 'Install source revision' : 'Install package'}</button></div><OperationNotice operation={installationOp} busyMessage="Installing the package in its own environment…"/>
+      </ActivityRegion><ActivityRegion name="smart-tool-installation" busy={working(installationOp)}><label htmlFor="smart-tool-extras">Optional package extras</label><input id="smart-tool-extras" value={editor.extras} placeholder="For example, mcp" data-action="view.update" onChange={event => edit({extras:event.target.value})}/><p className="a-caption">Use extras documented by the tool author, separated by commas. An MCP adapter may be an optional extra.</p>
+      <div className="a-dialog-actions"><button type="button" className="a-primary" data-operation-pending={working(installationOp)||undefined} aria-busy={working(installationOp)||undefined} data-action="smartTools.install" disabled={!editor.repository.trim() || anyPending} onClick={() => run('smartTools.install',{...sourceArgs(),...(editor.extras.trim() ? {extras:editor.extras.split(',').map(value => value.trim()).filter(Boolean)} : {})})}><Download/>{installed ? 'Install source revision' : 'Install package'}</button></div><OperationNotice operation={installationOp} busyMessage="Installing the package in its own environment…"/>
       {installation && <div className="a-smart-source-summary"><strong><Check/>Package installed</strong>{installation.binDir && <><p>Executables are available in:</p><code className="a-smart-path">{installation.binDir}</code></>}{installation.guidance && <p>{typeof installation.guidance === 'string' ? installation.guidance : pretty(installation.guidance)}</p>}<p>{installation.nextStep || 'Use the tool’s documented MCP executable and arguments to add a connection.'}</p><button type="button" className="a-soft" data-action="view.update" onClick={() => {openConnection();edit({connection:{...defaults.connection,name:installation.name || installation.manifest?.name || '',command:''}});}}><Cable/>Configure MCP connection<ArrowRight/></button></div>}
-    </>}
+    </ActivityRegion></>}
 
     {editor.page === 'connection' && <form onSubmit={async event => {event.preventDefault();try {const env = parseEnvironment(connection.env);await run('smartTools.configure',{...(connection.id?{id:connection.id}:{}),name:connection.name.trim(),command:connection.command.trim(),args:connection.args.split('\n').map(value => value.trim()).filter(Boolean),env,...(connection.cwd.trim()?{cwd:connection.cwd.trim()}:{})});} catch(caught) {setError(caught.message);}}}>
       <h4>{connection.id ? 'Edit connection' : 'Add MCP connection'}</h4><p>Connect a local MCP server. Tools shared with agents are listed here; a server may reserve additional helpers for its interactive view.</p>
@@ -188,15 +191,15 @@ export function SmartToolsSettings({state, act}) {
     </form>}
 
     {(editor.page === 'server' || editor.page === 'tool') && !server && <ResultNotice phase="neutral" message="This connection is no longer configured."/>}
-    {editor.page === 'server' && server && <>
+    {editor.page === 'server' && server && <ActivityRegion name={'smart-tool-connection-'+server.id} busy={working(lastConnectionOperation)}>
       <div className="a-smart-heading"><div><h4>{server.name}</h4><p>{server.status || 'Not connected'} · {tools.length} tools</p></div><button type="button" className="a-icon" aria-label={'Edit '+server.name} data-action="view.update" onClick={() => openConnection(server)}><Settings2/></button></div>
       {server.error && <ResultNotice phase="error" message={server.error}/>}
-      <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="smartTools.connect" disabled={anyPending || ['connected','ready'].includes(server.status)} onClick={() => run('smartTools.connect',{id:server.id})}><Cable/>{server.status === 'connected' || server.status === 'ready' ? 'Connected' : 'Connect'}</button><button type="button" className="a-soft" data-action="smartTools.disconnect" disabled={anyPending || !['connected','ready'].includes(server.status)} onClick={() => run('smartTools.disconnect',{id:server.id})}><Unplug/>Disconnect</button></div>
+      <div className="a-dialog-actions"><button type="button" className="a-soft" aria-busy={working(operation('smartTools.connect',{id:server.id}))||undefined} data-action="smartTools.connect" disabled={anyPending || ['connected','ready'].includes(server.status)} onClick={() => run('smartTools.connect',{id:server.id})}><Cable/>{server.status === 'connected' || server.status === 'ready' ? 'Connected' : 'Connect'}</button><button type="button" className="a-soft" aria-busy={working(operation('smartTools.disconnect',{id:server.id}))||undefined} data-action="smartTools.disconnect" disabled={anyPending || !['connected','ready'].includes(server.status)} onClick={() => run('smartTools.disconnect',{id:server.id})}><Unplug/>Disconnect</button></div>
       <OperationNotice operation={lastConnectionOperation} busyMessage="Updating the connection…"/>
       {tools.length > 4 && toolFilter}<div className="a-smart-list">{shownTools.map(item => <button type="button" key={item.name} className="a-smart-list-row" data-action="view.update" onClick={() => navigate('tool',{toolName:item.name,values:{},raw:false,json:'{}'})}><Code2/><span><strong>{item.title || item.annotations?.title || title(item.name)}</strong><small>{item.description || item.name}</small>{item._meta?.ui?.resourceUri && <small className="a-smart-view-label">Interactive canvas view</small>}</span><ChevronRight/></button>)}</div>
       {!tools.length && <p className="a-smart-empty">Connect to discover the tools supplied by this server.</p>}
       <div className="a-dialog-actions"><button type="button" className="a-link a-danger" disabled={anyPending} data-action="smartTools.remove" onClick={async () => {if(await run('smartTools.remove',{id:server.id}))navigate('home');}}><Trash2/>Remove connection</button></div><p className="a-caption">Removing a connection keeps the installed package and the tool’s saved work.</p>
-    </>}
+    </ActivityRegion>}
 
     {editor.page === 'tool' && server && !tool && <ResultNotice phase="neutral" message="This tool is no longer in the server’s tool list. Reconnect to discover its current tools."/>}
     {editor.page === 'tool' && tool && <>
@@ -206,8 +209,8 @@ export function SmartToolsSettings({state, act}) {
       <form onSubmit={event => {event.preventDefault();try {const args=collectArguments(toolSchema,editor.values,editor.raw,editor.json);run('smartTools.call',{id:server.id,name:tool.name,arguments:args});} catch(caught) {setError(caught.message);}}}>
         {!rawOnly && !editor.raw ? <SchemaFields schema={toolSchema} values={editor.values} edit={values => edit({values})}/> : <><label htmlFor="smart-tool-json">Tool arguments (JSON)</label><textarea id="smart-tool-json" className="a-json-editor" value={editor.json} spellCheck={false} data-action="view.update" onChange={event => edit({json:event.target.value})}/></>}
         {!rawOnly && <button type="button" className="a-link a-smart-advanced" data-action="view.update" aria-expanded={editor.raw} onClick={() => {try {if(editor.raw){const parsed=collectArguments(toolSchema,{},true,editor.json);if(Object.keys(parsed).some(key => !Object.hasOwn(toolSchema.properties,key)))throw new Error('These arguments include extra properties. Keep the JSON editor to preserve them.');const values=Object.fromEntries(Object.entries(parsed).map(([key,value]) => [key,toolSchema.properties?.[key]?.enum || typeof value === 'object' ? JSON.stringify(value) : String(value)]));edit({raw:false,values});}else {let value;try{value=collectArguments({...toolSchema,required:[]},editor.values,false,'{}');}catch {value={};}edit({raw:true,json:pretty(value)});}setError('');} catch(caught){setError(caught.message);}}}>{editor.raw ? 'Use form fields' : 'Edit arguments as JSON'}</button>}
-        <div className="a-dialog-actions"><button className="a-primary" data-action="smartTools.call" disabled={anyPending || !['connected','ready'].includes(server.status)}><Play/>Run tool</button></div>
-      </form><OperationNotice operation={callOperation} busyMessage="Running the tool…"/><ToolResult operation={callOperation}/>
+        <div className="a-dialog-actions"><button className="a-primary" data-operation-pending={working(callOperation)||undefined} aria-busy={working(callOperation)||undefined} data-action="smartTools.call" disabled={anyPending || !['connected','ready'].includes(server.status)}><Play/>Run tool</button></div>
+      </form><ActivityRegion name="smart-tool-result" busy={working(callOperation)}><OperationNotice operation={callOperation} busyMessage="Running the tool…"/><ToolResult operation={callResult}/></ActivityRegion>
     </>}
   </section>;
 }

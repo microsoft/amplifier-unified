@@ -44,6 +44,7 @@
     "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
     "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
     "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
+    "test:activity-feedback-browser": "node tests/activity-feedback-browser.mjs",
     "test:export-browser": "node tests/conversation-export-browser.mjs"
   },
   "dependencies": {

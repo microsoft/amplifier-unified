@@ -62,6 +62,16 @@ test('model selector uses provider catalog and falls back only when no list exis
  assert.equal(root.root.findByType('select').props.value,'saved-model');
  await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'working',models:[]}})));
  assert.equal(root.root.findByType('select').props.disabled,true);
+ assert.ok(root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Keep same-provider options during refresh');
+ const changed=[],committed=[];
+ await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,onChange:value=>changed.push(value),onCommit:value=>committed.push(value),entry:{phase:'error',models:[]}})));
+ assert.equal(root.root.findAllByType('select').length,0);
+ assert.ok(root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Retain cached models as suggestions after failure');
+ const manual=root.root.findByType('input');
+ await renderAct(async()=>{manual.props.onChange({target:{value:'new-model-id'}});manual.props.onBlur({target:{value:'new-model-id'}})});
+ assert.deepEqual(changed,['new-model-id']);assert.deepEqual(committed,['new-model-id']);
+ await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,catalogKey:'other-provider',entry:{phase:'working',models:[]}})));
+ assert.ok(!root.root.findAllByType('option').some(row=>row.props.value==='catalog-model'),'Do not borrow options from another provider');
  await renderAct(async()=>root.update(React.createElement(ModelSelect,{...props,entry:{phase:'ready',supported:false,models:[]}})));
  assert.equal(root.root.findAllByType('select').length,0);assert.equal(root.root.findByType('input').props.value,'saved-model');
  await renderAct(async()=>root.unmount());
