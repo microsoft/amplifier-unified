@@ -202,6 +202,8 @@ from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
 from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
+from .questions import definitions as question_definitions
+ACTION_DEFINITIONS.update(question_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -328,6 +330,8 @@ class AppService:
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
+        from .questions import Questions
+        self.questions = Questions(self)
         self._refresh_shared_preferences()
         self._save()
 
@@ -418,6 +422,7 @@ class AppService:
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
     def _save(self):
+        self.questions.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -589,6 +594,10 @@ class AppService:
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
                 'result': {'host': host, 'worker': worker},
                 **({'state': self.browser_state()} if include_state else {})}
+        if action in {'question.list', 'question.read'}:
+            async with self.lock:
+                return {'accepted': True, 'result': self.questions.read(action, args),
+                        **({'state': self.browser_state()} if include_state else {})}
         if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -601,7 +610,7 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+        if action in {'question.answer', 'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -610,7 +619,7 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action!='conversation.send' else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action!='conversation.send' and not action.startswith('question.') else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -651,7 +660,10 @@ class AppService:
                         raise AppError("This command ID was already used with different contents.", 409)
                     if include_state and getattr(self, '_progress_dirty', False):
                         self._publish()
-                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
+                    saved_receipt = json.loads(previous[1])
+                    if action == 'question.answer':
+                        saved_receipt['result'] = self.questions.read('question.read', args)
+                    return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
@@ -666,9 +678,9 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"question.answer","conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
-            if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
+            if action in {"question.answer","conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             from .canvas_library import remember, restore, fork_artifacts
@@ -892,7 +904,7 @@ class AppService:
                     session['historyManaged'] = False
                     session['configurationBusy'] = True
                     session['historyEdit'] = {'operationId':command_id or str(uuid.uuid4()),'messageId':original['id'],
-                        'text':text,'via':'text' if original.get('via')=='text' else 'chat',
+                        'text':text,'via':'text' if original.get('via')=='text' else 'chat','inputOrigin':origin,
                         'attachments':copy.deepcopy(original.get('attachments',[])), 'phase':'working'}
                     pending.append((self._edit_current,(copy.deepcopy(session),)))
                 else:
@@ -904,7 +916,7 @@ class AppService:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
                     input_id = command_id or str(uuid.uuid4())
-                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])))
+                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,inputOrigin=origin,attachments=copy.deepcopy(original.get('attachments',[])))
                     self._activity(session,'queued','Generating from your edited message.',reset=True)
                     session['status']='working'
                     ensure_turn(session,input_id,text)
@@ -975,6 +987,8 @@ class AppService:
                 session=self._session(args.get('sessionId'))
                 draft=self.clients.attachments(session)
                 draft[:]=[row for row in draft if row['id']!=args['id']]
+            elif action.startswith('question.'):
+                diagnostic_result = self.questions.dispatch(action, args, origin, client_id, pending)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 text = args["text"].strip()
@@ -992,7 +1006,7 @@ class AppService:
                 previous_activity = recent_activity(session)
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments,delivery={'status':'sending'})
+                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,delivery={'status':'sending'})
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
@@ -1243,7 +1257,7 @@ class AppService:
             self._publish_smart_tool_update(defer_publish=defer_publish)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current:
+            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action == 'question.answer':
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 await fn(*values)
@@ -1256,6 +1270,7 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':result['delivery']='accepted'
+        if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def wait_smart_tool(self, identity, timeout=300):
@@ -1677,6 +1692,10 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            if args['action'].startswith('question.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Question actions must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
             if args['action'].startswith('canvas.apps.'):
@@ -1716,7 +1735,7 @@ class AppService:
                 from .chat_navigation import touch
                 touch(session)
             else:
-                self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id)
+                self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id, inputOrigin='voice')
             self._publish()
 
     async def set_voice_status(self, payload):
