@@ -161,7 +161,11 @@ class SetupManager:
             except TimeoutError:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
-            except (ValueError,UnicodeError):raise ValueError('The provider check ended without a result. Retry after the runtime dependencies finish installing.') from None
+            except (ValueError,UnicodeError):
+                raise ValueError(
+                    f'The provider check ended without a valid result (exit code {process.returncode}). '
+                    'Check the runtime installation or update the app, then retry.'
+                ) from None
             if result.get('error'):raise ValueError(result['error'])
             if process.returncode:raise ValueError('The provider check could not finish. Please retry.')
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}

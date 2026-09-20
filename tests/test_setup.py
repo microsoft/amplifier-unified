@@ -75,6 +75,21 @@ async def test_provider_probe_errors_are_visible(manager,tmp_path):
         await manager.perform('providers.schema',{'module':'provider-openai','workspace':str(tmp_path)})
 
 
+@pytest.mark.parametrize('exit_code,output', [(1, ''), (0, 'not-json')])
+async def test_provider_probe_missing_result_does_not_claim_installation_is_running(manager,tmp_path,exit_code,output):
+    import sys
+    child=tmp_path/'failed-probe.py'
+    child.write_text(f'import sys; print({output!r}, end=""); print("credential-must-not-leak", file=sys.stderr); sys.exit({exit_code})')
+    manager.probe_command=[sys.executable,str(child)]
+    with pytest.raises(ValueError) as failure:
+        await manager.perform('providers.schema',{'module':'provider-openai','workspace':str(tmp_path)})
+    message=str(failure.value)
+    assert f'exit code {exit_code}' in message
+    assert 'update the app' in message
+    assert 'dependencies finish installing' not in message
+    assert 'credential-must-not-leak' not in message
+
+
 MATRIX={'description':'Custom policy','roles':{'general':{'description':'General','candidates':[{'provider':'one','model':'gpt-*','config':{'reasoning_effort':'high'}}]},'fast':{'description':'Quick','candidates':[{'provider':'one','model':'small'}]}}}
 
 @pytest.mark.asyncio

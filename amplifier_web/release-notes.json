@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.10",
+      "title": "Reliable provider settings and connection checks",
+      "changes": [
+        "Provider settings, model discovery and connection checks start correctly in the isolated runtime used by installed applications.",
+        "A provider helper that exits without a result now reports the exit status and recovery guidance instead of incorrectly saying dependencies are still installing."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.9",
       "title": "Preserve canvas resources across clients",
       "changes": [
