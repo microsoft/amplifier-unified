@@ -108,6 +108,8 @@ class RuntimeControls:
         self.coordinator.register_capability("web.controls.persist", self.persist)
         from .task_continuity import TaskController
         self.tasks = TaskController(self)
+        from .capacity import CapacityController
+        self.capacity = CapacityController(self)
 
     async def close(self):
         if self.kernels:
@@ -132,6 +134,9 @@ class RuntimeControls:
         self.coordinator.session_state["task"] = saved.get("task")
         self.tasks.receipts = saved.get("taskReceipts", {})
         self.tasks.history = saved.get("taskHistory", [])
+        self.capacity.policy.update(saved.get("capacity", {}))
+        self.capacity.receipts = saved.get("capacityReceipts", {})
+        self.capacity.last_denial = saved.get("capacityLastDenial")
         task = self.tasks.record()
         if task:
             task['appliedRevision'] = None
@@ -176,6 +181,7 @@ class RuntimeControls:
             budget["maxOutputTokens"] = self.max_output_tokens
         previous = json.loads(self.state_path().read_text()) if self.state_path().exists() else {}
         write_private(self.state_path(), json.dumps({"configurator":{"disabled":{key:row.get("disabled",[]) for key,row in snapshot.items()}},
+            "capacity":self.capacity.policy,"capacityReceipts":self.capacity.receipts,"capacityLastDenial":self.capacity.last_denial,
             "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget},default=str))
         if task_only:
@@ -267,6 +273,8 @@ class RuntimeControls:
             return await self._perform(operation, args)
 
     async def _perform(self, operation, args):
+        if operation.startswith("capacity."):
+            return await self.capacity.perform(operation, args)
         if operation.startswith('task.'):
             return await self.tasks.perform(operation, args)
         if operation == "configuration.inspect":
