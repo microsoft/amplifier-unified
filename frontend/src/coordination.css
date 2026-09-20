@@ -1,0 +1,5 @@
+.a-coordination-target{border-top:1px solid var(--a-border,#8884);padding-block:1rem;min-width:0;overflow-wrap:anywhere}
+.a-coordination-target>label{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.a-coordination-target>label input{width:auto;margin:0}
+.a-coordination-target article{padding:.5rem .75rem;background:var(--a-bg-muted,#8881);border-radius:.5rem;max-height:16rem;overflow:auto;margin-block:.5rem}
+.a-coordination-target textarea{box-sizing:border-box;width:100%;min-height:4rem}

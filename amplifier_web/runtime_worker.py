@@ -470,7 +470,7 @@ class Worker:
                 if settled:
                     self.shutdown.set()
             return
-        if op not in {"send", "resume", "control", "worker.steer", "worker.stop", "approval"}:
+        if op not in {"send", "resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
             await self._command_serial(data)
             return
         try:
@@ -579,11 +579,11 @@ class Worker:
                     result = await switch(self, arguments)
                 else:
                     result = await self.controls.perform(data["operation"], arguments)
-            elif op in {"worker.steer", "worker.stop"}:
+            elif op in {"worker.steer", "worker.stop", "worker.message"}:
                 children = self.session.coordinator.get_capability("live.children")
                 wid = data["worker_id"]
                 if children and wid in children.rows:
-                    result = await children.control(wid, "steer" if op == "worker.steer" else "cancel", data.get("text", ""))
+                    result = await children.control(wid, "steer" if op == "worker.steer" else "message" if op == "worker.message" else "cancel", data.get("text", ""), input_id=data.get("input_id"))
                 elif op == "worker.stop":
                     from amplifier_module_loop_live.runtime import Input
                     loop = self.session.coordinator.get("orchestrator")

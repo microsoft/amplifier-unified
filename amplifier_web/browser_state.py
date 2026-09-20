@@ -82,6 +82,10 @@ def snapshot(state, derived, *, session_id=None):
                           for row in state.get('sessions', []) if row['id'] in visible]
     from .conversation_library import projection as organization_projection
     result['conversationOrganization'] = organization_projection(state, visible)
+    # Report history is read through bounded coordination cursors, never copied
+    # into every browser progress snapshot. The worker's latest report remains.
+    result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+                           for worker in row.get('workers', [])]} for row in result['sessions']]
     workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
