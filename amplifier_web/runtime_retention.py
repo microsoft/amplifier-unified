@@ -37,6 +37,8 @@ class WorkerRetention:
         self.task = None
         self.background = asyncio.Semaphore(self.settings["max_background_starts"])
         self.sweep_lock = asyncio.Lock()
+        self.reply_timeout = 30
+        self.retirements = set()
 
     def wake(self):
         if self.manager._closed:
@@ -66,22 +68,43 @@ class WorkerRetention:
                     if self.manager.workers.get(sid) is not row or not self.eligible(row):
                         continue
                     row["closing"] = True
-                    try:
-                        result = await self.manager._request_unlocked(sid, "retire")
-                    except Exception:
-                        # Uncertain retirement must not force-kill a possibly busy worker.
-                        row["closing"] = False
-                        row["parked"] = False
-                        continue
-                    if not result.get("retired"):
-                        row["closing"] = False
-                        row["parked"] = False
-                        continue
-                    session, emit = row["start_session"], row["emit"]
-                    row["retiring"] = True
-                    await self.manager.stop(sid)
-                    # A command already queued behind retirement can restart normally.
-                    self.manager._retired[sid] = (session, emit)
+                    task = asyncio.create_task(self.retire(sid, row))
+                    row['retirement_task'] = task
+                    self.retirements.add(task)
+                    task.add_done_callback(self.retirements.discard)
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), self.reply_timeout)
+                except TimeoutError:
+                    # Keep the intent and reply reader alive. Admission waits
+                    # for reconciliation; a timeout is not a refusal to retire.
+                    continue
+
+    async def retire(self, sid, row):
+        try:
+            # Retirement has no protocol-reply deadline. The sweep and command
+            # callers have bounded waits without cancelling this reconciliation.
+            result = await self.manager._request_unlocked(sid, 'retire')
+        except Exception:
+            async with self.manager._locks.setdefault(sid, asyncio.Lock()):
+                if self.manager.workers.get(sid) is row and not row.get('stop_task'):
+                    row['closing'] = False
+                    row['parked'] = False
+                    if row['process'].returncode is not None:
+                        await row['emit']('runtime.error', {'sessionId': sid,
+                            'error': 'The worker disconnected before idle retirement was confirmed. Work was not replayed.'})
+            return
+        async with self.manager._locks.setdefault(sid, asyncio.Lock()):
+            if self.manager.workers.get(sid) is not row or row.get('stop_task'):
+                return
+            if not result.get('retired'):
+                row['closing'] = False
+                row['parked'] = False
+                return
+            session, emit = row['start_session'], row['emit']
+            row['retiring'] = True
+            await self.manager.stop(sid)
+            # Commands held behind even a late acknowledgement can restart.
+            self.manager._retired[sid] = (session, emit)
 
     async def run(self):
         try:
@@ -99,3 +122,7 @@ class WorkerRetention:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        tasks = list(self.retirements)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

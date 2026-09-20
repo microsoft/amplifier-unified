@@ -140,6 +140,75 @@ async def test_send_racing_retirement_waits_and_restarts(manager):
     assert manager.workers['a']['process'] is not first
 
 
+@pytest.mark.parametrize('uncertain_write', [False, True])
+async def test_late_retirement_ack_is_reconciled_and_controls_resume(manager, uncertain_write):
+    manager.command = [sys.executable, '-c', SCRIPT.replace('time.sleep(.02)', 'time.sleep(.08)')]
+    first = await warm(manager, 'late')
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.reply_timeout = .005
+    original = manager._write
+    writes = []
+    async def write(row, data):
+        writes.append(data['op'])
+        await original(row, data)
+        if uncertain_write and data['op'] == 'retire':
+            raise ConnectionResetError('Fixture reports an uncertain write after delivery')
+    manager._write = write
+    await manager.retention.sweep()
+    row = manager.workers['late']
+    assert row['closing'] and not row['retirement_task'].done()
+    with pytest.raises(RuntimeError, match='No new command was sent'):
+        await manager.control('late', 'inspect')
+    assert 'control' not in writes and not row['retirement_task'].done()
+    # This control waits for the late acknowledgement and clean shutdown, then
+    # resumes a new worker. The timed-out control was never handed to either.
+    manager.retention.reply_timeout = 2
+    result = await asyncio.wait_for(manager.control('late', 'inspect'), 2)
+    assert result['ok'] and writes.count('control') == 1
+    assert first.returncode == 0
+    assert manager.workers['late']['process'] is not first
+    assert not [event for event in manager.events if event[0] == 'runtime.error']
+
+
+async def test_late_retirement_refusal_reopens_same_worker(manager):
+    manager.command = [sys.executable, '-c', SCRIPT.replace('time.sleep(.02)', 'time.sleep(.06)')]
+    first = await warm(manager, 'late-refusal')
+    await manager.send({'id': 'late-refusal'}, 'work', 'one', manager.emit)
+    manager.workers['late-refusal']['parked'] = True
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.reply_timeout = .005
+    await manager.retention.sweep()
+    manager.retention.reply_timeout = 2
+    assert (await asyncio.wait_for(manager.control('late-refusal', 'inspect'), 2))['ok']
+    assert manager.workers['late-refusal']['process'] is first
+    assert first.returncode is None and not manager.workers['late-refusal']['closing']
+
+
+async def test_missing_retirement_reply_never_force_kills_and_explicit_stop_cleans_up(manager):
+    manager.command = [sys.executable, '-c', SCRIPT.replace("time.sleep(.02)", "continue")]
+    first = await warm(manager, 'no-reply')
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.reply_timeout = .005
+    await manager.retention.sweep()
+    with pytest.raises(RuntimeError, match='No new command was sent'):
+        await manager.control('no-reply', 'inspect')
+    assert first.returncode is None
+    assert not manager.workers['no-reply']['retirement_task'].done()
+    await manager.stop('no-reply')
+    assert first.returncode == 0 and 'no-reply' not in manager._retired
+
+
+async def test_exit_without_retirement_ack_is_reported_as_uncertain(manager):
+    manager.command = [sys.executable, '-c', SCRIPT.replace("time.sleep(.02)", "break")]
+    first = await warm(manager, 'no-ack')
+    manager.retention.settings['max_warm_workers'] = 0
+    await manager.retention.sweep()
+    assert first.returncode == 0
+    errors = [data['error'] for kind, data in manager.events if kind == 'runtime.error']
+    assert len(errors) == 1 and 'before idle retirement was confirmed' in errors[0]
+    assert 'no-ack' not in manager._retired
+
+
 async def test_background_startup_is_bounded_and_disabled_policy_does_not_start(manager):
     pending = [asyncio.create_task(warm(manager, f'slow-{i}')) for i in range(4)]
     await asyncio.sleep(.04)

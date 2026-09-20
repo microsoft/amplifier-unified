@@ -6,6 +6,7 @@ app-owned Foundation lifecycle and standalone Amplifier configuration.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path
@@ -154,8 +155,24 @@ class RuntimeManager:
 
     async def start(self, session: dict, emit: Emitter):
         sid = session["id"]
-        async with self._locks.setdefault(sid, asyncio.Lock()):
+        async with self._admission(sid):
             await self._start_locked(session, emit)
+
+    @asynccontextmanager
+    async def _admission(self, sid):
+        while True:
+            async with self._locks.setdefault(sid, asyncio.Lock()):
+                row = self.workers.get(sid)
+                retirement = row.get('retirement_task') if row else None
+                if retirement is None or retirement.done():
+                    yield
+                    return
+            # Never send a new command to an owner that might still exit after
+            # a delayed retirement acknowledgement. Waiting does not cancel it.
+            try:
+                await asyncio.wait_for(asyncio.shield(retirement), self.retention.reply_timeout)
+            except TimeoutError as exc:
+                raise RuntimeError('Idle worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
     async def _start_locked(self, session, emit):
         if self._closed:
@@ -337,7 +354,7 @@ class RuntimeManager:
             return await self._request_unlocked(sid, op, **args)
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
-        async with self._locks.setdefault(sid, asyncio.Lock()):
+        async with self._admission(sid):
             if sid not in self.workers and sid in self._retired and op in {"send", "control", "resume"}:
                 session, emit = self._retired[sid]
                 await self._start_locked(session, emit)
@@ -365,16 +382,20 @@ class RuntimeManager:
             row["inflight"].discard(identity)
             row["pending"].pop(identity, None)
             raise
-        except BaseException:
+        except BaseException as exc:
             # A partial transport write has an unknown outcome. Keep the
             # in-flight fence until its reply or process exit, just like timeout.
+            if op == 'retire' and isinstance(exc, Exception):
+                # A partial retirement write can still get a late reply. Its
+                # reconciler keeps the original future until reply or exit.
+                return row, identity, future
             row["pending"].pop(identity, None)
             raise
         return row, identity, future
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = None if op == "control" and args.get("operation") == "bundle.switch" else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = None if op == "retire" or op == "control" and args.get("operation") == "bundle.switch" else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
@@ -479,6 +500,10 @@ class RuntimeManager:
         row = self.workers.get(session_id)
         if not row:
             return
+        retirement = row.get('retirement_task')
+        if retirement and retirement is not asyncio.current_task() and not retirement.done():
+            retirement.cancel()
+            await asyncio.gather(retirement, return_exceptions=True)
         if "stop_task" not in row:
             row["stop_task"] = asyncio.create_task(self._stop_row(session_id, row))
         await asyncio.shield(row["stop_task"])

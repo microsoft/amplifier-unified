@@ -35,11 +35,33 @@ Lazy provider loading and interchangeable worker pools remain out of scope.
 - The TUI HTTP contract test prepares an explicit chat without selecting it,
   submits no input, and deduplicates a retried preparation command.
 
-The integrated full suites passed 1,171 Python tests (11 opt-in skips) and
-165 frontend tests. Subsequent startup-approval validation passed the focused
-runtime, retention, warmup, live-client and bundle suites. Wheel/source builds
+The final backend suite passed 1,177 Python tests (11 opt-in skips), including
+the startup-approval and retirement-review corrections. The unchanged frontend
+passed 165 tests. Wheel/source builds
 and packaged-source/static-asset verification passed. These checks do not
 constitute a release or deployment.
+
+## Retirement review correction
+
+An independent lifecycle review reproduced a late-acknowledgement race: after
+the retirement wait timed out, the host forgot the intent, reported the worker's
+successful exit as an error, and could not resume the next control. Retirement
+now has a persistent reconciliation task. The sweep and new command callers
+have bounded waits that do not cancel that task or admit work to an owner that
+may still exit. A late positive acknowledgement completes cleanup and records
+the normal resume information; a late refusal reopens admission to the same
+worker. An uncertain write keeps its original reply future. A missing reply
+never authorizes a forced shutdown, and an exit without acknowledgement is
+reported as uncertain rather than successful retirement.
+
+The correction passed 92 focused runtime, retention, warmup, live-client and
+bundle checks, including the five new delayed/missing-acknowledgement cases.
+An independent focused recheck also cancelled a caller waiting for retirement,
+confirmed reconciliation survived and recorded the late acknowledgement, then
+resumed a control without a spurious runtime error. This was a focused review
+of the correction, not comprehensive pull-request acceptance. The actual-worker
+probe passed again after the correction: about 4.44 seconds cold and 0.102 seconds
+for the next fixture turn, with safe retirement and resume without replay.
 
 Repeatable checks include `tests/test_runtime_retention.py`,
 `tests/test_session_warmup.py`, `tests/fixtures/warm_worker_probe.py`, and the
