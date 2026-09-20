@@ -5,17 +5,17 @@ const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'cha
 
 test('shared CLI IDs are searchable without replacing internal keys',()=>{
  const state=fixture();
- state.sessions=[{id:'internal-import',runtimeSessionId:'2c88c45f-native',workspaceId:'project'},
-  {id:'other-import',nativeIdentity:'2c88c45f-native',workspaceId:'other'},
-  {id:'ae543fd8-unified',workspaceId:'project'}];
- state.view={navChatScope:'all',navFilter:'2c88c45f'};state.pinnedSessionIds=['internal-import'];
+ state.sessions=[{id:'internal-import',runtimeSessionId:'cli-root-123',workspaceId:'project'},
+  {id:'other-import',nativeIdentity:'cli-root-123',workspaceId:'other'},
+  {id:'unified-root-456',workspaceId:'project'}];
+ state.view={navChatScope:'all',navFilter:'cli-root'};state.pinnedSessionIds=['internal-import'];
  const before=structuredClone(state);
  assert.deepEqual(chatPage(state).items.map(row=>row.id),['internal-import','other-import']);
  assert.deepEqual(state,before);
  state.view.navChatScope='workspace';
  assert.deepEqual(chatPage(state).items.map(row=>row.id),['internal-import']);
- state.view.navFilter='ae543fd8';
- assert.deepEqual(chatPage(state).items.map(row=>row.id),['ae543fd8-unified']);
+ state.view.navFilter='unified-root';
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['unified-root-456']);
 });
 
 test('workspace navigation includes only verified folders without discarding registrations',()=>{
