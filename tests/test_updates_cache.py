@@ -46,6 +46,7 @@ def cache_artifacts(root):
 
 class Runtime:
     async def close(self):pass
+    async def reset(self):pass
 
 
 @pytest.fixture

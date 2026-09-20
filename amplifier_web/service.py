@@ -1379,7 +1379,13 @@ class AppService:
             async with self.lock:
                 current = self._session(session['id'])
                 self._delivery(current, input_id, 'unknown')
+                needs_error = current['status'] != 'error'
                 self._publish()
+            if needs_error:
+                await self.on_runtime_event('runtime.error', {
+                    'sessionId': session['id'],
+                    'error': 'Message delivery could not be confirmed. The conversation worker is unavailable. Work was not automatically replayed.',
+                })
             raise
         async with self.lock:
             current = self._session(session["id"])
