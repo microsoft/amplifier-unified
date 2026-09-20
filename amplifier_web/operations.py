@@ -75,12 +75,25 @@ class Operations:
     async def observe(self, session_id, runtime_session_id, event):
         # session_id comes from the authenticated worker bridge, never the tool.
         self.service._session(session_id)
-        if event.get("source") != "tool-bash" or event.get("kind") != "process":
+        if (event.get("source"), event.get("kind")) not in {
+            ("tool-bash", "process"),
+            ("computation", "kernel"),
+            ("computation", "kernel-cell"),
+        }:
             raise ValueError(
                 "No host adapter is registered for this operation producer"
             )
         if self.closed:
             raise ValueError("Operation journal is closing")
+        if (
+            event.get("source") == "computation"
+            and event.get("kind") == "kernel-cell"
+            and event.get("phase") == "started"
+        ):
+            for question_id in event.get("metadata", {}).get("questionIds", []):
+                if not hasattr(self.service, "questions"):
+                    raise ValueError("Required question answers are unavailable")
+                self.service.questions.answer_for_dependency(session_id, question_id)
         task = asyncio.create_task(
             asyncio.to_thread(
                 self.journal.ingest, session_id, runtime_session_id, event
@@ -221,11 +234,13 @@ class Operations:
             return value
         value = self.journal.status(session_id, identity)
         value["revision"] = str(value["revision"])
+        if value["source"] == "kernel":
+            value["controlAvailable"] = False
         return value
 
     def read(self, args):
         value = self.status(args["sessionId"], args["id"])
-        if value["source"] != "process":
+        if value["source"] not in {"process", "kernel", "kernel-cell"}:
             # Existing receipts stay authoritative; inspect their evidence rather
             # than synthesizing a second streaming-output log.
             return {
@@ -242,6 +257,8 @@ class Operations:
             args.get("maxBytes", 16384),
         )
         result["revision"] = str(result["revision"])
+        if result["source"] == "kernel":
+            result["controlAvailable"] = False
         return result
 
     async def dispatch(self, action, args, origin):
@@ -296,6 +313,23 @@ class Operations:
 
     async def cancel(self, session_id, identity, origin):
         value = self.status(session_id, identity)
+        if value["state"] not in ACTIVE:
+            return value
+        if value["source"] == "kernel-cell":
+            from .computation import dispatch
+
+            metadata = value["metadata"]
+            return await dispatch(
+                self.service,
+                "kernels.interrupt",
+                {
+                    "sessionId": session_id,
+                    "kernelId": metadata["kernelId"],
+                    "generation": metadata["generation"],
+                    "cellId": identity,
+                },
+                origin,
+            )
         if value["source"] != "process":
             raise ValueError(
                 "Cancellation is unavailable for this receipt adapter; use the existing worker or Smart Tool controls"

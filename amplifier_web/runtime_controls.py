@@ -100,6 +100,8 @@ class RuntimeControls:
         self.selection_cleared = False
         self.max_output_tokens = None
         self.logins = {}
+        self.kernels = None
+        self.kernel_install = None
         from .provider_catalog import ProviderCatalog
         self.model_catalog=ProviderCatalog()
         self.catalog_revision=str(uuid.uuid4())
@@ -108,6 +110,8 @@ class RuntimeControls:
         self.tasks = TaskController(self)
 
     async def close(self):
+        if self.kernels:
+            await self.kernels.shutdown()
         await self.model_catalog.close()
         tasks = [row["task"] for row in self.logins.values() if not row["task"].done()]
         for task in tasks:
@@ -234,6 +238,17 @@ class RuntimeControls:
         args = args or {}
         if not isinstance(args, dict):
             raise ValueError("Control arguments must be an object")
+        if operation.startswith("kernels."):
+            if self.kernels is None:
+                from .computation import install
+                if self.kernel_install is None:
+                    self.kernel_install = asyncio.create_task(install(self))
+                self.kernels = await asyncio.shield(self.kernel_install)
+            arguments = {key: value for key, value in args.items() if key != "actor"}
+            arguments["action"] = operation.removeprefix("kernels.")
+            return await self.invoke({"name": "compute", "arguments": arguments},
+                bound_arguments=arguments, checkpoint=False,
+                provenance={"source": operation, "actor": args.get("actor", "ui")})
         if operation == "operations.cancel":
             coordinator = self.coordinator
             target = args.get("runtimeSessionId")
@@ -634,7 +649,7 @@ class RuntimeControls:
             data = {**data,"tool_input":arguments}
         if bound_arguments is not None and arguments != bound_arguments:
             await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
-            raise ValueError("A policy modification cannot redirect operation cancellation")
+            raise ValueError("A policy modification cannot redirect an identity-bound operation")
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
         try:

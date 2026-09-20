@@ -363,7 +363,7 @@ class RuntimeManager:
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._admission(sid):
-            if sid not in self.workers and sid in self._retired and op in {"send", "control", "resume"} and not (op == "control" and args.get("operation") == "operations.cancel"):
+            if sid not in self.workers and sid in self._retired and op in {"send", "control", "resume"} and not (op == "control" and (args.get("operation") == "operations.cancel" or args.get("operation", "").startswith("kernels."))):
                 session, emit = self._retired[sid]
                 await self._start_locked(session, emit)
             pending = await self._admit(sid, op, args)

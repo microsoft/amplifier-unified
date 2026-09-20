@@ -38,14 +38,14 @@ export function OperationsPanel({sessionId}){
   {open&&<div className="a-operations-body">
    <p>Saved execution evidence for this conversation.</p><button type="button" data-action="operations.list" onClick={()=>call('operations.list',{sessionId}).then(value=>setRows(value.operations)).catch(e=>setError(e.message))}>Refresh operations</button>
    {error&&<p role="alert">{error}</p>}
-   {!rows.length?<p>No operations have been recorded.</p>:<ul>{rows.map(row=><li key={row.id}><button type="button" data-action="operations.read" onClick={()=>{setPageCursor(0);setSelected(row.id)}} aria-pressed={selected===row.id}>{row.kind==='process'?'Command':row.kind==='worker'?'Worker':'Smart Tool'} · {labels[row.state]||row.state}</button></li>)}</ul>}
+   {!rows.length?<p>No operations have been recorded.</p>:<ul>{rows.map(row=><li key={row.id}><button type="button" data-action="operations.read" onClick={()=>{setPageCursor(0);setSelected(row.id)}} aria-pressed={selected===row.id}>{row.kind==='process'?'Command':row.kind==='worker'?'Worker':row.kind==='kernel-cell'?'Computation cell':row.kind==='kernel'?'Computation runtime':'Smart Tool'} · {labels[row.state]||row.state}</button></li>)}</ul>}
    {detail&&<div aria-live="polite"><strong>{labels[detail.state]||detail.state}</strong>
     {detail.returncode!=null&&<span> · Exit code {detail.returncode}</span>}
     {detail.state==='outcome_unknown'&&<p>The host could not confirm the outcome. Work has not been replayed.</p>}
     {(detail.cursorGap||detail.captureComplete===false)&&<p>Some output is unavailable. This evidence is incomplete.</p>}
-    <pre>{detail.chunks?.map(chunk=>chunk.text).join('')||JSON.stringify(detail.evidence||{},null,2)}</pre>
+    <pre>{detail.chunks?.map(chunk=>chunk.text).join('')}{detail.evidence&&JSON.stringify(detail.evidence,null,2)}</pre>
     {detail.hasMore&&<button type="button" data-action="operations.read" onClick={()=>setPageCursor(detail.nextCursor)}>Next output page</button>}
-    {detail.controlAvailable&&<button type="button" data-action="operations.cancel" disabled={busy} onClick={cancel}>Stop command</button>}
+    {detail.controlAvailable&&<button type="button" data-action="operations.cancel" disabled={busy} onClick={cancel}>{detail.kind==='kernel-cell'?'Interrupt cell':'Stop command'}</button>}
    </div>}
   </div>}
  </section>;

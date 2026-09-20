@@ -255,6 +255,8 @@ class OperationJournal:
                     and status.get("returncode") != 0
                 ):
                     raise ValueError("Completed process requires zero exit code")
+                if status.get("capture_complete") is False:
+                    value["captureComplete"] = False
                 value.update(
                     state=state,
                     returncode=status.get("returncode"),
@@ -274,6 +276,16 @@ class OperationJournal:
                     value["endedAt"] = status.get("ended_at") or time.time()
                     if status.get("total_output_bytes", 0) != value["totalOutputBytes"]:
                         value["captureComplete"] = value["outputComplete"] = False
+            if "metadata" in event:
+                if not isinstance(event["metadata"], dict):
+                    raise ValueError("Operation metadata must be an object")
+                value["metadata"] = event["metadata"]
+            if phase == "finished":
+                value["evidence"] = {
+                    key: status[key]
+                    for key in ("result", "error", "resultTruncated")
+                    if key in status
+                }
             value.update(
                 sequence=sequence, revision=value["revision"] + 1, updatedAt=time.time()
             )
