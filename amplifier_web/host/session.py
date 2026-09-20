@@ -33,6 +33,9 @@ def live_plan(plan, background_delegate=True):
     if root_loop not in {"loop-streaming", "loop-live"}:
         raise ValueError(f"Main session orchestrator {root_loop!r} is not compatible with live input. Select a bundle using loop-streaming or loop-live; custom orchestrators are not silently replaced.")
     def visit(node, prefix=""):
+        context = node.get("session", {}).get("context", {})
+        if context.get("module") == "context-managed" and context.get("config", {}).get("engine") == "boundary":
+            context.setdefault("config", {}).setdefault("durable_checkpoints", True)
         loop = node.get("session", {}).get("orchestrator", {})
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
@@ -550,6 +553,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "bundle_name": bundle_identity, "working_dir": str(config.workspace),
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(session.config)}
+        continuity = None
         async def checkpoint(status="in_progress"):
             if write_guard:
                 write_guard()
@@ -567,12 +571,16 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
             native_guard.saved()
+            if continuity:
+                continuity.save()
         coordinator.register_capability("live.checkpoint", checkpoint)
+        from ..context_continuity import install as install_continuity
+        continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)
         async def checkpoint_hook(event, data):
             if data.get("session_id", runtime.session_id) == runtime.session_id:
                 await checkpoint()
             return HookResult()
-        for event in ("tool:post", "tool:error", "orchestrator:complete"):
+        for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
             coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
         async def cleanup_jobs():
             jobs.close()

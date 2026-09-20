@@ -104,6 +104,8 @@ class RuntimeControls:
         self.model_catalog=ProviderCatalog()
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
+        from .task_continuity import TaskController
+        self.tasks = TaskController(self)
 
     async def close(self):
         await self.model_catalog.close()
@@ -123,6 +125,13 @@ class RuntimeControls:
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
+        self.coordinator.session_state["task"] = saved.get("task")
+        self.tasks.receipts = saved.get("taskReceipts", {})
+        self.tasks.history = saved.get("taskHistory", [])
+        task = self.tasks.record()
+        if task:
+            task['appliedRevision'] = None
+            self.tasks.apply()
         # Older snapshots recorded None for module-managed/automatic limits.
         # Absence of an override must leave the newly mounted module's default
         # intact, rather than passing null to the explicit budget-edit API.
@@ -154,7 +163,7 @@ class RuntimeControls:
         # Do not silently move an old pin to another model, account or backend.
         return selection
 
-    def persist(self):
+    def persist(self, *, task_only=False):
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in
@@ -163,8 +172,10 @@ class RuntimeControls:
             budget["maxOutputTokens"] = self.max_output_tokens
         previous = json.loads(self.state_path().read_text()) if self.state_path().exists() else {}
         write_private(self.state_path(), json.dumps({"configurator":{"disabled":{key:row.get("disabled",[]) for key,row in snapshot.items()}},
-            "goal":self.coordinator.session_state.get("goal"),"mode":self.coordinator.session_state.get("active_mode"),
+            "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget},default=str))
+        if task_only:
+            return
         write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(
             {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS},default=str))
 
@@ -241,6 +252,8 @@ class RuntimeControls:
             return await self._perform(operation, args)
 
     async def _perform(self, operation, args):
+        if operation.startswith('task.'):
+            return await self.tasks.perform(operation, args)
         if operation == "configuration.inspect":
             return self.configuration()
         if operation == "history.snapshot":
@@ -316,6 +329,8 @@ class RuntimeControls:
             return await self.mode(operation, args)
         if operation in {"goals.get", "goals.set", "goals.clear"}:
             if operation != "goals.get":
+                if self.tasks.record() and self.tasks.record()["status"] != "completed":
+                    raise ValueError("Use the saved task controls to update or pause its goal")
                 self.require_idle()
                 if not self.capabilities()["goals"]:
                     raise ValueError("This orchestrator does not support goal continuation")

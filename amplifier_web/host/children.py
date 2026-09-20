@@ -238,12 +238,15 @@ class Children:
                     "provider_preferences": [p.to_dict() for p in preferences], "mount_plan": plan}
         if selection:
             metadata["effective_selection"] = selection
+        continuity = None
         async def checkpoint(status=None):
             if not child:
                 return
             context = child.coordinator.get("context")
             messages = await context.get_messages() if context else []
             self.store.save(identity, messages, {**metadata, "status": status or row["status"]})
+            if continuity:
+                continuity.save()
         completion = {}
         async def completed(event, data):
             completion.update(data)
@@ -267,6 +270,13 @@ class Children:
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)
             coordinator.register_capability("live.checkpoint", checkpoint)
+            from ..context_continuity import install as install_continuity
+            from ..runtime_controls import override_path
+            continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
+            async def compacted(event, data):
+                await checkpoint()
+                return HookResult()
+            coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
                 if value is not None:
