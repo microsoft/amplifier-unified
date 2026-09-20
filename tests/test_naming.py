@@ -45,6 +45,7 @@ async def test_live_naming_schedule_dedupes_service_turns_resumes_and_updates(mo
     monkeypatch.setitem(sys.modules,'amplifier_module_hooks_session_naming',SimpleNamespace(SessionNamingHook=Hook,SessionNamingConfig=Config))
     coordinator=SimpleNamespace(config={'hooks':[{'module':'hooks-session-naming'}]},session_id='s',hooks=SimpleNamespace(register=lambda *a,**k:None),register_cleanup=lambda *a:None)
     namer=LiveSessionNaming(coordinator,tmp_path,lambda e:None)
+    namer.store.save('s', [], {})
     async def turn(n):
         namer.observe({'type':'input.delivered','input_id':str(n),'source':'user'})
         event={'type':'generation.finished','input_ids':[str(n)]}

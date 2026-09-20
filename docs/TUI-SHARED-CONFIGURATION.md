@@ -253,3 +253,31 @@ See `docs/SHARED-MODEL-ADAPTER.md` for installation boundaries and host validati
 Downstream integrations own their live-provider qualification. Compatible package
 pins matter when co-installing the optional host adapter and native runtime;
 their dependency resolver must agree on the Foundation revision.
+
+
+## Foundation metadata and settings adoption
+
+Foundation now supplies `amplifier_foundation.settings.read_settings(paths)` and
+`update_settings(path, mutator)`. Hosts select their scope paths; use this common
+reader/writer instead of maintaining a second settings merge implementation.
+Unified's existing path helpers are thin adapters. CLI resume must enable the
+native session scope for providers and configurator choices, not just tool paths.
+
+Native `metadata.json.name` is also the canonical conversation name. Connected
+TUI clients and agents rename through Unified's `session.rename` action. A
+standalone host uses Foundation's `SessionMetadataStore.set_name`, and saves
+runtime checkpoints through `SessionHistoryStore.save(..., merge_metadata=True)`.
+Never overlay `naming.json` or a UI cache over an existing native name. Automatic
+names carry their provenance/revision so a late result cannot replace a manual
+choice. Older sidecars are migration inputs only; conflicting originals remain
+available and existing native names win.
+
+This contract requires an updated Foundation and cooperating hosts. The short
+metadata lock is independent of execution ownership; it does not authorize
+transcript edits or tool execution. Custom roots remain supported. See Foundation
+`docs/SESSION_METADATA.md` for the API and deletion coordination requirements.
+
+This change covers naming and common scoped settings. The existing private
+runtime-control overrides described above, fork cost boundaries, resource
+portability, and event-only recovery remain distinct interoperability work. A
+connected TUI uses Unified's runtime rather than reinterpreting those host files.

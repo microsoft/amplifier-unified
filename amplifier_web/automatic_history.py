@@ -376,10 +376,13 @@ class AutomaticHistory:
                                                     'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
-                            if previous.get('historyManaged') and previous.get('titleSource') != 'manual':
+                            if row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual'):
                                 title = row.get('name') or row.get('title') or previous['title']
                                 if title != previous['title']:
                                     previous['title'] = title; changed = True
+                                source = row.get('nameSource') or 'manual'
+                                if row.get('name') and previous.get('titleSource') != source:
+                                    previous['titleSource'] = source; changed = True
                             if previous.get('historyManaged') and previous.get('historyReadOnlyReason') != row.get('readOnlyReason'):
                                 previous['historyReadOnlyReason'] = row.get('readOnlyReason'); changed = True
                             if previous.get('historyManaged'):

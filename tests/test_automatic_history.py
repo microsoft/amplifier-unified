@@ -498,7 +498,7 @@ async def test_resolved_metadata_migrates_workspace_customization_and_canvas_sco
     assert refreshed['createdAt'] == 1769947200
     assert refreshed['updatedAt'] == 9999999999
     assert refreshed['historyReadOnlyReason'] is None
-    assert refreshed['title'] == 'My manual chat title'
+    assert refreshed['title'] == 'A different CLI name'
     assert refreshed['workspaceId'] != original_workspace_id
     assert not any(item['id'] == original_workspace_id for item in app.state['workspaces'])
     registration = next(item for item in app.state['workspaces'] if item['id'] == refreshed['workspaceId'])
@@ -745,7 +745,7 @@ async def test_promoted_paged_chat_retains_earlier_history_offsets_and_web_messa
     assert [message['nativeIndex'] for message in session['messages']] == list(range(207))
 
 
-async def test_native_manual_title_source_refreshes_without_overriding_web_rename(tmp_path, app_factory):
+async def test_canonical_manual_title_refreshes_after_web_and_cli_renames(tmp_path, app_factory):
     directory = native_session(tmp_path / 'cli', 'named-chat', metadata={'name_source': 'manual', 'name': 'First CLI title'})
     app = app_factory()
     await app.history.refresh()
@@ -762,7 +762,7 @@ async def test_native_manual_title_source_refreshes_without_overriding_web_renam
     metadata['name'] = 'Third CLI title'
     metadata_path.write_text(json.dumps(metadata))
     await app.history.refresh()
-    assert app._session(row['id'])['title'] == 'User web title'
+    assert app._session(row['id'])['title'] == 'Third CLI title'
     await app.close()
     restored = app_factory()
     assert restored._session(row['id'])['nativeNameSource'] == 'manual'

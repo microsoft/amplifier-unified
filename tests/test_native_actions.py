@@ -93,7 +93,7 @@ async def test_explicit_native_rename_is_shared_without_promoting_history(tmp_pa
     row=native_rows(app)[0]
     before=(folder/'transcript.jsonl').read_bytes()
     await app.dispatch('session.rename', {'id':row['id'],'title':'My saved worker'})
-    assert json.loads((folder/'naming.json').read_text())['name']=='My saved worker'
+    assert not (folder/'naming.json').exists()  # No competing title authority.
     assert json.loads((folder/'metadata.json').read_text())['name']=='My saved worker'
     assert json.loads((folder/'metadata.json').read_text())['session_id']=='root_child:worker'
     assert app._session(row['id'])['historyManaged']
