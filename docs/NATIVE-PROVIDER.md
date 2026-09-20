@@ -12,14 +12,18 @@ No models, defaults, credentials, or source pins are changed by this feature.
 Only the currently selected OpenAI `gpt-6-astra` instance at the official endpoint
 is wrapped, before normal observation/capacity/surface wrappers. A missing module,
 unsupported model/endpoint, preexisting instance wrapper, or disabled option
-reports ordinary boundary steering. A later selection change requires remount
-before that new identity can use native transport. Finite children retain their
+reports ordinary boundary steering. A later selection change immediately uses ordinary transport and requires
+remount before that new identity can use native transport. Changing effort does
+not reuse the old native identity or poison it as an uncertain send. Finite children retain their
 ordinary execution path.
 
 The Limits & context panel and `runtime.control` share `native.status` and
 `native.compact`. Status is descriptive. Explicit compaction requires the session
 and dependent work to be idle, a prior successful native request, and a settled
-transport. It makes one provider request. An active agent cannot compact its own
+transport. It makes one provider request through the same capacity admission and durable
+call receipt path as ordinary completions. Reported token counters are retained;
+missing usage stays unknown. Missing accounting prevents compaction. An active
+agent cannot compact its own
 in-flight generation; it must defer until idle. Agent native controls are bound
 to the calling session, including through the generic runtime-control alias.
 Client-supplied actor labels do not grant authority.

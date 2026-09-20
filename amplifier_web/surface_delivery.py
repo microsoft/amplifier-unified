@@ -5,6 +5,7 @@ state reads are usable only while the exact tool result remains in the request;
 compaction, resume and forks therefore resync without trusting a revision alone.
 """
 import asyncio
+import inspect
 import json
 import time
 import uuid
@@ -192,7 +193,8 @@ class SurfaceProvider:
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):
                 request = await self._prepare(request)
-                return await method(request, **kwargs)
+                result = method(request, **kwargs)
+                return await result if inspect.isawaitable(result) else result
             return budget
         return method
 

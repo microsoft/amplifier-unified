@@ -95,6 +95,49 @@ class ExecutionEvents:
         child = self.children.get(sid)
         return (child["id"], child.get("turnId")) if child else (None, self.turn_id)
 
+    async def _begin_provider_call(self, sid, provider, request, *, label=None):
+        parent,turn = self.parent(sid)
+        purpose=CALL_PURPOSE.get()
+        if purpose:parent,turn=None,purpose.get('turnId',turn)
+        info = provider.get_info()
+        if inspect.isawaitable(info):
+            info = await info
+        defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info,"defaults",{})) or {}
+        provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
+        row = {"id":"llm:"+str(uuid.uuid4()),"parentId":parent,"turnId":turn,"sessionId":sid,
+               "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":label or (purpose["label"] if purpose else "Model call"),
+               "provider":str(provider_id)[:160],
+               "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
+               "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
+        if self.admission_guard:
+            await self.admission_guard(row)
+        return row
+
+    async def provider_call(self, sid, provider, request, invoke, *, label=None):
+        """Observe one host-owned provider action through the same admission gate.
+
+        Optional provider actions such as explicit compaction do not implement
+        complete(), but still consume model capacity. Retain only their usage
+        and call identity, exactly like ordinary completion calls.
+        """
+        row = await self._begin_provider_call(sid, provider, request, label=label)
+        token = CURRENT_CALL.set(row["id"])
+        owner = CURRENT_PROVIDER.set(id(provider))
+        self.publish(row)
+        try:
+            response = await invoke()
+            usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+            self.publish({**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)})
+            return response
+        except BaseException as exc:
+            from .session_health import exception_details
+            failure = {} if isinstance(exc, asyncio.CancelledError) else {'failure': exception_details(exc)}
+            self.publish({**row, "phase": "cancelled" if isinstance(exc, asyncio.CancelledError) else "error", "endedAt": time.time(), **failure})
+            raise
+        finally:
+            CURRENT_CALL.reset(token)
+            CURRENT_PROVIDER.reset(owner)
+
     def instrument_provider(self, sid, provider):
         """Observe the public complete boundary; Core hook callbacks may use new tasks.
 
@@ -109,44 +152,11 @@ class ExecutionEvents:
         original = getattr(provider,"complete",None)
         if not callable(original):
             return provider
-        async def begin(request):
-            parent,turn = self.parent(sid)
-            purpose=CALL_PURPOSE.get()
-            if purpose:parent,turn=None,purpose.get('turnId',turn)
-            info = provider.get_info()
-            if inspect.isawaitable(info):
-                info = await info
-            defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info,"defaults",{})) or {}
-            provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
-            row = {"id":"llm:"+str(uuid.uuid4()),"parentId":parent,"turnId":turn,"sessionId":sid,
-                   "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
-                   "provider":str(provider_id)[:160],
-                   "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
-                   "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
-            if self.admission_guard:
-                await self.admission_guard(row)
-            return row
-
         @wraps(original)
         async def complete(request, **kwargs):
             if CURRENT_PROVIDER.get() == id(provider):
                 return await original(request, **kwargs)
-            row = await begin(request)
-            token = CURRENT_CALL.set(row["id"])
-            owner = CURRENT_PROVIDER.set(id(provider))
-            self.publish(row)
-            try:
-                response = await original(request, **kwargs)
-                self.publish({**row,"phase":"completed","endedAt":time.time(),"usage":public_usage(getattr(response,"usage",None))})
-                return response
-            except BaseException as exc:
-                from .session_health import exception_details
-                failure = {} if isinstance(exc, asyncio.CancelledError) else {'failure': exception_details(exc)}
-                self.publish({**row,"phase":"cancelled" if isinstance(exc,asyncio.CancelledError) else "error","endedAt":time.time(), **failure})
-                raise
-            finally:
-                CURRENT_CALL.reset(token)
-                CURRENT_PROVIDER.reset(owner)
+            return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs))
 
         original_stream = getattr(provider, "stream", None)
         async def stream(request, **kwargs):
@@ -159,7 +169,7 @@ class ExecutionEvents:
                     if callable(getattr(iterator, "aclose", None)):
                         await iterator.aclose()
                 return
-            row = await begin(request)
+            row = await self._begin_provider_call(sid, provider, request)
             self.streaming_calls.add(row["id"])
             self.publish(row)
             iterator = None

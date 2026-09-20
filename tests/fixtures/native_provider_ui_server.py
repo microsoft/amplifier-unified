@@ -36,6 +36,9 @@ class Coordinator:
                                   _select_provider=lambda providers:providers['fixture-selected'])
         self.context=SimpleNamespace(get_messages=self.get_messages)
         self.caps={'live.checkpoint':AsyncMock()}
+        from amplifier_web.execution_events import ExecutionEvents
+        self.telemetry=ExecutionEvents(sid, lambda event:None)
+        self.caps['web.provider_call']=lambda provider,request,invoke,**kwargs: self.telemetry.provider_call(sid,provider,request,invoke,**kwargs)
         self.host=NativeProviderHost(self,self.loop,app_home()/'sessions'/sid)
         self.host.provider=self.provider
         self.host.identity=self.host.selected_identity()
