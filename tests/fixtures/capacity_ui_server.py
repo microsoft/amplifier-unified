@@ -32,7 +32,7 @@ async def main(home):
         def get_info(self): return SimpleNamespace(id='Fixture provider', defaults={'model': 'fixture-model'})
         async def complete(self, request):
             self.calls += 1
-            return SimpleNamespace(usage={'input_tokens': 8, 'output_tokens': 2})
+            return SimpleNamespace(usage={'input_tokens': 3, 'output_tokens': 7, 'cache_write_tokens': 12635})
     provider = Provider()
     async def configure():
         runtime.worker.capacity.admit = lambda row: service.app_bridge('capacity.admit', {'call': row}, sid)
@@ -51,7 +51,7 @@ async def main(home):
         await runtime.worker.close(); runtime.worker = controls(sid); await runtime.worker.restore()
         return web.json_response((await service.app_bridge('dispatch', {'action': 'capacity.read', 'args': {}}, sid))['result'])
     async def agent(request):
-        result = await service.app_bridge('dispatch', {'action': 'capacity.set', 'id': 'agent-budget', 'args': {'expectedRevision': runtime.worker.capacity.policy['revision'], 'maxTotalTokens': 100}}, sid)
+        result = await service.app_bridge('dispatch', {'action': 'capacity.set', 'id': 'agent-budget', 'args': {'expectedRevision': runtime.worker.capacity.policy['revision'], 'maxTotalTokens': 20000}}, sid)
         return web.json_response({'result': result['result'], 'draft': service.state['view']['draft']})
     app.router.add_post('/fixture/model', model)
     app.router.add_post('/fixture/restart', restart)

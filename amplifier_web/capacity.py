@@ -9,7 +9,9 @@ import json
 import math
 import time
 
-METRICS = ('inputTokens', 'outputTokens', 'totalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd')
+from .token_usage import with_gross_tokens
+
+METRICS = ('inputTokens', 'outputTokens', 'totalTokens', 'grossInputTokens', 'grossTotalTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens', 'costUsd')
 LIVE = {'running', 'working', 'starting', 'queued', 'retrying', 'pending'}
 
 
@@ -21,7 +23,7 @@ def definitions(schema, string):
     sid = {'sessionId': string(200)}
     return {
         'capacity.read': ('Read durable model-call receipts and task-wide consumption, including actual descendants. Unknown totals are explicitly partial; reading never starts work.', schema({**sid, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 500}}, ['sessionId'])),
-        'capacity.set': ('Set a revision-bound cumulative task budget. Limits pause future model calls at admission, never roll back in-flight effects. Updating does not send input or resume a paused task.', schema({**sid,
+        'capacity.set': ('Set a revision-bound cumulative task budget. Total tokens include cache writes once; cache reads are already included in input. Limits pause future model calls at admission, never roll back in-flight effects. Updating does not send input or resume a paused task.', schema({**sid,
             'expectedRevision': {'type': 'integer', 'minimum': 0}, 'maxTotalTokens': {'type': ['integer', 'null'], 'minimum': 1},
             'maxCostUsd': {'type': ['number', 'null'], 'exclusiveMinimum': 0},
             'warningFraction': {'type': 'number', 'exclusiveMinimum': 0, 'maximum': 1},
@@ -32,6 +34,7 @@ def definitions(schema, string):
 
 
 def aggregate(calls):
+    calls = [{**row, 'usage': with_gross_tokens(row.get('usage') or {})} for row in calls]
     result = {}
     for key in METRICS:
         rows = [(row, row.get('usage', {}).get(key)) for row in calls]
@@ -45,6 +48,8 @@ def aggregate(calls):
             result[key]['estimatedValue'] = sum(value for row, value in known if row.get('usage', {}).get('costType') == 'estimated')
             result[key]['estimatedCalls'] = sum(row.get('usage', {}).get('costType') == 'estimated' for row, _ in known)
             result[key]['source'] = 'provider-reported or explicitly attributed estimate; no host price table'
+        elif key in ('grossInputTokens', 'grossTotalTokens'):
+            result[key]['source'] = 'Core input includes cache reads; add reported cache writes once' + (' and output' if key == 'grossTotalTokens' else '')
     return result
 
 
@@ -74,6 +79,8 @@ def usage_snapshot(session):
         if old and (row.get('revision', 0), bool(row.get('endedAt'))) < (old.get('revision', 0), bool(old.get('endedAt'))):
             continue
         calls[key] = {k: copy.deepcopy(row[k]) for k in ('id', 'revision', 'producerId', 'budgetRevision', 'admittedAt', 'sessionId', 'provider', 'model', 'phase', 'startedAt', 'endedAt', 'usage', 'lifecycle') if k in row}
+        if 'usage' in calls[key]:
+            calls[key]['usage'] = with_gross_tokens(calls[key]['usage'] or {})
     receipts = sorted(calls.values(), key=lambda row: (row.get('startedAt') or 0, row['id']))
     groups = {}
     for row in receipts:
@@ -86,7 +93,7 @@ def usage_snapshot(session):
 
 def evaluate(policy, usage):
     reasons, warnings = [], []
-    for metric, limit_key in (('totalTokens', 'maxTotalTokens'), ('costUsd', 'maxCostUsd')):
+    for metric, limit_key in (('grossTotalTokens', 'maxTotalTokens'), ('costUsd', 'maxCostUsd')):
         limit = policy.get(limit_key)
         if not policy.get('enabled') or limit is None:
             continue
@@ -96,7 +103,7 @@ def evaluate(policy, usage):
         if metric == 'costUsd' and not policy.get('includeEstimatedCost'):
             value -= row['estimatedValue']
             uncertain += row['estimatedCalls']
-        label = 'Total tokens' if metric == 'totalTokens' else 'Cost (USD)'
+        label = 'Total tokens (including cache writes)' if metric == 'grossTotalTokens' else 'Cost (USD)'
         if value >= limit:
             reasons.append(f'{label} limit reached ({value:g} of {limit:g})')
         elif value >= limit * policy.get('warningFraction', .8):

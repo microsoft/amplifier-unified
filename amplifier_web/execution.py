@@ -1,9 +1,10 @@
 """Deduplicated public execution tree and usage rollups (no reasoning payloads)."""
 import time
+from .token_usage import with_gross_tokens
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
-USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens')
+USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens')
 
 def ensure_turn(session,identity,label=''):
     tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
@@ -38,7 +39,7 @@ def rollup(calls):
     result={key:0 for key in USAGE_KEYS}
     result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
     for node in calls:
-        usage=node.get('usage') or {}
+        usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
             value=usage.get(key)
             if isinstance(value,(int,float)) and value>=0:result[key]+=value

@@ -12,6 +12,7 @@ import uuid
 import weakref
 
 from .execution_details import tool_detail
+from .token_usage import with_gross_tokens
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
@@ -43,7 +44,7 @@ def public_usage(value):
             result["costSource"] = str(value["cost_source"])[:300]
     except (KeyError, TypeError, ValueError):
         result["costType"] = "unavailable"
-    return result
+    return with_gross_tokens(result)
 
 
 class ExecutionEvents:
@@ -316,8 +317,9 @@ class ExecutionEvents:
 
     def usage(self):
         calls = [row for row in self.nodes.values() if row["kind"] == "llm"]
-        totals = {key:sum(row.get("usage", {}).get(key, 0) for row in calls)
-                  for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens")}
+        usages = [with_gross_tokens(row.get("usage", {})) for row in calls]
+        totals = {key:sum(usage.get(key, 0) for usage in usages)
+                  for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "grossInputTokens", "grossTotalTokens")}
         priced = [row for row in calls if "costUsd" in row.get("usage", {})]
         totals.update(costUsd=sum(row["usage"]["costUsd"] for row in priced) if priced else None,
                       costType="reported" if priced and len(priced) == len(calls) else "partial" if priced else "unavailable")
