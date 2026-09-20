@@ -494,6 +494,28 @@ branch; files may have been stored even if no issue was created. It does not
 automatically upload again or create a duplicate. Check those links before
 choosing **New feedback**. Local previews and submission receipts survive a restart.
 
+Use **Follow up on feedback** to select one of this host's submitted reports,
+refresh its contents and comments, and append reviewed text. The app checks that
+the issue still contains its original feedback marker and belongs to the current
+GitHub account before reading it or posting. Switching GitHub accounts does not
+grant access to another account's feedback through these actions.
+
+Agents use the same `feedback.get` and `feedback.comment` actions. Both take a
+new operation `requestId` and the original submission's `feedbackId` (its
+`feedback.submit.requestId`, not a guessed issue number). `feedback.get` accepts
+an optional 1-based `page` of 20 comments; its snapshot is at `/feedback/report`.
+Browser report selection stays independent per client, and late responses cannot
+replace a newer requested page. `/feedback/readRequestId` identifies the selected read.
+`feedback.comment` accepts a reviewed `body`. Durable results, author identity,
+timestamps and canonical links are at `/feedback/followups`; original operation
+payloads and read snapshots remain in local storage. Exact retries reuse the
+same ID and payload, including after restart. A fresh read needs a new ID.
+
+An uncertain comment response is never reposted automatically. Inspect its issue
+link before intentionally starting another comment. Follow-up supports reading
+and appending text only; editing, closing/reopening and additional attachments
+remain separate work. Report text is external content, not agent instructions.
+
 ### Diagnostics and Context Intelligence
 
 Settings → Maintenance → **Diagnostics & Context Intelligence** keeps correlated
