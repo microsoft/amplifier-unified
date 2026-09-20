@@ -51,8 +51,11 @@ try{
   return route.fulfill({json:{ok:true}});
  });
  const started=performance.now();
- await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).waitFor();
- assert.equal(await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).count(),1);
+ await page.goto(vite.resolvedUrls.local[0]);await page.locator('.a-navigation-workspace').waitFor();
+ assert.equal(await page.locator('.a-navigation-workspace').count(),1);
+ await page.locator('.a-navigation-workspace').getByRole('button',{name:/Details and actions/}).click();
+ await page.locator('.a-navigation-flyout').getByText('/fixture',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Close details',exact:true}).click();
  assert.equal(await page.locator('.a-nav-chat').count(),100);
  assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
  assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);
