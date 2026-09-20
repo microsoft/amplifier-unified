@@ -6,7 +6,7 @@ manager and conversation list are independent registered components. Additional
 instances can follow the active workspace, pin a workspace, or show all chats.
 An external module can replace either component while the app stays open.
 
-The content-workspace milestone, integrated with published Unified 0.11.7, adds a
+The content-workspace milestone, integrated with Unified 0.11.8, adds a
 renderer registry, validated hot-loaded artifact viewers, and a second pinned
 artifact view. See [Artifact viewers](#artifact-viewers) below for its API,
 ownership boundaries and acceptance checks.
@@ -358,10 +358,12 @@ make no real provider/model calls; they do not prove voice continuity or every
 third-party renderer's behavior. This branch does not restart a user preview,
 publish a release or change the application version.
 
-Verification after integrating 0.11.7: **1,038 Python tests passed, 11 skipped**,
+Verification after integrating 0.11.8: **1,047 Python tests passed, 11 skipped**,
 and **154 frontend unit tests passed**. The production build, renderer hot-load
 proof, MCP App proof, navigation shell proof, existing canvas and saved-artifact
 browser suites, panel-layout, empty-host and live-client browser suites passed.
 The source distribution and wheel built and passed release verification.
-The renderer proof also
+The eight browser suites passed with the 0.11.7 integration; after the 0.11.8
+configuration bridge landed, the unchanged frontend sources were rebuilt and
+the renderer proof and distribution verification passed again. The renderer proof also
 exercises the recovery startup URL, including accurate fallback/ready status.

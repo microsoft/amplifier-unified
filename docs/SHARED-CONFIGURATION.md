@@ -94,8 +94,15 @@ include shared configuration and relevant workspace settings.
 ## Smart Tools and Converge
 
 This cutover is a host configuration change. It does not inject Amplifier
-settings discovery into portable Smart Tools or add a Converge-specific model
-path. Converge's separate tool model execution still needs the optional adapter
-work: a host resolves its routing policy and supplies an explicit portable
-invocation contract. Tools retain their own domain libraries, standalone usage,
-and provider abstraction. That work is separate from this migration.
+settings discovery into portable Smart Tools. The opt-in
+`amplifier_web.host.shared_runtime_config` adapter supplies shared provider
+instances and the ordinary routing hook to a compatible native runtime, while
+retaining its domain bundle and agent declarations. It has no required provider
+or model. Converge's companion runtime proposal supports this optional seam;
+its adoption remains separate from this migration and never restarts an active
+manager or bypasses the saved-session configuration guard.
+
+The adapter is an Amplifier host extension, not a universal Smart Tools
+invocation contract. Deterministic domain operations remain independent of
+provider credentials. See [the TUI handoff](TUI-SHARED-CONFIGURATION.md) for the
+shared file contract, optional adapter interface and cross-host adoption checks.
