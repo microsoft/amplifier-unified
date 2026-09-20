@@ -1,5 +1,17 @@
 # Remaining issue followups
 
+## Empty installation startup
+
+The verified guard and fresh-host regression from PR #62 are included with their
+commit ancestry preserved. A single explicit pending-send check guards the
+optimistic message, composer read-only state, and sending status. An empty host
+opens with an editable composer and no false sending indicator; its first send
+creates exactly one conversation, and its draft/selection survive reload.
+
+The release pipeline now runs the empty-host and pending-send review browser
+checks before publication. File-presence conditions preserve reruns of older
+immutable release tags that predate these checks.
+
 ## Review acknowledgement during a pending send (#41)
 
 The browser reproduction held a conversation send at admission, opened Activity,
