@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.12",
+      "title": "Preserve drafts during quick conversation switches",
+      "changes": [
+        "Typing or sending in another conversation no longer cancels an unsaved draft from the previous conversation during its short save delay.",
+        "Draft saves stay attached to their original conversation, and sending does not restore stale draft text or send it to a different chat."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.11",
       "title": "Reliable restart recovery and saved conversations",
       "changes": [
