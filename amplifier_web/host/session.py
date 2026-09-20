@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import inspect
 import json
@@ -9,7 +10,7 @@ import os
 from pathlib import Path
 import stat
 
-from .config import expand_environment, load_config, merge, write_private
+from .config import HostConfig, expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@de307c398facea5d4d656e14f84938a74b934ff2"
@@ -317,11 +318,25 @@ async def load_root_bundle(config, chosen):
     return registry, loaded, chosen
 
 
+@dataclass
+class ResolvedRoot:
+    """A single apply's validated composition, never a cross-request cache."""
+    config: HostConfig
+    bundle: str
+    root: tuple | None
+
+    def take(self, config, bundle):
+        if self.root is None or config != self.config or bundle != self.bundle:
+            raise ValueError("The bundle configuration changed while switching. Try again.")
+        root, self.root = self.root, None
+        return root
+
+
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, **kwargs):
+                          write_guard=None, resolved_root=None, **kwargs):
     from amplifier_foundation import SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -377,7 +392,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry, loaded, chosen = await load_root_bundle(config, chosen)
+    registry, loaded, chosen = (resolved_root.take(config, chosen) if resolved_root is not None
+                               else await load_root_bundle(config, chosen))
     snapshot = is_snapshot(loaded)
     from ..runtime_controls import override_path, validate_plan
     edited_path = override_path(runtime.session_id)

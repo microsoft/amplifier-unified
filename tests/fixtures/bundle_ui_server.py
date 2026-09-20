@@ -20,7 +20,7 @@ class Runtime:
             return {'bundle':args['bundle'],'previewId':token,'fingerprint':args['bundle'],'selection':None,'modelCompatible':True,'changes':{'tools':{'added':['read_transcript'],'removed':['old_tool']},'context':{'before':'context-simple','after':'context-managed'}},'appCapabilities':[]}
         if op=='bundle.switch':
             if args['bundle']=='broken':raise ValueError('The candidate failed to load; original configuration is preserved.')
-            if self.tokens[sid]!=args['previewId']:raise ValueError('Preview again.')
+            if args.get('previewId') and self.tokens.get(sid)!=args['previewId']:raise ValueError('Preview again.')
             return {'bundle':args['bundle'],'configuration':{'plan':{}},'providers':{'providers':[]}}
         if op=='history.snapshot':return {'messages':[{'role':'user','content':'Keep my original history.'},{'role':'assistant','content':'Saved response.'}]}
         if op=='configuration.inspect':return {'plan':{}}

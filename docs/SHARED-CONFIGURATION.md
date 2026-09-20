@@ -128,9 +128,14 @@ reveals a project/team default if present. **Shared Amplifier settings** edits
 only the chosen override. The older `settings.update {patch:{bundle:...}}` action
 retains its shared-global meaning for compatibility.
 
-For an existing conversation, preview the new root from the bundle control beside
-the model. Switching requires idle work and an unchanged preview. The root is
-resolved with current host composition; previous conversation mount-plan edits,
+For an existing conversation, choose a new root from the bundle control beside
+the model, then **Switch bundle** directly or **Preview changes** first. Forking
+also supports either route. Switching requires idle work. When a preview token is
+supplied, the current configuration must still match that preview. Without a
+token, the target is validated during Apply. The validated composition is reused
+within that switch instead of resolving it again during mounting; it is not
+cached between requests. First-time module installation still takes time. The
+root is resolved with current host composition; previous conversation mount-plan edits,
 module toggles, mode, and budget overrides are discarded. A compatible model pin
 and its reasoning effort survive. An unavailable provider pin requires an
 explicit reset choice. Original user/tool history is retained; old authoritative

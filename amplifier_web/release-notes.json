@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.15.2",
+      "title": "Switch bundles without a required preview",
+      "changes": [
+        "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
+        "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.15.1",
       "title": "Continue here from the message box",
       "changes": [

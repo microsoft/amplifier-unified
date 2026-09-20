@@ -26,6 +26,10 @@ async def perform(management, action, args):
                 app._session(sid)['bundlePreview'] = result
         elif action == 'bundle.switch':
             result = await app.runtime.control(sid, action, args)
+            if result.get('requiresModelChoice'):
+                async with app.lock:
+                    app._session(sid)['bundlePreview'] = result['preview']
+                raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
             async with app.lock:
                 current = app._session(sid)
                 current.update(bundle=result['bundle'], configuration=result['configuration'])
@@ -35,15 +39,15 @@ async def perform(management, action, args):
             management.background(management.warm_runtime_models(sid, result['providers'].get('providers', []), result['providers'].get('catalogRevision')))
         else:
             expected = app._session(sid).get('bundlePreview', {})
-            if expected.get('previewId') != args['previewId'] or expected.get('bundle') != args['bundle']:
+            if args.get('previewId') and (expected.get('previewId') != args['previewId'] or expected.get('bundle') != args['bundle']):
                 raise ValueError('Preview the selected bundle again before forking.')
             checked = await app.runtime.control(sid, 'bundle.preview', {'bundle': args['bundle']})
-            if any(checked.get(key) != expected.get(key) for key in ('fingerprint', 'selection')):
+            if args.get('previewId') and any(checked.get(key) != expected.get(key) for key in ('fingerprint', 'selection')):
                 raise ValueError('The configuration changed. Preview the selected bundle again.')
             # Refresh the original preview token too, so a failed fork can be retried.
             async with app.lock: app._session(sid)['bundlePreview'] = checked
             if not checked['modelCompatible'] and not args.get('resetModel'):
-                raise ValueError('The selected model is unavailable. Choose Use bundle model before forking.')
+                raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
             from .session_store import fork_session
             from .host.storage import SessionStore
             target = app._new_session({'title': source['title']+' · fork', 'workspace': source['workspace'], 'bundle': args['bundle']})
