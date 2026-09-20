@@ -1,6 +1,7 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {PanelsTopLeft,X} from 'lucide-react';
 import {request} from './api';
+import {CanvasAppViewer} from './canvas-app-viewer';
 import {CanvasViewer} from './canvas-viewer';
 import {BrowserPreview} from './canvas-library';
 import {McpAppViewer} from './mcp-app-viewer';
@@ -79,7 +80,7 @@ function ResourceView({view,state,dispatch,recovery}){
  },[targetKey,isPrimary,view.error]);
  const canvas=useMemo(()=>{
   const source=isPrimary?state.canvas:loaded;
-  return source?{...source,...targetOf(view),viewId:view.viewId,view:view.view||source.view,renderReports:view.renderReports,...(!isPrimary?{document:view.document,interaction:view.interaction,events:view.events}:{})}:null;
+  return source?{...source,...(view.app?{app:view.app}:{}),...targetOf(view),viewId:view.viewId,view:view.view||source.view,renderReports:view.renderReports,...(!isPrimary?{document:view.document,interaction:view.interaction,events:view.events}:{})}:null;
  },[isPrimary,state.canvas,loaded,view]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  if(view.error)return <section className="a-resource-view" role="alert">{view.error}<button type="button" onClick={()=>run('canvas.views.close',targetOf(view))}>Close unavailable view</button></section>;
@@ -94,7 +95,7 @@ function ResourceView({view,state,dispatch,recovery}){
    {!isPrimary&&<button type="button" className="a-icon" aria-label="Close secondary view" onClick={()=>run('canvas.views.close',targetOf(view))}><X/></button>}
   </div>
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
-  <div className="a-resource-renderer">{canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery}/>:<p role="status">Loading saved artifact…</p>}</div>
+  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery}/>:<p role="status">Loading saved artifact…</p>}</div>
  </section>;
 }
 

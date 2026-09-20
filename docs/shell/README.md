@@ -407,3 +407,8 @@ send in a different chat first queues the previous staged draft with its origina
 session and payload. It does not delay navigation behind general requests.
 The controlled debounce regression checks both host-saved drafts, sends once to
 the intended chat, and confirms a canceled timer cannot restore a sent draft.
+
+## Conversation-owned interactive surfaces
+
+Use [the surface contract](conversation-surfaces.md) for dynamic interfaces
+that users and agents can operate together and refine in one tab.

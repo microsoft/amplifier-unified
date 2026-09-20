@@ -236,7 +236,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def canvas_source_text(request):
         from .state_storage import resource
         row=next((r for r in service.state.get('canvasArtifacts',[]) if r['id']==request.match_info['identity']),None)
-        if not row or row.get('kind') not in {'html','babylon'}:
+        if not row or row.get('kind') not in {'html','babylon','canvas-app'}:
             raise AppError('Canvas source unavailable',404)
         canvas={**row, **({} if row.get('contentResource') else resource(service.db,row['body']['$resource']))}
         return web.Response(text=raw_source(canvas,service.db),content_type='text/plain',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
@@ -244,14 +244,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def canvas_document(request):
         canvas = (canvas_view_target(request, request.query['viewId']) if request.query.get('viewId')
                   else service.state.get("canvas", {}))
-        if canvas.get("id") != request.match_info["identity"] or canvas.get("kind") not in {"html", "babylon", "mcp-app"}:
+        if canvas.get("id") != request.match_info["identity"] or canvas.get("kind") not in {"html", "babylon", "mcp-app", "canvas-app"}:
             raise AppError("Canvas document no longer available", 404)
         if canvas.get("kind") == "mcp-app":
             from .smart_canvas import document_response
             service.smart_canvas.binding(canvas["id"])
             return document_response(canvas)
         identity = json.dumps(canvas["id"])
-        bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / "canvas_bridge.js").read_text().replace("__CANVAS_ID__", identity) + "</script>"
+        bridge = 'canvas_app_bridge.js' if canvas.get('app') else 'canvas_bridge.js'
+        bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / bridge).read_text().replace("__CANVAS_ID__", identity) + "</script>"
         return web.Response(text=bootstrap + canvas_source(canvas,service.db), content_type="text/html", headers={
             "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})

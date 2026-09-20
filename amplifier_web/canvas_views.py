@@ -17,7 +17,7 @@ KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'html', 'babylon'
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
-          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app'}
+          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
     'capabilities': CAPABILITIES, 'resourceKinds': [kind]} for kind, label in LABELS.items()}
@@ -86,7 +86,7 @@ class CanvasViews:
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
               or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
-              or action in {'canvas.show', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
+              or action in {'canvas.show', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 
     def artifact(self, identity):
@@ -98,7 +98,7 @@ class CanvasViews:
     @staticmethod
     def revision(row):
         # View preferences, reports and transient tool context are not content.
-        return hashlib.sha256(encoded({key: row.get(key) for key in ('id', 'kind', 'body', 'url')}).encode()).hexdigest()
+        return hashlib.sha256(encoded({**{key: row.get(key) for key in ('id', 'kind', 'body', 'url')}, **({'appRevision': row['app']['revision']} if row.get('app') else {})}).encode()).hexdigest()
 
     def preference(self, view_id, row):
         preferences = self.record()['preferences']
@@ -181,6 +181,7 @@ class CanvasViews:
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
                 'activation': preference.get('activation'),
+                **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
                 'renderReports': copy.deepcopy(self.service.state['canvas'].get('renderReports', {})) if view_id == 'primary' else copy.deepcopy(preference['renderReports']),
                 **{key: copy.deepcopy(preference[key]) for key in ('document', 'interaction', 'events') if key in preference}}
@@ -200,7 +201,7 @@ class CanvasViews:
     def canvas(self, view_id):
         from .state_storage import resource
         row, preference = self.resolve(view_id)
-        indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon'}
+        indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon', 'canvas-app'}
         body = {} if indirect else resource(self.service.db, row['body']['$resource'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
                   'resourceRevision': self.revision(row), 'generation': preference['generation']}
