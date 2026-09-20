@@ -153,7 +153,7 @@ class SurfaceContext:
             valid = valid and (not pref.get('dirty') or observation.get('pending') and observation.get('editVersion') == pref.get('editVersion'))
             pending = bool(pref.get('dirty') or valid and observation.get('pending'))
             item = {**target, 'title': row['title'][:80], 'revision': revision(row), 'facts': summary(row['app']['state']),
-                    'stateFields': list(row['app']['state'])[:32],
+                    'stateFields': [k for k in row['app']['state'] if len(k) <= 80][:16], 'stateFieldCount': len(row['app']['state']),
                     'pendingLocalEdits': pending, 'view': 'visible' if visible else 'unavailable',
                     'viewObservation': 'current' if valid else 'stale-or-unavailable',
                     'renderStatus': pref.get('activation', {}).get('status', 'unknown'),

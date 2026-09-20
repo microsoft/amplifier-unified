@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.18.0",
+      "title": "Shared canvas awareness and reliable editing",
+      "changes": [
+        "Agents receive small freshness notices for interactive surfaces when they next respond, including exact counts and pending edits. Ordinary drawing and control changes do not start model work.",
+        "Agents can selectively read current state, visible controls or drawing images. Images use the model's image format and remain separate from conversation text; unavailable or stale evidence is identified explicitly.",
+        "Generated surfaces can use a shared draft helper that saves completed edits before a question, retains failed saves and protects unfinished gestures. User and agent edits continue to share one tab and compatible state.",
+        "Drawing resize and tab changes preserve artwork. Older save acknowledgments cannot clear newer edits, and rendering errors remain visible until corrected.",
+        "Saved conversation reconciliation avoids duplicated messages around steering, and context-limit failures preserve completed work with focused recovery guidance."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.17.2",
       "title": "Use the shared Amplifier CLI session ID",
       "changes": [

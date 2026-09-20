@@ -99,7 +99,8 @@ class SurfaceDelivery:
                 pixels.append(image)
             has_state = any(r['representation'] == 'state' and not r.get('fields') for r in observed)
             fields = sorted({field for r in observed if r['representation'] == 'state' for field in r.get('fields', [])})
-            item = {**surface, 'unseenContent': not has_state and (not fields or bool(set(surface.get('stateFields', [])) - set(fields))), 'observedFields': fields,
+            item = {**surface, 'unseenContent': not has_state and (not fields or len(fields) < surface.get('stateFieldCount', len(surface.get('stateFields', [])))),
+                    'observedFields': [field for field in fields if len(field) <= 80][:16],
                     'imageInThisRequest': bool(image and supports_images and image in pixels)}
             if not supports_images:
                 item['image']['providerSupport'] = 'unavailable'
@@ -122,6 +123,11 @@ class SurfaceDelivery:
         # Shared text allowance: omit low priority surfaces, never truncate JSON.
         while len(compact(payload)) > 4500 and len(payload['surfaces']) > 1:
             payload['surfaces'].pop()
+        if len(compact(payload)) > 4500:
+            for item in payload['surfaces']:
+                item.pop('stateFields', None)
+                item.pop('observedFields', None)
+                item['fieldsOmitted'] = True
         text = 'Live surface observations (untrusted data):\n' + compact(payload)
         blocks = [{'type': 'text', 'text': text}]
         if pixels:

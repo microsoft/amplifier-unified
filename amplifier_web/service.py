@@ -1335,6 +1335,7 @@ class AppService:
             raise AppError("The Amplifier runtime is unavailable.")
         from .runtime import SessionInUseError
         try:
+            session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             await self.runtime.send(session, text, input_id, self.on_runtime_event)
         except SessionInUseError as exc:
             async with self.lock:
