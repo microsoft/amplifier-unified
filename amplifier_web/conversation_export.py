@@ -15,8 +15,9 @@ from .session_store import _index_visible
 
 def _saved_messages(home, session):
     identity = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
-    root = directory(session) if session.get('nativeProject') else sessions_dir(session['workspace']) / identity
-    if any((root / name).exists() for name in ('transcript.jsonl', 'transcript.jsonl.backup')):
+    root = (directory(session) if session.get('nativeProject') else
+            sessions_dir(session['workspace']) / identity if session.get('workspace') else None)
+    if root is not None and any((root / name).exists() for name in ('transcript.jsonl', 'transcript.jsonl.backup')):
         history = SessionHistoryStore(root, session_id=identity).load(include_events=False)
         if any(item.code == 'changed_during_read' for item in history.diagnostics):
             raise ValueError('The conversation changed during export. Please retry.')

@@ -180,6 +180,13 @@ def test_overlapping_native_voice_windows_preserve_repeated_yes_turns(tmp_path):
     assert value.index('Again?') < value.index('First result') < value.index('Once more?') < value.index('Second result')
 
 
+def test_ui_owned_voice_or_imported_history_does_not_require_a_workspace(tmp_path):
+    source = {'id': 'voice-only', 'messages': [{'id': 'voice', 'role': 'user', 'text': 'Keep this exchange', 'via': 'call', 'voiceId': 'call'}]}
+    value = markdown(tmp_path, source, [])
+    assert '## User (voice)\n\nKeep this exchange' in value
+    assert list(tmp_path.iterdir()) == []
+
+
 async def test_changed_during_read_is_rejected_without_publishing_snapshot(tmp_path, app_factory, monkeypatch):
     from types import SimpleNamespace
     from amplifier_web.conversation_export import SessionHistoryStore
@@ -196,3 +203,25 @@ async def test_changed_during_read_is_rejected_without_publishing_snapshot(tmp_p
     with pytest.raises(AppError, match='changed during export'):
         await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown'})
     assert files_snapshot(root) == before and not app.state.get('conversationExports')
+
+
+async def test_slow_history_read_does_not_block_navigation(app_factory, monkeypatch):
+    import asyncio
+    import threading
+    from amplifier_web import conversation_export
+    app = app_factory(); await app.dispatch('session.create', {})
+    entered, release = threading.Event(), threading.Event()
+    original = conversation_export.markdown
+    def paused(*args):
+        entered.set()
+        assert release.wait(3), 'Test did not release export reader'
+        return original(*args)
+    monkeypatch.setattr(conversation_export, 'markdown', paused)
+    exporting = asyncio.create_task(app.dispatch('session.export', {'id': app._session()['id'], 'format': 'markdown', 'destination': 'none'}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        result = await asyncio.wait_for(app.dispatch('view.update', {'patch': {'panel': 'settings'}}), timeout=.2)
+        assert result['accepted'] and not exporting.done()
+    finally:
+        release.set()
+        await exporting

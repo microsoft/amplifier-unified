@@ -583,6 +583,27 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        prepared_export = None
+        if action == 'session.export' and args.get('format') == 'markdown':
+            from .conversation_export import markdown
+            async with self.lock:
+                # Retried receipts refer to the original bytes even if their
+                # source is now missing. Do not read native history again.
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._publish()
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                source = copy.deepcopy(self._session(args['id']))
+                artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
+            # Native storage may be slow. Freeze the host-owned portion first,
+            # then let navigation and runtime events continue during the read.
+            try:
+                prepared_export = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from exc
         pending = []
         async with self.lock:
             # Flush and compare under the same lock: a queued runtime event
@@ -861,13 +882,8 @@ class AppService:
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
             elif action == 'session.export' and args.get('format') == 'markdown':
-                from .conversation_export import markdown
                 from .resource_files import put
-                source = copy.deepcopy(self._session(args.get('id')))
-                try:
-                    content = await asyncio.to_thread(markdown, self.data_dir, source, copy.deepcopy(self.state.get('canvasArtifacts', [])))
-                except (ValueError, OSError) as exc:
-                    raise AppError(str(exc), 409) from exc
+                source, content = prepared_export
                 reference = put(self.db, content)
                 identity = reference['$resource']
                 filename = 'amplifier-conversation-' + identity[:12] + '.md'
