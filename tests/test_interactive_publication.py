@@ -17,7 +17,13 @@ from test_smart_tools import Service
 async def interactive(tmp_path, monkeypatch):
     service = AppService(tmp_path, workspace=tmp_path)
     example = Tools(service)
+    advertised = copy.deepcopy(service.state['smartTools']['servers'][0]['tools'])
     service.smart_tools = SmartToolsManager(service)
+    # Startup correctly clears stale discovery. This fixture represents the
+    # synthetic server advertising its app after a fresh connection.
+    service.state['smartTools']['servers'][0].update(
+        status='connected', connectionState='connected', tools=advertised,
+        catalogState='current')
     service.smart_tools.read_app = example.read_app
     service.smart_canvas = SmartCanvas(service)
     await service.dispatch('session.create', {'title': 'Interactive'})
