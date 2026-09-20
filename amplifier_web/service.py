@@ -235,6 +235,8 @@ class AppService:
         self.db.commit()
         self.shell = ShellModules(self)
         self.canvas_views = CanvasViews(self)
+        from .surface_context import SurfaceContext
+        self.surface_context = SurfaceContext(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
@@ -972,6 +974,8 @@ class AppService:
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity
                 previous_activity = recent_activity(session)
+                session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
+                session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments,delivery={'status':'sending'})
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
@@ -1331,6 +1335,7 @@ class AppService:
             raise AppError("The Amplifier runtime is unavailable.")
         from .runtime import SessionInUseError
         try:
+            session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             await self.runtime.send(session, text, input_id, self.on_runtime_event)
         except SessionInUseError as exc:
             async with self.lock:
@@ -1527,13 +1532,23 @@ class AppService:
                 session["status"] = "error"
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
-                session["error"] = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                detail = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                error_type = payload.get('errorType') or session.get('turnErrorType')
+                session['errorType'] = error_type
+                session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
+                    'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
+                    if error_type == 'ContextLengthError' else detail)
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                if payload.get('event') == 'generation.started':
+                    session.pop('turnErrorType', None)
+                    session.pop('errorType', None)
+                elif payload.get('event') == 'generation.failed':
+                    session['turnErrorType'] = payload.get('error_type')
                 if payload.get("event") == "generation.finished":
                     if not payload.get("rootSessionId") or payload.get("rootSessionId")==payload.get("sessionId"):
                         from .attention import completed
@@ -1623,6 +1638,13 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation in {'context.manifest', 'context.read'}:
+            bindings = args.get('_contextBindings', [])
+            async with self.lock:
+                if operation == 'context.manifest':
+                    result = self.surface_context.manifest(session_id, bindings)
+                    return {**result, 'inputIds': args.get('_contextInputs', [])}
+                return self.surface_context.read(session_id, args, bindings)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)
@@ -1651,7 +1673,12 @@ class AppService:
                 action_args.setdefault('id', session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             await self._flush_pending_progress()
-            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}
+            if args['action'].startswith('canvas.apps.'):
+                from .agent_state import surface_context
+                context = surface_context(self.state_context(), session_id, self.clients.records)
+            else:
+                context = read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)
+            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 
     async def update_device(self, payload):
@@ -1684,6 +1711,7 @@ class AppService:
     async def voice_delegate(self, text, command_id, session_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
+        input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
@@ -1700,6 +1728,8 @@ class AppService:
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
+            session.setdefault('surfaceInputs', {})[command_id] = input_context
+            session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()
             snapshot = copy.deepcopy(session)
         self._task(self._guard(self._send, (snapshot, text, command_id)))

@@ -11,9 +11,25 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    later reads, events, patches, revisions and restoration. Do not repeatedly
    call `canvas.show` or `create` when improving this interface.
 3. Bind controls through `canvasApp.ready`, `subscribe`, `emit` and `patch`.
+   Prefer one `canvasApp.createDraft({delay:150})` store for all editable fields;
+   `update({...})` retains local values, `flush()` saves or retries, and
+   `getStatus()` exposes dirty/saving/error for your visible status. It joins
+   the host's bounded checkpoint before typed or voice input. Do not mix it
+   with independent whole-surface commit owners.
    Show errors and retain unfinished input. Use semantic labels, keyboard
    controls and inherited theme/accessibility context. Use `setDirty` for
-   unsaved work beyond ordinary form inputs.
+   unsaved work beyond ordinary form inputs. Prefer synchronous `beginEdit()`
+   for custom controls. Capture `getEditVersion()` and pass `{commit: version}`
+   only to the write that saves that unfinished input; unrelated events never
+   acknowledge it. Keep failed saves locally with a visible Save/Retry control.
+   Edit versions cover the whole surface: with multiple editable fields, use
+   one serialized pending-field save path that captures all unfinished values
+   and their version together. A palette/color click cannot acknowledge a
+   pending note or failed sketch. Preserve failed local strokes when drawing
+   again, and preserve pending field values after focus changes. Sliders must
+   participate in the same save path.
+   Include completed strokes in that map too; separate form and sketch saves
+   must not independently commit the whole surface's edit version.
 4. Inspect current state and both revisions before acting as the user or
    refining the design. Use `canvas.apps.event` for the same interaction as a
    click. Revision conflicts require reconciliation, not blind overwrite.
@@ -27,11 +43,29 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    do not copy its entire stylesheet into the surface. Pending requests
    do nothing until reviewed and resolved outside the sandbox. Agents can
    resolve already-authorized changes on the explicit target client; the
-   surface itself cannot grant permission.
+   surface itself cannot grant permission. Finish an authorized apply with
+   `canvas.apps.resolve {id, clientId, requestId, approve:true, expectedRevision,
+   expectedStateRevision}`; queuing alone is not completion.
 7. Verify the actual running view: one tab after refinement, user/agent parity,
    visible theme effects, retained state on refresh, intact chat draft/history,
    and a usable revert path. Distinguish deterministic tests from an actual
-   model-generated demo.
+   model-generated demo. For drawing use `canvasApp.observeCanvas` and redraw
+   normalized saved strokes; never reset a canvas on every snapshot. Skip
+   hidden/zero-size clocks, resize on reveal, and share sliders/colors/strokes.
+   Inspect `views` for dirty flags and render errors. A created artifact or a
+   successful state write does not prove a healthy render. Report only checks
+   actually performed.
+
+The host now supplies a small freshness notice at model boundaries. A notice
+and a stroke count are not image evidence. Before describing changed visual
+contents, use `app_control` operation `context.read` with
+`{surfaceId:id, representation:"image", revision:"definition:state"}`.
+The next model request receives typed pixels from the registered canvas.
+Use `state` with `fields:[...]` for selective state or `view` for visible text
+and controls. Respect pending/stale/unavailable limits. For an explicitly
+focused visual task, `context.focus {surfaceId:id, requests:1}` can prefetch;
+it expires automatically. Ordinary edits do not start model work. Read the
+contract's live-context section for budgets, receipt retention and scope.
 
 These surfaces serve the session's task. A custom theme chooser is a useful
 example to generate on demand, not a built-in app to ship. Publishing,

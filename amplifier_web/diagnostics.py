@@ -504,6 +504,7 @@ class Diagnostics:
             # manufacture a second provider/tool event from a UI progress card.
             return
         data={k:v for k,v in payload.items() if k in META_KEYS}
+        if isinstance(payload.get('error_type'),str):data['errorType']=payload['error_type'][:100]
         root=session.get('runtimeSessionId') or session['id']
         actual=payload.get('sessionId') or root
         data['appSessionId']=session['id']
