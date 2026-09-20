@@ -407,3 +407,41 @@ async def test_immediate_end_preempts_prepare_and_rejects_stale_call():
     service.result.set()
     await work
     await preparing
+
+
+async def test_deadline_cleanup_cannot_end_a_replacement_call(monkeypatch):
+    service = Service()
+    async def status(value):
+        service.state['voice'].update(value)
+    service.set_voice_status = status
+    manager = VoiceService(service, api_key='fixture', http=object())
+    manager.request = AsyncMock(return_value=({}, '', {}))
+    entered, release = asyncio.Event(), asyncio.Event()
+    class SlowSocket(Socket):
+        async def close(self):
+            entered.set()
+            await release.wait()
+            await super().close()
+    old = manager.call = VoiceCall(manager, 'main')
+    old.id, old.provider, old.socket = 'old-call', 'realtime', SlowSocket()
+    async def create(self, sdp, provider):
+        self.id = 'new-call'
+        return {'id': self.id, 'sdp': 'answer', 'provider': provider, 'sessionId': self.session_id}
+    monkeypatch.setattr(VoiceCall, 'create', create)
+    monkeypatch.setattr('amplifier_web.shared_settings.read_settings', lambda *args, **kwargs: {'voice': {}})
+    cleanup = asyncio.create_task(old._end_after_deadline())
+    replacement = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        assert old.closed
+        replacement = asyncio.create_task(manager.connect('v=0', 'realtime'))
+        await asyncio.sleep(0)
+        assert not replacement.done()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(cleanup, replacement), 1)
+        assert manager.call.id == 'new-call'
+        assert service.state['voice']['id'] == 'new-call'
+        assert service.state['voice']['status'] == 'connecting'
+    finally:
+        release.set()
+        await asyncio.gather(cleanup, *([replacement] if replacement else []), return_exceptions=True)

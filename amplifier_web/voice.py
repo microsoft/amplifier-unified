@@ -411,7 +411,10 @@ class VoiceCall:
 
     async def _end_after_deadline(self) -> None:
         await asyncio.sleep(max(0, self.end_deadline - time.monotonic()))
-        await self.close()
+        # Serialize complete cleanup with connect(), including the interval
+        # after closed=True but before the final shared status publication.
+        async with self.manager.lock:
+            await self.close()
 
     async def close(self) -> dict:
         async with self.close_lock:
