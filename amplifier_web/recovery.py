@@ -55,7 +55,14 @@ async def backup(service):
             service.state['maintenance']={'phase':'backing-up','detail':'Creating a private backup in the background.'}
             service._publish()
             from .session_files import capture_dir, sessions_dir, validate_id
-            paths=set()
+            from .shared_settings import settings_paths
+            from .session_files import amplifier_home
+            paths={(amplifier_home()/name,'shared-config/'+name) for name in ('settings.yaml','keys.env','routing','bundles')}
+            workspaces={service.default_workspace,*[s['workspace'] for s in service.state['sessions'] if not s.get('historyManaged') and s.get('workspace')]}
+            from .session_files import project_slug
+            for workspace in workspaces:
+                for scope,path in settings_paths(workspace).items():
+                    if scope!='global':paths.add((path,'workspace-settings/'+project_slug(workspace)+'/'+path.name))
             def include(workspace, identity):
                 try:validate_id(identity)
                 except ValueError:return
@@ -116,13 +123,9 @@ async def reset(manager,args):
                 service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
                 service.db.execute('DELETE FROM commands')
             if 'settings' in parts:
-                from .host.config import write_private
-                write_private(service.data_dir/'config/settings.yaml','_migration: {version: 1, reset: true}\n')
-                import hashlib
-                for workspace in {service.default_workspace,*[s['workspace'] for s in service.state['sessions'] if not s.get('historyManaged') and s.get('workspace')]}:
-                    key=hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()[:20]
-                    write_private(service.data_dir/'config/workspaces'/(key+'.yaml'),'{}\n')
-                service.state['settings'].update(bundle='anchors',preferredVoice='gpt-live-1',fallbackVoice='gpt-realtime-2.1',updates={'autoCheck':True,'autoInstall':False,'intervalHours':24})
+                service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':24}
+                service._shared_preferences_stamp=None
+                service._refresh_shared_preferences()
                 service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
                 service.state['notificationSettings']=manager.notifications.public()
                 for session in service.state['sessions']:

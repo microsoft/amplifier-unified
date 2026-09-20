@@ -38,7 +38,7 @@ async def prepare(app,repo):
     root=app.data_dir/'foundation/cache/repository';root.parent.mkdir(parents=True)
     git(root.parent,'clone',str(remote),str(root));git(root,'checkout','--detach',old)
     (root/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url':'https://example.invalid/repo','ref':'main','commit':old}))
-    (app.data_dir/'config').mkdir();(app.data_dir/'config/settings.yaml').write_text('{}')
+    (app.data_dir/'config').mkdir(exist_ok=True);(app.data_dir/'config/settings.yaml').write_text('{}')
     manager=app.update_manager
     manager.inventory=[{'id':'repo','path':'cache/repository','url':str(remote),'label':'Fixture','current':old,'latest':new,'ref':'main','eligible':True,'status':'update'}]
     return manager,root

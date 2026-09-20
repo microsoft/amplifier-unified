@@ -1,4 +1,4 @@
-"""Scoped provider and routing configuration owned by Amplifier Unified."""
+"""Provider and routing editors for shared Amplifier configuration."""
 from __future__ import annotations
 import copy
 import asyncio
@@ -12,7 +12,9 @@ from pathlib import Path
 import re
 import shlex
 import yaml
+from filelock import FileLock
 from .preferences import SettingsStore
+from .shared_settings import atomic_write, routing_dirs, overlay
 from .host.config import load_config, write_private
 from .bundles import SECRET_KEYS, validate_uri
 
@@ -106,7 +108,7 @@ class SetupManager:
             configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
             if not refs:configured=credential['available']
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
-                'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True)})
+                'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
     def catalog_key(self,args,workspace):
@@ -174,12 +176,16 @@ class SetupManager:
                 await process.wait()
 
     def _keys(self,updates):
-        path=self.home/'config/keys.env'
-        lines=path.read_text().splitlines() if path.exists() else []
-        names=set(updates)
-        lines=[line for line in lines if line.removeprefix('export ').split('=',1)[0].strip() not in names]
-        lines.extend(name+'='+shlex.quote(value) for name,value in updates.items())
-        write_private(path,'\n'.join(lines)+'\n')
+        path=self.store.shared_home/'keys.env'
+        path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with FileLock(str(path)+'.lock',timeout=10):
+            lines=path.read_text().splitlines() if path.exists() else []
+            names=set(updates)
+            lines=[line for line in lines if line.removeprefix('export ').split('=',1)[0].strip() not in names]
+            lines.extend(name+'='+shlex.quote(value) for name,value in updates.items())
+            atomic_write(path,'\n'.join(lines)+'\n',private=True)
+        from .host.config import _KEY_FILE_VALUES
+        _KEY_FILE_VALUES.update(updates)
         # A long-running backend must see edited keys immediately. Child host
         # generations inherit these values; no browser state includes them.
         os.environ.update(updates)
@@ -193,7 +199,7 @@ class SetupManager:
             index=next((i for i,row in enumerate(rows) if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
             if remove:
                 if not existing: raise ValueError('Provider instance does not exist.')
-                row={'id':identity,'module':existing['module'],'enabled':False}
+                row={'id':identity,'module':existing['module']}
             else:
                 module=safe_name(args.get('module') or (existing or {}).get('module',''))
                 if not module.startswith('provider-'): raise ValueError('Choose a provider module.')
@@ -230,22 +236,27 @@ class SetupManager:
                         credential=environment_credential(module)
                         if credential['supported'] and credential['available']:config[field]='${'+credential['envVar']+'}' 
                 if module=='provider-openai-chatgpt':
-                    config['token_file_path']=str(self.home/'config'/('openai-chatgpt-'+identity+'-oauth.json'))
+                    config['token_file_path']=config.get('token_file_path') or old.get('token_file_path') or str(self.store.shared_home/('openai-chatgpt-'+identity+'-oauth.json'))
                     config['login_on_mount']=False
-                row={'id':identity,'module':module,'config':private(config),'enabled':True}
+                row={'id':identity,'module':module,'config':private(config)}
                 source=args.get('source') or (existing or {}).get('source')
                 if source: row['source']=validate_uri(source)
                 if updates:self._keys(updates)
             if index is None:rows.append(row)
             else:rows[index]=row
-            settings.setdefault('overrides',{}).setdefault(identity,{})['enabled']=not remove
+            disabled=set(overlay(effective.settings,settings).get('configurator',{}).get('disabled',{}).get('providers',[]))
+            if remove:disabled.add(identity)
+            else:disabled.discard(identity)
+            settings.setdefault('configurator',{}).setdefault('disabled',{})['providers']=sorted(disabled)
+            # Clear the older Unified-only flag when editing an existing entry.
+            settings.get('overrides',{}).get(identity,{}).pop('enabled',None)
         self.store.update(workspace,scope,mutate)
         return {'providers':self.provider_rows(workspace),'takesEffect':'new_sessions','scope':scope}
 
     def _routing_dirs(self,workspace):
         # Same first-hit precedence as the mounted routing hook.
         registry=getattr(self.config(workspace),'registry_home',self.home/'foundation')
-        dirs=[Path(workspace)/'.amplifier-unified/routing.local',Path(workspace)/'.amplifier-unified/routing',self.home/'config/routing',registry/'routing']
+        dirs=routing_dirs(workspace,shared_home=self.store.shared_home)
         dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
         return dirs
 
@@ -261,7 +272,7 @@ class SetupManager:
                     value=yaml.safe_load(path.read_text());validate_matrix(value)
                 except (ValueError,yaml.YAMLError):continue
                 seen.add(name);roles.update(value['roles'])
-                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in self._routing_dirs(workspace)[:4] else 'bundle','active':active==name})
+                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in self._routing_dirs(workspace)[:3] else 'bundle','active':active==name})
         return {'matrices':rows,'active':active,'roles':sorted(roles)}
 
     def matrix(self,workspace,name):
@@ -289,7 +300,16 @@ class SetupManager:
             if identity not in ids or before is not None and before not in ids:raise ValueError('Refresh the provider list before reordering.')
             if identity!=before:
                 ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
-                self.store.update(workspace,scope,lambda settings:settings.update(provider_order=ids))
+                def reorder(settings):
+                    scoped=settings.setdefault('config',{}).setdefault('providers',[])
+                    for priority, key in enumerate(ids,1):
+                        source=next(row for row in rows if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key)
+                        row=next((row for row in scoped if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==key),None)
+                        if row is None:
+                            row={k:source[k] for k in ('id','module') if k in source};scoped.append(row)
+                        row.setdefault('config',{})['priority']=priority
+                    settings.pop('provider_order',None)
+                self.store.update(workspace,scope,reorder)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
@@ -311,9 +331,9 @@ class SetupManager:
                 if isinstance(value,str):value=yaml.safe_load(value)
                 value=validate_matrix(value);value['name']=name
                 if redact(value)!=value:raise ValueError('Routing matrices must not contain credentials; configure them on the provider.')
-                directory=self.home/'config/routing' if scope=='global' else Path(workspace)/'.amplifier-unified'/('routing.local' if scope=='local' else 'routing')
+                directory=self.store.shared_home/'routing' if scope=='global' else Path(workspace)/'.amplifier'/('routing.local' if scope=='local' else 'routing')
                 def save(settings):
-                    write_private(directory/(name+'.yaml'),yaml.safe_dump(value,sort_keys=False))
+                    atomic_write(directory/(name+'.yaml'),yaml.safe_dump(value,sort_keys=False))
                     if args.get('activate'):settings.setdefault('routing',{})['matrix']=name
                 self.store.update(workspace,scope,save)
             else:

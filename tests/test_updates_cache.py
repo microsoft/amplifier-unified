@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from amplifier_web.host.config import _import_global
+from amplifier_web.host.config import _import_registry
 from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager, active_release, cache_changes, foundation_home
 
@@ -170,7 +170,7 @@ def test_import_preserves_symlinks_including_external_links(tmp_path, repository
     outside = tmp_path/'external';outside.mkdir();(outside/'notes.txt').write_text('private')
     (legacy/'cache/repository/external').symlink_to(outside, target_is_directory=True)
     home = tmp_path/'imported'
-    _import_global(home, legacy)
+    _import_registry(home, legacy)
     imported = home/'foundation/cache/repository'
     assert (imported/'AGENTS.md').is_symlink()
     assert (imported/'AGENTS.md').readlink() == Path('CLAUDE.md')

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, merge, expand_environment
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
@@ -20,7 +20,7 @@ class HostSettingsTests(unittest.TestCase):
                 os.environ, {"AMPLIFIER_WEB_DATA_DIR": directory}, clear=True):
             self.assertEqual(app_home(), Path(directory).resolve())
 
-    def test_configuration_invalidation_tracks_the_same_workspace_snapshot_as_loading(self):
+    def test_configuration_invalidation_tracks_shared_inputs_without_snapshots(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             home = root / "home"
@@ -32,9 +32,11 @@ class HostSettingsTests(unittest.TestCase):
             load_config(workspace, home=home, legacy_home=legacy)
 
             snapshot = workspace_snapshot_path(workspace, home)
-            self.assertTrue(snapshot.is_file())
-            self.assertEqual(
-                configuration_paths(workspace, "session-id", home)[2], snapshot)
+            self.assertFalse(snapshot.exists())
+            paths = configuration_paths(workspace, "session-id", home)
+            self.assertIn(Path(os.environ["AMPLIFIER_HOME"]) / "settings.yaml", paths)
+            self.assertIn(workspace.resolve() / ".amplifier" / "settings.local.yaml", paths)
+            self.assertNotIn(snapshot, paths)
 
     def test_workspace_snapshot_is_stable_through_symlink_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -56,7 +58,7 @@ class HostSettingsTests(unittest.TestCase):
             self.assertEqual(os.environ["AMPLIFIER_WEB_REFRESH_TEST"], "second")
             _KEY_FILE_VALUES.clear()
 
-    def test_migration_is_owned_private_and_not_reloaded_from_former_host(self):
+    def test_shared_settings_reload_while_runtime_cache_remains_owned(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);legacy=root/'legacy';home=root/'owned';workspace=root/'workspace'
             legacy.mkdir();workspace.mkdir();(workspace/'.amplifier').mkdir()
@@ -70,12 +72,14 @@ class HostSettingsTests(unittest.TestCase):
                 self.assertEqual(config.active_bundle,'custom')
                 self.assertEqual([r['config']['model'] for r in config.providers],['b','c'])
                 self.assertEqual(os.environ['AMPLIFIER_MIGRATION_TEST_TOKEN'],'example test credential')
-                self.assertEqual((home/'config/keys.env').stat().st_mode & 0o777,0o600)
+                self.assertFalse((home/'config/keys.env').exists())
+                self.assertFalse((home/'foundation').exists())
+                prepare_registry(config)
                 owned=json.loads((home/'foundation/registry.json').read_text())
                 self.assertEqual(owned['bundles']['custom']['local_path'],str((home/'foundation/cache/module').resolve()))
                 (legacy/'settings.yaml').write_text('bundle:\n  active: changed-externally\n')
                 again=load_config(workspace,home=home,legacy_home=legacy)
-                self.assertEqual(again.active_bundle,'custom')
+                self.assertEqual(again.active_bundle,'changed-externally')
 
     def test_provider_instances_merge_by_instance_not_module(self):
         result=merge([{'module':'p','id':'a','config':{'secret':'retained','model':'old'}},{'module':'p','id':'b'}],
@@ -83,7 +87,7 @@ class HostSettingsTests(unittest.TestCase):
         self.assertEqual(len(result),2)
         self.assertEqual(result[0]['config'],{'secret':'retained','model':'new'})
 
-    def test_managed_behavior_tombstones_override_imported_project_list(self):
+    def test_legacy_private_settings_do_not_override_shared_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);home=root/'home';workspace=root/'project';legacy=root/'legacy'
             (home/'config').mkdir(parents=True);workspace.mkdir();(workspace/'.amplifier').mkdir()
@@ -94,8 +98,8 @@ class HostSettingsTests(unittest.TestCase):
             (workspace/'.amplifier-unified').mkdir()
             (workspace/'.amplifier-unified/settings.local.yaml').write_text('local_setting: active\n')
             result=load_config(workspace,home=home,legacy_home=legacy)
-            self.assertEqual(result.app_bundles,['added','project-only'])
-            self.assertEqual(result.settings['local_setting'],'active')
+            self.assertEqual(result.app_bundles,['disabled','removed','project-only'])
+            self.assertNotIn('local_setting',result.settings)
 
     def test_legacy_provider_ids_map_to_core_instances_without_collapsing(self):
         bundle=SimpleNamespace(providers=[{'module':'p','instance_id':'one','config':{'model':'old'}}],tools=[],hooks=[],session={})

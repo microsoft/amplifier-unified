@@ -33,7 +33,7 @@ async def main(home):
  os.environ['AMPLIFIER_HOME']=str(home/'native')
  os.environ['AMPLIFIER_WEB_HOME']=str(home);os.environ['AMPLIFIER_UNIFIED_IMPORT_HOME']=str(home/'legacy');os.environ['FIXTURE_KEY']='fixture-private-key'
  workspace=home/'workspace';workspace.mkdir();(workspace/'project').mkdir();(workspace/'project'/'bundle.yaml').write_text('bundle:\n  name: fixture\n')
- write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'},'bundle':{'added':{'fixture-root':'foundation:test'}}}))
+ write_private(Path(os.environ['AMPLIFIER_HOME'])/'settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${FIXTURE_KEY}','default_model':'fixture-model'}} for name in ['one','two','three']]},'routing':{'matrix':'balanced'},'bundle':{'added':{'fixture-root':'foundation:test'}}}))
  matrix={'name':'balanced','roles':{role:{'description':role.title(),'candidates':[{'provider':'one','model':'fixture-model'},{'provider':'two','model':'fallback-model'}]} for role in ['general','fast']}}
  write_private(home/'config/routing/balanced.yaml',yaml.safe_dump(matrix))
  app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)

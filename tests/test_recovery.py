@@ -20,7 +20,7 @@ async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_pat
     with pytest.raises(ValueError):await manager.perform('maintenance.reset',{'parts':['settings'],'apply':True})
     await manager.perform('maintenance.reset',{'parts':['settings'],'apply':True,'confirmation':'RESET'})
     assert not (config/'fixture.txt').exists()
-    assert (config/'settings.yaml').exists()
+    assert not (config/'settings.yaml').exists()
     assert (Path(service.state['maintenance']['retained'])/'config/fixture.txt').read_text()=='private fixture'
     assert len(service.state['sessions'])==1
     await service.close()

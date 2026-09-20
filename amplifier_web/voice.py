@@ -460,7 +460,13 @@ class VoiceService:
             session_id = session_id or state.get("selectedSessionId") or state.get("activeSessionId") or state.get("session", {}).get("id")
             if not session_id or not any(s.get("id") == session_id for s in state.get("sessions", [])):
                 raise VoiceError("Create or select a conversation before calling.", 409, "no_session")
-            preference = state.get("settings", {}).get("preferredVoice", MODELS["live"])
+            from .shared_settings import read_settings
+            session = next(s for s in state["sessions"] if s["id"] == session_id)
+            voice = read_settings(session["workspace"], session_id=session.get("runtimeSessionId") or session_id).get("voice", {})
+            preference = voice.get("preferred_model", MODELS["live"])
+            fallback = voice.get("fallback_model", MODELS["realtime"])
+            if provider == "auto" and (preference not in MODELS.values() or fallback not in MODELS.values()):
+                raise VoiceError("The configured voice model is not supported by this app's voice transport.", 409, "unsupported_model")
             selected = ("realtime" if preference == MODELS["realtime"] else "live") if provider == "auto" else provider
             # This endpoint bypasses command dispatch. Claim the active call
             # under the same lock used by update activation before any provider
@@ -476,7 +482,7 @@ class VoiceService:
                 try:
                     result = await call.create(sdp, selected)
                 except ProviderError as error:
-                    if provider != "auto" or selected != "live" or not should_fallback(error):
+                    if provider != "auto" or selected != "live" or fallback != MODELS["realtime"] or not should_fallback(error):
                         raise
                     result = await call.create(sdp, "realtime")
                     result["fallbackReason"] = "GPT-Live is unavailable to this project; connected with GPT-Realtime-2.1."
@@ -507,7 +513,8 @@ def setup_routes(app: web.Application) -> VoiceService:
     app["voice_service"] = manager
 
     async def config(request: web.Request) -> web.Response:
-        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "fallbackModel": MODELS["realtime"], "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
+        manager.service._refresh_shared_preferences()
+        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "fallbackModel": manager.service.state.get("settings", {}).get("fallbackVoice", MODELS["realtime"]), "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
 
     async def connect(request: web.Request) -> web.Response:
         try:

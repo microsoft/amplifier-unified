@@ -151,16 +151,23 @@ class BundleManager:
 
     @staticmethod
     def entries(settings: dict) -> list[dict]:
-        metadata = settings.get("web_bundles", {}).get("entries")
-        if isinstance(metadata, list):
-            return copy.deepcopy(metadata)
+        # YAML's standard bundle fields decide activation and order. UI row
+        # metadata can preserve labels/disabled entries but never veto CLI edits.
+        metadata = settings.get("web_bundles", {}).get("entries") or []
         rows = []
+        def entry(uri, role, name):
+            previous = next((row for row in metadata if row.get("uri") == uri and row.get("role") == role and (role != "standalone" or row.get("name") == name)), {})
+            return {**copy.deepcopy(previous), "id": previous.get("id") or uuid.uuid5(uuid.NAMESPACE_URL, role + ":" + uri + (":" + name if role == "standalone" else "")).hex,
+                    "uri": uri, "name": previous.get("name", name) if role == "behavior" else name, "role": role, "enabled": True}
         for uri in settings.get("bundle", {}).get("app", []):
             if isinstance(uri, str):
-                rows.append({"id": uuid.uuid5(uuid.NAMESPACE_URL, "behavior:" + uri).hex, "uri": uri, "name": uri.split("/")[-1], "role": "behavior", "enabled": True})
+                rows.append(entry(uri, "behavior", uri.split("/")[-1]))
         for name, uri in settings.get("bundle", {}).get("added", {}).items():
             if isinstance(uri, str):
-                rows.append({"id": uuid.uuid5(uuid.NAMESPACE_URL, "standalone:" + uri).hex, "uri": uri, "name": name, "role": "standalone", "enabled": True})
+                rows.append(entry(uri, "standalone", name))
+        for row in metadata:
+            if row.get("enabled") is False and not any(item["uri"] == row.get("uri") and item["role"] == row.get("role") and (item["role"] != "standalone" or item["name"] == row.get("name")) for item in rows):
+                rows.append(copy.deepcopy(row))
         return rows
 
     @staticmethod
@@ -235,7 +242,7 @@ class BundleManager:
             from .host.config import write_private
             filename = exported["filename"]
             name = filename.removesuffix(".md")
-            target = self.home / "bundles" / filename
+            target = self.store.shared_home / "bundles" / filename
             def register(current):
                 entries = self.entries(current)
                 existing = next((row for row in entries if row["role"] == "standalone" and row["name"] == name), None)

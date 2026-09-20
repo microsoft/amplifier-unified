@@ -171,19 +171,18 @@ def apply_provider_environment(plan):
 def _apply_settings(bundle, config):
     settings = config.settings
     bundle.providers = merge(bundle.providers, config.providers)
-    order={identity:index for index,identity in enumerate(settings.get("provider_order",[]))}
-    bundle.providers.sort(key=lambda row:order.get(row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-"),len(order)))
+    bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
         values = merge(getattr(bundle, kind), settings.get("modules", {}).get(kind, []))
         values = merge(values, settings.get("config", {}).get(kind, []))
         setattr(bundle, kind, values)
     bundle.session = merge(bundle.session, settings.get("config", {}).get("session", {}))
     routing = settings.get("routing", {})
-    if routing:
+    if routing or any(row.get("module") == "hooks-routing" for row in bundle.hooks):
+        from ..shared_settings import routing_dirs
         for hook in bundle.hooks:
             if hook.get("module") == "hooks-routing":
-                patch = {"custom_routing_dirs": [str(config.workspace / ".amplifier-unified" / "routing.local"),
-                    str(config.workspace / ".amplifier-unified" / "routing"), str(config.home / "config" / "routing"), str(config.registry_home / "routing")]}
+                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None))]}
                 if routing.get("matrix"):
                     patch["default_matrix"] = routing["matrix"]
                 if routing.get("overrides"):
@@ -193,8 +192,8 @@ def _apply_settings(bundle, config):
     for kind in ("providers", "tools", "hooks"):
         values = []
         for row in getattr(bundle, kind):
-            override = overrides.get(row.get("id"), overrides.get(row.get("module"), {}))
-            if override.get("enabled") is False:
+            override = merge(overrides.get(row.get("module"), {}), overrides.get(row.get("id") or row.get("instance_id"), {}))
+            if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
@@ -206,6 +205,12 @@ def _apply_settings(bundle, config):
             else:
                 values.append(expand_environment(row))
         setattr(bundle, kind, values)
+    # Context and orchestrator are modules too (e.g. context-simple.token_meter).
+    for kind in ("context", "orchestrator"):
+        row = bundle.session.get(kind)
+        if isinstance(row, dict):
+            override = overrides.get(row.get("module"), {})
+            bundle.session[kind] = merge(row, {key: value for key, value in override.items() if key in {"source", "config"}})
     return bundle
 
 
@@ -307,14 +312,16 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .children import install_children, StandaloneHostAdapter
     from .storage import SessionStore
 
-    config = load_config(workspace)
+    runtime = runtime or Runtime()
+    config = load_config(workspace, session_id=runtime.session_id)
+    from .config import prepare_registry
+    prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
     # remain the community data root, including for mounted CI logging hooks.
     os.chdir(config.workspace)
     from ..session_files import capture_dir
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
-    runtime = runtime or Runtime()
     store = SessionStore.for_app(config.home, config.workspace)
     # Native history is authoritative, including an intentionally empty file.
     # A common checkpoint is read only for an explicitly legacy-only session;
@@ -448,7 +455,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:
-            raise RuntimeError("No provider is configured. Add config.providers to the app-owned config/settings.yaml.")
+            raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
         loop = coordinator.get("orchestrator")
         if selection:
             identity = selection.get("instance")
@@ -521,7 +528,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "agents": list(prepared.mount_plan.get("agents", {})), "provider_choices": choices,
             "selection": selection, "effective_selection": effective, "replaced": replacements,
             "steering": "request_boundary", "native": False, "standalone": True,
-            "settings_file": str(config.home / "config" / "settings.yaml"),
+            "settings_file": str(config.settings_file),
             "capabilities": {name: coordinator.get_capability(name) is not None for name in
                 ("session.spawn", "session.resume", "mention_resolver", "model_role_resolver")},
             "module_load_failures": failures}

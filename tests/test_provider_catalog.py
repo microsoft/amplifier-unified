@@ -5,10 +5,11 @@ import yaml
 from amplifier_web.provider_catalog import ProviderCatalog
 from amplifier_web.setup import SetupManager
 from amplifier_web.host.config import write_private
+from amplifier_web.session_files import amplifier_home
 
 
 def settings(home,models=('first','second')):
-    write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':str(i),'module':'provider-openai','config':{'default_model':model,'api_key':'${CATALOG_TEST_KEY}'}} for i,model in enumerate(models)]}}))
+    write_private(amplifier_home()/'settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':str(i),'module':'provider-openai','config':{'default_model':model,'api_key':'${CATALOG_TEST_KEY}'}} for i,model in enumerate(models)]}}))
 
 
 async def test_catalog_single_flight_refresh_and_failure_recovery():

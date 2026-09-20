@@ -167,6 +167,8 @@ def _serve(args, data_dir: Path) -> None:
     overrides = _server_overrides(args)
     config = load_server_config(data_dir, overrides=overrides)
     os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+    from .settings_migration import migrate_settings
+    migrate_settings(data_dir, [args.workspace])
     from .host.config import load_config
     load_config(args.workspace)
     from .server import create_app
@@ -213,6 +215,9 @@ def main():
     config = load_server_config(data_dir, overrides=_server_overrides(args))
     args.port, args.data_dir = config["port"], str(data_dir)
     if args.command in {"run", "continue", "tool"}:
+        os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
+        from .settings_migration import migrate_settings
+        migrate_settings(data_dir, [args.workspace])
         from .host.config import load_config
         load_config(args.workspace)
         from .headless import run

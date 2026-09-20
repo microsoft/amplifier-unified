@@ -25,7 +25,7 @@ async def test_keys_are_private_and_redacted_across_scopes(manager,tmp_path,monk
     assert result['providers'][0]['credentialsConfigured']
     settings=manager.store.read(tmp_path,'project')
     assert settings['config']['providers'][0]['config']['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
-    keyfile=manager.home/'config/keys.env'
+    keyfile=manager.store.shared_home/'keys.env'
     assert keyfile.stat().st_mode & 0o777 == 0o600
     assert 'secret-test' in keyfile.read_text()
     await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'first','config':{'model':'edited','api_key':'[REDACTED]'},'scope':'project'})
@@ -37,8 +37,8 @@ async def test_provider_removal_tombstones_inherited_instance(manager,tmp_path):
     await manager.perform('providers.save',args)
     result=await manager.perform('providers.remove',{'workspace':str(tmp_path),'id':'one','scope':'local'})
     assert result['providers'][0]['enabled'] is False
-    assert manager.store.read(tmp_path,'global')['config']['providers'][0]['enabled'] is True
-    assert manager.store.read(tmp_path,'local')['overrides']['one']['enabled'] is False
+    assert 'one' not in manager.store.read(tmp_path,'global')['configurator']['disabled']['providers']
+    assert manager.store.read(tmp_path,'local')['configurator']['disabled']['providers'] == ['one']
 
 @pytest.mark.asyncio
 async def test_models_and_test_use_isolated_provider_without_starting_session(manager,tmp_path,monkeypatch):
@@ -120,7 +120,7 @@ async def test_local_routing_shadows_project_without_mutating_it(manager,tmp_pat
     await manager.perform('routing.save',{'workspace':str(tmp_path),'name':'custom','scope':'local','matrix':local})
     result=await manager.perform('routing.show',{'workspace':str(tmp_path),'name':'custom'})
     assert result['matrix']['description']=='Local only'
-    assert yaml.safe_load((tmp_path/'.amplifier-unified/routing/custom.yaml').read_text())['description']=='Custom policy'
+    assert yaml.safe_load((tmp_path/'.amplifier/routing/custom.yaml').read_text())['description']=='Custom policy'
 
 @pytest.mark.asyncio
 async def test_default_env_is_detected_and_saved_as_reference_without_copying_secret(manager,tmp_path,monkeypatch):
@@ -132,7 +132,7 @@ async def test_default_env_is_detected_and_saved_as_reference_without_copying_se
     row=result['providers'][0]
     assert row['credentialsConfigured'] and row['credential']['envVar']=='OPENAI_API_KEY'
     assert manager.store.read(tmp_path)['config']['providers'][0]['config']['api_key']=='${OPENAI_API_KEY}'
-    assert not (manager.home/'config/keys.env').exists()
+    assert not (manager.store.shared_home/'keys.env').exists()
     assert 'existing-private-key' not in str(status)+str(result)
 
 @pytest.mark.asyncio
@@ -194,12 +194,12 @@ def test_copilot_credentials_include_nested_agent_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_app_private_key_file_is_detected_without_returning_value(tmp_path,monkeypatch):
+async def test_shared_key_file_is_detected_without_returning_value(tmp_path,monkeypatch):
     name='UNIFIED_TEST_SAVED_KEY'
     monkeypatch.delenv(name,raising=False)
     home=tmp_path/'home';(home/'config').mkdir(parents=True)
-    (home/'config/settings.yaml').write_text('{}')
-    (home/'config/keys.env').write_text(name+'=private-file-value\n')
+    shared=Path(os.environ['AMPLIFIER_HOME']);shared.mkdir()
+    (shared/'keys.env').write_text(name+'=private-file-value\n')
     manager=SetupManager(home)
     result=await manager.perform('providers.credentials',{'module':'provider-openai','envVar':name,'workspace':str(tmp_path)})
     assert result['credentialCheck']['available'] and 'private-file-value' not in str(result)
@@ -209,12 +209,14 @@ async def test_app_private_key_file_is_detected_without_returning_value(tmp_path
 async def test_provider_order_persists_without_copying_inherited_credentials(tmp_path):
     from amplifier_web.host.config import write_private
     home=tmp_path/'home'
-    write_private(home/'config/settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${PRIVATE_KEY}'}} for name in ['one','two','three']]}}))
+    write_private(Path(os.environ['AMPLIFIER_HOME'])/'settings.yaml',yaml.safe_dump({'config':{'providers':[{'id':name,'module':'provider-openai','config':{'api_key':'${PRIVATE_KEY}'}} for name in ['one','two','three']]}}))
     manager=SetupManager(home)
     result=await manager.perform('providers.move',{'workspace':str(tmp_path),'scope':'project','id':'one','beforeId':None})
     assert [row['id'] for row in result['providers']]==['two','three','one']
     saved=manager.store.read(tmp_path,'project')
-    assert saved['provider_order']==['two','three','one'] and 'config' not in saved
+    assert 'provider_order' not in saved
+    assert [row['config'] for row in saved['config']['providers']]==[{'priority':1},{'priority':2},{'priority':3}]
+    assert 'PRIVATE_KEY' not in str(saved)
     with pytest.raises(ValueError):await manager.perform('providers.move',{'workspace':str(tmp_path),'id':'missing'})
 
 @pytest.mark.asyncio

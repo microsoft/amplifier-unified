@@ -1,3 +1,4 @@
+from pathlib import Path
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,7 +7,7 @@ from amplifier_web.voice import ProviderError, VoiceCall, VoiceError, VoiceServi
 
 class Service:
     def __init__(self):
-        self.state = {"selectedSessionId": "main", "sessions": [{"id": "main", "messages": [], "workers": []}], "view": {"mode": "chat"}, "voice": {}}
+        self.state = {"selectedSessionId": "main", "sessions": [{"id": "main", "workspace": str(Path.cwd()), "messages": [], "workers": []}], "view": {"mode": "chat"}, "voice": {}}
         self.transcripts, self.calls, self.statuses = [], [], []
         self.result = asyncio.Event()
         self.lock = asyncio.Lock()
@@ -128,7 +129,8 @@ def test_voice_context_omits_theme_and_uses_pinned_session():
 
 async def test_saved_realtime_preference_skips_live_and_start_session_is_pinned(monkeypatch):
     service=Service()
-    service.state['settings']={'preferredVoice':'gpt-realtime-2.1'}
+    from amplifier_web.preferences import SettingsStore
+    SettingsStore(Path.cwd()).update(Path.cwd(),'global',lambda settings:settings.update(voice={'preferred_model':'gpt-realtime-2.1'}))
     service.state['sessions'].append({'id':'other','messages':[]})
     service.state['selectedSessionId']='other'
     manager=VoiceService(service,api_key='secret',http=object())

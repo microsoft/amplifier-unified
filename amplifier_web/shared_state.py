@@ -83,14 +83,15 @@ def workspace_snapshot_path(workspace: Path, home: Path) -> Path:
 def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[Path, ...]:
     """Only stat inputs this host actually consumes during a manager mount."""
 
+    from .shared_settings import settings_paths, routing_dirs
+    from .session_files import amplifier_home
+    paths = settings_paths(workspace, session_id=session_id)
+    matrices = [path for directory in routing_dirs(workspace) for path in sorted(directory.glob("*.yaml"))]
     return (
-        home / "config" / "settings.yaml",
-        home / "config" / "keys.env",
-        workspace_snapshot_path(workspace, home),
-        workspace / ".amplifier" / "settings.yaml",
-        workspace / ".amplifier" / "settings.local.yaml",
-        workspace / ".amplifier-unified" / "settings.yaml",
-        workspace / ".amplifier-unified" / "settings.local.yaml",
+        *paths.values(),
+        amplifier_home() / "keys.env",
+        *routing_dirs(workspace),
+        *matrices,
         home / "sessions" / session_id / "configuration.json",
         home / "sessions" / session_id / "control-state.json",
         home / "updates" / "active.json",

@@ -2,7 +2,8 @@
 
 This candidate combines independent live clients, the modular shell from PR #58,
 management/history latency fixes from PR #59, and the work-harness streaming
-bridge. It builds on the released 0.10.9 issue fixes and prepares 0.10.10.
+bridge. It preserves the released 0.10.9 issue fixes and 0.11.0 shared configuration,
+and prepares 0.11.1.
 
 ## Client behavior
 
