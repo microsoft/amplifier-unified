@@ -17,11 +17,14 @@ import uuid
 
 import yaml
 
-from .builtin_behaviors import SHELL_BEHAVIOR_URI, app_behaviors, resource_root
+from .builtin_behaviors import SHELL_BEHAVIOR_URI, app_behaviors
 
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
 MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
+# Conversation profiles known to the host/ecosystem. Other roots are explicitly
+# registered through bundle.added (the standalone role in the management UI).
+STANDALONE_PROFILES = {"foundation", "anchors", "anchors-amp-dev", "amplifier-dev", "exp-delegation"}
 SECRET_KEYS = {"api_key", "apikey", "token", "access_token", "refresh_token", "id_token", "auth_token", "secret", "client_secret", "password", "passwd", "authorization", "cookie", "cookies", "credentials", "private_key", "bearer_token"}
 
 
@@ -265,9 +268,15 @@ class BundleManager:
                 config = load_config(workspace, home=self.home)
                 path = config.registry_home / 'registry.json'
                 registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
-                names = {name for name,row in registry.items() if isinstance(row,dict) and row.get('is_root')
-                         and row.get('uri') != resource_root().as_uri()}
-                names.update(config.registrations)
+                # Foundation's is_root marks a namespace/repository root, not a
+                # runnable conversation profile. Even explicitly_requested can
+                # describe an add-on, so neither cache flag admits picker rows.
+                # Source overrides also name dependencies; they are not standalone
+                # registrations. Keep the capability catalog below unfiltered.
+                available = set(registry) | set(config.registrations)
+                names = STANDALONE_PROFILES & available
+                names.update(config.settings.get('bundle', {}).get('added', {}))
+
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
                 from .bundle_selection import catalog_entry
                 return {"bundles": self.public_entries(settings), "registeredBundles":[catalog_entry(name) for name in sorted(names-disabled)]}

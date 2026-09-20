@@ -140,14 +140,20 @@ async def test_drag_reorder_moves_atomically_and_persists_composition_order(tmp_
     assert [row['name'] for row in result['bundles']]==['a','b','c']
 
 
-async def test_registered_root_picker_merges_effective_aliases_and_root_registry(tmp_path,monkeypatch):
+async def test_picker_lists_standalone_registrations_not_namespace_roots(tmp_path,monkeypatch):
     import json
     monkeypatch.setenv('AMPLIFIER_UNIFIED_IMPORT_HOME',str(tmp_path/'legacy'))
     manager=BundleManager(tmp_path)
-    manager.store.update(tmp_path,'global',lambda _: {'bundle':{'added':{'my-root':'foundation:custom'}},'sources':{'bundles':{'override-root':'foundation:override'}}})
+    manager.store.update(tmp_path,'global',lambda _: {'bundle':{'added':{'my-root':'foundation:custom','work':'foundation:work','anchors-work':'foundation:anchors-work'},'app':['foundation:behaviors/addon']},'sources':{'bundles':{'override-root':'foundation:override'}}})
     directory=tmp_path/'foundation';directory.mkdir(exist_ok=True)
-    (directory/'registry.json').write_text(json.dumps({'bundles':{'registered-root':{'is_root':True},'behavior-only':{'is_root':False}}}))
+    (directory/'registry.json').write_text(json.dumps({'bundles':{
+        'namespace-root':{'is_root':True},
+        'requested-addon':{'is_root':True,'explicitly_requested':True},
+        'app-addon':{'is_root':True,'app_bundle':True},
+        'behavior-only':{'is_root':False},
+        'anchors-amp-dev':{'is_root':False},
+    }}))
     result=await manager.perform('bundles.list',{'workspace':str(tmp_path)})
     names={row['name'] for row in result['registeredBundles']}
-    assert {'anchors','foundation','my-root','override-root','registered-root'}<=names
-    assert 'behavior-only' not in names
+    assert names == {'anchors','foundation','anchors-amp-dev','my-root','work','anchors-work'}
+    assert any(row['role']=='behavior' and row['uri']=='foundation:behaviors/addon' for row in result['bundles'])

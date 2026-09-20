@@ -106,7 +106,11 @@ async def test_namespace_anchor_is_not_a_selectable_session_root(tmp_path):
     }}))
     result = await BundleManager(config.home).perform("bundles.list", {"workspace": str(tmp_path)})
     names = {row["name"] for row in result["registeredBundles"]}
-    assert "unified" not in names and "custom" in names
+    assert "unified" not in names and "custom" not in names
+    await BundleManager(config.home).perform('bundles.add', {'workspace': str(tmp_path),
+        'name': 'custom', 'uri': 'git+https://example.org/custom', 'role': 'standalone'})
+    result = await BundleManager(config.home).perform('bundles.list', {'workspace': str(tmp_path)})
+    assert 'custom' in {row['name'] for row in result['registeredBundles']}
 
 
 @pytest.mark.parametrize("origin", ["ui", "agent"])
