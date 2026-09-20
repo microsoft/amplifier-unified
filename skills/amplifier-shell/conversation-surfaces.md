@@ -11,6 +11,11 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    later reads, events, patches, revisions and restoration. Do not repeatedly
    call `canvas.show` or `create` when improving this interface.
 3. Bind controls through `canvasApp.ready`, `subscribe`, `emit` and `patch`.
+   Prefer one `canvasApp.createDraft({delay:150})` store for all editable fields;
+   `update({...})` retains local values, `flush()` saves or retries, and
+   `getStatus()` exposes dirty/saving/error for your visible status. It joins
+   the host's bounded checkpoint before typed or voice input. Do not mix it
+   with independent whole-surface commit owners.
    Show errors and retain unfinished input. Use semantic labels, keyboard
    controls and inherited theme/accessibility context. Use `setDirty` for
    unsaved work beyond ordinary form inputs. Prefer synchronous `beginEdit()`
@@ -50,6 +55,17 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    Inspect `views` for dirty flags and render errors. A created artifact or a
    successful state write does not prove a healthy render. Report only checks
    actually performed.
+
+The host now supplies a small freshness notice at model boundaries. A notice
+and a stroke count are not image evidence. Before describing changed visual
+contents, use `app_control` operation `context.read` with
+`{surfaceId:id, representation:"image", revision:"definition:state"}`.
+The next model request receives typed pixels from the registered canvas.
+Use `state` with `fields:[...]` for selective state or `view` for visible text
+and controls. Respect pending/stale/unavailable limits. For an explicitly
+focused visual task, `context.focus {surfaceId:id, requests:1}` can prefetch;
+it expires automatically. Ordinary edits do not start model work. Read the
+contract's live-context section for budgets, receipt retention and scope.
 
 These surfaces serve the session's task. A custom theme chooser is a useful
 example to generate on demand, not a built-in app to ship. Publishing,

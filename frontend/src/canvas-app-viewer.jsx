@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {clientUrl} from './api';
+import {clientUrl,request} from './api';
+import {registerSurfaceCheckpoint} from './surface-checkpoint';
 import './canvas-app-viewer.css';
 
 const targetOf=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,canvas[key]]));
@@ -17,6 +18,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  if(canvas.app.revision!==latest.current.app.revision||canvas.app.stateRevision>=latest.current.app.stateRevision)latest.current=canvas;
  shown.current=mounted;
  const app=canvas.app;
+ const checkpoints=useRef(new Map());
  const mount=value=>{editVersion.current=0;channel.current=crypto.randomUUID();seen.current.clear();setReview(null);setError('');setRenderError('');sent.current=null;reported.current=null;setMounted(value)};
  const send=(force=false)=>{
   const current=latest.current;
@@ -31,7 +33,7 @@ export function CanvasAppViewer({canvas,dispatch}){
   if(version!==editVersion.current)return Promise.resolve();
   dirtyRef.current=value;setDirty(value);
   const target=targetOf(shown.current),epoch=channel.current;
-  const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value}));
+  const write=dirtyWrites.current.catch(()=>{}).then(()=>dispatch('canvas.views.dirty',{...target,dirty:value,editVersion:version}));
   dirtyWrites.current=write;
   return write.catch(e=>{if(epoch===channel.current){dirtyRef.current=true;setDirty(true);setError(e.message)}throw e});
  };
@@ -40,11 +42,22 @@ export function CanvasAppViewer({canvas,dispatch}){
   else send();
  },[canvas]);
  useEffect(()=>{
+  const unregister=registerSurfaceCheckpoint(canvas.sessionId,identity=>new Promise(resolve=>{
+   const requestId=identity||crypto.randomUUID(),timer=setTimeout(()=>{checkpoints.current.delete(requestId);resolve()},900);
+   checkpoints.current.set(requestId,()=>{clearTimeout(timer);resolve()});
+   frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:latest.current.id,channel:channel.current,checkpoint:requestId},'*');
+  }));
   const receive=async event=>{
    const data=event.data;
    if(event.source!==frame.current?.contentWindow||data?.type!=='canvas-app'||data.id!==latest.current.id)return;
    if(data.op==='ready'){send(true);return}
    if(data.channel!==channel.current)return;
+   if(data.op==='observation'){
+    const value=data.observation;
+    if(!value||JSON.stringify(value).length>480000)return;
+    try{await request('/api/actions',{method:'POST',body:{action:'canvas.views.observe',args:{...value,...targetOf(shown.current),...(data.checkpoint?{checkpointId:data.checkpoint}:{})},id:crypto.randomUUID()}})}catch{}
+    checkpoints.current.get(data.checkpoint)?.();checkpoints.current.delete(data.checkpoint);return;
+   }
    if(data.op==='status'){
     const status=data.status==='error'?'error':'ready',message=String(data.message||'').slice(0,1000),key=status+':'+message;
     if(key===reported.current)return;reported.current=key;
@@ -82,7 +95,7 @@ export function CanvasAppViewer({canvas,dispatch}){
   const root=document.getElementById('amp-one');if(root)observer.observe(root,{attributes:true,subtree:true,childList:true,characterData:true});
   const queries=['prefers-color-scheme: dark','prefers-reduced-motion: reduce','prefers-contrast: more'].map(q=>matchMedia('('+q+')'));
   queries.forEach(q=>q.addEventListener('change',refresh));
-  return()=>{window.removeEventListener('message',receive);observer.disconnect();cancelAnimationFrame(scheduled);queries.forEach(q=>q.removeEventListener('change',refresh))};
+  return()=>{unregister();for(const done of checkpoints.current.values())done();checkpoints.current.clear();window.removeEventListener('message',receive);observer.disconnect();cancelAnimationFrame(scheduled);queries.forEach(q=>q.removeEventListener('change',refresh))};
  },[dispatch]);
  const args=()=>({id:canvas.id,sessionId:canvas.sessionId,expectedRevision:latest.current.app.revision,expectedStateRevision:latest.current.app.stateRevision});
  const run=async(action,extra)=>{try{const result=await dispatch(action,{...args(),...extra});setError('');return result}catch(e){setError(e.message)}};

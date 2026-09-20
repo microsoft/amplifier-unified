@@ -33,8 +33,13 @@ def definitions(schema, string):
         'canvas.views.renderer': ('Select a validated renderer for this exact artifact/view generation.', schema({**target, 'renderer': string(100)})),
         'canvas.views.recover': ('Restore this view to its built-in renderer; retain the saved artifact.', schema(target)),
         'canvas.views.command': ('Invoke an explicitly targeted renderer control without retargeting the selected conversation.', schema({**target, 'action': string(100), 'args': {'type': 'object'}}, [*target, 'action', 'args'])),
-        'canvas.views.dirty': ('Declare unsaved renderer-local edits before a replacement or close.', schema({**target, 'dirty': {'type': 'boolean'}})),
+        'canvas.views.dirty': ('Declare unsaved renderer-local edits before a replacement or close.', schema({**target, 'dirty': {'type': 'boolean'}, 'editVersion': {'type': 'integer', 'minimum': 0}}, [*target, 'dirty'])),
         'canvas.views.status': ('Record browser mount evidence for this renderer; not a package validation receipt.', schema({**target, 'status': {'enum': ['loading', 'ready', 'error']}, 'message': string(2000)})),
+        'canvas.views.observe': ('Report bounded, untrusted drawing and visible-control evidence for this exact view. Does not start an agent turn.', schema({**target,
+            'revision': string(80), 'editVersion': {'type': 'integer', 'minimum': 0}, 'pending': {'type': 'boolean'},
+            'status': {'enum': ['ready', 'pending', 'unavailable']}, 'image': string(470000), 'text': string(1800),
+            'controls': {'type': 'array', 'maxItems': 16, 'items': schema({'label': string(100), 'value': string(100)}, ['label', 'value'])},
+            'reason': string(200), 'checkpointId': string(100)}, [*target, 'revision', 'editVersion', 'pending', 'status'])),
     }
     for _, spec in actions.values():
         spec['properties']['clientId'] = IDENTITY
@@ -219,6 +224,8 @@ class CanvasViews:
 
     def command(self, action, args, origin):
         """Called under the normal AppService action lock and receipt handling."""
+        if action == 'canvas.views.observe':
+            return self.service.surface_context.observe(args), []
         if action == 'canvas.views.inspect':
             return self.project(), []
         if action == 'canvas.views.open':
@@ -263,6 +270,8 @@ class CanvasViews:
             preference.pop('activation', None)
         elif action == 'canvas.views.dirty':
             preference['dirty'] = args['dirty']
+            if 'editVersion' in args:
+                preference['editVersion'] = args['editVersion']
         elif action == 'canvas.views.status':
             preference['activation'] = {'status': args['status'], 'message': args['message']}
         elif action == 'canvas.views.command':

@@ -7,7 +7,7 @@ const source=readFileSync(new URL('../../amplifier_web/canvas_app_bridge.js',imp
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(){
  const sent=[],listeners={},parent={postMessage:value=>sent.push(value)};
- const realm={parent,structuredClone,setTimeout,clearTimeout,console,document:{readyState:'complete',documentElement:{style:{setProperty(){},removeProperty(){}},dataset:{}}},addEventListener:(name,fn)=>{(listeners[name]??=[]).push(fn)},removeEventListener(){},ResizeObserver:class{observe(){} disconnect(){}}};
+ const realm={parent,structuredClone,setTimeout,clearTimeout,console,document:{readyState:'complete',querySelectorAll:()=>[],documentElement:{style:{setProperty(){},removeProperty(){}},dataset:{}}},addEventListener:(name,fn)=>{(listeners[name]??=[]).push(fn)},removeEventListener(){},ResizeObserver:class{observe(){} disconnect(){}}};
  realm.window=realm;vm.runInNewContext(source,realm);
  const snapshot=(revision=0,theme={tokens:{accent:'#123456'},scheme:'light'})=>({id:'fixture',app:{revision:1,stateRevision:revision,manifest:{},state:{tab:'draw'}},theme});
  const deliver=value=>listeners.message.forEach(fn=>fn({source:parent,data:{type:'canvas-app-host',id:'fixture',channel:'test',...value}}));

@@ -49,12 +49,19 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
+      - name: Verify typed surface context through Core and loop-live
+        run: |
+          uv sync --project amplifier_web/runtime_deps
+          UNIFIED_RUNTIME_PYTHON="$PWD/amplifier_web/runtime_deps/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
+      - name: Verify live surface awareness and draft checkpoints
+        working-directory: frontend
+        run: npm run test:surface-context-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend

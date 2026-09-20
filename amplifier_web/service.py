@@ -235,6 +235,8 @@ class AppService:
         self.db.commit()
         self.shell = ShellModules(self)
         self.canvas_views = CanvasViews(self)
+        from .surface_context import SurfaceContext
+        self.surface_context = SurfaceContext(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
@@ -949,6 +951,8 @@ class AppService:
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity
                 previous_activity = recent_activity(session)
+                session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
+                session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,attachments=attachments)
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
@@ -1544,6 +1548,13 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation in {'context.manifest', 'context.read'}:
+            bindings = args.get('_contextBindings', [])
+            async with self.lock:
+                if operation == 'context.manifest':
+                    result = self.surface_context.manifest(session_id, bindings)
+                    return {**result, 'inputIds': args.get('_contextInputs', [])}
+                return self.surface_context.read(session_id, args, bindings)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)
@@ -1610,6 +1621,7 @@ class AppService:
     async def voice_delegate(self, text, command_id, session_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
+        input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
@@ -1626,6 +1638,8 @@ class AppService:
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
+            session.setdefault('surfaceInputs', {})[command_id] = input_context
+            session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()
             snapshot = copy.deepcopy(session)
         self._task(self._guard(self._send, (snapshot, text, command_id)))

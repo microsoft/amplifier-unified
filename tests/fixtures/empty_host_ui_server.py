@@ -18,6 +18,9 @@ class Runtime:
 
     async def send(self, session, text, input_id, emit):
         self.sent.append({"sessionId": session["id"], "text": text})
+        if hasattr(self, 'service'):
+            binding = session.get('surfaceInputs', {}).get(input_id, {})
+            self.sent[-1]['surfaceContext'] = self.service.surface_context.manifest(session['id'], [binding])
         await emit("assistant.message", {"sessionId": session["id"],
                    "inputId": input_id, "text": "Synthetic first response"})
         await emit("runtime.status", {"sessionId": session["id"], "status": "idle"})
@@ -51,6 +54,7 @@ async def main(home):
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
                            voice=False, background_updates=False)
     app["control_token"] = "fixture-browser-control-token"
+    runtime.service = app['service']
 
     async def inspect(request):
         return web.json_response({"sent": getattr(runtime, 'sent', []),

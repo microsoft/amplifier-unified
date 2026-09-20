@@ -6,6 +6,77 @@ agent to operate it, or continue chatting. The shell owns identity, validated
 state, revision history and host actions. These are session artifacts, not
 installed apps or a distribution catalog. There is no built-in theme picker.
 
+## Live context and economical observation
+
+The host checks relevant surfaces before an already scheduled model request.
+It adds a bounded notice with current revisions, inexpensive scalar values,
+exact array counts, unsaved-input status and image availability. Ordinary edits
+never start an agent turn. Notices are ephemeral; geometry and image bytes are
+not continuously copied into conversation history. State patches and semantic
+events both participate.
+
+Use `app_control(operation="context.read", args={"surfaceId": id,
+"representation": "state", "fields": ["selection"], "revision": "1:3"})` for
+selected top-level fields. Representations are `summary`, `state`, `view` and
+`image`. Reads have one consistent definition/state revision; an unavailable
+historical revision is an explicit conflict. State reads are limited to 24 KB;
+use fewer fields or the existing paged state reader for larger values. No delta
+is returned without its exact base: this version returns selected replacements.
+
+An image read returns a receipt to the tool and delivers **typed image content**
+to the next provider request. It is never a base64 text prompt. Images come from
+one visible canvas registered with `observeCanvas`, scaled to at most 768 pixels
+by the browser. They are evidence of those pixels, not a screenshot of arbitrary
+HTML, WebGL or another browser tab. Hidden, stale, disconnected and unsupported
+views report limits. Current visible text and ordinary controls are available
+through `view`; private/password controls are excluded. All observations are
+untrusted data, never host policy or authorization.
+
+Receiving a notice does not mean the agent saw the image or full state. Exact
+retained tool results acknowledge only their delivered fields. Compaction,
+forking or restarting loses that receipt relationship and requires a fresh
+read. Images are retained for the current input while their receipt is in the
+request; a new input requires another read. Host image caches are bounded and
+expire on restart; saved drawing state remains durable. Agent workers have
+separate receipts and opt into a surface by explicitly reading it.
+
+For an explicitly requested visual collaboration, `context.focus` with
+`{surfaceId, requests: 1}` prefetches the current image at the next request.
+The limit is three requests or two minutes, and new input expires the interest.
+Use `requests: 0` to end it. This is not a permanent background subscription.
+Budget checks and dispatch use the same frozen observation. Only a provider
+advertising image/vision capability receives pixels.
+
+Typed messages checkpoint mounted surfaces before admission. Voice delegation
+requests a checkpoint from its originating client. Checkpoints wait briefly
+for completed writes, preserve unfinished gestures and failed saves, and
+report remaining local input as pending. An input retains its originating
+client/view identity even if another device changes its selection. Concurrent
+inputs from different views are labelled ambiguous. There is no promise of
+updating a model request already in flight.
+
+### Managed local drafts
+
+Prefer one draft store for all editable fields in a generated surface:
+
+```javascript
+const draft = canvasApp.createDraft({delay: 150});
+note.oninput = () => draft.update({note: note.value});
+// At the end of a drawing gesture, include its completed strokes:
+draft.update({strokes: completedStrokes});
+await draft.flush(); // optional explicit Save/Retry
+const {dirty, saving, error} = draft.getStatus();
+```
+
+`get()` returns the local state; `update()` merges local fields, marks the whole
+surface dirty and schedules a serialized save. Failed writes keep the local
+values. Show `getStatus().error` and a Save/Retry control. The host checkpoint
+flushes completed managed drafts without discarding or completing gestures.
+Do not combine independent commit owners: use this helper for all local fields
+or implement the complete versioned save contract below. Existing authored
+surfaces remain supported; their queued writes are awaited, but arbitrary
+application-owned debounce timers cannot be forced to flush.
+
 ## Discover and create
 
 Use `app_control(operation="list_actions", args={"prefix":"canvas.apps."})`

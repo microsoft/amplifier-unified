@@ -436,7 +436,9 @@ class RuntimeManager:
 
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id, attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+        return await self._request(session["id"], "send", text=text, input_id=input_id,
+            context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
+            attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
     async def takeover(self, session, emit, expected_owner=None, timeout=30):
         """One deliberate request; a competing successor is never asked to yield."""
