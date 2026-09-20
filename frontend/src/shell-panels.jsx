@@ -1,10 +1,9 @@
+import {CanvasWorkspace} from './canvas-workspace';
 import {ShellModules} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
-import {CanvasTabs,SavedArtifacts,BrowserAddress,BrowserPreview,chatArtifacts} from './canvas-library';
+import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
 import {FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
-import {CanvasViewer} from './canvas-viewer';
-import {McpAppViewer} from './mcp-app-viewer';
 import {PaneResizer,usePanelLayout} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -56,23 +55,8 @@ export function SessionHistoryControls({session,act,onLoadEarlier}){
  </div>;
 }
 
-export function A2UISurface({surface,act}){
- const rows=new Map((surface?.components||[]).map(row=>[row.id,row]));
- const render=(id,ancestors=[])=>{
-  if(ancestors.length>20||ancestors.includes(id))return null;
-  const row=rows.get(id);if(!row)return null;
-  const [kind,props]=Object.entries(row.component||{})[0]||[];if(!props)return null;
-  const children=()=> (props.children?.explicitList||[]).map(child=><React.Fragment key={child}>{render(child,[...ancestors,id])}</React.Fragment>);
-  if(kind==='Text'){const Tag=['h1','h2','h3','h4','h5'].includes(props.usageHint)?props.usageHint:'p';return <Tag className="a-canvas-text">{props.text?.literalString||''}</Tag>}
-  if(kind==='Row'||kind==='Column')return <div className={`a-canvas-${kind.toLowerCase()}`}>{children()}</div>;
-  if(kind==='Card')return <div className="a-canvas-card">{render(props.child,[...ancestors,id])}</div>;
-  if(kind==='Divider')return <hr/>;
-  if(kind==='Button')return <button type="button" className="a-soft" data-action="canvas.event" onClick={()=>act('canvas.event',{surfaceId:surface.surfaceId,componentId:id,name:props.action.name})}>{render(props.child,[...ancestors,id])}</button>;
-  return null;
- };
- return <div className="a-canvas-surface" data-part="agent-surface">{render(surface?.root)}</div>;
-}
-export function AgentCanvas({state,act}){
+export {A2UISurface} from './a2ui';
+export function AgentCanvas({state,act,dispatch=act}){
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
  const focused=!!canvas.open&&!!view.canvasFocused,controls=!!view.canvasControlsPinned||!!view.canvasControlsExpanded;
@@ -113,7 +97,10 @@ export function AgentCanvas({state,act}){
   {canvas.path&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}
    </div>
   </div>
-  <div className="a-canvas-body">{draft.library||canvas.placeholder?<SavedArtifacts state={state} act={act}/>:canvas.kind==='mcp-app'?<McpAppViewer key={canvas.id} canvas={canvas} act={act}/>:canvas.kind==='browser'?<BrowserPreview key={canvas.id} canvas={canvas} act={act}/>:canvas.kind==='a2ui'?<A2UISurface surface={canvas.surface} act={act}/>:canvas.kind?<CanvasViewer key={canvas.id} canvas={canvas} act={act}/>:<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}</div>
+  <div className="a-canvas-body">
+   {!!state.canvasWorkspace?.views?.length&&<CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/>}
+   {draft.library||(!state.canvasWorkspace?.views?.length&&canvas.placeholder)?<SavedArtifacts state={state} act={act}/>:!state.canvasWorkspace?.views?.length&&<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}
+  </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
  </aside>;
 }

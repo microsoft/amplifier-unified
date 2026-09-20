@@ -184,6 +184,8 @@ ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
 from .shell_modules import ShellModules, definitions as shell_definitions
 ACTION_DEFINITIONS.update(shell_definitions(schema, string))
+from .canvas_views import CanvasViews, definitions as canvas_view_definitions
+ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
 
 
 class AppService:
@@ -207,6 +209,7 @@ class AppService:
         self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.commit()
         self.shell = ShellModules(self)
+        self.canvas_views = CanvasViews(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
@@ -524,6 +527,12 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action.startswith('canvas.views.') and 'clientId' in args:
+            if client_id is None:
+                with self.clients.bind(args['clientId']):
+                    return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
+            if args['clientId'] != client_id:
+                raise AppError('The canvas view command targets a different client.')
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
@@ -572,6 +581,7 @@ class AppService:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             from .canvas_library import remember, restore, fork_artifacts
+            self.canvas_views.guard_transition(action, args)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
@@ -631,7 +641,10 @@ class AppService:
                         pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
-                if action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
+                if action.startswith('canvas.views.'):
+                    diagnostic_result, view_effects = self.canvas_views.command(action, args, origin)
+                    effects.extend(view_effects)
+                elif action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
                     from .canvas_library import command
                     command(self.state,self.db,action,args)
                     if action=='canvas.select':
@@ -1008,17 +1021,23 @@ class AppService:
                 from .workspace_navigation import NAV_KEYS
                 for key in NAV_KEYS | {'navWorkspaceBrowseFor', 'navWorkspaceAncestorsOpen'}:
                     self.state['view'].pop(key, None)
-            if action != 'session.pin' and not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
-                owner=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state.get('selectedSessionId'))),{})
+            view_action = args.get('action') if action == 'canvas.views.command' else action
+            if action not in {'session.pin', 'canvas.views.inspect', 'canvas.views.status'} and view_action != 'canvas.snapshot' and not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
+                artifact_id = args.get('resourceId') if action.startswith('canvas.views.') else self.state.get('canvas',{}).get('id')
+                owner_id = args.get('sessionId',self.state.get('selectedSessionId'))
+                if action.startswith('canvas.views.'):
+                    artifact = next((row for row in self.state.get('canvasArtifacts', []) if row['id'] == artifact_id), {})
+                    owner_id = artifact.get('sessionId')
+                owner=next((s for s in self.state['sessions'] if s['id']==owner_id),{})
                 if owner.get('historyManaged'):
                     owner = {}  # Browsing must not append to the observed CLI capture.
                 stream='canvas' if action.startswith('canvas.') else 'smartTools' if action.startswith('smartTools.') else 'sessions' if action.startswith('session.') else 'workers' if action.startswith('worker.') else 'app'
-                self.diagnostics.record(stream,{'event':'app:action','data':{'action':action,'origin':origin,'commandId':command_id,'sessionId':owner.get('id'),'runtimeSessionId':owner.get('runtimeSessionId'),'artifactId':self.state.get('canvas',{}).get('id') if stream=='canvas' else None}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
+                self.diagnostics.record(stream,{'event':'app:action','data':{'action':action,'origin':origin,'commandId':command_id,'sessionId':owner.get('id'),'runtimeSessionId':owner.get('runtimeSessionId'),'artifactId':artifact_id if stream=='canvas' else None}},session_id=owner.get('runtimeSessionId') or owner.get('id'),workspace=owner.get('workspace'))
             self.state["events"].append({"id": command_id, "action": action, "origin": origin, "at": time.time()})
             self.state["events"] = self.state["events"][-200:]
             for effect in effects:
                 effect.update({"id": str(uuid.uuid4()), "createdAt": time.time(), "origin": origin, **({"clientId": client_id} if client_id else {})})
-            self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or action == "canvas.download"]))
+            self.state.setdefault("deviceCommands", []).extend(copy.deepcopy([effect for effect in effects if effect["type"] != "download" or view_action == "canvas.download"]))
             self.state["deviceCommands"] = self.state["deviceCommands"][-20:]
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
             if diagnostic_result is not None:receipt['result']=diagnostic_result

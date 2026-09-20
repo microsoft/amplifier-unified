@@ -203,6 +203,26 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     from .canvas_documents import canvas_source, raw_source
 
+    def canvas_view_target(request, view_id):
+        try:
+            args = {'viewId': view_id, 'resourceId': request.query['resourceId'],
+                    'resourceRevision': request.query['resourceRevision'], 'generation': int(request.query['generation'])}
+        except (KeyError, ValueError):
+            raise AppError('Supply the artifact view identity and revision.') from None
+        service.canvas_views.target(args)
+        return service.canvas_views.canvas(view_id)
+
+    async def canvas_view_resource(request):
+        canvas = canvas_view_target(request, request.match_info['view_id'])
+        return web.json_response(canvas, headers={'Cache-Control': 'no-store'})
+
+    async def canvas_view_source(request):
+        canvas = canvas_view_target(request, request.match_info['view_id'])
+        return web.json_response({'content': raw_source(canvas, service.db)}, headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/canvas/views/{view_id}/resource', canvas_view_resource)
+    app.router.add_get('/api/canvas/views/{view_id}/source', canvas_view_source)
+
     async def canvas_download(request):
         from .state_storage import resource
         identity = request.match_info["identity"]
@@ -222,7 +242,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.Response(text=raw_source(canvas,service.db),content_type='text/plain',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
     async def canvas_document(request):
-        canvas = service.state.get("canvas", {})
+        canvas = (canvas_view_target(request, request.query['viewId']) if request.query.get('viewId')
+                  else service.state.get("canvas", {}))
         if canvas.get("id") != request.match_info["identity"] or canvas.get("kind") not in {"html", "babylon", "mcp-app"}:
             raise AppError("Canvas document no longer available", 404)
         if canvas.get("kind") == "mcp-app":

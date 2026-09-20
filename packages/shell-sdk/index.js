@@ -6,3 +6,6 @@ export function defineModule(factory){
 export function useNavigation(React,host){
  return React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);
 }
+export function useCanvas(React,host){
+ return React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);
+}

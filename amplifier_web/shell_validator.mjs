@@ -40,7 +40,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(origin);
  await page.waitForFunction(()=>typeof window.validateShellModule==='function');
- const result=await page.evaluate(()=>window.validateShellModule());
+ const result=await page.evaluate(manifest=>window.validateShellModule(manifest),manifest);
  if(errors.length)throw Error(errors.join('\n'));
  process.stdout.write(JSON.stringify({...result,profile:manifest.profile}));
 }finally{

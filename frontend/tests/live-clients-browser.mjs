@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/live_clients_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
@@ -39,9 +39,11 @@ try{
  assert.equal(await selected(a),first);assert.equal(await selected(b),second);
  await contexts[0].setOffline(true);
  await finish();
- await act(b,'session.select',{id:first});
+ const restored=await act(b,'session.select',{id:first});
+ assert.equal(restored.state.view.draft,'Draft belonging to B');
  await b.getByText('Finished: Shared input from A',{exact:true}).waitFor();
- assert.equal(await composer(b).inputValue(),'Draft belonging to B');
+ // The action receipt can precede React's composer synchronization effect.
+ await expect(composer(b)).toHaveValue('Draft belonging to B');
  await contexts[0].setOffline(false);
  await a.getByText('Finished: Shared input from A',{exact:true}).waitFor({timeout:15000});
  assert.equal((await inspect()).sent.length,1);assert.deepEqual((await inspect()).stopped,[]);
