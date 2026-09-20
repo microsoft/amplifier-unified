@@ -111,6 +111,10 @@ class Worker:
         if coordinator.get_capability("web.activity"):
             return
         coordinator.register_capability("web.activity", True)
+        def public_stream():
+            from amplifier_web.execution_events import CALL_PURPOSE
+            return not CALL_PURPOSE.get()
+        coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
@@ -131,7 +135,11 @@ class Worker:
             phase = "model"
             retry = {}
             detail = "Waiting for the configured model to respond."
-            if event == "provider:retry":
+            if event == "context:compaction_started":
+                phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+            elif event == "context:compaction_finished":
+                detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."
+            elif event == "provider:retry":
                 phase = "retrying"
                 attempt, maximum = data.get("attempt"), data.get("max_retries")
                 suffix = f" ({attempt} of {maximum})" if isinstance(attempt, int) and isinstance(maximum, int) else ""
@@ -151,7 +159,7 @@ class Worker:
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"), "time": time.time(), **retry})
             return HookResult()
-        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response"):
+        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
 
     async def preparation_progress(self, directory):

@@ -139,6 +139,10 @@ class HostSettingsTests(unittest.TestCase):
         self.assertEqual(adapted['agents']['worker']['session']['orchestrator']['module'],'custom-finite')
         self.assertTrue(replacements)
 
+    def test_live_plan_preserves_opt_in_background_policy(self):
+        adapted, _ = live_plan({'session': {'orchestrator': {'module': 'loop-live', 'config': {'background_delegate': False}}}})
+        self.assertFalse(adapted['session']['orchestrator']['config']['background_delegate'])
+
     def test_imported_queued_receipt_is_history_not_replay(self):
         rows=[{'role':'tool','tool_call_id':'c','content':json.dumps({'status':'queued','call_id':'c','job_id':'j'})}]
         repaired=repair_interrupted_receipts(rows)

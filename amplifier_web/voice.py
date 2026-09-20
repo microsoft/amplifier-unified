@@ -57,6 +57,7 @@ def compact_context(state: dict[str, Any], session_id: str | None) -> str:
     session = next((s for s in sessions if s.get("id") == session_id), {}) if isinstance(sessions, list) else sessions.get(session_id, {})
     return json.dumps({
         "session_id": session_id, "title": session.get("title"),
+        "activity": {k: session.get("activity", {}).get(k) for k in ("phase", "label")},
         "view": {k: state.get("view", {}).get(k) for k in ("mode", "panel", "scheme", "layout", "selectedWorkerId", "contextVisible")},
         "workers": [{k: w.get(k) for k in ("id", "title", "status")} for w in session.get("workers", [])],
         "recent_messages": [{k: m.get(k) for k in ("role", "text")} for m in [m for m in session.get("messages", []) if m.get("via") != "call"][-4:]],

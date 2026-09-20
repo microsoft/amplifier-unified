@@ -36,7 +36,8 @@ def live_plan(plan, background_delegate=True):
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
             loop.update(module="loop-live", source=LOOP_SOURCE)
-            loop.setdefault("config", {}).update(configured_bundle=True, background_delegate=background_delegate)
+            loop.setdefault("config", {}).update(configured_bundle=True)
+            loop["config"].setdefault("background_delegate", background_delegate)
             changed.append({"path": prefix + "session.orchestrator", "from": original, "to": "loop-live"})
         for name, agent in node.get("agents", {}).items():
             if isinstance(agent, dict):
