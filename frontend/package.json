@@ -31,7 +31,9 @@
     "test:review-during-send-browser": "node tests/review-during-send-browser.mjs",
     "test:typing-audit-browser": "node tests/typing-audit-browser.mjs",
     "test:bootstrap-recovery-browser": "node tests/bootstrap-recovery-browser.mjs",
-    "test:empty-host-browser": "node tests/empty-host-browser.mjs"
+    "test:empty-host-browser": "node tests/empty-host-browser.mjs",
+    "build:reader-example": "node scripts/build-reader-example.mjs",
+    "test:canvas-renderers-browser": "node tests/canvas-renderers-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

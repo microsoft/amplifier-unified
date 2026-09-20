@@ -46,6 +46,9 @@ try{
  await page.goto('http://127.0.0.1:8967/');await page.waitForSelector('#amp-one');
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('view.update',{patch:{scheme:'system'}});
+ await action('canvas.show',{kind:'markdown',title:'Pinned notes',content:'# Notes beside the live tool'});
+ const pinned=(await action('canvas.views.inspect',{})).result.views[0];
+ await action('canvas.views.open',{resourceId:pinned.resourceId,sessionId:pinned.resource.sessionId});
  const opened=await action('smartTools.open',{id:'counter',tool:'counter_read'});
  await page.waitForFunction(()=>window.amplifier.getState().canvas.kind==='mcp-app');
  const frame=page.frameLocator('.a-canvas-html');
@@ -105,9 +108,24 @@ try{
  assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,operationCount);
 
  // An agent takes the same action through app_control's shared dispatch contract.
- const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4}});
+ const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4,delay_ms:3000}});
+ await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='running'),receipt.operationId);
+ await page.getByRole('button',{name:'Customize appearance'}).click();
+ await page.locator('#scheme').selectOption('light');
+ await frame.locator('body[data-theme="light"]').waitFor();
+ await page.locator('#layout').selectOption('work');
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await action('view.update',{patch:{canvasFocused:true}});
+ assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
+ assert.equal((await action('canvas.views.inspect',{})).result.views.find(v=>v.viewId==='secondary').resourceId,pinned.resourceId);
  await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='completed'),receipt.operationId);
  state=await page.evaluate(()=>window.amplifier.getState());assert.equal(state.smartTools.operations.find(o=>o.id===receipt.operationId).result.structuredContent.count,5);
+ assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');
+ await action('view.update',{patch:{canvasFocused:false}});
+ await page.getByRole('button',{name:'Customize appearance'}).click();
+ await page.locator('#scheme').selectOption('system');
+ await page.locator('#layout').selectOption('balanced');
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('canvas.close',{});
  const reopen=action('canvas.select',{id:savedId});
  await page.evaluate(()=>window.setSystemTheme(false));

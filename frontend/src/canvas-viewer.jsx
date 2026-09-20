@@ -95,7 +95,7 @@ function HtmlPreview({canvas,act}){
   window.addEventListener('message',receive);return()=>window.removeEventListener('message',receive);
  },[canvas.id,report]);
  useEffect(()=>{const request=canvas.interaction;if(request&&sent.current!==request.requestId){sent.current=request.requestId;frame.current?.contentWindow?.postMessage({type:'canvas-interact',...request},'*')}},[canvas.interaction]);
- return <iframe ref={frame} title={canvas.title||'Interactive canvas'} className="a-canvas-html" sandbox="allow-scripts" referrerPolicy="no-referrer" src={clientUrl(`/api/canvas/${canvas.id}/document`)}/>;
+ return <iframe ref={frame} title={canvas.title||'Interactive canvas'} className="a-canvas-html" sandbox="allow-scripts" referrerPolicy="no-referrer" src={clientUrl(`/api/canvas/${canvas.id}/document`+(canvas.viewId?'?'+new URLSearchParams({viewId:canvas.viewId,resourceId:canvas.id,resourceRevision:canvas.resourceRevision,generation:canvas.generation}):''))}/>;
 }
 
 

@@ -1,5 +1,6 @@
 """Unfamiliar, deterministic MCP App. No Unified imports and no model calls."""
 from pathlib import Path
+import asyncio
 import sys
 from typing import Any
 from mcp.server import MCPServer
@@ -14,9 +15,10 @@ def counter_read() -> dict[str, Any]:
     return {'count':count}
 
 @apps.tool(resource_uri='ui://counter/app', structured_output=True)
-def counter_add(amount: int = 1) -> dict[str, Any]:
+async def counter_add(amount: int = 1, delay_ms: int = 0) -> dict[str, Any]:
     """Add an amount to the shared counter."""
     global count
+    await asyncio.sleep(min(max(delay_ms, 0), 5000) / 1000)
     count += amount
     return {'count':count}
 

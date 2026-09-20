@@ -1,10 +1,15 @@
-# Modular shell: first implementation
+# Modular shell: navigation and artifact viewers
 
-This milestone implements the navigation slice of the shell plan, based on
+The first milestone implemented the navigation slice of the shell plan, based on
 Unified `81f2182b6112e4162d982291151c489bdec6ef8a` (0.10.8). The workspace
 manager and conversation list are independent registered components. Additional
 instances can follow the active workspace, pin a workspace, or show all chats.
 An external module can replace either component while the app stays open.
+
+The content-workspace milestone, based on published Unified 0.11.4, adds a
+renderer registry, validated hot-loaded artifact viewers, and a second pinned
+artifact view. See [Artifact viewers](#artifact-viewers) below for its API,
+ownership boundaries and acceptance checks.
 
 The default shell retains workspace creation, folder browsing, chat search,
 pagination, pinning, renaming, removal, unread indicators and history refresh.
@@ -31,13 +36,13 @@ navigation state. They do not expose transcripts, composer drafts, credentials
 or runtime mount plans through the SDK. The existing app-wide observation API
 continues to exist outside the module SDK.
 
-Shell compositions and view state are scoped to a browser client ID, stored in
-session storage so reloads retain that client's shell. A new browser tab starts
-with a default composition. A browser's Duplicate Tab operation may copy
-session storage; durable user/device identity and synchronized preferences are
-later work. Active conversation selection is still the existing shared app
-selection. Independent module filters and pinned contexts do not imply
-independent conversations in separate browsers.
+Shell compositions and view state use the existing client-attachment contract.
+Each page attaches with a new client ID; reload or duplication resumes a copy
+of the previous client's presentation, drafts and shell preferences, so two
+live pages do not share writable presentation state. A fresh tab starts with
+defaults. Conversation selection is client-local, while canonical sessions,
+artifacts and tool work remain host-owned. Durable cross-device preference
+synchronization remains later work.
 
 Legacy navigation preferences are copied once when a client is first seen.
 Agents should use `shell.query` and `shell.view.update` for the actual module
@@ -69,8 +74,9 @@ Each composition holds up to 12 instances in the navigation slot, with stable
 IDs. CSS order changes placement without moving or recreating mounted nodes.
 Presentation supports light/dark/system appearance, accent color, density and
 the existing balanced/conversation/work layouts. Custom CSS skins continue to
-use the existing theme service. Full theme bundles, arbitrary slots, canvas
-renderer replacement and conversation decomposition are later milestones.
+use the existing theme service. Full theme bundles, arbitrary slots and
+conversation decomposition are later milestones. Artifact renderers have the
+separate content-workspace contract below.
 
 ## Stage, validate, prepare, activate
 
@@ -177,7 +183,7 @@ Package distribution, signing, unattended trust policy, sandboxing, retention
 of unused packages/clients, rich layout editing and schema migration remain
 separate work. The SDK is provisional until this first milestone is reviewed.
 
-## Verification record
+## Navigation milestone verification record
 
 On this branch, the complete Python suite passed **833 tests, with 10 skips**;
 all **142 frontend unit tests** passed. Production build, production shell
@@ -206,8 +212,154 @@ integration; this milestone does not claim to resolve the existing large-state
 performance work. Reproduce these samples with
 `node frontend/tests/shell-performance.mjs /path/to/baseline-checkout`.
 
-The concurrent live-client branch is introducing per-page attachment and
-client-aware selection. Before integration, replace the temporary session-storage
-identity with that attachment contract, adapt `ShellModules.scoped_state` to the
-client's active selection, preserve the multiplexed shell event, and rebuild
-assets once from the combined source. No version or release bump is included.
+The navigation milestone was subsequently integrated with per-page attachment
+and client-aware selection. The historical measurements above are not a
+performance claim for the combined application or the content workspace.
+
+## Artifact viewers
+
+`CanvasWorkspace` owns view containers and an Open with selector. A registry
+routes every existing artifact format through its standard adapter: Markdown,
+text, code, JSON/JSONL, images, HTML, Babylon, Mermaid, Graphviz, A2UI, websites
+and MCP Apps. Existing format controls and sandbox restrictions remain in
+those adapters. Contributed renderers enter the same host through a validated
+manifest and compiled artifact, without a format-specific host branch.
+
+The primary view follows the client's selected artifact. **Open a second
+view** pins the current ordinary artifact below it; that view remains bound
+when the primary artifact or selected conversation changes. It does not select
+the pinned artifact's conversation or change the composer target. Both views
+can render the same artifact with different settings and renderers.
+
+Artifacts retain their existing library IDs and immutable stored bodies.
+Renderer choice, generation, dirty state, controls and reports belong to the
+view within the existing client presentation record. No second artifact store
+or conversation store is introduced. Closing a pinned view retains its
+preferences and artifact. Reload clones these preferences through normal
+client attachment; restarting the host restores the saved records.
+
+MCP Apps retain their existing single active tool binding per client. They can
+occupy the primary view alongside an ordinary pinned artifact. Pinning a second
+MCP App is rejected. This milestone does not provide arbitrary pane counts,
+drag-and-drop layouts, multiple simultaneous tool bindings, conversation
+renderer replacement, or automatic state-schema migrations.
+
+### Renderer package and public SDK
+
+Use the same `shell.packages.stage` and `shell.packages.validate` sequence.
+A renderer manifest adds a label and its supported resource kinds:
+
+```json
+{
+  "id": "example.document-reader",
+  "label": "Reading view",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "profile": "trusted-native-renderer-v1",
+  "stateSchema": "canvas-view-v1",
+  "resourceKinds": ["markdown", "text"],
+  "capabilities": ["canvas.resource.read", "canvas.view.update"]
+}
+```
+
+The package exports `({React}) => Component` and receives `{host}`. Public
+`useCanvas(React, host)` subscribes to a snapshot containing only `viewId`, the
+artifact's identity/content metadata and that view's presentation state.
+It does not supply chat history, drafts, credentials or tool capabilities.
+
+| Host API | Behavior |
+| --- | --- |
+| `getSnapshot()`, `subscribe(listener)` | Observe the bound artifact and view; return subscription cleanup |
+| `readSource()` | Explicitly fetch the bound immutable text, including large stored documents; stale bindings reject |
+| `dispatch('view.update', {patch})` | Merge presentation state, requiring `canvas.view.update`; accumulated state is limited to 16 KB |
+| `dispatch('view.report', {part, status, message})` | Report rendered content with `canvas.view.report` |
+| `setDirty(boolean)` | Defer renderer replacement and secondary close/replacement while edits are pending |
+
+Matching state schemas preserve stored view state across renderer changes.
+Arbitrary React local state is not migrated. Modules should prefix their custom
+view keys and use the host state for preferences they want to keep. Large HTML
+and 3D sources stay out of routine snapshots; `readSource()` is an explicit
+on-demand read. Independent example `examples/shell-reader` imports only the
+public SDK and preserves its text-size choice without editing source content.
+
+This remains the **trusted native code profile** described above. SDK
+capability checks are not an isolation boundary. Validation exercises empty
+and populated fixtures for each declared resource kind, plus mount/update/
+unmount/remount and subscription cleanup. Fixture success is separate from
+live browser activation and cannot establish correctness for all live data.
+
+### Agent actions and precise targets
+
+Attach the intended client and use its normal action transport. HTTP requests
+can carry `X-Amplifier-Client`; agents without an attached transport can pass the
+observed `clientId` in any `canvas.views.*` action. A conflicting attached client
+is rejected, and an unknown ID never creates a presentation implicitly.
+`canvas.views.inspect {clientId}` returns current views and compatible,
+validated renderer choices. Every view mutation except opening a pinned view
+requires all four values from that observation:
+
+```json
+{
+  "viewId": "primary",
+  "resourceId": "observed-artifact-id",
+  "resourceRevision": "observed-content-digest",
+  "generation": 3
+}
+```
+
+| Action | Additional arguments and outcome |
+| --- | --- |
+| `canvas.views.open` | `{resourceId, sessionId}` pins an ordinary saved artifact without selecting its chat |
+| `canvas.views.renderer` | Target plus `{renderer}`; choose a built-in ID or validated package digest |
+| `canvas.views.command` | Target plus `{action, args}`; explicitly address supported view/report, HTML interaction, A2UI or export controls |
+| `canvas.views.dirty` | Target plus `{dirty}`; declare unfinished local edits |
+| `canvas.views.close` | Secondary target; close its container, retaining the artifact and preferences |
+| `canvas.views.recover` | Target; restore its standard viewer, retaining the artifact |
+| `canvas.views.status` | Target plus `{status, message}`; browser evidence of loading, ready or error, separate from package validation |
+
+The host rejects changed resource identities, revisions and generations.
+Renderer replacements and reopened views invalidate late actions from previous
+mounts. Existing action receipt IDs support retries without repeating an
+accepted mutation. A missing package retains its saved choice and artifact,
+shows the standard viewer and exposes recovery. A live render failure stays
+within its view. `?shell=recovery` bypasses optional renderer imports as well as
+optional navigation modules; explicit recovery can discard module-local edits.
+
+Source and iframe document requests also carry the view target. Each HTML
+bridge receives only its own frame messages, even when both views show the same
+artifact. Ordinary artifact bodies are fetched on binding changes, not on each
+view preference, theme or chat-state update. Both views share the existing
+event stream. This is not a large-workload performance claim.
+
+### Content-workspace acceptance
+
+After the dependencies and production build described above:
+
+```sh
+npm run test:canvas-renderers-browser --prefix frontend
+npm run test:smart-tools-browser --prefix frontend
+uv run pytest tests/test_canvas_views.py -q
+```
+
+The renderer proof opens a disposable production app before independently
+building/staging/validating the example. It checks two instances with separate
+settings, immutable content, an unchanged HTML iframe and its unsaved input,
+preserved composer draft and conversation target, renderer changes, appearance
+changes, reload, stale HTTP reads/actions and failed-render recovery. Desktop
+and narrow-layout screenshots and structured evidence are written under
+`output/canvas-proof/`.
+
+The MCP proof uses an independently authored official-SDK counter app and a
+real local MCP tool server. A delayed accepted tool action finishes once while
+appearance/layout/focus change, the iframe survives, and its pinned ordinary
+artifact remains bound. It also covers sandbox isolation, stale server
+configuration denial and reopening without replaying mutations. These fixtures
+make no real provider/model calls; they do not prove voice continuity or every
+third-party renderer's behavior. This branch does not restart a user preview,
+publish a release or change the application version.
+
+Verification on this branch: **926 Python tests passed, 10 skipped**, and
+**152 frontend unit tests passed**. The production build, renderer hot-load
+proof, MCP App proof, navigation shell proof, existing canvas and saved-artifact
+browser suites, and panel-layout browser suite passed. The renderer proof also
+exercises the recovery startup URL, including accurate fallback/ready status.

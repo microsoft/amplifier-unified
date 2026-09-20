@@ -11,16 +11,17 @@ const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch
 const patch=values=>action('view.update',{patch:values});
 const box=selector=>page.locator(selector).boundingBox();
 const settled=()=>page.waitForTimeout(120);
+const toolbarsMatch=visible=>page.locator('.a-canvas-toolbar').evaluateAll((nodes,visible)=>nodes.length>0&&nodes.every(node=>!!node.getClientRects().length===visible),visible);
 try{
  await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
  await action('canvas.show',{kind:'html',title:'A canvas that keeps its place',content:'<!doctype html><html><head><style>body{margin:0;background:linear-gradient(135deg,#eef2ff,#e6f9f5);font:18px system-ui;min-height:100vh}main{padding:40px}button{font:inherit;padding:12px 20px;border:0;border-radius:12px;background:#6261db;color:white}</style></head><body><main><h1>Room to explore</h1><p>This interactive view stays alive as you resize and focus it.</p><button onclick="this.textContent=String(Number(this.textContent)+1)">0</button></main></body></html>'});
  // Hover stays engaged while moving from the header into viewer-specific tools.
  await page.locator('.a-canvas-head').hover();await page.getByRole('button',{name:'Copy canvas source'}).hover();
- assert.equal(await page.locator('.a-canvas-toolbar').isVisible(),true);
+ assert.equal(await toolbarsMatch(true),true);
  await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
  const frame=page.frameLocator('.a-canvas-html');await frame.getByRole('button',{name:'0',exact:true}).click();
  await patch({canvasControlsPinned:false,canvasControlsExpanded:false});await page.mouse.move(100,30);
- assert.equal(await page.locator('.a-canvas-toolbar').isVisible(),false);
+ assert.equal(await toolbarsMatch(false),true);
  const header=await box('.a-canvas-head'),body=await box('.a-canvas-body'),iframe=await box('.a-canvas-html');
  assert.equal(header.height,36);assert.ok(Math.abs(body.x-iframe.x)<1&&Math.abs(body.width-iframe.width)<1);assert.ok(Math.abs(body.y-iframe.y)<1);assert.ok(Math.abs(iframe.y+iframe.height-950)<1);
  const separator=page.getByRole('separator',{name:'Resize canvas'});await separator.focus();await page.keyboard.press('End');await settled();
@@ -37,7 +38,7 @@ try{
  const nav=page.getByRole('separator',{name:'Resize navigation'});await nav.focus();await page.keyboard.press('End');await settled();
  assert.ok((await box('.a-nav-slot')).width>700);assert.ok((await box('.a-canvas-panel')).width>=300);assert.ok((await box('.a-conversation')).width>=360);
  await nav.focus();await page.keyboard.press('Home');await separator.focus();await page.keyboard.press('End');await settled();assert.equal(Math.round((await box('.a-nav-slot')).width),216);assert.equal(Math.round((await box('.a-conversation')).width),360);
- await patch({canvasControlsExpanded:true});await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();assert.equal(await page.locator('.a-canvas-toolbar').isVisible(),true);
+ await patch({canvasControlsExpanded:true});await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();assert.equal(await toolbarsMatch(true),true);
  await patch({canvasControlsPinned:false,canvasControlsExpanded:false});
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();await page.mouse.move(500,400);await patch({canvasControlsExpanded:false});await settled();
  assert.deepEqual(await box('.a-canvas-panel'),{x:0,y:0,width:1600,height:950});assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),true);
