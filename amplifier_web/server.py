@@ -81,6 +81,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
     app["runtime"] = runtime
+    from .voice_visual import setup_routes as visual_routes
+    visual_routes(app)
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)

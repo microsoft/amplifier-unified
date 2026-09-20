@@ -221,6 +221,8 @@ from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
+from .voice_visual import VoiceVisual, definitions as visual_definitions
+ACTION_DEFINITIONS.update(visual_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -260,6 +262,7 @@ class AppService:
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
+        self.voice_visual = VoiceVisual(self)
         self.update_manager = None
         self.management = None
         self.smart_tools = None
@@ -672,6 +675,8 @@ class AppService:
             return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
             return await self.operations.dispatch(action, args, origin)
+        if action.startswith("voice.visual."):
+            return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         if action == 'runtime.control' and args.get('operation') in {'history.edit','history.rewind'}:
@@ -1814,6 +1819,8 @@ class AppService:
     async def app_bridge(self, operation, args, session_id):
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
+        if operation == "voice.visual.read":
+            return self.voice_visual.read(session_id, args.get("captureId"))
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:
@@ -1850,6 +1857,10 @@ class AppService:
             if args['action'].startswith(('recall.','memory.')):
                 if action_args.get('sessionId',session_id) != session_id:
                     raise AppError('Recall actions must identify the calling conversation.',409)
+                action_args['sessionId'] = session_id
+            if args['action'].startswith('voice.visual.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Visual capture must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'].startswith('canvas.apps.'):
                 if action_args.get('sessionId', session_id) != session_id:
@@ -1894,7 +1905,9 @@ class AppService:
     async def set_voice_status(self, payload):
         async with self.lock:
             self.state["voice"].update(payload)
-            self._publish()
+            if self.state["voice"].get("status") != "connected":
+                self.voice_visual.revoke()
+            self.voice_visual.publish()
 
     async def voice_delegate(self, text, command_id, session_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
@@ -1916,6 +1929,7 @@ class AppService:
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
+            self.voice_visual.bind_input(session["id"], command_id)
             session.setdefault('surfaceInputs', {})[command_id] = input_context
             session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()

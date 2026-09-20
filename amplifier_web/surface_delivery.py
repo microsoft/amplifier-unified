@@ -168,6 +168,8 @@ class SurfaceProvider:
             cached = await self.delivery.prepare(request, self.original)
             self.prepared = (self.prepared + [(request, cached)])[-4:]
         if commit:
+            if hasattr(self.delivery, "revalidate"):
+                cached = await self.delivery.revalidate(cached)
             self.delivery.commit(cached)
             self.prepared = [(source, value) for source, value in self.prepared if source is not request]
         return cached
