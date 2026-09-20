@@ -1,7 +1,7 @@
 # Work capability access
 
 Work uses the existing patch-editing module from the filesystem bundle. Unified
-pins a reviewed Work composition; an explicit user source registration remains
+tracks Work and its dependencies on `main`; an explicit user source registration remains
 authoritative. Existing conversations pick up changed composition when remounted,
 without replaying prior tools. A saved snapshot keeps its original module roster.
 
@@ -41,3 +41,19 @@ Validation includes Foundation composition, shared-policy regression tests, and
 both real patch engines operating in a disposable directory with denial and
 symlink-escape checks. No model request or live-session write is part of that
 evidence.
+
+## Ecosystem updates
+
+Work, its tools, live loop, context modules, routing, and worker dependencies follow
+`main`. The update check compares both cached source checkouts and the worker's
+installed Git revisions with their branches. Installation refreshes an isolated
+cache and worker lock, validates the configured bundles without a model turn,
+and activates only when work and calls are idle. Resuming mounts the new code.
+Automatic checking and automatic installation are separate settings.
+
+Lockfiles and update receipts record what was installed and support rollback;
+they do not prevent the next ecosystem update from advancing the branch. The
+server's own Python libraries follow their dependency declarations when the app
+is installed or updated. They are distinct from the independently updateable
+conversation worker libraries. User-supplied fixed sources and local edits remain
+explicit choices; the app does not rewrite arbitrary user configuration.

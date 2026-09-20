@@ -49,7 +49,7 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
-      - name: Resolve pinned private runtime dependency
+      - name: Resolve declared private runtime dependency
         id: runtime-dependency
         run: |
           python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
