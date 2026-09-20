@@ -132,7 +132,6 @@ export class VoiceClient {
       const ending = {controller, promise: null, timer: null};
       this.ending = ending;
       ending.timer = setTimeout(() => this.end({id: identity}).catch(this.onError), 20000);
-      const since = performance.now();
       this.update({status: 'ending', muted: true});
       this.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
       ending.promise = (async () => {
@@ -140,6 +139,9 @@ export class VoiceClient {
           const ready = await this.request('/api/voice/end', {method: 'POST', body: {id: identity, graceful: true}, signal: controller.signal});
           if (controller.signal.aborted || this.state.id !== identity) return;
           if (!ready.closed) {
+            // Earlier acknowledgement audio may have stopped while the host
+            // was preparing the final answer. Require later playback evidence.
+            const since = performance.now();
             const drain = await this.playback.drain({provider: this.state.provider, audio: this.audio, peer: this.peer, signal: controller.signal, since, timeoutMs: ready.maxDrainMs});
             if (!controller.signal.aborted) this.update({playbackDrain: drain});
           }

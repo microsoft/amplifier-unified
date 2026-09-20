@@ -98,3 +98,21 @@ test('prepare failure still releases media and finalizes the correct call', asyn
   assert.deepEqual(f.released, ['mic', 'peer', 'audio']);
   assert.equal(f.client.state.status, 'ended');
 });
+
+test('an earlier acknowledgement stopping during preparation cannot drain the final answer', async () => {
+  const ready = deferred();
+  const f = fixture((path, options) => options.body.graceful ? ready.promise : Promise.resolve({finalized: true}));
+  const ending = f.client.end({graceful: true});
+  f.client.playback.event({type: 'response.done'});
+  f.client.playback.event({type: 'output_audio_buffer.stopped'});
+  await new Promise(resolve => setTimeout(resolve, 350));
+  ready.resolve({maxDrainMs: 3000});
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.deepEqual(f.released, []);
+  f.client.playback.event({type: 'response.created'});
+  f.client.playback.event({type: 'output_audio_buffer.started'});
+  f.client.playback.event({type: 'response.done'});
+  f.client.playback.event({type: 'output_audio_buffer.stopped'});
+  await ending;
+  assert.deepEqual(f.released, ['mic', 'peer', 'audio']);
+});
