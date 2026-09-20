@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import time
+import tomllib
 from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
@@ -53,6 +54,7 @@ def group_sources(items):
             groups[row['id']]=row
             continue
         key=tuple(row.get(k) for k in ('label','ref','current','latest','status'))
+        key = (*key, row.get('usage'), tuple(row.get('usageEvidence', [])))
         if key in groups:
             groups[key]['cacheCopies']+=row.get('cacheCopies',1)
         else:
@@ -64,6 +66,96 @@ def group_sources(items):
 
 def pinned(ref):
     return bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', ref) or re.match(r'^(refs/tags/|v?\d+\.)', ref))
+
+
+def source_key(url, ref):
+    """Compare repository/ref identity, never infer that main and master agree."""
+    parsed = urlsplit(url)
+    if parsed.scheme not in {'https', 'http', 'ssh'} or not parsed.hostname or not isinstance(ref, str) or not ref:
+        raise ValueError('Unsupported Git source')
+    return (parsed._replace(path=parsed.path.rstrip('/').removesuffix('.git'), fragment='').geturl(),
+            ref.removeprefix('refs/heads/'))
+
+
+def configured_sources(service):
+    """Positive configuration evidence only, NOT a reachability/garbage collector.
+
+    Registry entries resolve selected names; their mere presence proves nothing.
+    Dynamic/transitive dependencies and local bundle contents remain unknown.
+    Never prepare a bundle, import credentials or mutate configuration here.
+    """
+    from .host.config import read_config
+    import yaml
+    sources, incomplete = {}, False
+    state, home = service.state, service.data_dir
+    selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
+    selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
+                      for s in state['sessions'])
+    selections.update((w['path'], None, None) for w in state.get('workspaces', []))
+    try:
+        path = foundation_home(home)/'registry.json'
+        registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
+        if not isinstance(registry, dict):raise ValueError('Invalid registry')
+    except (OSError, ValueError, AttributeError):
+        registry, incomplete = {}, True
+
+    for workspace, selected, session_id in selections:
+        try:
+            # Missing registrations and saved sessions remain available for
+            # history. Their unavailable directories are not configuration errors.
+            if not Path(workspace).expanduser().is_dir():continue
+            config = read_config(workspace, home=home, session_id=session_id)
+            registrations = {name: row['uri'] for name, row in registry.items()
+                             if isinstance(row, dict) and isinstance(row.get('uri'), str)}
+            configured = dict(config.registrations)
+            if 'foundation' in registry:configured.pop('foundation', None)
+            registrations.update(configured)
+
+            def resolve(reference, evidence, seen=frozenset()):
+                nonlocal incomplete
+                if not isinstance(reference, str) or not reference or reference in seen:
+                    incomplete = True
+                    return
+                if reference.startswith('git+'):
+                    parsed = urlsplit(reference[4:])
+                    path, separator, ref = parsed.path.rpartition('@')
+                    url = parsed._replace(path=path if separator else parsed.path, fragment='').geturl()
+                    sources.setdefault(source_key(url, ref if separator else 'HEAD'), set()).add(evidence)
+                    return
+                # Match the host's local-before-registry preference. Local files
+                # may contain arbitrary includes; don't guess their dependencies.
+                local = Path(reference.removeprefix('file://')).expanduser()
+                if not local.is_absolute():local = config.workspace/local
+                if any(p.exists() for p in (local, home/'bundles'/reference,
+                        home/'bundles'/(reference+'.md'), config.workspace/'.amplifier-unified/bundles'/reference)):
+                    return
+                namespace = reference.split(':', 1)[0]
+                replacement = config.resolve_source(reference) or registrations.get(namespace)
+                if replacement:
+                    resolve(replacement, evidence, seen | {reference})
+                else:
+                    incomplete = True
+
+            # Do not walk added/registered bundle lists: those are catalogs.
+            resolve(selected or config.active_bundle, 'Selected bundle')
+            for reference in config.app_bundles:
+                resolve(reference, 'Enabled app bundle')
+            for reference in config.module_sources.values():
+                resolve(reference, 'Module source configuration')
+
+            def configured_git_values(value):
+                # Module config can declare skill sources (and other plugins'
+                # Git inputs). Only explicit Git URIs are positive evidence.
+                if isinstance(value, dict):
+                    for child in value.values():configured_git_values(child)
+                elif isinstance(value, list):
+                    for child in value:configured_git_values(child)
+                elif isinstance(value, str) and value.startswith('git+'):
+                    resolve(value, 'Git input in module configuration')
+            configured_git_values(config.settings.get('config', {}))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, yaml.YAMLError):
+            incomplete = True
+    return sources, incomplete
 
 
 async def process(*args, cwd=None, env=None, timeout=90, raw=False):
@@ -101,19 +193,38 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
     return CommandOutput(stdout.decode(errors='replace').strip(),command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
 
 
+# Content identity of the reviewed wiki-weaver hook, NOT a dependency/revision pin.
+# Unknown hook implementations remain protected until separately reviewed.
+_WIKI_VERSION_HOOK_SHA256 = 'd0733aa7fecaadf307fdeb42dd202c4fec1a8255e56b24bb23777cbd003620f3'
+_WIKI_VERSION_HEADER = b'''"""Single source of truth for the wiki-weaver package version.
+
+Kept as a leaf module with no imports so that any submodule can safely
+import __version__ without risk of triggering a circular import through
+the wiki_weaver package __init__.
+
+This value is baked in at wheel-build time by the git-version hatchling
+build hook (see hatch_build.py at the repo root) -- it is the commit date
++ short SHA of the exact commit this wheel was built from, not the build
+date. Do not hand-edit; it is overwritten on the next build.
+"""
+
+'''
+
+
 async def cache_changes(root):
     """Return protected changes and proven cache artifacts, without editing files.
 
     Imported caches used to flatten symlinks, and some upstreams track generated
-    bytecode. Only their unstaged, exactly verified forms may be restored later,
+    bytecode. Wiki-weaver's reviewed build hook also bakes a version into source.
+    Only unstaged, exactly verified generated forms may be restored later,
     inside an isolated staging copy. Untracked files are never removed.
     """
     root = Path(root).resolve()
-    records = (await process('git','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
+    records = (await process('git','--no-optional-locks','status','--porcelain=v1','-z','--untracked-files=no',cwd=root,timeout=10,raw=True)).split(b'\0')
     protected, artifacts = [], []
 
-    async def head_entry(path):
-        value = await process('git','--literal-pathspecs','ls-tree','-z','HEAD','--',path,cwd=root,timeout=10,raw=True)
+    async def head_entry(path, revision='HEAD'):
+        value = await process('git','--literal-pathspecs','ls-tree','-z',revision,'--',path,cwd=root,timeout=10,raw=True)
         entries = value.split(b'\0')
         if len(entries)!=2 or not entries[0]:return None
         metadata, name = entries[0].split(b'\t',1)
@@ -132,6 +243,46 @@ async def cache_changes(root):
     def bytecode_header(value):
         return len(value)>=16 and value[2:4]==b'\r\n' and int.from_bytes(value[4:8],'little')&~3==0
 
+    async def wiki_generated_version():
+        # Never execute/import a cached hook or evaluate Python source. Verify its
+        # exact reviewed bytes and reproduce only that implementation's output.
+        version_path = 'wiki_weaver/_version.py'
+        originals = {}
+        try:
+            captured = await process('git','rev-parse','--verify','HEAD^{commit}',cwd=root,timeout=10,raw=True)
+            if not re.fullmatch(rb'(?:[0-9a-f]{40}|[0-9a-f]{64})\n',captured):return False
+            revision = captured[:-1].decode('ascii')
+            for name in (version_path, 'hatch_build.py', 'pyproject.toml'):
+                entry = await head_entry(name, revision)
+                if not entry or entry[0] not in {'100644','100755'} or not regular(name,entry[0]):return False
+                mode, identity = entry
+                indexed = await process('git','--literal-pathspecs','ls-files','--stage','-z','--',name,cwd=root,timeout=10,raw=True)
+                if indexed != f'{mode} {identity} 0\t{name}\0'.encode():return False
+                original = await process('git','cat-file','blob',identity,cwd=root,timeout=10,raw=True)
+                if name != version_path and (root/name).read_bytes() != original:return False
+                originals[name] = original
+            if hashlib.sha256(originals['hatch_build.py']).hexdigest() != _WIKI_VERSION_HOOK_SHA256:return False
+            project = tomllib.loads(originals['pyproject.toml'].decode('utf-8'))
+            if project['project']['name'] != 'wiki-weaver':return False
+            if project['build-system'] != {'requires':['hatchling'], 'build-backend':'hatchling.build'}:return False
+            if project['tool']['hatch']['build']['hooks']['custom'] != {'path':'hatch_build.py'}:return False
+            original = originals[version_path]
+            if not original.startswith(_WIKI_VERSION_HEADER):return False
+            if not re.fullmatch(rb'__version__ = "[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9a-f]{4,64}"\n',original[len(_WIKI_VERSION_HEADER):]):return False
+            # Match the hook's actual Git semantics (including core.abbrev), not
+            # an assumed seven-character prefix or a wall-clock/author date.
+            # Bind all awaited reads to one commit; a moving HEAD cannot mix
+            # one commit's tree/date with another commit's abbreviation.
+            date = await process('git','log','-1','--format=%cd','--date=format:%Y.%m.%d',revision,cwd=root,timeout=10,raw=True)
+            sha = await process('git','rev-parse','--short',revision,cwd=root,timeout=10,raw=True)
+            if not re.fullmatch(rb'[0-9]{4}\.[0-9]{2}\.[0-9]{2}\n',date):return False
+            if not re.fullmatch(rb'[0-9a-f]{4,64}\n',sha) or not captured[:-1].startswith(sha[:-1]):return False
+            expected = _WIKI_VERSION_HEADER + b'__version__ = "' + date[:-1] + b'-' + sha[:-1] + b'"\n'
+            if (root/version_path).read_bytes() != expected:return False
+            return await process('git','rev-parse','--verify','HEAD^{commit}',cwd=root,timeout=10,raw=True) == captured
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, TimeoutError):
+            return False
+
     index = 0
     while index<len(records):
         record=records[index];index+=1
@@ -141,6 +292,10 @@ async def cache_changes(root):
         if 'R' in change or 'C' in change:index+=1
         if change not in {' M',' T'}:
             protected.append(path);continue
+        if path=='wiki_weaver/_version.py':
+            generated=change==' M' and await wiki_generated_version()
+            (artifacts if generated else protected).append(path)
+            continue
         entry=await head_entry(path)
         if not entry or not regular(path):
             protected.append(path);continue
@@ -249,6 +404,7 @@ class UpdateManager:
 
     async def inventory_sources(self):
         base = foundation_home(self.home)
+        configured, incomplete = configured_sources(self.service)
         rows = []
         for meta in sorted((base/'cache').rglob('.amplifier_cache_meta.json')):
             # Each cache may include nested skills copies. All are app-owned;
@@ -263,13 +419,21 @@ class UpdateManager:
                 relative = str(root.relative_to(base))
                 identity = hashlib.sha256(relative.encode()).hexdigest()[:20]
                 current = await process('git','rev-parse','HEAD',cwd=root,timeout=10)
+                evidence = sorted(configured.get(source_key(url, ref), ()))
                 dirty, _ = await cache_changes(root)
                 rows.append({'id':identity,'label':safe_label(url),'ref':ref,'current':current,
                     'status':'local_changes' if dirty else 'pinned' if pinned(ref) else 'not_checked',
+                    'usage':'configured' if evidence else 'unknown','usageEvidence':evidence,
+                    **({'detail':'Tracked source changes are preserved and block automatic updates. Builds can also modify tracked files (including version stamps); without verified provenance these changes are not discarded.'} if dirty else {}),
                     'path':relative,'url':url,'kind':'bundle / module','eligible':not dirty and not pinned(ref)})
             except (ValueError, KeyError, RuntimeError, TimeoutError):
                 rows.append({'id':hashlib.sha256(str(root).encode()).hexdigest()[:20],
-                    'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source'})
+                    'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source',
+                    'usage':'unknown','usageEvidence':[]})
+        if incomplete:
+            rows.append({'id':'source-configuration','label':'Source configuration','status':'check_failed',
+                'eligible':False,'kind':'configuration',
+                'detail':'Some selected sources or workspace settings could not be resolved read-only. Usage classification is incomplete; cached-source checks and update eligibility are unchanged. Review source configuration.'})
         return rows
 
     def protected_items(self):
@@ -296,7 +460,7 @@ class UpdateManager:
     async def check(self):
         if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
         async with self.lock:
-            await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking configured ecosystem sources…', error=None)
+            await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking cached ecosystem sources…', error=None)
             try:
                 rows = await self.inventory_sources()
                 semaphore = asyncio.Semaphore(5)
@@ -339,7 +503,7 @@ class UpdateManager:
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
                     items=public+self.protected_items()+[application],application=application,appAvailable=app_available,
                     available=sum(r['status']=='update' for r in public)+int(app_available),
-                    lastCheck=time.time(), detail='Check complete. Pins and failed checks are listed separately.')
+                    lastCheck=time.time(), detail='Check complete. Pins, failed checks and caches with unknown usage are listed separately.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
@@ -400,6 +564,10 @@ class UpdateManager:
                     current=await process('git','rev-parse','HEAD',cwd=target)
                     dirty,artifacts=await cache_changes(target)
                     if dirty or current!=row['current']: raise ValueError('Source changed since check')
+                    meta=target/'.amplifier_cache_meta.json'
+                    data=json.loads(meta.read_text())
+                    if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
+                        raise ValueError('Source identity changed since check')
                     if artifacts:
                         # Restore only verified tracked artifacts in this copy.
                         # Rechecking here also protects edits made after check.
@@ -407,8 +575,7 @@ class UpdateManager:
                     await self.publish(detail='Downloading '+row['label']+'…')
                     await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
                     await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
-                    meta=target/'.amplifier_cache_meta.json'
-                    data=json.loads(meta.read_text());data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
+                    data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
                     meta.write_text(json.dumps(data))
                 await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
                 await self.validate(stage,release)

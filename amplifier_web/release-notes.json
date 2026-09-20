@@ -2,6 +2,36 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.8",
+      "title": "Shared model settings for native runtimes",
+      "changes": [
+        "An optional host adapter lets compatible native runtimes read shared provider settings from the user, workspace and native-session scopes while retaining their own domain bundles and instructions.",
+        "The adapter uses normal model routing, preserves delegated model preferences and keeps saved-session configuration checks. Installing this release does not enable it or change an existing manager.",
+        "A shareable TUI integration guide documents settings precedence, provider instances, credentials, routing, voice preferences and cross-app adoption checks."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.11.7",
+      "title": "Reliable live-session activation and terminal client handoff",
+      "changes": [
+        "A new live turn keeps session ownership while it is being scheduled, preventing a concurrent UI control from parking it before execution starts.",
+        "The runtime uses the reviewed loop-live scheduling correction across both session preparation and installed runtime dependencies.",
+        "The TUI developer handoff documents the supported connection, command, snapshot, retry and lifecycle contracts with validation boundaries."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.11.6",
+      "title": "Clearer ecosystem update status",
+      "changes": [
+        "Updates distinguish sources found in shared Amplifier settings from cached sources whose use is unknown, while keeping failures visible and eligible updates available.",
+        "Retained conversation history for missing workspace folders no longer causes a source-configuration warning.",
+        "Verified wiki-weaver build-generated version stamps no longer block ecosystem updates; genuine edits and unrecognized generated changes remain protected."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.5",
       "title": "Updates resume after inspecting runtime settings",
       "changes": [
