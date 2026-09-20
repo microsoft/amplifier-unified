@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.0",
+      "title": "Persistent work, shared controls and reusable outputs",
+      "changes": [
+        "Start managed commands, follow their output, answer pending questions and coordinate workers while keeping conversation drafts and saved history intact.",
+        "Save task objectives and corrections across compaction and restart, schedule later continuation, and move execution into an isolated Git worktree with a recorded handoff.",
+        "Search saved work, manage scoped memory, organize and archive conversations, and deliberately publish fixed conversation snapshots.",
+        "Keep Python or Node variables across computation cells, attach and review saved outputs, and discover installed artifact runtimes.",
+        "Use approved tools from bounded programs, connect supported MCP services, fetch attributable web sources, and explicitly share browser-selected visual context during voice.",
+        "Inspect attributed usage and enforce supported model-call budgets, with optional native provider direction and compaction where available."
+      ],
+      "notices": [
+        "Work features require their corresponding updated modules. Persistent computation requires a trusted execution configuration; creating a runtime does not relax tool permissions.",
+        "Schedules require an available capable host. Budgets cover recorded supported model-call boundaries, not all account spending or already-started work.",
+        "Native provider features depend on model and account support. Browser visual capture does not provide a native foreground-app bridge.",
+        "Interrupted work with an unknown result is retained for inspection. Restart does not automatically rerun commands or computation cells."
+      ]
+    },
+    {
       "version": "0.19.4",
       "title": "Keep conversation names consistent across apps",
       "changes": [
