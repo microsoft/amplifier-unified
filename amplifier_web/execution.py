@@ -61,7 +61,7 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle'}
+    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure'}
     safe={k:v for k,v in event.items() if k in allowed}
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)

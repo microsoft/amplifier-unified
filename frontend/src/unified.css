@@ -775,3 +775,4 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 @media(max-width:600px){#amp-one .a-execution-node>.a-execution-line{flex-wrap:wrap}#amp-one .a-execution-node .a-execution-label{flex-basis:calc(100% - 66px)}#amp-one .a-execution-phase{display:inline;font-size:10px;margin-left:36px}#amp-one .a-execution-usage{white-space:normal}#amp-one .a-execution-timing{padding:0 8px}}
 
 #amp-one .a-execution-result-link{display:block;font-size:11px;overflow-wrap:anywhere;margin:6px 0;color:var(--a-accent)}
+.a-conversation-details{padding:.5rem 0;min-width:0}.a-conversation-details p{margin:.55rem 0}.a-conversation-details code{user-select:text}.a-conversation-details .a-dialog-actions{flex-wrap:wrap;justify-content:flex-start}
