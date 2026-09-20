@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "configured_provider": "terra",
+  "model": "gpt-5.6-terra",
+  "effort": "high",
+  "chromium": "153.0.8010.12",
+  "acceptance": "combined attributed evidence; no single all-scenario green run is claimed",
+  "checks": {
+    "browser_denied_nested_tool": true,
+    "denied_effect_absent": true,
+    "nested_denial_receipt": true,
+    "denied_not_retried": true,
+    "browser_allowed_nested_tool": true,
+    "allowed_effect_observed": true,
+    "nested_allowed_output_receipt": true,
+    "browser_stop_admitted": true,
+    "process_termination_observed": true,
+    "python_variables_persist": true,
+    "node_variables_persist": true,
+    "agent_reused_ui_kernel": true,
+    "calculated_artifact_written": true,
+    "draft_preserved": true,
+    "selected_chat_preserved": true,
+    "no_browser_errors": true,
+    "reconnect_no_replay": true,
+    "visible_recalculated_value": true,
+    "real_saved_html_view": true,
+    "execution_disabled": true,
+    "transcript_unchanged": true,
+    "baseline_real_admitted_call": true,
+    "budget_policy_persisted": true,
+    "rejection_receipt_persisted": true,
+    "no_second_provider_call": true,
+    "limit_visibly_blocks_admission": true,
+    "failure_publicly_observed": true,
+    "no_fabricated_model_reply": true,
+    "denied_effect_absent_after_all_live_work": true,
+    "stop_late_effect_absent_after_all_live_work": true
+  },
+  "passed": true,
+  "sources": [
+    {
+      "run": "g",
+      "kind": "real provider + production browser",
+      "verified": "nested approval/denial receipts, no denied effect/replay, Stop process exit -15, persistent Python/Node, agent reuses Python state to calculate43",
+      "ended": "harness used session-only endpoint for a general kernel close action; corrected to shared /api/actions"
+    },
+    {
+      "run": "j",
+      "kind": "actual production UI, no provider calls",
+      "verified": "Python/Node persistent cells, saved receipts, selected task and draft preserved, reconnect and no browser errors",
+      "passed": true
+    },
+    {
+      "run": "k",
+      "kind": "saved artifact, runtime execution disabled",
+      "verified": "visible43 in production HTML canvas after reopening, unchanged canonical transcript",
+      "passed": true
+    },
+    {
+      "run": "i",
+      "kind": "one real configured provider call, then budget denial",
+      "verified": "stable admission receipt and actual usage; rejected next call after setting revision-bound1-token limit",
+      "ended": "harness expected idle; actual failure correctly ended stopped; terminal predicate corrected"
+    },
+    {
+      "run": "l",
+      "kind": "saved authoritative budget read, execution disabled",
+      "verified": "persisted budget and rejection receipt, exactly one provider call, visible blocked admission, no fabricated response",
+      "passed": true
+    }
+  ],
+  "provider_reported_usage": {
+    "inputTokens": 3,
+    "outputTokens": 7,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 12635,
+    "totalTokens": 10,
+    "reasoningTokens": 0,
+    "costUsd": 0.0316775,
+    "costType": "reported"
+  },
+  "usage_limitation": "Provider totalTokens excludes a separately reported cacheWriteTokens value in this receipt; host preserves both and does not invent inclusive total semantics.",
+  "limits": [
+    "Synthetic unrestricted Bash stdin override only; production policy unchanged.",
+    "No spreadsheet formula engine was available; spreadsheet recalculation is untested.",
+    "Image interpretation, physical audio, account quota retrieval and worker-descendant usage are outside this acceptance.",
+    "No deployment, merge or version change."
+  ],
+  "validation": {
+    "focused_tests": 23,
+    "stop_retention_handoff_tests": 42,
+    "runtime_and_profile_tests": 33,
+    "profile_and_cleanup_tests": 4
+  },
+  "fixes": [
+    "2ad4083c: wait for explicit worker stop completion at admission",
+    "ffb60ba2: explicit kernels.create prepares a fresh owner; old generation operations never resume it"
+  ]
+}
