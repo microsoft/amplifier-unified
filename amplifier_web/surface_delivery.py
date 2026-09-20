@@ -141,6 +141,8 @@ class SurfaceDelivery:
         return result
 
     def commit(self, request):
+        if not request.messages:
+            return
         message = request.messages[-1]
         if not (message.metadata or {}).get('surfaceObservation'):
             return

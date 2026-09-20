@@ -43,7 +43,9 @@ try{
  // exercise the genuine pending-send state as well as the empty idle state.
  let release;
  const held=new Promise(resolve=>{release=resolve});
+ let releaseCreation;const creationHeld=new Promise(resolve=>{releaseCreation=resolve});
  await page.route('**/api/actions',async route=>{
+  if(route.request().method()==='POST'&&route.request().postDataJSON()?.action==='session.create')await creationHeld;
   if(route.request().method()==='POST'&&route.request().postDataJSON()?.action==='conversation.send')await held;
   await route.continue();
  });
@@ -53,6 +55,7 @@ try{
  await expect(composer).toBeEditable();
  await expect(composer).toHaveValue('');
  await composer.fill('Next draft while the first delivery is pending');
+ releaseCreation();
  release();
  await page.getByText('Synthetic first response',{exact:true}).waitFor();
  await expect(composer).toHaveValue('Next draft while the first delivery is pending');

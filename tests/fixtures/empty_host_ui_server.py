@@ -20,7 +20,9 @@ class Runtime:
         self.sent.append({"sessionId": session["id"], "text": text})
         if hasattr(self, 'service'):
             binding = session.get('surfaceInputs', {}).get(input_id, {})
-            self.sent[-1]['surfaceContext'] = self.service.surface_context.manifest(session['id'], [binding])
+            context = self.service.surface_context.manifest(session['id'], [binding])
+            if context['surfaces']:
+                self.sent[-1]['surfaceContext'] = context
         await emit("assistant.message", {"sessionId": session["id"],
                    "inputId": input_id, "text": "Synthetic first response"})
         await emit("runtime.status", {"sessionId": session["id"], "status": "idle"})

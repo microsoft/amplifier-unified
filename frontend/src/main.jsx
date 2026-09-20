@@ -215,8 +215,14 @@ function App(){
   clearTimeout(draftTimer.current);act('view.update',payload);
   pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;
  }
- function editDraft(value){const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value},sessionId);stagedDraftPayload.current={patch:{draft:value},sessionId};if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value},sessionId})},220)}
- async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>result.state.sessions.find(row=>row.id===result.state.selectedSessionId)).finally(()=>{creatingSession.current=null});return creatingSession.current}
+ function editDraft(value,sessionId=latest.current?.selectedSessionId??null){preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value},sessionId);stagedDraftPayload.current={patch:{draft:value},sessionId};if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value},sessionId})},220)}
+ async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>{
+  const created=result.state.sessions.find(row=>row.id===result.state.selectedSessionId),next=stagedDraftPayload.current;
+  // The composer stays editable while its first conversation is being created.
+  // Carry input typed during that wait into the new chat, including its timer.
+  if(next?.sessionId===null&&next.patch.draft){clearTimeout(draftTimer.current);pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;editDraft(next.patch.draft,created.id)}
+  return created;
+ }).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=ensureSession();uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{const current=await target;for(const file of files)await dispatch('attachment.add',{sessionId:current.id,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;

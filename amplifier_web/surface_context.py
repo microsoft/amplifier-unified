@@ -16,7 +16,7 @@ from .canvas_apps import fail
 
 
 def compact(value):
-    return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+    return json.dumps(value, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
 
 
 def revision(row):
@@ -56,7 +56,8 @@ class SurfaceContext:
             return binding
         identity = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
-        self.checkpoints[identity] = (client_id, future)
+        targets = {(t['viewId'], t['surfaceId']) for t in binding['targets']}
+        self.checkpoints[identity] = (client_id, future, targets)
         async with self.service.lock:
             client = self.service.clients.records[client_id]
             client.setdefault('deviceCommands', []).append({'id': identity, 'type': 'canvas.checkpoint', 'sessionId': sid,
@@ -117,7 +118,9 @@ class SurfaceContext:
         self.observations[key] = value
         checkpoint = self.checkpoints.get(args.get('checkpointId'))
         if checkpoint and checkpoint[0] == key[0] and not checkpoint[1].done():
-            checkpoint[1].set_result(True)
+            checkpoint[2].discard((key[1], key[2]))
+            if not checkpoint[2]:
+                checkpoint[1].set_result(True)
         # Evidence is a cache, never an unbounded image history.
         while len(self.observations) > 64:
             self.observations.pop(next(iter(self.observations)))
