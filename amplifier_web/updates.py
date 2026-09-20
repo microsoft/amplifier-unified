@@ -91,7 +91,8 @@ def configured_sources(service):
     selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
     selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
                       for s in state['sessions'])
-    selections.update((w['path'], None, None) for w in state.get('workspaces', []))
+    selections.update((w['path'], None, None) for w in state.get('workspaces', [])
+                      if isinstance(w.get('path'), str) and w['path'].strip())
     try:
         path = foundation_home(home)/'registry.json'
         registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
@@ -103,6 +104,7 @@ def configured_sources(service):
         try:
             # Missing registrations and saved sessions remain available for
             # history. Their unavailable directories are not configuration errors.
+            if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
             config = read_config(workspace, home=home, session_id=session_id)
             registrations = {name: row['uri'] for name, row in registry.items()
@@ -124,10 +126,8 @@ def configured_sources(service):
                     return
                 # Match the host's local-before-registry preference. Local files
                 # may contain arbitrary includes; don't guess their dependencies.
-                local = Path(reference.removeprefix('file://')).expanduser()
-                if not local.is_absolute():local = config.workspace/local
-                if any(p.exists() for p in (local, home/'bundles'/reference,
-                        home/'bundles'/(reference+'.md'), config.workspace/'.amplifier-unified/bundles'/reference)):
+                from .host.bundle_paths import local_bundle_path
+                if local_bundle_path(config, reference) is not None:
                     return
                 namespace = reference.split(':', 1)[0]
                 replacement = config.resolve_source(reference) or registrations.get(namespace)
