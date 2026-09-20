@@ -38,7 +38,7 @@ def snapshot(state):
         completion=session.get('completion')
         if completion:
             add('completion:'+session['id'],'Response ready','chats','chats',version=completion['id'],sessionId=session['id'],workspace=session.get('workspace'),label=session.get('title','Conversation'),completedAt=completion.get('at'))
-        if session.get('error'):add('session:'+session['id'],'Conversation needs attention','setup','conversation',session['error'],sessionId=session['id'],workspace=session.get('workspace'))
+        if session.get('error'):add('session:'+session['id'],'Conversation needs attention','setup','conversation',session['error'],version=session.get('errorAt'),sessionId=session['id'],workspace=session.get('workspace'))
         for approval in session.get('approvals',[]):
             if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'setup','conversation',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
     unread=[item for item in items if not item['read']]

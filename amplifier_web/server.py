@@ -113,6 +113,13 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         await service._flush_pending_progress()
         return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource))
 
+    async def conversation_detail(request):
+        from .browser_detail import page, read_text
+        session = service._session(request.query.get('sessionId'))
+        if 'field' in request.query:
+            return web.json_response(read_text(session, request.query))
+        return web.json_response(page(session, request.query.get('part'), request.query.get('before')))
+
     async def actions(request):
         if request.method == "GET":
             return web.json_response(service.get_actions())
@@ -286,6 +293,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
+    app.router.add_get("/api/conversation/detail", conversation_detail)
     app.router.add_get("/api/actions", actions)
     app.router.add_post("/api/actions", actions)
     app.router.add_post("/api/view", view)

@@ -3,6 +3,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {AppBridge,PostMessageTransport} from '@modelcontextprotocol/ext-apps/app-bridge';
 import {AlertCircle,Check,Loader,RefreshCw} from 'lucide-react';
 import {request} from './api';
+import {useMcpAppTheme} from './mcp-app-theme';
 
 // The iframe can call tools only through its saved server binding. No host
 // credentials, app_control handle, or server selector crosses postMessage.
@@ -35,16 +36,39 @@ async function callTool(canvasId,params,signal){
  throw new Error(op.error||'Tool work was interrupted; it was not replayed.');
 }
 
+function useHostTheme(scheme){
+ const media=()=>window.matchMedia('(prefers-color-scheme: dark)');
+ const [systemTheme,setSystemTheme]=useState(()=>media().matches?'dark':'light');
+ useEffect(()=>{
+  if(scheme!=='system')return;
+  const query=media(),change=event=>setSystemTheme(event.matches?'dark':'light');
+  setSystemTheme(query.matches?'dark':'light');
+  query.addEventListener('change',change);
+  return()=>query.removeEventListener('change',change);
+ },[scheme]);
+ return scheme==='dark'||scheme==='light'?scheme:systemTheme;
+}
+
 export function McpAppViewer({canvas,act}){
- const frame=useRef(null),current=useRef(canvas),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
+ const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
+ const theme=useHostTheme(useMcpAppTheme());
  current.current=canvas;
+ themeRef.current=theme;
+ useEffect(()=>{
+  const bridge=bridgeRef.current,previous=hostContext.current;
+  if(!bridge||!previous||previous.theme===theme)return;
+  const next={...previous,theme};
+  hostContext.current=next;
+  bridge.setHostContext(next);
+ },[theme]);
  useEffect(()=>{
   const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='';
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   const start=async()=>{
+   hostContext.current={theme:themeRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
     {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
-    {hostContext:{theme:document.querySelector('#amp-one')?.dataset.scheme==='dark'?'dark':'light',displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language}});
+    {hostContext:hostContext.current});
    bridge.oncalltool=async params=>{
     try{
      const result=await callTool(canvas.id,params,controller.signal);
@@ -76,11 +100,17 @@ export function McpAppViewer({canvas,act}){
    bridge.onerror=error=>report('error',error.message);
    await bridge.connect(new PostMessageTransport(frame.current.contentWindow,frame.current.contentWindow));
    // Connect before navigation so even a fast inline App.initialize is heard.
-   if(live)frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
+   if(live){
+    bridgeRef.current=bridge;
+    const next={...hostContext.current,theme:themeRef.current};
+    hostContext.current=next;
+    bridge.setHostContext(next);
+    frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
+   }
   };
   report('loading','Connecting tool view…');start().catch(error=>report('error',error.message));
   const timeout=setTimeout(()=>{if(live&&!initialized)setStatus(s=>s.phase==='loading'?{phase:'error',text:'The tool view has not connected. Check that this server supplies a self-contained MCP App.'}:s)},15000);
-  return()=>{live=false;clearTimeout(timeout);controller.abort();bridge?.close().catch(()=>{})};
+  return()=>{live=false;clearTimeout(timeout);controller.abort();if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
  },[canvas.id,canvas.view?.reload]);
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
   <div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">

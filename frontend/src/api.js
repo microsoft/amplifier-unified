@@ -7,10 +7,10 @@ export function clientUrl(path){
   const url=new URL(path,location.origin);url.searchParams.set('clientId',clientId);
   return url.pathname+url.search;
 }
-export function attachClient(){
+export function attachClient(signal){
   if(!attachment){
     let resumeClientId;try{resumeClientId=sessionStorage.getItem('amplifier.clientId')||undefined}catch{}
-    attachment=request('/api/clients/attach',{method:'POST',body:{clientId,resumeClientId,kind:'web',protocolVersion:1}}).then(result=>{
+    attachment=request('/api/clients/attach',{method:'POST',signal,body:{clientId,resumeClientId,kind:'web',protocolVersion:1}}).then(result=>{
       try{sessionStorage.setItem('amplifier.clientId',clientId)}catch{}
       return result;
     }).catch(error=>{attachment=null;throw error});

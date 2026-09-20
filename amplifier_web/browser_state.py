@@ -4,6 +4,7 @@ The native catalog is an index, not browser state. Actions and JSON Pointer
 reads still address the complete catalog; browsing only publishes one page.
 """
 from copy import deepcopy
+from .browser_detail import project
 from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
 
@@ -76,7 +77,7 @@ def snapshot(state, derived, *, session_id=None):
             full.add(row['id'])
     visible.update(full)
     visible.add(derived['subagentNavigation']['scope']['sessionId'])
-    result['sessions'] = [{**(row if row['id'] in full else summary(row)),
+    result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': sum(direct_child(child, row) for child in state.get('sessions', []))} if row['id'] == selected else {})}
                           for row in state.get('sessions', []) if row['id'] in visible]
     workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}

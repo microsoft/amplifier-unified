@@ -4,12 +4,12 @@
 export function createPendingView(){
  const patches=new Map();
  return {
-  add(patch){const token=Symbol();patches.set(token,{...patch});return token},
+  add(patch,sessionId){const token=Symbol();patches.set(token,{patch:{...patch},sessionId});return token},
   settle(token){patches.delete(token)},
   apply(state){
    if(!state||!patches.size)return state;
    let view={...state.view};
-   for(const patch of patches.values())view={...view,...patch};
+   for(const {patch,sessionId} of patches.values()){const values={...patch};if(sessionId&&sessionId!==state.selectedSessionId)delete values.draft;view={...view,...values}};
    return {...state,view};
   },
  };

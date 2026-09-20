@@ -8,10 +8,17 @@ export function formatElapsed(milliseconds){
  const seconds=Math.max(0,Math.floor(milliseconds/1000));
  return seconds<60?`${seconds}s`:`${Math.floor(seconds/60)}m ${String(seconds%60).padStart(2,'0')}s`;
 }
+const terminalJobs={'job.returned':'completed','job.failed':'error','job.cancelled':'cancelled'};
 export function visibleWorkers(workers=[]){
- const rows=new Map();
- for(const [index,worker]of workers.entries()){const key=worker.callId||worker.call_id||worker.id||`worker-${index}`;const previous=rows.get(key);if(!previous||worker.kind==='session'||previous.kind!=='session')rows.set(key,worker)}
- return [...rows.values()];
+ const rows=new Map(),finished=new Map();
+ for(const [index,worker]of workers.entries()){
+  const key=worker.callId||worker.call_id||worker.id||`worker-${index}`,previous=rows.get(key);
+  if(worker.kind==='job'){const terminal=terminalJobs[worker.event]||(['completed','cancelled','error','failed','stopped','interrupted'].includes(worker.status)?worker.status:null);if(terminal)finished.set(key,terminal)}
+  // Keep the child session identity for stop/steer, but a finished job is the
+  // authoritative outcome for this call, including after late progress events.
+  if(!previous||worker.kind==='session'||previous.kind!=='session')rows.set(key,worker);
+ }
+ return [...rows].map(([key,worker])=>finished.has(key)?{...worker,status:finished.get(key),phase:finished.get(key)}:worker);
 }
 /** Derive public execution activity, never model reasoning or tool inputs/results. */
 export function liveActivity(session,now=Date.now()){

@@ -17,7 +17,7 @@ import shutil
 import time
 
 from . import __version__
-from . import attachments, feedback_attachments
+from . import attachments, feedback_attachments, feedback_diagnostics
 
 REPOSITORY = "bkrabach/amplifier-unified"
 ISSUES_URL = "https://github.com/" + REPOSITORY + "/issues"
@@ -31,10 +31,11 @@ def definitions(schema, string):
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
     return {
         "feedback.submit": (
-            "Create a GitHub issue in bkrabach/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Diagnostics are opt-in (app version and OS family). Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create a GitHub issue in bkrabach/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "includeDiagnostics": {"type": "boolean"},
+                    "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
                     "attachmentIds": {"type": "array", "items": attachment_id, "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True}},
                    ["requestId", "title", "body", "category"]),
         ),
@@ -107,7 +108,7 @@ class Feedback:
             if row:
                 receipts.append(json.loads(row[0]))
         self.service.state["feedback"] = {"repository": REPOSITORY, "issuesUrl": ISSUES_URL,
-            "diagnostics": {"appVersion": __version__, "osFamily": platform.system()},
+            "diagnostics": feedback_diagnostics.build_facts(),
             "requests": receipts}
 
     def attachment_command(self, action, args):
@@ -175,6 +176,8 @@ class Feedback:
             # Persist exactly the selected metadata/hash at acceptance. Changes
             # to the draft or file store after this point cannot alter a send.
             args["_attachments"] = self.selected_files(args)
+            if args.get("includeDiagnostics", True):
+                args["_diagnostics"] = feedback_diagnostics.snapshot(self.service.state_context(),args.get("deviceDiagnostics"))
         except (OSError, ValueError):
             raise AppError("An attachment changed or is unavailable. Remove it and attach it again.") from None
         receipt = {"requestId": identity, "title": args["title"], "category": args["category"],
@@ -209,7 +212,10 @@ class Feedback:
             await self.update(identity, status="failed", message="An attachment changed or is unavailable. Start new feedback and attach it again. Nothing was sent.")
             return
         body = args["body"] + "\n\n---\nCategory: " + CATEGORIES[args["category"]]
-        if args.get("includeDiagnostics"):
+        if args.get("_diagnostics"):
+            body += feedback_diagnostics.markdown(args["_diagnostics"])
+        elif args.get("includeDiagnostics"):
+            # Accepted payloads from older versions retain their original contract.
             facts = self.service.state["feedback"]["diagnostics"]
             body += "\n\nApp version: " + facts["appVersion"] + "\nOS family: " + facts["osFamily"]
         body += "\n\n<!-- amplifier-feedback:" + identity + " -->"

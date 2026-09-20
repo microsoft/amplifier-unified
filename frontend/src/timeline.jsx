@@ -1,6 +1,6 @@
+import {DetailText} from './conversation-detail';
 import React from 'react';
 import {ChevronRight,GitBranch,Wrench,MessageCircle,Check,Circle,Loader,Square,AlertCircle,Layers} from 'lucide-react';
-import {Markdown} from './markdown';
 import {treeForTurn,usageLabel} from './timeline-data';
 
 const liveStates=new Set(['running','working','starting','queued','pending','retrying','idle']);
@@ -12,7 +12,7 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,expanded,toggle,act}){
   const summary=typeof node.summary==='string'?node.summary:typeof node.detail==='string'?node.detail:'';
   return <div className="a-execution-node" data-kind={node.kind}>
    <button className="a-execution-line" data-action="view.update" aria-expanded={isOpen} onClick={()=>toggle(node.id)}><ChevronRight className={`a-execution-chevron ${isOpen?'open':''}`}/><Icon/><span className="a-execution-label">{node.label||node.tool||node.model||node.kind}</span><span className="a-execution-phase">{node.phase||node.status}</span><Usage value={node.aggregateUsage||node.usage}/><Status status={node.status||node.phase}/></button>
-   {isOpen&&<div className="a-execution-body">{summary&&<Markdown text={summary} className="a-execution-summary"/>}{node.model&&<small>{[node.provider,node.model].filter(Boolean).join(' · ')}</small>}{node.kind==='llm'&&!usageLabel(node.aggregateUsage||node.usage)&&<small>Usage has not been reported for this call.</small>}{node.kind==='worker'&&liveStates.has(node.status||node.phase)&&(node.workerId||node.sessionId)&&<button className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}{children.length>0?<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} expanded={expanded} toggle={toggle} act={act}/>)}</div>:!summary&&node.kind!=='llm'&&<small>No additional details reported.</small>}</div>}
+   {isOpen&&<div className="a-execution-body">{summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} markdown/>}{node.model&&<small>{[node.provider,node.model].filter(Boolean).join(' · ')}</small>}{node.kind==='llm'&&!usageLabel(node.aggregateUsage||node.usage)&&<small>Usage has not been reported for this call.</small>}{node.kind==='worker'&&liveStates.has(node.status||node.phase)&&(node.workerId||node.sessionId)&&<button className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}{children.length>0?<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} expanded={expanded} toggle={toggle} act={act}/>)}</div>:!summary&&node.kind!=='llm'&&<small>No additional details reported.</small>}</div>}
   </div>;
  }
 export function TurnTimeline({data,turnId,state,act}){
@@ -22,8 +22,8 @@ export function TurnTimeline({data,turnId,state,act}){
  const expanded=new Set(state.view?.executionExpanded||[]);
  const toggle=id=>{const next=new Set(expanded);next.has(id)?next.delete(id):next.add(id);act('view.update',{patch:{executionExpanded:[...next]}})};
  const summaryId=`turn:${turnId}`,open=expanded.has(summaryId);
- const toolCount=data.nodes.filter(node=>node.turnId===turnId&&node.kind==='tool').length;
- const workers=data.nodes.filter(node=>node.turnId===turnId&&node.kind==='worker').length;
+ const toolCount=turn.nodeCounts?.tools??data.nodes.filter(node=>node.turnId===turnId&&node.kind==='tool').length;
+ const workers=turn.nodeCounts?.workers??data.nodes.filter(node=>node.turnId===turnId&&node.kind==='worker').length;
  const detail=(turnId==='observed-activity'?turn.label:null)||[toolCount?`${toolCount} ${toolCount===1?'tool call':'tool calls'}`:null,workers?`${workers} ${workers===1?'worker':'workers'}`:null].filter(Boolean).join(' · ')||'Execution details';
 
  const duration=turn.startedAt&&turn.endedAt?Math.max(1,Math.round(turn.endedAt-turn.startedAt)):null;

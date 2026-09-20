@@ -36,3 +36,12 @@ test('provider retry status takes precedence over pending tools and counts prepa
  const result=liveActivity({status:'working',activity:{phase:'retrying',label:'Provider retry 4 of 5',activeTools:[{callId:'a',tool:'delegate'}]},workers:[{id:'b',status:'preparing'},{id:'c',status:'retrying'}]});
  assert.equal(result.phase,'retrying');assert.equal(result.label,'Provider retry 4 of 5');assert.equal(result.workerCount,2);
 });
+
+test('terminal job outcomes override stale session progress for the same call',()=>{
+ for(const [event,status] of [['job.returned','completed'],['job.cancelled','cancelled'],['job.failed','error']]){
+  const workers=[{id:'job',kind:'job',callId:'call',event,status},{id:'child',kind:'session',callId:'call',status:'running',phase:'retrying'}];
+  assert.equal(visibleWorkers(workers)[0].id,'child');assert.equal(visibleWorkers(workers)[0].status,status);
+  assert.equal(liveActivity({status:'idle',workers}),null);
+  assert.equal(liveActivity({status:'idle',workers:[...workers,{id:'other',kind:'session',callId:'new-call',status:'running'}]}).workerCount,1);
+ }
+});

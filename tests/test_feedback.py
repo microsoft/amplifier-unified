@@ -60,16 +60,16 @@ async def test_ui_and_agent_share_durable_receipts_without_private_state(tmp_pat
         await reopened.close()
 
 
-async def test_diagnostics_are_explicit_minimal_and_identical_to_ui(tmp_path, github):
+async def test_diagnostics_include_build_and_bounded_state(tmp_path, github):
     app = AppService(tmp_path, workspace=tmp_path)
     try:
         await app.dispatch("feedback.submit", payload(includeDiagnostics=True))
         await settle(app)
         facts = app.state["feedback"]["diagnostics"]
-        assert set(facts) == {"appVersion", "osFamily"}
+        assert set(facts) == {"appVersion", "osFamily", "pythonVersion", "packagedFrontendVersion", "packagedFrontendBuild"}
         body = github.call_args.args[1]
-        assert "App version: " + facts["appVersion"] in body
-        assert "OS family: " + facts["osFamily"] in body
+        assert "Reproduction diagnostics" in body
+        assert json.loads(body.split("```json\n")[1].split("\n```")[0])["appVersion"] == facts["appVersion"]
     finally:
         await app.close()
 

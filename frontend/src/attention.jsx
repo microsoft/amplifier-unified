@@ -11,13 +11,14 @@ export function AttentionReview({state,act,page}){
 
 export const readItems=(act,items)=>act('attention.read',{ids:items.map(i=>i.id),fingerprints:Object.fromEntries(items.map(i=>[i.id,i.fingerprint]))});
 export function ActivityPanel({state,act}){
- const items=(state.attention?.items||[]).filter(i=>!i.read);
+ const [showReviewed,setShowReviewed]=React.useState(false);
+ const all=state.attention?.items||[],items=all.filter(i=>showReviewed||!i.read);
  async function open(item){
   if(item.sessionId){await act('session.select',{id:item.sessionId});await act('view.update',{patch:{panel:null}})}
   else if(item.requestId)await act('view.update',{patch:{panel:'feedback'}});
   else await act('view.update',{patch:{panel:'settings',settingsSection:item.section,settingsExpanded:[item.page]}});
  }
- return <section className="a-activity-inbox" aria-label="Activity to review"><p>Finished work and items that need your attention. Read status is shared with your agent and other devices.</p>{items.length?<><button className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,items)}>Mark all reviewed</button>{items.map(item=><div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.title}</strong><span>{item.label||item.detail}</span></button><button type="button" className="a-link" aria-label={`Mark reviewed: ${item.label||item.title}`} data-action="attention.read" onClick={()=>readItems(act,[item])}>Mark reviewed</button></div>)}</>:<p>All caught up.</p>}</section>;
+ return <section className="a-activity-inbox" aria-label="Activity to review"><p>Finished work and items that need your attention. Read status is shared with your agent and other devices.</p>{all.some(i=>i.read)&&<button className="a-link" type="button" onClick={()=>setShowReviewed(!showReviewed)}>{showReviewed?'Hide reviewed items':'Show reviewed items'}</button>}{items.length?<><button className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,items)}>Mark all reviewed</button>{items.map(item=><div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.title}</strong><span>{item.label||item.detail}</span></button><button type="button" className="a-link" aria-label={`Mark reviewed: ${item.label||item.title}`} data-action="attention.read" onClick={()=>readItems(act,[item])}>Mark reviewed</button></div>)}</>:<p>All caught up.</p>}</section>;
 }
 
 // Viewing the end of a chat in a focused tab acknowledges that exact completion.

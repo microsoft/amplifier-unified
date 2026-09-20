@@ -60,6 +60,7 @@ try{
  await finish(firstDraft);assert.equal(await composer.inputValue(),'Newer typed draft','An older save cannot erase newer typing');
  const secondDraft=await nextAction();assert.equal(secondDraft.args.patch.draft,'Newer typed draft');await finish(secondDraft);
  await composer.fill('Submitted before debounce');await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const capture=await nextAction();assert.equal(capture.args.patch.draft,'Submitted before debounce');await finish(capture);
  const send=await nextAction();assert.equal(send.action,'conversation.send');assert.equal(send.args.text,'Submitted before debounce');await finish(send);
  const clearDraft=await nextAction();assert.equal(clearDraft.args.patch.draft,'');await finish(clearDraft);
  await page.waitForFunction(()=>document.querySelector('textarea[aria-label="Message Amplifier"]').value==='');

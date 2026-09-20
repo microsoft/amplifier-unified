@@ -15,7 +15,7 @@ from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
-INDEX_FIELDS = ('id', 'title', 'titleSource', 'nativeNameSource', 'description', 'bundle', 'workspace',
+INDEX_FIELDS = ('draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'description', 'bundle', 'workspace',
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
@@ -66,9 +66,13 @@ def display_message(row, index, session, *, include_internal=False):
     if not text:
         return None
     from .session_store import message_time
+    provenance=(row.get('metadata') or {}).get('amplifier_input',{})
+    observation={}
+    if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
+        observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0)}
+            'createdAt': message_time(row) or session.get('createdAt', 0), **observation}
 
 
 def read_transcript(session, *, before=None, limit=100):

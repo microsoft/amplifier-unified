@@ -1,17 +1,19 @@
+import {feedbackDiagnostics} from './feedback-diagnostics';
 import React,{useEffect,useRef,useState} from 'react';
 import {ExternalLink,Send,Plus,Paperclip,File,X,Image as ImageIcon} from 'lucide-react';
 import {ResultNotice} from './settings-ui';
 import './feedback.css';
 import {readItems} from './attention';
 
-const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:false,attachments:[]});
+const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:true,attachments:[]});
 const sizeLabel=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
 const encodeFile=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Could not read this file.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file)});
 export function FeedbackPanel({state,act}){
  const shared=state.view?.feedbackDraft;
  const [draft,setDraft]=useState(()=>shared||empty()),[busy,setBusy]=useState(false),[error,setError]=useState(''),[uploading,setUploading]=useState(false),[dragging,setDragging]=useState(false),[retryUpload,setRetryUpload]=useState(null);
- const current=useRef(draft),submitting=useRef(false),fileInput=useRef(null),staging=useRef(false);
- useEffect(()=>{if(shared){current.current=shared;setDraft(shared)}},[shared]);
+ const current=useRef(draft),submitting=useRef(false),fileInput=useRef(null),staging=useRef(false),dirty=useRef(false),timer=useRef(null),saving=useRef(null);
+ useEffect(()=>()=>{clearTimeout(timer.current);if(dirty.current)void flush().catch(()=>{})},[]);
+ useEffect(()=>{if(shared&&!dirty.current&&!submitting.current){current.current=shared;setDraft(shared)}},[shared]);
  const requests=state.feedback?.requests||[],pending=draft.pending;
  const result=pending&&requests.find(item=>item.requestId===pending.requestId);
  const shown=pending||draft;
@@ -19,14 +21,25 @@ export function FeedbackPanel({state,act}){
  const working=busy||['queued','sending'].includes(result?.status),done=['submitted','failed','unknown'].includes(result?.status);
  const frozen=!!pending||uploading,preview=draft.previewId,selected=(draft.attachments||[]).filter(row=>!pending||pending.attachmentIds?.includes(row.id));
  const issues=state.feedback?.issuesUrl||'https://github.com/bkrabach/amplifier-unified/issues';
- function save(next){current.current=next;setDraft(next);return act('view.update',{patch:{feedbackDraft:next}})}
- function edit(patch){setError('');save({...current.current,...patch}).catch(()=>setError('The draft could not be saved. Reconnect and try again.'))}
+ async function flush(){
+  clearTimeout(timer.current);
+  if(saving.current){await saving.current;return flush()}
+  if(!dirty.current)return;
+  const value=current.current;
+  const job=act('view.update',{patch:{feedbackDraft:value}});saving.current=job;
+  try{const result=await job;if(!result||result.accepted===false)throw Error('The draft could not be saved.');if(current.current===value)dirty.current=false}
+  finally{saving.current=null}
+  if(dirty.current)return flush();
+ }
+ function save(next){current.current=next;dirty.current=true;setDraft(next);return flush()}
+ function edit(patch){setError('');current.current={...current.current,...patch};dirty.current=true;setDraft(current.current);clearTimeout(timer.current);timer.current=setTimeout(()=>flush().catch(()=>setError('The draft could not be saved. Reconnect and try again.')),250)}
  function setPreview(id){edit({previewId:id})}
  function acceptDraft(response){const next=response?.state?.view?.feedbackDraft;if(next){current.current=next;setDraft(next)}}
  async function stageFiles(files,retry){
   if(staging.current||current.current.pending)return;
   staging.current=true;setUploading(true);setError('');setDragging(false);
   try{
+   await flush();
    if(retry){acceptDraft(await act('feedback.attachment.add',retry));setRetryUpload(null)}
    for(const file of files){
     if(!file.size||file.size>8*1024*1024)throw new Error('Choose nonempty files up to 8 MB each.');
@@ -37,7 +50,7 @@ export function FeedbackPanel({state,act}){
   }catch(error){setError(error?.message||'The file could not be added. Check the draft and retry; it will not be added twice.')}
   finally{staging.current=false;setUploading(false)}
  }
- async function removeFile(id){if(frozen)return;setError('');try{acceptDraft(await act('feedback.attachment.remove',{id}));if(preview===id)setPreview(null)}catch(error){setError(error?.message||'The attachment could not be removed.')}}
+ async function removeFile(id){if(frozen)return;setError('');try{await flush();acceptDraft(await act('feedback.attachment.remove',{id}));if(preview===id)setPreview(null)}catch(error){setError(error?.message||'The attachment could not be removed.')}}
  function paste(event){const files=Array.from(event.clipboardData?.files||[]);if(files.length){event.preventDefault();event.stopPropagation();if(!frozen)stageFiles(files)}}
  function drop(event){if(!event.dataTransfer?.types?.includes('Files'))return;event.preventDefault();event.stopPropagation();setDragging(false);if(!frozen)stageFiles(Array.from(event.dataTransfer.files||[]))}
  async function submit(event){
@@ -45,7 +58,7 @@ export function FeedbackPanel({state,act}){
   submitting.current=true;setBusy(true);setError('');
   // Freeze both text and identity before the first await. A lost response must
   // never generate a second GitHub issue or submit newly edited text as a retry.
-  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:!!source.includeDiagnostics,attachmentIds:(source.attachments||[]).map(row=>row.id)};
+  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:source.includeDiagnostics!==false,...(source.includeDiagnostics!==false?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),attachmentIds:(source.attachments||[]).map(row=>row.id)};
   try{await save({...source,pending:payload});await act('feedback.submit',payload)}
   catch{setError('The submission was not acknowledged. Check its status using the same request below; this will not post it twice.')}
   finally{submitting.current=false;setBusy(false)}
@@ -70,9 +83,9 @@ export function FeedbackPanel({state,act}){
     {selected.filter(row=>row.id===preview&&/^[a-f0-9]{32}$/.test(row.id)).map(row=><div className="a-feedback-preview" key={row.id}>{row.mime?.startsWith('image/')?<img src={`/api/attachments/${row.id}`} alt={`Preview of ${row.name}`}/>:<File size={32}/>}<a href={`/api/attachments/${row.id}`} download={row.name}>{row.mime?.startsWith('image/')?<ImageIcon size={14}/>:<File size={14}/>}Open {row.name}</a></div>)}
     {retryUpload&&<div className="a-feedback-upload-retry"><button type="button" className="a-soft" disabled={uploading} onClick={()=>stageFiles([],retryUpload)}>Check attachment: {retryUpload.name}</button><button type="button" className="a-soft" disabled={uploading} onClick={()=>{setRetryUpload(null);setError('')}}>Stop retrying</button></div>}
    </div>
-   <label className="a-feedback-checkbox"><input type="checkbox" data-action="view.update" checked={!!shown.includeDiagnostics} disabled={frozen} onChange={e=>edit({includeDiagnostics:e.target.checked})}/>Include app version and operating system</label>
-   {shown.includeDiagnostics&&<p className="a-caption">Included: app {facts.appVersion||'version not reported'} · {facts.osFamily||'OS not reported'}</p>}
-   <p className="a-caption">Only your text and the files listed above are sent when you submit. Files stay in this private repository’s history and are linked from the issue; your GitHub sign-in needs repository Contents write access. Optional diagnostics add the two facts above. Chats, paths, provider settings, and credentials are not attached automatically.</p>
+   <label className="a-feedback-checkbox"><input type="checkbox" data-action="view.update" checked={shown.includeDiagnostics!==false} disabled={frozen} onChange={e=>edit({includeDiagnostics:e.target.checked})}/>Include reproduction diagnostics</label>
+   {shown.includeDiagnostics!==false&&<details><summary>Build and device diagnostics</summary><pre className="a-state-view">{JSON.stringify({server:facts,device:pending?.deviceDiagnostics||feedbackDiagnostics(state)},null,2)}</pre><p className="a-caption">Includes build and browser versions, display preferences, connection state, and counts/statuses for the selected conversation and library. No message text, workspace paths, raw logs, or credentials.</p></details>}
+   <p className="a-caption">Your text, selected diagnostics and the files listed above are sent when you submit. Files stay in this private repository’s history and are linked from the issue; your GitHub sign-in needs repository Contents write access. Chats, paths, provider settings, and credentials are not attached automatically.</p>
    <div className="a-dialog-actions">
     {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
     {(done||pending&&!busy)&&<button type="button" className="a-soft" data-action="view.update" onClick={startNew}><Plus/>New feedback</button>}

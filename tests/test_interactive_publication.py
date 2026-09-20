@@ -97,7 +97,7 @@ async def test_interactive_progress_flushes_for_reads_cas_and_normal_duplicates(
     await service.wait_smart_tool('cas')
     with pytest.raises(AppError, match='app changed'):
         await service.dispatch('view.update', {'patch': {'scheme': 'dark'}}, expected_revision=revision)
-    assert service.state['view']['scheme'] == 'light'
+    assert service.state['view']['scheme'] == 'system'
     assert not service._progress_dirty
     await service.dispatch('smartTools.appCall', arguments(service), command_id='read', include_state=False)
     await service.wait_smart_tool('read')
