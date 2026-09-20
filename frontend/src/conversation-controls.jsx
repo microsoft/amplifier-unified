@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {X} from 'lucide-react';
 import {readItems} from './attention';
 import {isTopLevelChat} from './chat-navigation';
+import {sessionIdentity} from './navigation-presentation';
 
 export function ConversationName({session,act}){
  const [name,setName]=useState(session.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
@@ -32,7 +33,7 @@ export function ConversationDetails({session,act,initiallyOpen=false}){
   try{const result=await act('session.recover',{id:session.id});if(!result||result.accepted===false)throw Error('Could not create the recovery copy.')}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
  async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID below.')}}
- const identity=session.runtimeSessionId||session.nativeIdentity||session.id,failure=report?.failure||session.failure;
+ const identity=sessionIdentity(session),failure=report?.failure||session.failure;
  const working=['working','running','starting','stopping'].includes(session.status)||session.configurationBusy||(session.workers||[]).some(worker=>['queued','starting','running','working','stopping'].includes(worker.status));
  return <div className="a-conversation-details" aria-busy={!!busy}>
   <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.inspect" disabled={!!busy} onClick={()=>open?setOpen(false):inspect()}>{busy==='inspect'?'Inspecting…':open?'Hide details':'Conversation details'}</button><button type="button" className="a-soft" onClick={()=>copy(identity,'Session ID copied')}>Copy session ID</button></div>
