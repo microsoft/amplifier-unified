@@ -20,7 +20,7 @@ async def profile(folder, args):
     from amplifier_foundation import load_bundle
     bundle = await load_bundle(str(args.bundle), strict=True)
     mounted = bundle.to_mount_plan()
-    root = args.module_root.resolve()
+    root = args.module_root.resolve() if getattr(args, "module_root", None) else None
     sources = {
         'loop-live': root / 'worktrees/parity-loop-integration',
         'context-managed': root / 'worktrees/parity-context-checkpoints/modules/context-managed',
@@ -28,7 +28,15 @@ async def profile(folder, args):
         'tool-bash': root / 'worktrees/parity-managed-process',
         'tool-web': root / 'worktrees/parity-truthful-web',
         'tool-exec': root / 'repos/amplifier-module-tool-exec',
-    }
+    } if root else {}
+    for source in getattr(args, 'module_source', []) or []:
+        name, separator, path = source.partition('=')
+        if not separator or name not in {'loop-live', 'context-managed', 'tool-transcript', 'tool-bash', 'tool-web', 'tool-exec'}:
+            raise ValueError('Use --module-source MODULE=/absolute/reviewed/source for an execution module')
+        target = Path(path).expanduser().resolve()
+        if not target.is_dir():
+            raise ValueError('The reviewed module source does not exist')
+        sources[name] = target
     # Keep the real include graph and source namespaces. Flattening mount plans
     # loses on-demand skill/resource bases and is not full bundle acceptance.
     plan = {'bundle': {'name': 'parity-acceptance', 'version': '0.1.0'},
@@ -39,7 +47,7 @@ async def profile(folder, args):
     for name, row in mounted.get('session', {}).items():
         if isinstance(row, dict) and row.get('module') in sources:
             plan['session'][name] = {**row, 'source': str(sources[row['module']])}
-    plan['session']['orchestrator'].setdefault('config', {})['max_iterations'] = 16
+    plan['session'].setdefault('orchestrator', {}).setdefault('config', {})['max_iterations'] = 16
     path = folder / 'profile.md'
     path.write_text('---\n' + yaml.safe_dump(plan, sort_keys=False) + '---\n')
     return path
@@ -187,7 +195,8 @@ def main():
     parser.add_argument('--provider', required=True)
     parser.add_argument('--settings', type=Path, default=Path.home() / '.amplifier/settings.yaml')
     parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--module-root', type=Path, required=True)
+    parser.add_argument('--module-root', type=Path, help='Optional local integration checkout layout')
+    parser.add_argument('--module-source', action='append', default=[], help='Explicit reviewed MODULE=/absolute/path override; repeatable')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if not args.allow_live:

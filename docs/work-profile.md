@@ -115,3 +115,26 @@ for app, workspace, and shared defaults and history-preserving root transitions.
 Work is Unified’s default for new installations and when no bundle choice is saved. Existing app, workspace, and shared choices remain in effect; existing conversations retain their own bundle. Use the app or workspace bundle default control to change that choice.
 
 Bundle pickers use optional `bundle.display_name` metadata from the selected local or cached manifest (or Foundation registry), then fall back to the existing built-in label or bundle ID. Labels are sorted alphabetically; stored aliases, namespaces, and source URIs stay unchanged. Labels from a different registered source are ignored. Opening a picker does not fetch or load remote bundles.
+
+## Composed execution and saved-image acceptance
+
+`parity_acceptance.py` exercises approved tool orchestration, managed process output,
+a real UI question/answer, web research, reconnect and draft preservation.
+`image_acceptance.py` creates a synthetic PNG whose contents are not in the prompt,
+saves it, requests its exact pixels, and checks the model's observation. It also
+requires Pillow in the acceptance interpreter. Both use the selected configured
+provider and require `--allow-live`.
+
+Pass `--bundle /absolute/path/to/bundle.md --provider <configured-instance-id>
+--output /absolute/private/new-run-directory`. By default, module sources come
+from that bundle. Before upstream changes merge, repeat
+`--module-source MODULE=/absolute/reviewed/source` for each candidate module.
+The optional `--module-root` argument supports this project's local integration
+checkout layout only; it is not a runtime installation requirement. Overrides
+are validation inputs, not changes to the bundle's maintained `@main` sources.
+The include graph, instructions and resource namespaces remain intact.
+
+Reports distinguish actual calls from unavailable capabilities and never claim
+success from a pending receipt. Raw history and temporary provider configuration
+are private test evidence; redact copied credentials after completed runs before
+sharing or archiving that evidence.
