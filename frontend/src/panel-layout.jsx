@@ -1,7 +1,7 @@
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
 
 export const CHAT_MIN=360,CANVAS_MIN=300,NAV_MIN=216;
-export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasOpen=false,navWidth=260,canvasWidth=440,priority='canvas'}={}){
+export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasOpen=false,navWidth=320,canvasWidth=440,priority='canvas'}={}){
  const overlay=canvasOpen&&available<CHAT_MIN+CANVAS_MIN+rail+gap*2;
  const reserveCanvas=canvasOpen&&!overlay;
  const docked=navPinned&&available>=CHAT_MIN+NAV_MIN+(reserveCanvas?CANVAS_MIN+gap*2:gap);

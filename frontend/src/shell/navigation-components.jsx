@@ -1,6 +1,8 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Copy,Folder,MoreHorizontal} from 'lucide-react';
 import {chatPage,visibleWorkspaces} from '../chat-navigation';
+import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
+import {activityFor,relativeActivity,compactParent} from '../navigation-presentation';
 import {WorkspaceExplorer} from '../workspace-explorer';
 import {AttentionBadge} from '../attention';
 import {PathField} from '../settings-ui';
@@ -68,26 +70,68 @@ function NavigationEditor({model}){
     </form>}
 </>;
 }
-export function WorkspaceManager({host}){
+export function WorkspaceManager({host,paired=false}){
  const model=useNavigationController(host,'workspaces');
  const {state,act,allChats,workspace,workspaceCount,setDraft}=model;
+ if(paired)return <NavigationEditor model={model}/>;
  return <><NavigationEditor model={model}/>    {!allChats&&<WorkspaceExplorer state={state} act={act}/>}
     {!allChats&&workspace&&<div className="a-nav-workspace-path"><span className="a-workspace-full-path" title={workspace.path||'Project folder unavailable'}>{workspace.path||'Project folder unavailable'}</span><button type="button" className="a-icon" aria-label="Rename workspace" data-action="view.update" onClick={()=>setDraft({mode:'rename',id:workspace.id,name:workspace.name})}><Pencil/></button><button type="button" className="a-icon" aria-label="Remove workspace registration" disabled={workspaceCount<2} data-action="view.update" onClick={()=>setDraft({mode:'remove',id:workspace.id,name:workspace.name})}><Trash2/></button></div>}
 </>;
 }
-export function ConversationList({host}){
+function PairedWorkspaceBrowser({host,onOpen}){
+ const model=useNavigationController(host,'workspaces');
+ return <WorkspaceExplorer state={model.state} act={model.act} onOpen={onOpen} onEdit={model.setDraft}/>;
+}
+export function ChatDetails({chat,model,now,close}){
+ const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
+ const title=chat.title||'Untitled conversation';
+ return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
+  <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
+  <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
+  <CopyDetail label="Full workspace path" value={chat.workspace||'Unavailable'}/>
+  <CopyDetail label="Session ID" value={chat.id}/>
+  {chat.runtimeSessionId&&chat.runtimeSessionId!==chat.id&&<CopyDetail label="Runtime session ID" value={chat.runtimeSessionId}/>}
+  {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
+   <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
+   <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
+   <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
+   <button type="button" className="a-danger" aria-label={'Remove '+title+' from list'} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Remove</button>
+  </div>}
+ </>;
+}
+export function ConversationList({host,workspaceHost}){
  const model=useNavigationController(host,'chats');
- const {state,act,session,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,chats,groups,changePage,setDraft,updateDraft,choose,submit}=model;
- return <>    <div className="a-nav-scope" role="group" aria-label="Chat view"><button type="button" aria-pressed={!allChats} data-action="view.update" onClick={()=>patch(act,{navChatScope:'workspace'})}><FolderOpen aria-hidden="true"/>Workspaces</button><button type="button" aria-pressed={allChats} data-action="view.update" onClick={()=>patch(act,{navChatScope:'all'})}><MessageCircle aria-hidden="true"/>All chats</button></div>
-<NavigationEditor model={model}/>    <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder="Find chats · * ? patterns" data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
-    <div className="a-nav-eyebrow a-nav-conversations"><span className="a-nav-chat-heading">{allChats?'All chats':workspace?`Chats in ${workspace.name}`:'Conversations'}</span> <span>{chats.pending?'…':chats.total}</span><button type="button" className="a-icon" aria-label="Refresh workspaces and chats" title="CLI projects and chats appear automatically. Refresh now." data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button></div>
-    {chats.pending&&<p className="a-nav-history-status" role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversations…</p>}
-    {history.loading&&<p className="a-nav-history-status" role="status"><LoaderCircle className="a-progress-spinner"/>Finding projects and chats…</p>}
-    {history.error&&<p className="a-nav-history-status a-danger" role="alert"><AlertCircle/><span>{history.error}</span></p>}
-    <div className="a-nav-chats">{groups.filter(group=>group.items.length).map(group=><section className="a-nav-chat-group" aria-label={group.name+' chats'} key={group.name}><h4 className="a-nav-chat-group-title">{group.name}</h4>{group.items.map(chat=>draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} key={chat.id} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} key={chat.id} data-session-id={chat.id}>
-     <button className="a-nav-chat-select" type="button" data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} title={[chat.title,chat.description,allChats?chat.workspace:null].filter(Boolean).join(' — ')} onClick={()=>choose(chat.id)}><MessageCircle/><span className="a-nav-chat-label"><span>{chat.title||'Untitled conversation'}</span>{allChats&&<small className="a-nav-chat-workspace">{chat.workspace}</small>}</span><AttentionBadge state={state} count={state.attention?.sessions?.[chat.id]||0}/>{['running','working','starting'].includes(chat.status)&&<span className="a-nav-busy" aria-label="Working"/>}</button>
-     <button type="button" className={`a-icon a-nav-chat-edit a-nav-chat-pin ${chat.pinned?'is-pinned':''}`} aria-label={`${chat.pinned?'Unpin':'Pin'} ${chat.title||'conversation'}`} aria-pressed={!!chat.pinned} title={chat.pinned?'Unpin chat':'Pin chat'} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin fill={chat.pinned?'currentColor':'none'}/></button>
-     <button type="button" className="a-icon a-nav-chat-edit" aria-label={`Rename ${chat.title||'conversation'}`} data-action="view.update" onClick={()=>{setDraft({mode:'chat-rename',id:chat.id,name:chat.title||''})}}><Pencil/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label={`Remove ${chat.title||'conversation'} from list`} data-action="view.update" onClick={()=>{setDraft({mode:'chat-delete',id:chat.id,name:chat.title||'conversation'})}}><Trash2/></button>
-    </div>)}</section>)}{!chats.total&&!chats.pending&&!history.loading&&<p className="a-nav-empty">{view.navFilter?'No matching chats.':allChats?'Your conversations will appear here.':!workspace?'Choose a workspace to see its conversations.':'Your conversations will appear here.'}</p>}</div>
-    {chats.pages>1&&<div className="a-nav-pagination"><span>{chats.start+1}–{chats.end} of {chats.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label="Show previous conversations" disabled={chats.index===0} onClick={()=>changePage(chats.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label="Show more conversations" disabled={chats.index===chats.pages-1} onClick={()=>changePage(chats.index+1)}>More chats<ChevronRight/></button></div></div>}</>;
+ const {state,act,session,view,draft,history,refreshing,workspace,allChats,chats,groups,changePage,choose}=model;
+ const workspaceState=useNavigation(React,workspaceHost||host),now=useActivityClock();
+ const browsing=!!workspaceHost&&!allChats&&(view.navWorkspaceList??!workspace);
+ const workspaceView=workspaceState.view||{};
+ const browseWorkspaces=async()=>{
+  if(workspaceHost)await workspaceHost.dispatch('view.update',{patch:{navWorkspaceMode:workspaceView.navWorkspaceMode||'recent'}});
+  return patch(act,{navChatScope:'workspace',navWorkspaceList:true});
+ };
+ const selectedWorkspace=workspaceState.workspaceExplorer?.selected;
+ const counts=chats.activityCounts||{};
+ return <>
+  <div className="a-nav-scope" role="group" aria-label="Chat view"><button type="button" aria-pressed={!allChats} data-action="view.update" onClick={workspaceHost?browseWorkspaces:()=>patch(act,{navChatScope:'workspace'})}><FolderOpen aria-hidden="true"/>Workspaces</button><button type="button" aria-pressed={allChats} data-action="view.update" onClick={()=>patch(act,{navChatScope:'all'})}><MessageCircle aria-hidden="true"/>All chats</button></div>
+  {browsing?<PairedWorkspaceBrowser host={workspaceHost} onOpen={()=>patch(act,{navWorkspaceList:false,navStatusFilter:'all',navFilter:''})}/>:<>
+   {!allChats&&workspace&&workspaceHost&&<>
+    <button type="button" className="a-navigation-back" data-action="view.update" onClick={browseWorkspaces}><ArrowLeft/>All workspaces</button>
+    <NavigationRow className="a-navigation-workspace" label={workspace.name} details={({close})=><WorkspaceDetails row={selectedWorkspace||{...workspace,chatCount:chats.total}} now={now} actions={<><button type="button" data-action="view.update" onClick={()=>{close();workspaceHost.dispatch('view.update',{patch:{workspaceDraft:{mode:'rename',id:workspace.id,name:workspace.name}}})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={workspaceState.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();workspaceHost.dispatch('view.update',{patch:{workspaceDraft:{mode:'remove',id:workspace.id,name:workspace.name}}})}}><Trash2/>Remove registration</button></>}/>}><Folder/><div><strong>{workspace.name}</strong><small title={workspace.path}>{compactParent(workspace.path)}</small></div></NavigationRow>
+   </>}
+   <NavigationEditor model={model}/>
+   <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder={allChats?'Find chats or paths · * ?':'Find chats · * ? patterns'} data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
+   <div className="a-navigation-filters" role="group" aria-label="Conversation activity filters">
+    <button type="button" aria-pressed={view.navStatusFilter==='attention'} data-action="view.update" onClick={()=>patch(act,{navStatusFilter:view.navStatusFilter==='attention'?'all':'attention'})}><AlertCircle/>{counts.attention??0} need attention</button>
+    <button type="button" aria-pressed={view.navStatusFilter==='working'} data-action="view.update" onClick={()=>patch(act,{navStatusFilter:view.navStatusFilter==='working'?'all':'working'})}><LoaderCircle/>{counts.working??0} working</button>
+    {view.navStatusFilter&&view.navStatusFilter!=='all'&&<button type="button" className="a-link" data-action="view.update" onClick={()=>patch(act,{navStatusFilter:'all'})}>Clear</button>}
+   </div>
+   <div className="a-nav-eyebrow a-nav-conversations"><span className="a-nav-chat-heading">{allChats?'All chats':workspace?`Chats in ${workspace.name}`:'Conversations'}</span><span>{chats.pending?'…':chats.total}</span><button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button></div>
+   {(chats.pending||history.loading)&&<p className="a-nav-history-status" role="status"><LoaderCircle className="a-progress-spinner"/>{history.loading?'Finding projects and chats…':'Loading conversations…'}</p>}
+   {history.error&&<p className="a-nav-history-status a-danger" role="alert"><AlertCircle/><span>{history.error}</span></p>}
+   <div className="a-nav-chats">{groups.filter(group=>group.items.length).map(group=><section className="a-nav-chat-group" aria-label={group.name+' chats'} key={group.name}><h4 className="a-nav-chat-group-title">{group.name}</h4>{group.items.map(chat=><NavigationRow key={chat.id} className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} data-session-id={chat.id} label={chat.title||'Untitled conversation'} expanded={draft.mode==='chat-rename'&&draft.id===chat.id} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>
+    <button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} aria-label={chat.title||'Untitled conversation'} onClick={()=>choose(chat.id)}><NavigationStatus activity={activityFor(chat,state)}/><span className="a-nav-chat-label"><span>{chat.title||'Untitled conversation'}</span><small className="a-nav-chat-workspace" title={allChats?chat.workspace:undefined}>{allChats?(chat.workspaceLabel||chat.workspace):activityFor(chat,state).label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button>
+   </NavigationRow>)}</section>)}{!chats.total&&!chats.pending&&!history.loading&&<p className="a-nav-empty">{view.navFilter||view.navStatusFilter&&view.navStatusFilter!=='all'?'No matching chats.':!workspace&&!allChats?'Choose a workspace to see its conversations.':'Your conversations will appear here.'}</p>}</div>
+   {chats.pages>1&&<div className="a-nav-pagination"><span>{chats.start+1}–{chats.end} of {chats.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label="Show previous conversations" disabled={chats.index===0} onClick={()=>changePage(chats.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label="Show more conversations" disabled={chats.index===chats.pages-1} onClick={()=>changePage(chats.index+1)}>More chats<ChevronRight/></button></div></div>}
+  </>}
+ </>;
 }

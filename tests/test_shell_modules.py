@@ -215,3 +215,32 @@ async def test_corrupt_optional_package_does_not_block_recovery_query(service):
     recovery = service.shell.inspect('browser-one', snapshots=True, recovery=True)
     assert recovery['effectiveComposition'] == DEFAULT
     assert set(recovery['snapshots']) == {'workspaces', 'chats'}
+
+@pytest.mark.asyncio
+async def test_paired_workspace_drill_in_is_shared_with_agents_and_client_scoped(service):
+    paths = {workspace['id']: workspace['path'] for workspace in service.state['workspaces']}
+    for session in service.state['sessions']:
+        session['workspace'] = paths[session['workspaceId']]
+    for client in ('browser-one', 'browser-two'):
+        await command(service, 'shell.view.update', clientId=client, instanceId='chats',
+                      patch={'navWorkspaceList': True, 'navStatusFilter': 'attention'})
+    await command(service, 'shell.command', clientId='browser-one', instanceId='workspaces',
+                  action='workspace.select', args={'id': 'two'})
+    first = (await command(service, 'shell.query', clientId='browser-one', instanceId='chats'))['result']
+    second = (await command(service, 'shell.query', clientId='browser-two', instanceId='chats'))['result']
+    assert first['view']['navWorkspaceList'] is False
+    assert first['view']['navStatusFilter'] == 'all'
+    assert second['view']['navWorkspaceList'] is True
+    assert second['view']['navStatusFilter'] == 'attention'
+
+
+@pytest.mark.asyncio
+async def test_shell_summaries_derive_current_unread_without_acknowledging_it(service):
+    session = service.state['sessions'][0]
+    session['completion'] = {'id': 'fresh', 'at': 123}
+    before = deepcopy(service.state.get('attentionRead', {}))
+    result = (await command(service, 'shell.query', clientId='browser-one', instanceId='chats'))['result']
+    row = next(row for row in result['chatNavigation']['items'] if row['id'] == session['id'])
+    assert row['activity']['kind'] == 'unread'
+    assert result['attention']['sessions'][session['id']] == 1
+    assert service.state.get('attentionRead', {}) == before

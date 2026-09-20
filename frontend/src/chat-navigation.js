@@ -1,4 +1,5 @@
 import {filterList} from './list-filter.js';
+import {activityFor} from './navigation-presentation.js';
 
 export const CHAT_PAGE_SIZE=100;
 export function visibleWorkspaces(state){
@@ -39,6 +40,8 @@ export function chatPage(state,workspace){
  const view=state.view||{},mode=view.navChatScope==='all'?'all':'workspace',filter=view.navFilter||'',selectedSessionId=state.selectedSessionId??null;
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
+ const statusFilter=view.navStatusFilter||'all';
+ if(statusFilter!=='all')scope.statusFilter=statusFilter;
  const projection=state.chatNavigation;
  const saved=view.navChatPage,matches=saved&&Object.entries(scope).every(([key,value])=>saved[key]===value);
  const requestedIndex=matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
@@ -46,12 +49,16 @@ export function chatPage(state,workspace){
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
- const chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,chat.workspace,chat.workspaceName]);
+ let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,chat.workspace,chat.workspaceName]);
+ const activityCounts={attention:0,working:0,unread:0,idle:0};
+ chats=chats.map(chat=>({...chat,activity:activityFor(chat,state)}));
+ for(const chat of chats)activityCounts[chat.activity.kind]++;
+ if(statusFilter!=='all')chats=chats.filter(chat=>chat.activity.kind===statusFilter);
  const inferred=mode==='all'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/CHAT_PAGE_SIZE);
  const requested=matches&&Number.isSafeInteger(saved.index)?saved.index:inferred;
  const pages=Math.max(1,Math.ceil(chats.length/CHAT_PAGE_SIZE)),index=Math.max(0,Math.min(pages-1,requested));
  const start=index*CHAT_PAGE_SIZE,end=Math.min(chats.length,start+CHAT_PAGE_SIZE);
- return {items:chats.slice(start,end),total:chats.length,index,pages,start,end,scope};
+ return {items:chats.slice(start,end),total:chats.length,index,pages,start,end,scope,activityCounts};
 }
 export function headerChatChoices(state){
  if(!state)return {items:[],total:0};

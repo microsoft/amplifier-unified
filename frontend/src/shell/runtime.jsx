@@ -90,11 +90,11 @@ class ModuleBoundary extends React.Component{
  componentDidCatch(error){this.props.report('error',error.message)}
  render(){return this.state.error?<p role="alert">This component could not render. {this.state.error.message}</p>:this.props.children}
 }
-function Ready({View,host,report}){
+function Ready({View,host,report,workspaceHost,paired}){
  useEffect(()=>{report('ready');return()=>report('loading')},[View,report]);
- return <View host={host}/>;
+ return <View host={host} workspaceHost={workspaceHost} paired={paired}/>;
 }
-function ModuleInstance({instance,metadata,host,report}){
+function ModuleInstance({instance,metadata,host,report,workspaceHost,paired}){
  const [loaded,setLoaded]=useState(null),[error,setError]=useState('');
  const builtin=builtins[instance.package];
  useEffect(()=>{
@@ -111,7 +111,7 @@ function ModuleInstance({instance,metadata,host,report}){
  const View=builtin||(loaded?.package===instance.package?loaded.View:null);
  if(error)return <p role="alert">Component unavailable: {error}</p>;
  if(!View)return <p role="status">Loading component…</p>;
- return <ModuleBoundary key={instance.package} report={report}><Ready View={View} host={host} report={report}/></ModuleBoundary>;
+ return <ModuleBoundary key={instance.package} report={report}><Ready View={View} host={host} report={report} workspaceHost={workspaceHost} paired={paired}/></ModuleBoundary>;
 }
 export function ShellModules({shell}){
  const statuses=useRef({}),callbacks=useRef(new Map()),active=useRef([]),timer=useRef(null);
@@ -133,7 +133,10 @@ export function ShellModules({shell}){
  return <>
   {(shell.error||shell.recovery)&&<p role="alert">{shell.recovery?'Recovery mode: optional components are disabled.':shell.error}</p>}
   <div className="a-shell-modules">{shell.composition.instances.map((instance,index)=><section className="a-shell-instance" data-shell-instance={instance.id} data-shell-package={instance.package} hidden={!!instance.hideWhen&&!shell.data?.snapshots?.[instance.id]?.view?.workspaceDraft?.mode&&shell.data?.snapshots?.[instance.hideWhen.instanceId]?.view?.navChatScope===instance.hideWhen.navChatScope} style={{order:index}} key={instance.id}>
-   <ModuleInstance instance={instance} metadata={shell.data?.packages?.[instance.package]} host={shell.hostFor(instance)} report={reportFor(instance.id)}/>
+   <ModuleInstance instance={instance} metadata={shell.data?.packages?.[instance.package]} host={shell.hostFor(instance)} report={reportFor(instance.id)}
+    paired={instance.package==='builtin.workspaces'&&shell.composition.instances.some(item=>item.id===instance.hideWhen?.instanceId&&item.package==='builtin.chats')}
+    workspaceHost={instance.package==='builtin.chats'&&shell.composition.instances.some(item=>item.package==='builtin.workspaces'&&item.hideWhen?.instanceId===instance.id)?shell.hostFor(shell.composition.instances.find(item=>item.package==='builtin.workspaces'&&item.hideWhen?.instanceId===instance.id)):undefined}/>
+
   </section>)}</div>
   <details className="a-shell-recovery"><summary>Shell controls</summary><button type="button" onClick={()=>shell.recover('lastGood')}>Restore last working shell</button><button type="button" onClick={()=>shell.recover('default')}>Restore default shell</button><a href="?shell=recovery">Open recovery mode</a></details>
  </>;

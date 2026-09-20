@@ -10,9 +10,11 @@ from pathlib import PurePosixPath, PureWindowsPath
 import re
 
 from .session_navigation import is_top_level
+from .chat_navigation import recent_activity
+from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
-NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage'}
+NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode'}
 
 
 def _path(value):
@@ -75,17 +77,19 @@ def _index(state):
         if workspace is None:
             continue
         path = _path(workspace['path'])
-        entry = chats.setdefault(path, {'workspace': workspace, 'chatCount': 0, 'unread': 0})
+        entry = chats.setdefault(path, {'workspace': workspace, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)})
         if workspace['id'] == state.get('selectedWorkspaceId'):
             entry['workspace'] = workspace
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
+        entry['recentActivityAt'] = max(entry['recentActivityAt'], recent_activity(session))
+        entry['activityCounts'][activity(session, bool(unread_sessions.get(session.get('id'))))['kind']] += 1
 
     root = _root(list(chats))
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}
     for path, entry in chats.items():
         node = nodes.setdefault(path, {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0})
-        node.update(workspace=entry['workspace'], chatCount=entry['chatCount'])
+        node.update(workspace=entry['workspace'], chatCount=entry['chatCount'], recentActivityAt=entry['recentActivityAt'], activityCounts=entry['activityCounts'])
         node['unread'] += entry['unread']
         child = path
         for parent in _ancestors(path, root):
@@ -130,10 +134,12 @@ def _location(state, root, nodes):
 def _row(path, node):
     workspace = node.get('workspace', {})
     name = path.name or str(path)
-    result = {'path': str(path), 'name': name, 'workspaceId': workspace.get('id'),
+    result = {'path': str(path), 'parentPath': _text(path.parent if path != path.parent else None), 'name': name, 'workspaceId': workspace.get('id'),
               'chatCount': node.get('chatCount', 0),
               'descendantWorkspaceCount': node['descendantWorkspaceCount'],
               'canBrowse': bool(node['children']), 'unread': node['unread']}
+    result['recentActivityAt'] = node.get('recentActivityAt', 0)
+    result['activityCounts'] = node.get('activityCounts', {})
     alias = workspace.get('name')
     if alias and alias != name:
         result['customName'] = alias
@@ -152,11 +158,15 @@ def snapshot(state):
     """Return the same bounded explorer shown to users and agents."""
     root, nodes, total = _index(state)
     location, query, requested_page = _location(state, root, nodes)
-    paths = [path for path, node in nodes.items() if node.get('workspace')] if query else nodes[location]['children']
+    mode = state.get('view', {}).get('navWorkspaceMode', 'folders')
+    paths = [path for path, node in nodes.items() if node.get('workspace')] if query or mode == 'recent' else nodes[location]['children']
     rows = [_row(path, nodes[path]) for path in paths]
     if query:
         rows = [row for row in rows if _matches(row, query)]
-    rows.sort(key=lambda row: (row['name'].casefold(), row['path'].casefold(), row['path']))
+    labels = path_labels([str(path) for path, node in nodes.items() if node.get('workspace')])
+    for row in rows:
+        row['pathLabel'] = labels.get(row['path'], row['path'])
+    rows.sort(key=lambda row: ((-row['recentActivityAt'] if mode == 'recent' and not query else 0), row['name'].casefold(), row['path'].casefold(), row['path']))
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(requested_page, pages)
     trail = [location]
@@ -165,8 +175,9 @@ def snapshot(state):
     breadcrumbs = [{'path': _text(path), 'name': 'Workspaces' if path is None else (_text(path) if path == root else path.name or _text(path))} for path in reversed(trail)]
     parent = None if location == root else _text(location.parent if location.parent != location else None)
     return {'path': _text(location), 'parentPath': parent, 'rootPath': _text(root),
-            'breadcrumbs': breadcrumbs, 'filter': query,
+            'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode,
             'rows': rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
+            'selected': next((_row(path, node) for path, node in nodes.items() if node.get('workspace') and node['workspace'].get('id') == state.get('selectedWorkspaceId')), None),
             'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages}
 
 
@@ -176,6 +187,8 @@ def view_patch(state, patch):
         return patch
     result = dict(patch)
     root, nodes, _ = _index(state)
+    if 'navWorkspaceMode' in patch and patch['navWorkspaceMode'] not in ('recent', 'folders'):
+        raise ValueError('Workspace mode must be recent or folders.')
     if 'navWorkspacePath' in patch:
         value = patch['navWorkspacePath']
         path = _path(value)
@@ -194,7 +207,7 @@ def view_patch(state, patch):
     if view.get('navWorkspaceBrowseFor') != state.get('selectedWorkspaceId'):
         location, _, _ = _location(state, root, nodes)
         result = {'navWorkspacePath': _text(location), 'navWorkspaceFilter': '', 'navWorkspacePage': 1, **result}
-    if 'navWorkspacePath' in patch or 'navWorkspaceFilter' in patch:
+    if {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspaceMode'}.intersection(patch):
         result.setdefault('navWorkspacePage', 1)
     if 'navWorkspacePath' in patch:
         result.setdefault('navWorkspaceFilter', '')
