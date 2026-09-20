@@ -28,7 +28,7 @@ Updates includes an offline changelog packaged from `amplifier_web/release-notes
 
 Add an entry for every release with `version`, a concise `title`, a nonempty `changes` list, and `notices` (empty for ordinary changes). Add a notice for configuration migrations, compatibility changes, changes to existing workflows, or required action. Each notice needs a stable `id`, `title`, `detail` explaining the impact, and `action` explaining what to check or do. Do not use HTML or invent notices from commit titles. Keep existing entries so users who skip versions can review the intervening changes.
 
-High-impact notices appear above the update controls and contribute to the shared Settings / Maintenance / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in the changelog after review; changed wording becomes unread again. All high-impact notices in the available history start unread, including on a fresh installation.
+High-impact notices appear above the update controls and contribute to the shared Settings / Updates attention badges. `attention.read` marks the current notice wording reviewed across devices. Reviewing is acknowledgment, not confirmation that an action was performed, and never gates installation. Notices remain in the changelog after review; changed wording becomes unread again. All high-impact notices in the available history start unread, including on a fresh installation.
 
 The release validator requires an entry for the package version, rejects future or duplicate versions and malformed notices, and checks that the wheel and source archive contain the validated history. The publisher generates GitHub release text from that entry. Historical immutable releases through 0.11.2 can still be rerun without a changelog; new releases require one. The bounded format supports up to 100 releases, five notices per release and 256 KB of text; archive older history deliberately when approaching those limits.
 
@@ -45,7 +45,7 @@ Full private state backup and selected reset are available under Maintenance. Ba
 
 The source inventory groups identical repository/ref/revision/status/usage/evidence entries and shows their cache-copy count. Installation retains its full path inventory and updates every eligible cached copy. Different branches, revisions, statuses or usage evidence stay separate. Successful checks use compact inline status; failures include an explanatory notice.
 
-Unread attention counts lead from Settings through Maintenance to Updates. Users and agents can mark items reviewed through `attention.read`; the underlying condition stays visible until resolved, and a new version or changed error becomes unread again.
+Unread attention counts lead from Settings to Updates. Users and agents can mark items reviewed through `attention.read`; the underlying condition stays visible until resolved, and a new version or changed error becomes unread again.
 
 Source classification recognizes local bundle files and directories in the standard
 project `.amplifier/bundles` and shared user bundle folders, using the same lookup

@@ -1,3 +1,4 @@
+import {ActivityRegion} from './activity-region';
 import {useListFilter} from './list-filter.jsx';
 import {ResultNotice} from './settings-ui';
 import React from 'react';
@@ -34,7 +35,7 @@ export function UpdateSettings({state,act}){
  const resultMessage=updates.error||(['error','interrupted'].includes(updates.phase)?updates.detail||'The update did not finish.':busy||pending||updates.phase==='installed'?updates.detail:'');
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;
  const change=patch=>act('settings.update',{patch:{updates:patch}});
- return <section className="a-updates" data-part="updates">
+ return <ActivityRegion as="section" name="updates" busy={busy} className="a-updates" data-part="updates">
   <div className="a-app-update" data-part="application-update" aria-label="Application release status">
    <div className="a-app-update-heading"><h4>Amplifier Unified</h4><span className={'a-app-update-status '+appState}><AppIcon aria-hidden="true"/>{appLabels[appState]||appState}</span></div>
    <dl className="a-app-update-versions"><div><dt>Installed</dt><dd>{application.current||'Not reported'}</dd></div><div><dt>Latest release</dt><dd>{application.latest||'Not checked'}</dd></div></dl>
@@ -58,5 +59,5 @@ export function UpdateSettings({state,act}){
   </div>
   <p className="a-caption">Checks include the app and ecosystem while the local server is running. Updates activate when work and calls are idle. Automatic app installation includes a server restart. Pins and local edits stay unchanged.</p>
   {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<><p className="a-caption">Source inventory for troubleshooting version pins and checks.</p><SourceList items={items} state={state} act={act} id="update-sources"/></>}</div>}
- </section>;
+ </ActivityRegion>;
 }

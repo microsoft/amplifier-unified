@@ -55,6 +55,11 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
+      - name: Verify settings navigation and retained capabilities
+        working-directory: frontend
+        run: |
+          npm run test:settings-browser
+          npm run test:settings-completeness-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
