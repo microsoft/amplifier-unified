@@ -29,7 +29,7 @@ async def main():
         app=await create_app(temp/'app', workspace=alpha, runtime=Runtime(), voice=False,
             background_updates=False, preload_providers=False)
         app['control_token']='fixture-detail-token'
-        service=app['service']; await service.history.close()
+        service=app['service']; await service.history.close(); await service.event_log_view.close()
         await service.dispatch('session.create', {'title':'Alpha conversation','workspace':str(alpha)})
         aid=service.state['selectedSessionId']
         await service.dispatch('session.create', {'title':'Beta conversation','workspace':str(beta)})
@@ -42,6 +42,23 @@ async def main():
         service.state.setdefault('setup',{}).update(providers=[],providersLoadedAt=time.time(),providersWorkspace=str(alpha))
         service._publish()
         baseline=copy.deepcopy(service.state)
+        def log_hook(session_id, event, data, at=None):
+            from amplifier_web.event_log_view import event_path
+            row=service._session(aid)
+            path=event_path(row,session_id);path.parent.mkdir(parents=True,exist_ok=True)
+            with path.open('a') as stream:
+                stream.write(json.dumps({'event':event,'timestamp':at or time.time(),'data':{'session_id':session_id,**data}})+'\n')
+        class LoggedEvents:
+            def __init__(self, identity, emit):
+                from amplifier_web.execution_events import ExecutionEvents
+                self.observer=ExecutionEvents(identity,emit)
+            @property
+            def turn_id(self):return self.observer.turn_id
+            @turn_id.setter
+            def turn_id(self,value):self.observer.turn_id=value
+            def hook(self,sid,event,data):
+                log_hook(sid,event,data);self.observer.hook(sid,event,data)
+            def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
             if op=='native-history':
@@ -84,6 +101,29 @@ async def main():
                     row.update(id=identity,title=f'Additional conversation {index}',status='idle',nativeIdentity=None,runtimeSessionId=None,
                         messages=[{'id':f'{identity}-m-{i}','role':'assistant','text':'Retained text. '*350,'createdAt':1700000000+i} for i in range(count)],execution={'turns':[],'nodes':[]})
                     service.state['sessions'].append(row)
+            elif op in {'canonical-work','canonical-append'}:
+                from amplifier_web.event_log_view import event_path
+                row=service._session(aid);base=1700000000
+                def tool(call,name,arguments,result,start,end):
+                    log_hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':name,'tool_input':arguments},base+start)
+                    log_hook(aid,'tool:post',{'tool_call_id':call,'tool_name':name,'result':result},base+end)
+                if op=='canonical-work':
+                    event_path(row,aid).unlink(missing_ok=True)
+                    row.update(status='idle',workers=[],messages=[
+                        {'id':'before','role':'user','text':'Review the change','createdAt':base},
+                        {'id':'interim','role':'assistant','text':'The first check passed. I am inspecting the remaining files.','createdAt':base+10},
+                        {'id':'final','role':'assistant','text':'The review is complete.','createdAt':base+20}],execution={'nodes':[],'turns':[]})
+                    tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
+                    log_hook(aid,'llm:response',{'request_id':'first','model':'fixture','duration_ms':1000,'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
+                    for count,start in [(15,11),(16,13)]:
+                        tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
+                             {'success':True,'output':{'content':'\n'.join('Line '+str(i) for i in range(1,count+1))}},start,start+1)
+                    tool('owned','app_control',{'action':'inspect','authorization':'Bearer owner-recorded-value'},
+                         {'success':True,'output':{'value':'The full result is already here'}},15,16)
+                    log_hook(aid,'llm:response',{'request_id':'second','model':'fixture','duration_ms':1000,'usage':{'input_tokens':20,'output_tokens':3,'cost_usd':.002}},base+18)
+                else:
+                    tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                await service.event_log_view.refresh(aid)
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn
                 from amplifier_web.execution_events import ExecutionEvents
@@ -92,16 +132,16 @@ async def main():
                 row.update(status='working',messages=[{'id':'question','role':'user','text':'Inspect this work','createdAt':now-5},
                     {'id':'long-answer','role':'assistant','text':'# Complete response\n\n'+('A visible paragraph with **formatting**.\n\n'*450)+'COMPLETE-RESPONSE-END','createdAt':now}],execution={'turns':[],'nodes':[]})
                 ensure_turn(row,'inspect');row['execution']['turns'][0].update(startedAt=now-3,anchorMessageId='question')
-                emitted=[];events=ExecutionEvents(aid,emitted.append);events.turn_id='inspect'
-                events.hook(aid,'tool:pre',{'tool_call_id':'inspect-tool','tool_name':'fixture.read','tool_input':{'action':'inspect fixture','path':'/fixture/public.txt','authorization':'Bearer never-publish-this','text':'input '*150}})
-                events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','result':{'success':True,'output':'Result line. '*2000+'RESULT-END','url':'https://example.com/artifact'}})
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='inspect'
+                events.hook(aid,'tool:pre',{'tool_call_id':'inspect-tool','tool_name':'fixture.read','tool_input':{'action':'inspect fixture','path':'/fixture/public.txt','authorization':'Bearer owned-log-value','text':'input '*150}})
+                events.hook(aid,'tool:post',{'tool_call_id':'inspect-tool','result':{'success':True,'output':'Result line.\n'*2000+'RESULT-END','url':'https://example.com/artifact'}})
                 for event in emitted:
                     kind,data=normalize_event(event,aid);await service.on_runtime_event(kind,data)
                 await service.on_runtime_event('execution.event',{'id':'live-model','kind':'llm','sessionId':aid,'rootSessionId':aid,'turnId':'inspect','label':'Model call','phase':'running','startedAt':now-2})
             elif op=='inspection-actions':
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime import normalize_event
-                emitted=[];events=ExecutionEvents(aid,emitted.append);events.turn_id='inspect'
+                emitted=[];events=LoggedEvents(aid,emitted.append);events.turn_id='inspect'
                 examples=[
                     ('command','bash',{'command':'python -m pytest retirement/test_retire.py -q'},
                      {'success':True,'output':{'stdout':'............ [100%]\n12 passed in 0.21s','stderr':'','returncode':0}}),
@@ -125,6 +165,7 @@ async def main():
                 for identity,name,arguments,result in examples:
                     events.hook(aid,'tool:pre',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments})
                     events.hook(aid,'tool:post',{'tool_call_id':identity,'tool_name':name,'tool_input':arguments,'result':result})
+                log_hook(aid,'delegate:agent_spawned',{'tool_call_id':'delegate','sub_session_id':'review-worker','agent':'code-reviewer'})
                 events.lifecycle({'type':'child.updated','sessionId':'review-worker','parentSessionId':aid,'callId':'delegate','agent':'code-reviewer','status':'completed','report':'No findings. The assertion checks committed status.'})
                 events.hook('review-worker','tool:pre',{'tool_call_id':'nested','tool_name':'bash','tool_input':{'command':'git diff --check'}})
                 events.hook('review-worker','tool:post',{'tool_call_id':'nested','tool_name':'bash','result':{'success':True,'output':{'stdout':'','stderr':'','returncode':0}}})
@@ -140,6 +181,8 @@ async def main():
                 service.state['sessions'].extend([{**copy.deepcopy(template),'id':f'library-{i}','title':f'Library conversation {i:03}',
                     'createdAt':now-i,'recentActivityAt':now-i,'messages':[],'nativeIdentity':None,'runtimeSessionId':None}
                     for i in range(args.get('count',205))])
+            if op.startswith('inspection'):
+                await service.event_log_view.refresh(aid)
             service._publish()
             return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
                 'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
