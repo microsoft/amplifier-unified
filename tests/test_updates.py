@@ -107,7 +107,7 @@ async def test_check_is_read_only_and_failures_are_not_current(app,repo,monkeypa
     assert 'url' not in app.state['updates']['items'][0]
 
 async def test_default_and_update_settings_preserve_existing_conversation(app):
-    assert app.state['settings']['bundle']=='anchors'
+    assert app.state['settings']['bundle']=='work'
     assert app.state['sessions'][0]['bundle']=='anchors-amp-dev'
     await app.dispatch('settings.update',{'patch':{'updates':{'autoCheck':False}}})
     with pytest.raises(AppError):await app.dispatch('settings.update',{'patch':{'updates':{'autoInstall':True}}})

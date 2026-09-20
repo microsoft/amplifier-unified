@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.15.0",
+      "title": "Work by default and bundle display names",
+      "changes": [
+        "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
+        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
+      ],
+      "notices": [
+        {
+          "id": "work-default",
+          "title": "Work is the default bundle",
+          "detail": "Work is now the default when no bundle choice is saved. Work currently requires access to its private GitHub repository.",
+          "action": "Choose a different app or workspace default in Settings if desired; Anchors remains available."
+        }
+      ]
+    },
+    {
       "version": "0.14.1",
       "title": "Read earlier messages in live conversations",
       "changes": [

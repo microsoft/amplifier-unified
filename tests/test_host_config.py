@@ -17,7 +17,7 @@ from amplifier_web.shared_state import configuration_paths, workspace_snapshot_p
 class HostSettingsTests(unittest.TestCase):
     def test_work_is_available_without_changing_default_or_overriding_user_sources(self):
         config = HostConfig(Path('/app'), Path('/workspace'), {}, Path('/registry'))
-        self.assertEqual(config.active_bundle, 'anchors')
+        self.assertEqual(config.active_bundle, 'work')
         self.assertEqual(config.registrations['work'], WORK_SOURCE)
         config.settings['bundle'] = {'added': {'work': 'file:///custom/work.md'}}
         self.assertEqual(config.registrations['work'], 'file:///custom/work.md')
