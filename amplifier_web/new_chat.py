@@ -42,6 +42,6 @@ def selection(value):
     """An incomplete choice remains editable, but cannot silently use a different model."""
     validate(value, SELECTION)
     result = {key: item.strip() for key, item in value.items() if item.strip()}
-    if result and (not result.get('instance') or not result.get('model')):
+    if value and (not result.get('instance') or not result.get('model')):
         raise ValueError('Choose a provider and model, or use the bundle default.')
     return result

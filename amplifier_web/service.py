@@ -771,6 +771,8 @@ class AppService:
                 from .new_chat import open_draft
                 open_draft(self, args)
             elif action == "session.create":
+                if args.get('fromDraft') and not args.get('workspace', '').strip():
+                    raise AppError('Choose a workspace folder before starting this chat.')
                 session = self._new_session(args)
                 if args.get('fromDraft') and command_id:
                     session['creationCommandId'] = command_id

@@ -99,8 +99,9 @@ async def test_delayed_upload_stays_with_unsent_chat_after_navigation(app, tmp_p
     assert snapshot(app, 'web')['view']['draft'] == 'Future chat'
 
 
-@pytest.mark.parametrize('setup', [{'workspace': '/nonexistent-new-chat-folder'}, {'selection': {'instance': 'missing-model'}}])
+@pytest.mark.parametrize('setup', [{'workspace': ''}, {'workspace': '/nonexistent-new-chat-folder'}, {'selection': {'instance': 'missing-model'}}, {'selection': {'instance': '', 'model': ''}}])
 async def test_invalid_first_creation_preserves_config_and_text(app, setup):
+    setup = {'workspace': str(app.data_dir.parent), **setup}
     await command(app, 'web', 'session.draft')
     await command(app, 'web', 'view.update', {'patch': {'newSessionDraft': setup, 'draft': 'Keep me'}})
     with pytest.raises(AppError):

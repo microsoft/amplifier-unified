@@ -15,8 +15,9 @@ def hydrate(home, state, db):
     canvas = state.get('canvas', {})
     reference = canvas.pop('$body', None)
     if reference and not canvas.get('contentResource'):
-        from .state_storage import resource
-        canvas.update(resource(db, reference['$resource']))
+        from .canvas_library import restore_body
+        canvas['contentResource'] = reference
+        restore_body(canvas, db)
     for index, session in enumerate(state.get('sessions', [])):
         if session.pop('$native', False):
             session.update(messages=[], workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)

@@ -167,3 +167,34 @@ async def test_unavailable_retained_source_suspends_pruning_unknown_nested_refer
         assert app.state['canvas']['open']
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('missing', ['index', 'blob'])
+async def test_missing_global_canvas_body_does_not_prevent_host_restart(tmp_path, missing):
+    import sqlite3
+    from amplifier_web.resource_files import root
+    home = tmp_path / 'app'
+    app = AppService(home, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    await app.dispatch('canvas.show', {'kind': 'markdown', 'content': '# Preserve its reference'})
+    aid = app.state['canvas']['id']
+    sid = app.state['selectedSessionId']
+    body = app.state['canvasArtifacts'][0]['body'].copy()
+    blob = root(app.db) / (body['$resource'] + '.json')
+    await app.close()
+    if missing == 'index':
+        with sqlite3.connect(home / 'app.sqlite3') as db:
+            db.execute('DELETE FROM state_resources WHERE id=?', (body['$resource'],))
+    else:
+        blob.unlink()
+    restored = AppService(home, workspace=tmp_path)
+    try:
+        await restored.dispatch('canvas.reopen', {})
+        assert restored.state['selectedSessionId'] == sid
+        assert restored.state['canvas']['id'] == aid
+        assert restored.state['canvas']['open']
+        assert restored.state['canvas']['contentResource'] == body
+        assert restored.state['canvas']['renderReports']['stored-source']['status'] == 'error'
+        assert restored.state['canvasArtifacts'][0]['body'] == body
+    finally:
+        await restored.close()
