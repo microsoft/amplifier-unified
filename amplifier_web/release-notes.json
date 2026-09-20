@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.9",
+      "title": "Preserve canvas resources across clients",
+      "changes": [
+        "Storage cleanup retains canvas content, saved tool views, nested resources and attachments referenced by any client, including disconnected clients.",
+        "Startup and routine saves use complete shared and client state when checking which resource files remain in use.",
+        "A recovery action can restore missing content from exact hash-matching saved JSON while preserving artifact identities and without replaying tools.",
+        "The TUI host recommendation is now 0.11.9 or later; the documented live-client validation baseline remains 0.11.7."
+      ],
+      "notices": [
+        {
+          "id": "canvas-resource-retention",
+          "title": "Update to protect saved canvas content",
+          "detail": "Earlier releases could delete resource files still referenced by saved canvas views during cleanup. This release prevents that deletion; it cannot reconstruct content already lost.",
+          "action": "Install this update. If a saved view reports unavailable content, recover it from an exact retained source or reopen the read-only view. Do not replay a tool action that changes data just to restore its display."
+        }
+      ]
+    },
+    {
       "version": "0.11.8",
       "title": "Shared model settings for native runtimes",
       "changes": [

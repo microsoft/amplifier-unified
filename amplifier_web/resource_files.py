@@ -1,4 +1,5 @@
 """Immutable, content-addressed artifact files; SQLite contains only an index."""
+from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
@@ -35,7 +36,7 @@ def resolve(db, identity, value):
 
 
 def references(value):
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         if isinstance(value.get('$resource'), str):
             yield value['$resource']
         for item in value.values():
@@ -45,13 +46,47 @@ def references(value):
             yield from references(item)
 
 
+def retained_references(db, state):
+    """References from complete state and durable client/operation records."""
+    pending = list(references(state))
+    # Persisted client records remain roots even before ClientViews is loaded
+    # at startup, and when their browser is disconnected or another is bound.
+    for table in ('smart_tool_operations', 'client_views'):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+            for (text,) in db.execute('SELECT value FROM ' + table):
+                pending.extend(references(json.loads(text)))
+    return pending
+
+
+def restore(db, state, identity, value):
+    """Restore an exact missing, directly retained resource without replay."""
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    if hashlib.sha256(encoded.encode()).hexdigest() != identity:
+        raise ValueError('Recovery content does not match the saved resource identity.')
+    if identity not in retained_references(db, state):
+        raise ValueError('Recovery requires an existing saved reference to this resource.')
+    from .state_storage import resource
+    if db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
+        try:
+            existing = resource(db, identity)
+        except FileNotFoundError:
+            pass
+        else:
+            if existing != value:
+                raise ValueError('Existing resource content conflicts with recovery content.')
+            return {'id': identity, 'restored': False}
+    directory = root(db)
+    path = directory / (identity + '.json') if directory else None
+    if path and path.exists() and path.read_text() != encoded:
+        raise ValueError('Existing resource file conflicts with recovery content.')
+    put(db, value)
+    return {'id': identity, 'restored': True}
+
+
 def collect(db, state):
     """Mark all retained state/receipt references, including nested references."""
     from .state_storage import resource
-    pending = list(references(state))
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name='smart_tool_operations'").fetchone():
-        for (text,) in db.execute('SELECT value FROM smart_tool_operations'):
-            pending.extend(references(json.loads(text)))
+    pending = retained_references(db, state)
     marked = set()
     while pending:
         identity = pending.pop()
