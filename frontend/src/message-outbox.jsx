@@ -9,13 +9,13 @@ export function outboxMessages(messages,entries,sessionId){
  return [...confirmed,...pending.filter(row=>!messages.some(message=>message.inputId===row.commandId)).map(row=>({id:row.id,inputId:row.commandId,role:'user',text:row.text,via:row.via,createdAt:row.createdAt,attachments:row.attachments,localDelivery:row}))];
 }
 export function useMessageOutbox(){
- const [entries,setEntries]=useState(()=>readOutbox(typeof sessionStorage==='undefined'?null:sessionStorage)),current=useRef(entries);
+ const [entries,setEntries]=useState(()=>readOutbox(typeof sessionStorage==='undefined'?null:sessionStorage)),current=useRef(entries),[storageError,setStorageError]=useState(false);
  const update=useCallback((id,patch)=>{
   const rows=current.current,found=rows.some(row=>row.id===id);
   if(!found&&patch!==null&&!patch.commandId)return; // A late reply cannot recreate an already acknowledged entry.
   const next=patch===null?rows.filter(row=>row.id!==id):found?rows.map(row=>row.id===id?{...row,...patch}:row):[...rows,{id,...patch}];
-  current.current=next;setEntries(next);try{sessionStorage.setItem(key,JSON.stringify(next))}catch{}
+  current.current=next;setEntries(next);try{sessionStorage.setItem(key,JSON.stringify(next));setStorageError(false)}catch{setStorageError(true)}
   return next.find(row=>row.id===id);
  },[]);
- return {entries,current,update};
+ return {entries,current,update,storageError};
 }
