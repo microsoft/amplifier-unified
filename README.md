@@ -34,6 +34,10 @@ End users need no Node installation: compiled React assets ship in the Python pa
 
 **Settings → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
 
+## Persistent work controls
+
+The [Work capability guide](docs/WORK-ALIGNMENT.md) connects the new task, question, operation, scheduling, computation, output, connector and usage controls with their setup and acceptance boundaries. [Delivery issue128](https://github.com/bkrabach/amplifier-unified/issues/128) tracks the integration and release.
+
 ## Shell customization and agent guidance
 
 The [Unified shell behavior](behaviors/unified-shell.yaml) provides the
