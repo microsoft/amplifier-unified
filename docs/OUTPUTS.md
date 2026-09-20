@@ -18,7 +18,7 @@ Validation:30 backend checks across output, resource-retention, server and canva
 
 ## Explicit visual inspection
 
-Attach a rendered PNG as a file, then call `outputs.image` with that output ID and exact SHA-256. UI and agent use the same action. UI opens an authenticated preview without sending a message or changing the draft. An agent call keeps the exact tool receipt and supplies typed PNG pixels to the next supported provider request, through the existing surface-delivery boundary. Only the latest explicitly requested image is carried, within the current input; compaction, a changed input, or a missing exact tool result requires another explicit read. Cached request-budget pixels are revalidated before transport. A text receipt or successful canvas render is not visual QA.
+Attach a rendered PNG as a file, then call `outputs.image` directly through `app_control` with that output ID and exact SHA-256. Do not nest this read inside `tool_exec`: its outer result does not retain the required direct app-control receipt. UI and agent use the same action. UI opens an authenticated preview without sending a message or changing the draft. An agent call keeps the exact tool receipt and supplies typed PNG pixels to the next supported provider request, through the existing surface-delivery boundary. Only the latest explicitly requested image is carried, within the current input; compaction, a changed input, or a missing exact tool result requires another explicit read. Cached request-budget pixels are revalidated before transport. A text receipt or successful canvas render is not visual QA.
 
 Images must be complete, noninterlaced8-bit RGB/RGBA PNGs, at most8MB and4096pixels per side. CRCs, bounded decompression and scanlines are validated before delivery. Convert unsupported image formats in the approved computation environment deliberately; this action does not reinterpret safety text as pixels. Original files are not reread: the exact immutable snapshot is used even if the source later changes. No-vision providers and missing/corrupt resources receive a clear no-pixels notice. This provides generated-page inspection without pretending to capture a native screen.
 
@@ -29,3 +29,5 @@ raw Git and worktree bytes; it does not download or materialize LFS objects. A l
 materialized LFS file can therefore appear different from its saved pointer. Quoted
 UTF-8 paths (including accented names, tabs and quotes) retain exact review anchors;
 lines resembling file headers inside a hunk remain ordinary content.
+
+Image support uses the selected provider model catalog when available, with a bounded cached read; provider-level tags are a fallback when no model catalog exists. An unavailable/failed lookup remains unconfirmed and sends no pixels. No model is substituted.

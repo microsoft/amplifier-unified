@@ -623,6 +623,8 @@ class AppService:
             args.setdefault('sessionId', self.state.get('selectedSessionId'))
             if not args['sessionId']:
                 raise AppError('Select a conversation first.', 404)
+        if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
+            raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('task.'):

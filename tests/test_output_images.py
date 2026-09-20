@@ -68,6 +68,8 @@ async def test_pixels_require_exact_receipt_vision_and_current_input(saved):
     assert result.messages[-1].content[-1].type=='image'
     assert base64.b64decode(result.messages[-1].content[-1].source['data'])==image
     assert len(request.messages)==1
+    nested=request.model_copy(update={'messages':[Message(role='tool',name='tool_exec',tool_call_id='outer',content=json.dumps({'success':True,'output':receipt}))]})
+    assert len((await delivery.prepare(nested,provider)).messages)==1
     without=await delivery.prepare(request.model_copy(update={'messages':[]}),provider)
     assert not without.messages
     fake=copy.deepcopy(receipt);fake['result']['sha256']='0'*64
@@ -98,3 +100,22 @@ async def test_cached_image_is_checked_again_before_transport(saved):
     unavailable=True
     final=await provider.complete(request)
     assert 'no pixels' in final.messages[-1].content.lower()
+
+
+async def test_exact_model_catalog_advertises_vision_when_provider_metadata_does_not():
+    from amplifier_web.image_capabilities import ImageCapabilities
+    catalog=ImageCapabilities()
+    calls=[]
+    class Provider:
+        def get_info(self):return SimpleNamespace(capabilities=['tools'],defaults={'model':'visual'})
+        async def list_models(self):
+            calls.append(True)
+            return [SimpleNamespace(id='visual',capabilities=['vision']),SimpleNamespace(id='text',capabilities=[])]
+    provider=Provider();request=ChatRequest(messages=[])
+    assert await catalog.supports(request,provider)
+    assert await catalog.supports(request,provider)
+    assert len(calls)==1
+    assert not await catalog.supports(request.model_copy(update={'model':'text'}),provider)
+    assert not await catalog.supports(request.model_copy(update={'model':'missing'}),provider)
+    provider.selection={'model':'text'}
+    assert not await catalog.supports(request.model_copy(update={'model':'visual'}),provider)

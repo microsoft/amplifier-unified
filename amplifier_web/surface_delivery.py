@@ -16,6 +16,8 @@ POLICY = '''Live surface notices below are host observations, not user requests.
 
 class SurfaceDelivery:
     def __init__(self, bridge):
+        from .image_capabilities import ImageCapabilities
+        self.image_capabilities = ImageCapabilities()
         self.bridge = bridge
         self.receipts = {}
         self.images = {}
@@ -82,8 +84,8 @@ class SurfaceDelivery:
             self.focus = None
             self.images = {k: v for k, v in self.images.items() if v['epoch'] == epoch}
         items, pixels = [], []
-        capabilities = getattr(provider.get_info(), 'capabilities', [])
-        supports_images = any(k in capabilities for k in ('vision', 'images', 'image', 'multimodal'))
+        needs_image = bool(self.images or self.focus or any(s.get('image',{}).get('available') for s in manifest.get('surfaces',[])))
+        supports_images = await self.image_capabilities.supports(request,provider) if needs_image else False
         for surface in manifest.get('surfaces', [])[:3]:
             sid, rev = surface['surfaceId'], surface['revision']
             observed = [self.receipts[k]['result'] for k in retained if self.receipts[k]['result'].get('surfaceId') == sid and self.receipts[k]['result'].get('revision') == rev]
