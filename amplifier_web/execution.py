@@ -1,6 +1,8 @@
 """Deduplicated public execution tree and usage rollups (no reasoning payloads)."""
 import time
 
+LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
+
 USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens')
 
 def ensure_turn(session,identity,label=''):
@@ -34,18 +36,23 @@ def anchor_turns(session):
 
 def rollup(calls):
     result={key:0 for key in USAGE_KEYS}
-    result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0)
+    result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
     for node in calls:
         usage=node.get('usage') or {}
         for key in USAGE_KEYS:
             value=usage.get(key)
             if isinstance(value,(int,float)) and value>=0:result[key]+=value
-        if not usage or not any(k in usage for k in ('inputTokens','outputTokens','totalTokens')):result['tokenUnknownCalls']+=1
+        pending=node.get('phase',node.get('status')) in LIVE_PHASES and not node.get('endedAt')
+        if not usage or not any(k in usage for k in ('inputTokens','outputTokens','totalTokens')):
+            result['tokenUnknownCalls']+=1
+            result['tokenPendingCalls']+=int(pending)
         cost=usage.get('costUsd')
         if isinstance(cost,(int,float)) and cost>=0:
             result['costUsd']+=cost;result['pricedCalls']+=1
             result['estimatedCalls']+=int(usage.get('costType')=='estimated')
-        else:result['unknownCalls']+=1
+        else:
+            result['unknownCalls']+=1
+            result['costPendingCalls']+=int(pending)
     result['costType']='unavailable' if not result['pricedCalls'] else 'partial' if result['unknownCalls'] else 'estimated' if result['estimatedCalls'] else 'reported'
     return result
 
@@ -54,12 +61,18 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary'}
+    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error'}
     safe={k:v for k,v in event.items() if k in allowed}
+    if safe.get('kind') != 'tool':
+        for key in ('input','output','error'):safe.pop(key,None)
     node=next((n for n in tree['nodes'] if n['id']==identity),None)
     if node:node.update(safe)
     else:
         node=safe;tree['nodes'].append(node)
+    refresh_usage(tree)
+
+
+def refresh_usage(tree):
     lookup={n['id']:n for n in tree['nodes']}
     for candidate in tree['nodes']:
         if not candidate.get('turnId'):
@@ -81,5 +94,12 @@ def ingest(session,event):
 
 def finish(session,status='completed'):
     tree=session.get('execution',{})
+    ended=time.time()
     for turn in tree.get('turns',[]):
-        if turn['phase']=='running':turn.update(phase=status,endedAt=time.time())
+        if turn.get('phase') in LIVE_PHASES:turn.update(phase=status,endedAt=ended)
+    for node in tree.get('nodes',[]):
+        # Root lifecycle settles dangling root calls; independently running
+        # delegated workers retain their own lifecycle and may report later.
+        if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
+            node.update(phase='interrupted' if status=='completed' else status,endedAt=ended)
+    if 'nodes' in tree:refresh_usage(tree)

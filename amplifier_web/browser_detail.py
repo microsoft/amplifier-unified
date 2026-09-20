@@ -2,6 +2,8 @@
 from copy import deepcopy
 from hashlib import sha256
 
+from .execution import LIVE_PHASES
+
 MESSAGE_LIMIT=60
 NODE_LIMIT=100
 TEXT_LIMIT=4096
@@ -11,9 +13,9 @@ SUMMARY_LIMIT=512
 def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
-    fields = {'id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax'}
+    fields = {'id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error'}
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
-    for field in ('text','summary','detail','report','result'):
+    for field in ('text','summary','detail','report','result','input','output','error'):
         text=row.get(field)
         if part!='messages' and field in result and not isinstance(text,str):
             result.pop(field, None)
@@ -37,6 +39,9 @@ def page(session, part, before=None):
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
     else:
         turn_ids={row.get('turnId') for row in items}
+        # Keep newly started work visible before its first tool/provider event.
+        active=[row['id'] for row in session.get('execution',{}).get('turns',[]) if row.get('phase') in LIVE_PHASES and not row.get('endedAt')]
+        turn_ids.update(active[-20:])
         counts={identity:{'tools':0,'workers':0} for identity in turn_ids}
         for node in rows:
             if node.get('turnId') in counts and node.get('kind') in {'tool','worker'}:
@@ -68,7 +73,7 @@ def project(session):
 
 def read_text(session, args):
     part=args.get('part');field=args.get('field')
-    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result'}:
+    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error'}:
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)

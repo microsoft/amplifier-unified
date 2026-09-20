@@ -1,6 +1,6 @@
 import {request} from './api.js';
-export async function readDetail(reference,read=request){
+export async function readDetail(reference,read=request,signal){
  let offset=0,text='';
- do{const page=await read('/api/conversation/detail?'+new URLSearchParams({...reference,offset}));text+=page.value;offset=page.nextOffset}while(offset!==null);
+ do{const page=await read('/api/conversation/detail?'+new URLSearchParams({...reference,offset}),{signal});text+=page.value;offset=page.nextOffset}while(offset!==null);
  return text;
 }
