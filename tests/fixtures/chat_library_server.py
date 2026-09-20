@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -77,7 +78,8 @@ async def main():
                  'two': temp / 'folders/research/playground',
                  'missing': temp / 'folders/deleted/playground'}
         for index in range(202):
-            native_chat(home, paths['one'], f'alpha-{index:03}', f'Alpha {index:03}', 1_700_000_000 + index)
+            title = 'Review very long workspace navigation names without changing the height of neighboring rows' if index == 201 and os.environ.get('AMPLIFIER_NAVIGATION_PROOF') == '1' else f'Alpha {index:03}'
+            native_chat(home, paths['one'], f'alpha-{index:03}', title, 1_700_000_000 + index)
         for index in range(3):
             native_chat(home, paths['two'], f'beta-{index:03}', f'Beta {index:03}', 1_700_001_000 + index)
         native_chat(home, paths['one'], 'worker-only', 'Hidden worker', 1_700_009_000, worker=True)
@@ -107,6 +109,13 @@ async def main():
                 initial = next(row['id'] for row in service.state['sessions'] if row.get('nativeIdentity') == 'alpha-201')
                 await service.dispatch('session.select', {'id': initial})
                 await service.dispatch('view.update', {'patch': {'navPinned': True}})
+                service._save()
+            if generation == 0 and os.environ.get('AMPLIFIER_NAVIGATION_PROOF') == '1':
+                by_native = {row.get('nativeIdentity'): row for row in service.state['sessions']}
+                by_native['alpha-200'].update(status='working', recentActivityAt=time.time()-120)
+                by_native['alpha-199'].update(approvals=[{'id': 'navigation-approval', 'title': 'Allow workspace access', 'status': 'pending'}], recentActivityAt=time.time()-240)
+                by_native['alpha-198'].update(completion={'id': 'navigation-completion', 'at': time.time()-600}, recentActivityAt=time.time()-600)
+                by_native['alpha-197'].update(error='Fixture operation failed', status='error', recentActivityAt=time.time()-900)
                 service._save()
             generation += 1
 

@@ -29,7 +29,9 @@ try{
  await page.waitForFunction(id=>window.amplifier.getState().attention.sessions[id]===1,first);
  await page.reload();await page.waitForFunction(id=>window.amplifier?.getState().attention?.sessions?.[id]===1,first);
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
- assert.equal(await page.locator('.a-workspace-row .a-attention-badge').getAttribute('aria-label'),'1 unread items');
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();
+ await page.locator('.a-workspace-row .a-navigation-status[data-kind="unread"]').waitFor();
+ assert.equal(await page.locator('.a-workspace-row .a-navigation-status[data-kind="unread"]').getAttribute('aria-label'),'1 chats with unread activity');
  await page.getByRole('button',{name:'Activity',exact:true}).click();
  await page.getByRole('button',{name:'Response ready Settings test',exact:true}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-completion-inbox.png'});

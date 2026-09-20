@@ -31,7 +31,14 @@ try{
   if(!response.ok)throw Error(await response.text());return response.json();
  },[path,body]);
  const info=()=>api('/api/fixture/info');
- const agent=async(action,args)=>api('/api/fixture/agent',{args:action==='view.update'?{action:'shell.view.update',args:{...args,clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'workspaces'}}:{action,args}});
+ const agent=async(action,args)=>{
+  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
+  if(action==='view.update'){
+   await api('/api/fixture/agent',{args:{action:'shell.view.update',args:{clientId,instanceId:'chats',patch:{navChatScope:'workspace',navWorkspaceList:true}}}});
+   return api('/api/fixture/agent',{args:{action:'shell.view.update',args:{...args,clientId,instanceId:'workspaces',patch:{navWorkspaceMode:'folders',...args.patch}}}});
+  }
+  return api('/api/fixture/agent',{args:action==='workspace.select'?{action:'shell.command',args:{clientId,instanceId:'workspaces',action,args}}:{action,args}});
+ };
  const row=path=>page.locator('.a-workspace-row').filter({has:page.getByRole('button',{name:'Open chats in '+path,exact:true})});
  const browse=path=>page.getByRole('button',{name:'Browse '+path,exact:true});
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
@@ -39,7 +46,7 @@ try{
  const showPath=async path=>{await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await waitPath(path)};
 
  await page.goto(vite.resolvedUrls.local[0]);
- await page.locator('.a-workspace-explorer').waitFor();
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();
  const initial=await info(),paths=initial.paths,first=initial.initialSession;
  assert.equal(await selected(),first);
  assert.equal(initial.directories.new,false);
@@ -95,10 +102,16 @@ try{
  assert.match(await page.locator('.a-nav-chat').innerText(),/nested-chat/);
 
  // Search matches full paths across branches, including duplicate leaf names.
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();
  const search=page.getByRole('searchbox',{name:'Filter workspaces',exact:true});
  await search.fill('*/playground');
  await page.waitForFunction(()=>document.querySelectorAll('.a-workspace-row').length===2);
- for(const key of ['playgroundOne','playgroundTwo'])assert.ok((await row(paths[key]).innerText()).includes(paths[key]),'search results visibly distinguish full paths');
+ assert.equal(new Set(await page.locator('.a-workspace-result-path').allTextContents()).size,2,'duplicate leaf names retain distinct parent labels');
+ for(const key of ['playgroundOne','playgroundTwo']){
+  await row(paths[key]).getByRole('button',{name:/Details and actions/}).click();
+  assert.ok((await page.locator('.a-navigation-flyout').innerText()).includes(paths[key]),'details expose the complete path');
+  await page.getByRole('button',{name:'Close details',exact:true}).click();
+ }
  await row(paths.playgroundTwo).getByRole('button',{name:'Open chats in '+paths.playgroundTwo,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundTwo);
  await agent('view.update',{patch:{navWorkspaceFilter:'*/playground',navWorkspacePage:1}});
@@ -107,7 +120,7 @@ try{
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),'narrow viewport must not scroll the document');
  const overflow=await row(paths.playgroundTwo).evaluate(element=>({scroll:element.scrollWidth,width:element.clientWidth}));
- assert.ok(overflow.scroll<=overflow.width+1,'full paths wrap inside narrow sidebar rows');
+ assert.ok(overflow.scroll<=overflow.width+1,'path labels stay within fixed-height narrow rows');
  await page.screenshot({path:'/tmp/amplifier-workspace-explorer-narrow.png'});
  await page.setViewportSize({width:1280,height:900});
  assert.deepEqual((await info()).runtimeStarts,[],'browsing saved workspaces never mounts their runtimes');
@@ -140,7 +153,7 @@ try{
  assert.deepEqual(current.runtimeStarts,[]);
  assert.deepEqual(current.runtimeSends,[]);
  assert.deepEqual(errors,[]);
- console.log('Workspace explorer browser checks passed: real native discovery, only root-chat paths, split root/browse actions, leaf constraints, full-path wildcard search, narrow wrapping, persisted agent/UI navigation, existing/new folder creation, no model work.');
+ console.log('Workspace explorer browser checks passed: real native discovery, only root-chat paths, split root/browse actions, leaf constraints, full-path wildcard search, narrow truncation, persisted agent/UI navigation, existing/new folder creation, no model work.');
 }catch(error){
  await page?.screenshot({path:'/tmp/amplifier-workspace-explorer-failure.png'}).catch(()=>{});
  if(fixtureLog)console.error(fixtureLog);
