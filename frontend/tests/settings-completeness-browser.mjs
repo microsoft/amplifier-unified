@@ -2,7 +2,7 @@ import {openSettingsPage} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
 let browser,page;const errors=[];
@@ -13,7 +13,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const presentation=async(id,value)=>{if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());};
+ const presentation=async(id,value)=>{if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());await expect(page.locator('#'+id)).toHaveValue(value);};
  await openSettingsPage(page,'notifications');
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
@@ -67,7 +67,9 @@ try{
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
  await presentation('scheme','dark');await presentation('layout','work');
  await page.reload();await page.locator('#theme-name').waitFor();
- assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');assert.equal(await page.locator('#layout').inputValue(),'work');
+ assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
+ // Shell settings hydrate separately from the host's skin controls after reload.
+ await expect(page.locator('#layout')).toHaveValue('work');
  await page.getByRole('button',{name:'Restore default skin',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name!=='Acceptance skin');
  await openSettingsPage(page,'smart-tools');
