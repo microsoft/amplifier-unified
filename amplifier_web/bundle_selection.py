@@ -10,7 +10,12 @@ import uuid
 
 from .host.config import write_private
 
+# Bootstrap labels for known profiles before their manifests have been cached.
+# A bundle's own display metadata always takes precedence.
 BUNDLE_LABELS = {
+    'foundation': ('Foundation', 'Standard Amplifier tools and agent orchestration.'),
+    'amplifier-dev': ('Amplifier development', 'Tools and expertise for developing the Amplifier ecosystem.'),
+    'exp-delegation': ('Experimental · Delegation only', 'Delegate work to specialized agents.'),
     'anchors': ('Anchors', 'General-purpose tools, instructions, and agents.'),
     'anchors-amp-dev': ('Anchors · Amplifier development', 'Anchors with Amplifier ecosystem knowledge and tooling.'),
     'work': ('Work', 'A small tool set with live delegation and managed context.'),
