@@ -266,3 +266,33 @@ test('copied receipts include version revisions but exclude raw output and extra
  assert.equal(receipt.lastFailure.status,'failed');
  assert.doesNotMatch(JSON.stringify(receipt),/secret output|private\/folder|stdout"|path"/);
 });
+
+test('unknown usage keeps failure conditions visible separately even with inventory collapsed',()=>{
+ const initial=state({items:[
+   {id:'old',kind:'bundle / module',label:'Historical source',ref:'master',usage:'unknown',status:'check_failed'},
+   {id:'dirty',kind:'bundle / module',label:'Edited source',ref:'main',usage:'unknown',status:'local_changes',detail:'Tracked source changes preserved.'},
+   {id:'active',kind:'bundle / module',label:'Configured source',usage:'configured',status:'check_failed'},
+ ],lastCheck:100});
+ const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state:initial,act:()=>{}}));
+ assert.match(html,/Other cached sources/);
+ assert.match(html,/2 sources: 1 check failed, 1 with local changes/);
+ assert.match(html,/Historical source/);
+ assert.match(html,/Tracked source changes preserved/);
+ assert.match(html,/Needs attention/);
+ assert.match(html,/Configured source/);
+ assert.doesNotMatch(html,/aria-label="Current"|All sources.*current/);
+ assert.match(html,/may still be needed by your bundles/);
+});
+
+test('unknown update remains installable while unknown pins and current status stay distinct',()=>{
+ const html=render({items:[
+   {...component,usage:'unknown'},
+   {id:'pin',label:'Pinned dependency',usage:'unknown',status:'pinned'},
+   {id:'current',label:'Current dependency',usage:'unknown',status:'current'},
+ ]});
+ assert.match(html,/1 available/);
+ assert.match(html,/3 sources: 1 with updates, 1 pinned, 1 current/);
+ assert.match(html,/data-action="updates.install"/);
+ assert.doesNotMatch(html,/disabled="" data-action="updates.install"/);
+ assert.doesNotMatch(html,/Needs attention/);
+});

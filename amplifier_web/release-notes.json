@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.6",
+      "title": "Clearer ecosystem update status",
+      "changes": [
+        "Updates distinguish sources found in shared Amplifier settings from cached sources whose use is unknown, while keeping failures visible and eligible updates available.",
+        "Retained conversation history for missing workspace folders no longer causes a source-configuration warning.",
+        "Verified wiki-weaver build-generated version stamps no longer block ecosystem updates; genuine edits and unrecognized generated changes remain protected."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.5",
       "title": "Updates resume after inspecting runtime settings",
       "changes": [

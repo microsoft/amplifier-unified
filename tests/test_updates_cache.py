@@ -49,9 +49,17 @@ class Runtime:
 
 
 @pytest.fixture
-async def service(tmp_path, monkeypatch):
+async def service(tmp_path, monkeypatch, repository):
+    from amplifier_web import updates
+    original = updates.process
+    async def process(*args, **kwargs):
+        if 'fetch' in args:
+            args = tuple(str(repository) if arg in {'https://example.invalid/repo', 'https://example.invalid/wiki'} else arg for arg in args)
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(updates, 'process', process)
     monkeypatch.setenv('AMPLIFIER_UNIFIED_IMPORT_HOME', str(tmp_path/'no-import'))
     app = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
+    app.state['settings']['bundle'] = 'git+https://example.invalid/repo@main'
     app.update_manager = UpdateManager(app)
     yield app
     await app.close()
@@ -132,7 +140,7 @@ async def test_staging_normalizes_only_verified_artifacts_and_preserves_live_cac
     (cache/'__pycache__/personal-notes.pyc').write_text('keep my notes')
     before = (cache/'AGENTS.md').read_bytes(), (cache/'__pycache__/module.cpython-313.pyc').read_bytes()
     manager = service.update_manager
-    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':str(repository), 'label':'Fixture', 'current':old, 'latest':new, 'ref':'main', 'eligible':True, 'status':'update'}]
+    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':new, 'ref':'main', 'eligible':True, 'status':'update'}]
     async def validate(stage, release):
         staged = stage/'foundation/cache/example'
         assert git(staged, 'rev-parse', 'HEAD') == new
@@ -157,7 +165,7 @@ async def test_source_edit_added_after_check_blocks_staging(repository, service)
     assert (await cache_changes(cache))[0] == []
     (cache/'bundle.py').write_text('a later real source edit\n')
     manager = service.update_manager
-    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':str(repository), 'label':'Fixture', 'current':old, 'latest':old, 'ref':'main', 'eligible':True, 'status':'update'}]
+    manager.inventory = [{'id':'repo', 'path':'cache/example', 'url':'https://example.invalid/repo', 'label':'Fixture', 'current':old, 'latest':old, 'ref':'main', 'eligible':True, 'status':'update'}]
     await manager.install()
     assert service.state['updates']['phase'] == 'error'
     assert not active_release(service.data_dir)
@@ -177,6 +185,280 @@ def test_import_preserves_symlinks_including_external_links(tmp_path, repository
     assert (imported/'AGENTS.md').readlink() == Path('CLAUDE.md')
     assert (imported/'external').is_symlink()
     assert git(imported, 'status', '--porcelain', '--untracked-files=no') == ''
+
+
+def cached(service, repository, name, ref='main'):
+    root = service.data_dir/'foundation/cache'/name
+    shutil.copytree(repository, root, symlinks=True)
+    (root/'.amplifier_cache_meta.json').write_text(json.dumps({
+        'git_url': 'https://example.invalid/'+name, 'ref': ref,
+    }))
+    return root
+
+
+@pytest.mark.parametrize('ref', ['main', 'master'])
+async def test_historical_registry_entries_keep_failures_with_unknown_usage(repository, service, monkeypatch, ref):
+    from amplifier_web import updates, app_updates
+    from amplifier_web.attention import snapshot
+    root = cached(service, repository, 'retired', ref)
+    registry = root.parent.parent/'registry.json'
+    registry.write_text(json.dumps({'bundles': {'retired': {
+        'uri': 'git+https://example.invalid/retired@'+ref,
+        'is_root': True, 'local_path': str(root),
+    }}}))
+    remote_calls = []
+    original = updates.process
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':
+            remote_calls.append(args)
+            raise RuntimeError('Unavailable branch')
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    await service.update_manager.check()
+    row = service.update_manager.inventory[0]
+    assert row['status'] == 'check_failed' and row['usage'] == 'unknown'
+    assert row['eligible']
+    assert len(remote_calls) == 1
+    assert len(snapshot(service.state)['items']) == 1
+    assert root.exists() and registry.exists()
+
+
+async def test_configured_sources_include_scoped_settings_and_session_choices(repository, service, tmp_path):
+    import yaml
+    from amplifier_web.session_files import amplifier_home
+    names = ['repo', 'app', 'module', 'skill', 'workspace', 'session', 'disabled', 'historical']
+    for name in names:
+        cached(service, repository, name)
+    home = service.data_dir
+    shared = amplifier_home()
+    shared.mkdir(parents=True, exist_ok=True)
+    (home/'foundation/registry.json').write_text(json.dumps({'bundles': {
+        name: {'uri': 'git+https://example.invalid/'+name+'@main'} for name in ['app', 'historical']
+    }}))
+    (home/'config').mkdir(exist_ok=True)
+    (shared/'settings.yaml').write_text(yaml.safe_dump({
+        'bundle': {'active': 'git+https://example.invalid/repo@main', 'app': ['app'], 'added': {'disabled': 'git+https://example.invalid/disabled@main'}},
+        'web_bundles': {'excluded': ['disabled']},
+        'sources': {'modules': {'tool-example': 'git+https://example.invalid/module@main'}},
+        'config': {'tools': [{'module': 'tool-skills', 'config': {'skills': ['git+https://example.invalid/skill@main']}}]},
+    }))
+    other = tmp_path/'other-workspace'
+    other.mkdir()
+    snapshot = other/'.amplifier/settings.yaml'
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(yaml.safe_dump({'bundle': {'active': 'git+https://example.invalid/workspace@main'}}))
+    service.state['workspaces'].append({'id': 'other', 'path': str(other)})
+    await service.dispatch('session.create', {'workspace': str(other), 'bundle': 'git+https://example.invalid/session@main'})
+    before = {p: p.read_bytes() for p in (home/'config').rglob('*') if p.is_file()}
+    rows = {r['label'].split('/')[-1]: r for r in await service.update_manager.inventory_sources()}
+    for name in names[:6]:
+        assert rows[name]['eligible'] and rows[name]['usage'] == 'configured', name
+        assert rows[name]['usageEvidence'], name
+    for name in names[6:]:
+        assert rows[name]['usage'] == 'unknown' and rows[name]['eligible'], name
+        assert not rows[name]['usageEvidence'], name
+    assert before == {p: p.read_bytes() for p in (home/'config').rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('failure', ['alias', 'cycle', 'yaml', 'module-shape', 'recursive-yaml'])
+async def test_unresolvable_configuration_does_not_hide_cache_failures(repository, service, monkeypatch, failure):
+    from amplifier_web import updates, app_updates
+    from amplifier_web.session_files import amplifier_home
+    shared = amplifier_home()
+    shared.mkdir(parents=True, exist_ok=True)
+    root = cached(service, repository, 'repo')
+    service.state['settings']['bundle'] = 'missing'
+    if failure == 'cycle':
+        (root.parent.parent/'registry.json').write_text(json.dumps({'bundles': {'missing': {'uri': 'missing'}}}))
+    if failure == 'yaml':
+        (service.data_dir/'config').mkdir(exist_ok=True)
+        (shared/'settings.yaml').write_text('bundle: [')
+    elif failure in {'module-shape', 'recursive-yaml'}:
+        (service.data_dir/'config').mkdir(exist_ok=True)
+        (shared/'settings.yaml').write_text(
+            'config:\n  providers:\n    - source: git+https://example.invalid/repo@main\n'
+            if failure == 'module-shape' else 'config: &cycle\n  children: *cycle\n')
+    original = updates.process
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':raise RuntimeError('Unavailable branch')
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    await service.update_manager.check()
+    rows = service.update_manager.inventory
+    assert any(r['id'] == 'source-configuration' and r['status'] == 'check_failed' for r in rows)
+    row = next(r for r in rows if r.get('path'))
+    assert row['eligible'] and row['status'] == 'check_failed' and row['usage'] == 'unknown'
+    assert root.exists()
+
+
+async def test_uncertain_transitive_module_and_skill_caches_survive_staging(repository, service):
+    active = cached(service, repository, 'repo')
+    module = cached(service, repository, 'transitive-module')
+    skill = cached(service, repository, 'transitive-skill')
+    (module/'bundle.py').write_text('local edit to a transitive module\n')
+    (skill/'untracked.txt').write_text('keep this too\n')
+    manager = service.update_manager
+    rows = await manager.inventory_sources()
+    unknown = next(r for r in rows if r.get('path') == 'cache/transitive-module')
+    assert unknown['status'] == 'local_changes' and unknown['usage'] == 'unknown'
+    assert not unknown['eligible']
+    row = next(r for r in rows if r.get('path') == 'cache/repo')
+    manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
+    async def validate(stage, release):
+        assert (stage/'foundation/cache/transitive-module/bundle.py').read_bytes() == (module/'bundle.py').read_bytes()
+        assert (stage/'foundation/cache/transitive-skill/untracked.txt').read_bytes() == (skill/'untracked.txt').read_bytes()
+    manager.validate = validate
+    await manager.install()
+    assert service.state['updates']['phase'] == 'installed'
+    assert active.exists() and module.exists() and skill.exists()
+
+
+async def test_unregistered_transitive_modules_and_skills_are_checked_and_updated(repository, service, monkeypatch):
+    from amplifier_web import app_updates, updates
+    module = cached(service, repository, 'transitive-module')
+    skill = cached(service, repository, 'skills/transitive-skill')
+    old = git(repository, 'rev-parse', 'HEAD')
+    (repository/'bundle.py').write_text('new upstream value\n')
+    git(repository, 'commit', '-am', 'Updated dependency')
+    new = git(repository, 'rev-parse', 'HEAD')
+    calls = []
+    original = updates.process
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':
+            calls.append(args[2])
+            return new+'\trefs/heads/main'
+        if 'fetch' in args:
+            args = tuple(str(repository) if str(arg).startswith('https://example.invalid/') else arg for arg in args)
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    manager = service.update_manager
+    await manager.check()
+    assert len(calls) == 2
+    assert all(r['usage'] == 'unknown' and r['eligible'] and r['status'] == 'update' for r in manager.inventory)
+    assert service.state['updates']['available'] == 2
+    async def validate(stage, release):
+        for name in ['transitive-module', 'skills/transitive-skill']:
+            assert git(stage/'foundation/cache'/name, 'rev-parse', 'HEAD') == new
+    manager.validate = validate
+    await manager.install()
+    assert service.state['updates']['phase'] == 'installed'
+    for root in [module, skill]:
+        assert git(root, 'rev-parse', 'HEAD') == old
+    assert all(r['status'] == 'current' for r in service.state['updates']['items'] if r.get('usage') == 'unknown')
+
+
+async def test_version_stamp_is_not_exempted_by_filename_or_generated_comment(repository, service):
+    stamp = repository/'package/_version.py'
+    stamp.parent.mkdir()
+    stamp.write_text('# generated by a build backend\n__version__ = "1.0"\n')
+    git(repository, 'add', '.');git(repository, 'commit', '-m', 'Version stamp')
+    root = cached(service, repository, 'repo')
+    (root/'package/_version.py').write_text('# generated by a build backend\n__version__ = "1.1"\n')
+    assert await cache_changes(root) == (['package/_version.py'], [])
+    row = (await service.update_manager.inventory_sources())[0]
+    assert row['status'] == 'local_changes' and not row['eligible']
+    assert 'Tracked source changes' in row['detail']
+    assert 'build' in row['detail'].lower() and 'preserved' in row['detail']
+
+
+async def test_branch_identity_and_nested_copies_are_not_guessed(repository, service):
+    main = cached(service, repository, 'repo')
+    old = main.parent/'old-branch'
+    nested = main.parent/'skills/repo'
+    shutil.copytree(main, old, symlinks=True)
+    shutil.copytree(main, nested, symlinks=True)
+    (old/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'https://example.invalid/repo.git', 'ref': 'master'}))
+    rows = {r['path']: r for r in await service.update_manager.inventory_sources() if r.get('path')}
+    assert rows['cache/repo']['eligible']
+    assert rows['cache/skills/repo']['eligible']
+    assert rows['cache/old-branch']['usage'] == 'unknown' and rows['cache/old-branch']['eligible']
+
+
+async def test_live_workspace_override_is_read_without_import_or_key_loading(repository, service, tmp_path, monkeypatch):
+    from amplifier_web.host import config
+    for name in ['repo', 'project']:
+        cached(service, repository, name)
+    override = tmp_path/'.amplifier'
+    override.mkdir()
+    (override/'settings.local.yaml').write_text('sources:\n  modules:\n    example: git+https://example.invalid/project@main\n')
+    def forbidden(*args):
+        pytest.fail('Inventory must not migrate config or load credentials')
+    monkeypatch.setattr(config, '_load_keys', forbidden)
+    monkeypatch.setattr(config, 'prepare_registry', forbidden)
+    before = {p: p.read_bytes() for p in (service.data_dir/'config').rglob('*') if p.is_file()}
+    rows = await service.update_manager.inventory_sources()
+    assert all(r['eligible'] for r in rows)
+    assert next(r for r in rows if r['label'].endswith('/project'))['usage'] == 'configured'
+    assert before == {p: p.read_bytes() for p in (service.data_dir/'config').rglob('*') if p.is_file()}
+
+
+async def test_configured_unavailable_branch_remains_an_actionable_failure(repository, service, monkeypatch):
+    from amplifier_web import app_updates, updates
+    from amplifier_web.attention import snapshot
+    cached(service, repository, 'repo')
+    original = updates.process
+    async def process(*args, **kwargs):
+        if args[1] == 'ls-remote':return ''
+        return await original(*args, **kwargs)
+    async def application():
+        return {'id': 'application', 'label': 'Application', 'status': 'current'}
+    monkeypatch.setattr(updates, 'process', process)
+    monkeypatch.setattr(app_updates, 'check', application)
+    await service.update_manager.check()
+    assert service.update_manager.inventory[0]['status'] == 'check_failed'
+    assert len(snapshot(service.state)['items']) == 1
+
+
+async def test_changed_cache_identity_invalidates_previously_checked_candidate(repository, service):
+    root = cached(service, repository, 'repo')
+    row = (await service.update_manager.inventory_sources())[0]
+    service.update_manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
+    service.state['settings']['bundle'] = 'git+https://example.invalid/replacement@main'
+    (root/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url': 'https://example.invalid/replacement', 'ref': 'main'}))
+    await service.update_manager.install()
+    assert service.state['updates']['phase'] == 'error'
+    assert not active_release(service.data_dir)
+
+
+async def test_removing_configuration_after_check_does_not_block_update(repository, service):
+    root = cached(service, repository, 'repo')
+    row = (await service.update_manager.inventory_sources())[0]
+    service.update_manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
+    service.state['settings']['bundle'] = 'missing'
+    async def validate(stage, release):
+        assert git(stage/'foundation/cache/repo', 'rev-parse', 'HEAD') == row['current']
+    service.update_manager.validate = validate
+    await service.update_manager.install()
+    assert service.state['updates']['phase'] == 'installed'
+    assert git(root, 'rev-parse', 'HEAD') == row['current']
+
+
+@pytest.mark.parametrize('ref', ['v1.2.3', 'a'*40])
+async def test_unknown_pins_remain_pinned_and_ineligible(repository, service, ref):
+    cached(service, repository, 'pinned-dependency', ref)
+    row = (await service.update_manager.inventory_sources())[0]
+    assert row['usage'] == 'unknown' and row['status'] == 'pinned'
+    assert not row['eligible']
+
+
+def test_grouping_preserves_orthogonal_usage_evidence():
+    from amplifier_web.updates import group_sources
+    row = {'id': 'one', 'kind': 'bundle / module', 'label': 'example.invalid/repo',
+           'ref': 'main', 'current': 'old', 'status': 'check_failed',
+           'usage': 'configured', 'usageEvidence': ['Selected bundle']}
+    rows = group_sources([row, {**row, 'id': 'two', 'usage': 'unknown', 'usageEvidence': []},
+                          {**row, 'id': 'three', 'usageEvidence': ['Enabled app bundle']}])
+    assert len(rows) == 3
+    assert group_sources(rows) == rows
 
 
 # Reviewed upstream hook at cd855a4f21e55a0e58227637c1505e1a695b75e4.
@@ -443,7 +725,7 @@ async def test_wiki_staging_rechecks_and_restores_only_the_copy(wiki_repository,
     manager = service.update_manager
     row = (await manager.inventory_sources())[0]
     assert row['eligible']
-    manager.inventory = [{**row, 'url':str(root), 'latest':new, 'status':'update'}]
+    manager.inventory = [{**row, 'latest':new, 'status':'update'}]
     if late_edit:
         (cache/WIKI_VERSION).write_bytes((cache/WIKI_VERSION).read_bytes() + b'# later user edit\n')
     before = (cache/WIKI_VERSION).read_bytes()

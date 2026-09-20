@@ -54,6 +54,7 @@ def group_sources(items):
             groups[row['id']]=row
             continue
         key=tuple(row.get(k) for k in ('label','ref','current','latest','status'))
+        key = (*key, row.get('usage'), tuple(row.get('usageEvidence', [])))
         if key in groups:
             groups[key]['cacheCopies']+=row.get('cacheCopies',1)
         else:
@@ -65,6 +66,96 @@ def group_sources(items):
 
 def pinned(ref):
     return bool(re.fullmatch(r'[0-9a-fA-F]{7,40}', ref) or re.match(r'^(refs/tags/|v?\d+\.)', ref))
+
+
+def source_key(url, ref):
+    """Compare repository/ref identity, never infer that main and master agree."""
+    parsed = urlsplit(url)
+    if parsed.scheme not in {'https', 'http', 'ssh'} or not parsed.hostname or not isinstance(ref, str) or not ref:
+        raise ValueError('Unsupported Git source')
+    return (parsed._replace(path=parsed.path.rstrip('/').removesuffix('.git'), fragment='').geturl(),
+            ref.removeprefix('refs/heads/'))
+
+
+def configured_sources(service):
+    """Positive configuration evidence only, NOT a reachability/garbage collector.
+
+    Registry entries resolve selected names; their mere presence proves nothing.
+    Dynamic/transitive dependencies and local bundle contents remain unknown.
+    Never prepare a bundle, import credentials or mutate configuration here.
+    """
+    from .host.config import read_config
+    import yaml
+    sources, incomplete = {}, False
+    state, home = service.state, service.data_dir
+    selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
+    selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
+                      for s in state['sessions'])
+    selections.update((w['path'], None, None) for w in state.get('workspaces', []))
+    try:
+        path = foundation_home(home)/'registry.json'
+        registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
+        if not isinstance(registry, dict):raise ValueError('Invalid registry')
+    except (OSError, ValueError, AttributeError):
+        registry, incomplete = {}, True
+
+    for workspace, selected, session_id in selections:
+        try:
+            # Missing registrations and saved sessions remain available for
+            # history. Their unavailable directories are not configuration errors.
+            if not Path(workspace).expanduser().is_dir():continue
+            config = read_config(workspace, home=home, session_id=session_id)
+            registrations = {name: row['uri'] for name, row in registry.items()
+                             if isinstance(row, dict) and isinstance(row.get('uri'), str)}
+            configured = dict(config.registrations)
+            if 'foundation' in registry:configured.pop('foundation', None)
+            registrations.update(configured)
+
+            def resolve(reference, evidence, seen=frozenset()):
+                nonlocal incomplete
+                if not isinstance(reference, str) or not reference or reference in seen:
+                    incomplete = True
+                    return
+                if reference.startswith('git+'):
+                    parsed = urlsplit(reference[4:])
+                    path, separator, ref = parsed.path.rpartition('@')
+                    url = parsed._replace(path=path if separator else parsed.path, fragment='').geturl()
+                    sources.setdefault(source_key(url, ref if separator else 'HEAD'), set()).add(evidence)
+                    return
+                # Match the host's local-before-registry preference. Local files
+                # may contain arbitrary includes; don't guess their dependencies.
+                local = Path(reference.removeprefix('file://')).expanduser()
+                if not local.is_absolute():local = config.workspace/local
+                if any(p.exists() for p in (local, home/'bundles'/reference,
+                        home/'bundles'/(reference+'.md'), config.workspace/'.amplifier-unified/bundles'/reference)):
+                    return
+                namespace = reference.split(':', 1)[0]
+                replacement = config.resolve_source(reference) or registrations.get(namespace)
+                if replacement:
+                    resolve(replacement, evidence, seen | {reference})
+                else:
+                    incomplete = True
+
+            # Do not walk added/registered bundle lists: those are catalogs.
+            resolve(selected or config.active_bundle, 'Selected bundle')
+            for reference in config.app_bundles:
+                resolve(reference, 'Enabled app bundle')
+            for reference in config.module_sources.values():
+                resolve(reference, 'Module source configuration')
+
+            def configured_git_values(value):
+                # Module config can declare skill sources (and other plugins'
+                # Git inputs). Only explicit Git URIs are positive evidence.
+                if isinstance(value, dict):
+                    for child in value.values():configured_git_values(child)
+                elif isinstance(value, list):
+                    for child in value:configured_git_values(child)
+                elif isinstance(value, str) and value.startswith('git+'):
+                    resolve(value, 'Git input in module configuration')
+            configured_git_values(config.settings.get('config', {}))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, yaml.YAMLError):
+            incomplete = True
+    return sources, incomplete
 
 
 async def process(*args, cwd=None, env=None, timeout=90, raw=False):
@@ -313,6 +404,7 @@ class UpdateManager:
 
     async def inventory_sources(self):
         base = foundation_home(self.home)
+        configured, incomplete = configured_sources(self.service)
         rows = []
         for meta in sorted((base/'cache').rglob('.amplifier_cache_meta.json')):
             # Each cache may include nested skills copies. All are app-owned;
@@ -327,13 +419,21 @@ class UpdateManager:
                 relative = str(root.relative_to(base))
                 identity = hashlib.sha256(relative.encode()).hexdigest()[:20]
                 current = await process('git','rev-parse','HEAD',cwd=root,timeout=10)
+                evidence = sorted(configured.get(source_key(url, ref), ()))
                 dirty, _ = await cache_changes(root)
                 rows.append({'id':identity,'label':safe_label(url),'ref':ref,'current':current,
                     'status':'local_changes' if dirty else 'pinned' if pinned(ref) else 'not_checked',
+                    'usage':'configured' if evidence else 'unknown','usageEvidence':evidence,
+                    **({'detail':'Tracked source changes are preserved and block automatic updates. Builds can also modify tracked files (including version stamps); without verified provenance these changes are not discarded.'} if dirty else {}),
                     'path':relative,'url':url,'kind':'bundle / module','eligible':not dirty and not pinned(ref)})
             except (ValueError, KeyError, RuntimeError, TimeoutError):
                 rows.append({'id':hashlib.sha256(str(root).encode()).hexdigest()[:20],
-                    'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source'})
+                    'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source',
+                    'usage':'unknown','usageEvidence':[]})
+        if incomplete:
+            rows.append({'id':'source-configuration','label':'Source configuration','status':'check_failed',
+                'eligible':False,'kind':'configuration',
+                'detail':'Some selected sources or workspace settings could not be resolved read-only. Usage classification is incomplete; cached-source checks and update eligibility are unchanged. Review source configuration.'})
         return rows
 
     def protected_items(self):
@@ -360,7 +460,7 @@ class UpdateManager:
     async def check(self):
         if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
         async with self.lock:
-            await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking configured ecosystem sources…', error=None)
+            await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking cached ecosystem sources…', error=None)
             try:
                 rows = await self.inventory_sources()
                 semaphore = asyncio.Semaphore(5)
@@ -403,7 +503,7 @@ class UpdateManager:
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
                     items=public+self.protected_items()+[application],application=application,appAvailable=app_available,
                     available=sum(r['status']=='update' for r in public)+int(app_available),
-                    lastCheck=time.time(), detail='Check complete. Pins and failed checks are listed separately.')
+                    lastCheck=time.time(), detail='Check complete. Pins, failed checks and caches with unknown usage are listed separately.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
@@ -464,6 +564,10 @@ class UpdateManager:
                     current=await process('git','rev-parse','HEAD',cwd=target)
                     dirty,artifacts=await cache_changes(target)
                     if dirty or current!=row['current']: raise ValueError('Source changed since check')
+                    meta=target/'.amplifier_cache_meta.json'
+                    data=json.loads(meta.read_text())
+                    if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
+                        raise ValueError('Source identity changed since check')
                     if artifacts:
                         # Restore only verified tracked artifacts in this copy.
                         # Rechecking here also protects edits made after check.
@@ -471,8 +575,7 @@ class UpdateManager:
                     await self.publish(detail='Downloading '+row['label']+'…')
                     await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
                     await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
-                    meta=target/'.amplifier_cache_meta.json'
-                    data=json.loads(meta.read_text());data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
+                    data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
                     meta.write_text(json.dumps(data))
                 await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
                 await self.validate(stage,release)
