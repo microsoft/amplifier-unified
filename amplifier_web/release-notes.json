@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.17.0",
+      "title": "Stable workspace and chat navigation",
+      "changes": [
+        "Workspace and chat rows keep a fixed height when hovered. Details and actions open in a flyout with full names, copyable paths, session IDs and last activity.",
+        "See working, attention and unread indicators directly in the list, and filter working conversations or those needing attention across the complete matching library.",
+        "Find workspaces through recent activity or browse nested folders, then open a workspace to give its chats the full sidebar. Duplicate folder names retain distinguishing parent paths.",
+        "Keyboard and touch controls, narrow screens and saved themes retain accessible details and actions. Browsing and opening details leave conversation selection, unread state and activity order unchanged.",
+        "Failed conversations can also be diagnosed and continued in a safe recovery copy, preserving the original history without replaying work."
+      ],
+      "notices": [
+        {
+          "id": "navigation-details-and-drill-in",
+          "title": "Navigation details and actions moved",
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+        }
+      ]
+    },
+    {
       "version": "0.15.3",
       "title": "Conversation export, execution details and feedback follow-up",
       "changes": [
