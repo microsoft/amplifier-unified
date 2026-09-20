@@ -27,7 +27,7 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-amplifier-module-loop-live = { git = "https://github.com/bkrabach/amplifier-module-loop-live", rev = "7a2a9b9ed0ddf2f1927f5d0e7aba42698c1e4c8d" }
+amplifier-module-loop-live = { git = "https://github.com/bkrabach/amplifier-module-loop-live", rev = "11a730ac24463cb5bea8bd65385f494aa8f0f454" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "695f875c0908f45f8dc78b1fcde80ecddebffd7c" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "603aa6eefacd28367fc886d58eb89de993c58dea" }
 amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6" }
