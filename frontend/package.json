@@ -27,7 +27,11 @@
     "test:ownership-browser": "node tests/ownership-browser.mjs",
     "test:shell-browser": "node tests/shell-browser.mjs",
     "build:shell-example": "node scripts/build-shell-example.mjs",
-    "test:live-clients-browser": "node tests/live-clients-browser.mjs"
+    "test:live-clients-browser": "node tests/live-clients-browser.mjs",
+    "test:review-during-send-browser": "node tests/review-during-send-browser.mjs",
+    "test:typing-audit-browser": "node tests/typing-audit-browser.mjs",
+    "test:bootstrap-recovery-browser": "node tests/bootstrap-recovery-browser.mjs",
+    "test:empty-host-browser": "node tests/empty-host-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
