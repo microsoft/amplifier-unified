@@ -88,7 +88,7 @@ class Schedules:
         return {key: copy.deepcopy(args[key]) for key in ('prompt', 'kind', 'missedRunPolicy', 'notificationPolicy')} | {'spec': normalize(args['spec'])}
 
     def reviewed(self, sid, config, task):
-        binding = {'sessionId': sid, 'taskId': task['id'], 'taskRevision': task['revision'], 'interruptionRevision': self.app._session(sid).get('interruptionRevision', 0), **config}
+        binding = {'sessionId': sid, 'taskId': task['id'], 'taskRevision': task['revision'], 'interruptionRevision': self.app._session(sid).get('interruptionRevision', 0), 'executionRevision': self.app._session(sid).get('executionRevision', 0), **config}
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
     def authorization(self, sid, args, origin, *, previous=None):
@@ -165,6 +165,10 @@ class Schedules:
             return result
 
     def dependency_reason(self, session, task, schedule):
+        if session.get('configurationBusy'):
+            return 'This task has an unresolved configuration change or execution-folder handoff.'
+        if session.get('executionRevision', 0) != schedule.get('executionRevision', 0):
+            return 'The task execution folder changed. Review the schedule for its current checkout.'
         if session.get('interruptionRevision', 0) != schedule['interruptionRevision']:
             return 'The user stopped this conversation. Review the schedule before resuming.'
         authorization = schedule.get('authorization', {})
@@ -195,7 +199,7 @@ class Schedules:
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
             session = self.app._session(sid)
-            if session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
+            if session.get('configurationBusy') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             try:
                 task = await self.task(sid)
             except Exception as exc:
@@ -220,7 +224,7 @@ class Schedules:
                 if run['phase'] == 'skipped': self.changed(); continue
                 # This is the durable handoff boundary. A crash from this point
                 # leaves an uncertain input; retries never send it again.
-                run = self.store.transition(sid, run['id'], ['claimed'], 'submitting', self.clock(), interruptionRevision=current['interruptionRevision'])
+                run = self.store.transition(sid, run['id'], ['claimed'], 'submitting', self.clock(), interruptionRevision=current['interruptionRevision'], executionRevision=current.get('executionRevision', 0))
                 text = current['prompt']
                 if current['kind'] == 'monitor':
                     text += '\n\nScheduled monitor run ' + run['id'] + '. Inspect schedule.read for prior compared values, then record this run with schedule.report and actual values when available. Label evidence accurately; an unchanged claim is not proof. Do not complete the overall task merely because this run ends.'
@@ -235,6 +239,8 @@ class Schedules:
                 def guard():
                     latest = self.store.get(sid, current['id'])
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
+                    owner = self.app._session(sid)
+                    if owner.get('configurationBusy') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task execution folder changed or is moving; this occurrence was skipped.'
                     if latest['status'] != 'active' or latest['revision'] != current['revision']: return 'The schedule changed before admission.'
                     if self.app._session(sid).get('interruptionRevision', 0) != current['interruptionRevision']: return 'The user stop won input admission; this occurrence was skipped.'
                     return None
