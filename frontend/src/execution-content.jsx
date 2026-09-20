@@ -2,7 +2,7 @@ import React,{useEffect,useState} from 'react';
 import {Check,Circle,Copy,LoaderCircle} from 'lucide-react';
 import {request} from './api';
 import {readDetail} from './detail-read';
-import {detailLinks} from './timeline-data';
+import {detailLinks,elapsedLabel,isRunning,usageLabel} from './timeline-data';
 import {textValue,record} from './execution-content.js';
 
 export function useExecutionField(node,field,open){
@@ -62,5 +62,19 @@ export function ToolContent({node,action,input,output,error}){
  return <>{content}{Object.keys(extra).length>0&&<ExecutionBlock label="Arguments" text={textValue(extra)} loading={input.incomplete}/>}<ExecutionBlock label="Result details" text={used&&Object.keys(details).length?textValue(details):null}/><ExecutionBlock label="Error" text={error.value??(a.kind!=='generic'&&a.kind!=='app'&&Object.hasOwn(record(a.result),'output')?a.result.error:null)} loading={error.incomplete}/>{[['Input',input],['Result',output],['Error',error]].map(([label,field])=><FieldStatus key={label} label={label} field={field}/>)}
   {detailLinks(output.value).map(url=><a key={url} className="a-execution-result-link" href={url} target="_blank" rel="noopener noreferrer">{url}</a>)}
   {input.value==null&&output.value==null&&error.value==null&&!input.loading&&!output.loading&&!error.loading&&<small>{a.running?'Waiting for the event log…':'No action content is available in the event log.'}</small>}
+ </>;
+}
+
+const requestLabels={message_count:'Messages',tool_count:'Tools',has_instructions:'Instructions',has_system:'System message',reasoning_enabled:'Reasoning enabled',thinking_enabled:'Thinking enabled',thinking_budget:'Thinking budget',background_mode:'Background mode',stream:'Streaming',max_tokens:'Maximum tokens',max_output_tokens:'Maximum output tokens',temperature:'Temperature',top_p:'Top P',parallel_tool_calls:'Parallel tool calls',tool_choice:'Tool choice',purpose:'Purpose',reasoning_effort:'Reasoning effort'};
+export function ModelContent({node,request,error,requestOpen,toggleRequest,now}){
+ const formatTime=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
+ const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',elapsedLabel(node,now)],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
+ const usage=usageLabel(node.usage,{pending:isRunning(node)});
+ return <><dl className="a-execution-model-facts">{facts.map(([label,value])=><React.Fragment key={label}><dt>{label}</dt><dd>{String(value)}</dd></React.Fragment>)}</dl>
+  {usage&&<p className="a-execution-model-usage">{usage.title}</p>}
+  <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
+  {node.requestDetail?<><button type="button" className="a-link a-execution-request-toggle" data-action="view.update" aria-expanded={requestOpen} onClick={toggleRequest}>{requestOpen?'Hide raw request':'Load raw request'}{!requestOpen&&` · ${node.requestDetail.length.toLocaleString()} characters`}</button>
+   {requestOpen&&<><ExecutionBlock label="Raw request" text={request.value} loading={request.incomplete}/><FieldStatus label="Request" field={request}/></>}
+  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'The event log does not contain a raw request for this call.'}</small>}
  </>;
 }

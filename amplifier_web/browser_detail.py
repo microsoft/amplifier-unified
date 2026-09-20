@@ -14,9 +14,9 @@ SUMMARY_LIMIT=512
 def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
-    fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle'}
+    fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
-    for field in ('input', 'output', 'error'):
+    for field in ('input', 'output', 'error', 'request'):
         if row.get('_eventFields', {}).get(field) and row.get(field + 'Detail'):
             result[field + 'Detail'] = row[field + 'Detail']
     for field in ('text','summary','detail','report','result','input','output','error'):
@@ -121,7 +121,7 @@ def project(session):
 
 def read_text(session, args):
     part=args.get('part');field=args.get('field')
-    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error'}:
+    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error','request'}:
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)

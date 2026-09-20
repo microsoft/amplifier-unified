@@ -25,7 +25,8 @@ test('streaming new work does not rename earlier segments or shift them past an 
 });
 test('small records do not create meaningless disclosure controls',()=>{
  assert.ok(workSize(data.nodes.slice(0,2))<=15);
- assert.ok(workSize([{kind:'tool',input:'command',output:'x\n'.repeat(20)}])>15);
+ assert.equal(workSize([{kind:'tool',input:'command',output:'x\n'.repeat(20)}]),1);
+ assert.ok(workSize(Array.from({length:16},()=>({kind:'tool'})))>15);
 });
 test('canonical segment totals include earlier action pages without moving anchors',()=>{
  const grouped=splitWork(messages,{...data,nodes:[data.nodes[0]],segments:[{id:'turn@user',anchorMessageId:'user',startedAt:2,endedAt:9,phase:'completed',nodeCounts:{tools:90,models:100},aggregateUsage:{totalTokens:5000,costUsd:1}}]});

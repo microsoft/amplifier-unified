@@ -114,7 +114,13 @@ async def main():
                         {'id':'interim','role':'assistant','text':'The first check passed. I am inspecting the remaining files.','createdAt':base+10},
                         {'id':'final','role':'assistant','text':'The review is complete.','createdAt':base+20}],execution={'nodes':[],'turns':[]})
                     tool('brief','bash',{'command':'git diff --check'},{'success':True,'output':{'stdout':'','stderr':'','returncode':0}},1,2)
-                    log_hook(aid,'llm:response',{'request_id':'first','model':'fixture','duration_ms':1000,'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
+                    raw={'model':'fixture','instructions':'Owner-recorded instructions',
+                         'input':[{'role':'user','content':'Recorded message '+str(i)+' '+('content '*100)} for i in range(100)],
+                         'tools':[{'name':'read_file'},{'name':'bash'}], 'reasoning':{'effort':'high'}, 'max_output_tokens':4096}
+                    log_hook(aid,'provider:request',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'phase':'running'},base+3)
+                    log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':raw},base+3)
+                    log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
+                    log_hook(aid,'llm:response',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'endedAt':base+4,'phase':'completed','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'}},base+4)
                     for count,start in [(15,11),(16,13)]:
                         tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
                              {'success':True,'output':{'content':'\n'.join('Line '+str(i) for i in range(1,count+1))}},start,start+1)

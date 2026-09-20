@@ -11,7 +11,8 @@ const control=async body=>{const response=await fetch(base+'/api/fixture/control
 await control({op:'canonical-work'});
 const browser=await chromium.launch({headless:true});
 try{
- const page=await browser.newPage({viewport:{width:1280,height:1050},extraHTTPHeaders:headers}),errors=[];
+ const page=await browser.newPage({viewport:{width:1280,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:headers}),errors=[],requestReads=[];
+ page.on('request',r=>{if(r.url().includes('/api/conversation/detail?')&&new URL(r.url()).searchParams.get('field')==='request')requestReads.push(r.url())});
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
  const groups=page.locator('[data-group-id]'),before=page.locator('[data-group-id$="@before"]'),interim=page.locator('[data-group-id$="@interim"]');
@@ -21,15 +22,34 @@ try{
  assert.equal(await before.locator('button.a-execution-turn-line').count(),0);
  assert.match(await before.innerText(),/git diff --check/);
  assert.match(await before.locator('.a-execution-turn-line').innerText(),/Worked for 3s[\s\S]*12 tokens.*\$0.001/);
- await interim.locator('button.a-execution-turn-line').click();
+ assert.equal(await interim.locator('button.a-execution-turn-line').count(),0);
  const action=id=>page.locator(`[data-node-id$=":${id}"]`),read15=action('read15'),read16=action('read16');
+ assert.equal(await page.locator('.a-execution-body').count(),0);
+ assert.match(await action('brief').innerText(),/Ran git diff --check/);
+ await read15.locator('button.a-execution-action-line').click();await read16.locator('button.a-execution-action-line').click();
  assert.equal(await read15.locator('pre').innerText(),Array.from({length:15},(_,i)=>'Line '+(i+1)).join('\n'));
  assert.equal(await read15.getByRole('button',{name:/Show all/}).count(),0);
  assert.equal(await read16.locator('pre').innerText(),Array.from({length:10},(_,i)=>'Line '+(i+1)).join('\n'));
  await read16.getByRole('button',{name:'Show all 16 lines'}).click();assert.match(await read16.innerText(),/Line 16/);
- assert.equal(await page.locator('.a-execution-node > button, .a-execution-content details').count(),0);
+ assert.equal(await page.locator('.a-execution-content details').count(),0);
+ await action('owned').locator('button.a-execution-action-line').click();
  assert.match(await action('owned').innerText(),/Bearer owner-recorded-value/);
  assert.equal((await action('owned').innerText()).split('The full result is already here').length-1,1);
+ const model=before.locator('[data-kind="llm"]');
+ assert.equal(await model.locator('.a-execution-body').count(),0);assert.equal(requestReads.length,0);
+ await model.locator('button.a-execution-action-line').click();
+ assert.match(await model.innerText(),/Messages\s+100/);assert.match(await model.innerText(),/Tools\s+2/);assert.match(await model.innerText(),/Reasoning effort\s+high/);
+ assert.equal(requestReads.length,0);assert.equal(await model.locator('pre').count(),0);
+ let failRequest=true;await page.route('**/api/conversation/detail?**',route=>{if(failRequest&&new URL(route.request().url()).searchParams.get('field')==='request'){failRequest=false;return route.fulfill({status:503,json:{error:'Request temporarily unavailable'}})}return route.continue()});
+ await model.getByRole('button',{name:/Load raw request/}).click();await model.getByRole('button',{name:'Retry request',exact:true}).click();
+ await expect(model.getByRole('button',{name:'Copy raw request',exact:true})).toBeEnabled();
+ assert.equal((await model.locator('pre').innerText()).split('\n').length,10);
+ await model.getByRole('button',{name:/Show all .* lines/}).click();assert.match(await model.locator('pre').innerText(),/Recorded message 99/);
+ await model.getByRole('button',{name:'Copy raw request',exact:true}).click();const copied=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
+ assert.equal(copied.input.length,100);assert.equal(copied.instructions,'Owner-recorded instructions');assert.equal(requestReads.length,2);
+ await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
+ await model.getByRole('button',{name:'Hide raw request',exact:true}).click();
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/does not contain a raw request/);
  await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  assert.equal(await page.locator('[data-group-id$="@final"] button.a-execution-turn-line').count(),0);
@@ -50,5 +70,5 @@ try{
  await page.setViewportSize({width:390,height:844});await before.scrollIntoViewIfNeeded();await page.mouse.move(380,830);await page.waitForTimeout(400);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-canonical-work-mobile.png'});
  assert.deepEqual(errors,[]);
- console.log('Existing native logs render in message order; 15 lines stay whole and 16 preview 10; brief groups have no disclosure; owner data appears once; appended work, three summary levels, reload and mobile pass.');
+ console.log('Collapsed one-line actions and richer grouped model details pass; raw requests are lazy, complete, retryable and copyable; 15/10 previews, ordering, shared expansion, reload and mobile pass.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}
