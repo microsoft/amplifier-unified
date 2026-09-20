@@ -47,7 +47,7 @@ const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?v
 const initialSetup={title:'A new conversation',bundle:'anchors',workspace:''};
 function App(){
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[sending,setSending]=useState(null),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Converge'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView());
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -181,11 +181,20 @@ function App(){
   window.addEventListener('keydown',handler);
   return()=>{window.removeEventListener('keydown',handler);if(previous?.isConnected)previous.focus()};
  },[panel,act]);
- function editDraft(value){const sessionId=latest.current?.selectedSessionId??null;setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value},sessionId);if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value},sessionId})},220)}
+ function preserveOtherDraft(sessionId){
+  const payload=stagedDraftPayload.current;
+  if(!stagedDraft.current||payload?.sessionId===sessionId)return;
+  // A new chat's edit/send must not cancel the previous chat's unsaved debounce.
+  // Queue its explicitly bound save without blocking independent navigation.
+  clearTimeout(draftTimer.current);act('view.update',payload);
+  pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;
+ }
+ function editDraft(value){const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value},sessionId);stagedDraftPayload.current={patch:{draft:value},sessionId};if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value},sessionId})},220)}
  async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>result.state.sessions.find(row=>row.id===result.state.selectedSessionId)).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=ensureSession();uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{const current=await target;for(const file of files)await dispatch('attachment.add',{sessionId:current.id,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
  async function send(e){
   e?.preventDefault();if((!draft.trim()&&!session?.draftAttachments?.length)||uploadCount.current||busy||sending||historyPending||executionUnavailable)return;
+  preserveOtherDraft(session?.id??null);
   const submittedText=draft,submittedToken=stagedDraft.current,id=crypto.randomUUID();chatScroll.current?.reveal();clearTimeout(draftTimer.current);setError('');
   setSending({sessionId:session?.id,id,text:submittedText});
   try{

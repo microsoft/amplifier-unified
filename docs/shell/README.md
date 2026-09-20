@@ -397,3 +397,9 @@ content and surfaces from compact client records after a host restart. This
 branch applies the same behavior to its pinned-view resource endpoint. Large
 HTML/Babylon bodies remain indirect. The restart proof is
 `node frontend/tests/canvas-restart-browser.mjs`; run it from the repository root.
+
+The separate composer preservation fix (PR #79) is also included: an edit or
+send in a different chat first queues the previous staged draft with its original
+session and payload. It does not delay navigation behind general requests.
+The controlled debounce regression checks both host-saved drafts, sends once to
+the intended chat, and confirms a canceled timer cannot restore a sent draft.
