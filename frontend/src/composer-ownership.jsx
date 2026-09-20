@@ -11,7 +11,8 @@ export function ComposerOwnership({session,runtimeAvailable=true,dispatch,childr
  currentId.current=id;
  const requesting=request===id,blocked=ownership.blocked||requesting;
  const unavailable=session?.workspaceAvailable===false?'This workspace is unavailable. Restore access to it before continuing.':session?.historyReadOnlyReason||(!runtimeAvailable?'The Amplifier runtime is unavailable. Check Settings before trying again.':'');
- const error=failure?.id===id?failure.message:'';
+ const error=failure&&failure.id===id?failure.message:'';
+ useEffect(()=>setFailure(null),[id,session?.ownership?.status,session?.ownership?.reason,session?.ownership?.detail]);
  useEffect(()=>{
   if(blocked||requested.current!==id)return;
   requested.current=null;

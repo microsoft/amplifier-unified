@@ -1287,6 +1287,8 @@ class AppService:
                     from .session_ownership import blocked
                     blocked(current, exc.owner, detail=str(exc))
                 else:
+                    # Failure does not establish ownership. Keep the shared
+                    # read-only gate until an explicit retry succeeds.
                     current['ownership'] = {'status': 'blocked', 'reason': 'takeover-failed', 'detail': str(exc)}
                     current.update(status='error', error=str(exc))
                 self._publish()

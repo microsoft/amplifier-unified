@@ -2,6 +2,7 @@
 import asyncio
 from pathlib import Path
 import tempfile
+import time
 from aiohttp import web
 import settings_ui_server as fixture
 from amplifier_web.runtime import SessionInUseError
@@ -39,7 +40,7 @@ async def main(home):
     app['service'].state['updates'].update(items=[], available=0)
     service = app['service']
     service._session(service.state['selectedSessionId'])['messages'].append({
-        'id': 'saved-history', 'role': 'assistant', 'text': 'Saved history stays readable.'})
+        'id': 'saved-history', 'role': 'assistant', 'text': 'Saved history stays readable.', 'createdAt': time.time()})
     async def ownership(request):
         args = await request.json()
         runtime = service.runtime

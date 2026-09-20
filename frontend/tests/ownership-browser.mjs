@@ -81,6 +81,7 @@ try{
  // Unsupported owners, in-progress yield, and failed cleanup all stay honest.
  await configure({supportsTakeover:false});
  await expect(access).toContainText('does not support takeover requests');
+ await expect(access.getByRole('alert'),'old connection failure clears when host ownership changes').toHaveCount(0);
  await expect(takeover).toBeEnabled();
  for(const status of ['yielding','yield-failed']){
   await configure({status,detail:status==='yield-failed'?'Cleanup needs attention.':undefined});
