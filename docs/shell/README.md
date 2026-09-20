@@ -334,7 +334,9 @@ composer target, binding or generation. These parent operations return HTTP 409
 with code `canvas_view_dirty`; existing view-specific replacements return their
 deferred result. A dirty pinned secondary can remain mounted through primary
 artifact and chat navigation. Shared chat deletion checks affected clients too,
-and MCP App loading rechecks after asynchronous resource I/O. Finish or cancel
+and MCP App loading rechecks after asynchronous resource I/O. The browser
+navigation queue waits for preceding dirty declarations so an immediate chat
+switch cannot overtake the edit report. Finish or cancel
 the edit in its renderer before retrying, or explicitly recover that view to
 discard its local edit while retaining the saved artifact. Dirty state is a
 navigation guard, not persistence of arbitrary React state across a page reload.
@@ -367,8 +369,9 @@ and narrow-layout screenshots and structured evidence are written under
 The dirty-view proof validates and loads a minimal editor whose text exists only
 in React state. It verifies Library hide/show retains the same input element,
 panel-close refusal, a pinned dirty edit surviving primary/chat navigation,
-primary transitions leaving drafts and binding generations unchanged, and
-explicit targeted recovery followed by close/reopen.
+primary transitions leaving drafts and binding generations unchanged, a chat
+switch racing a delayed dirty declaration, and explicit targeted recovery
+followed by close/reopen.
 
 The MCP proof uses an independently authored official-SDK counter app and a
 real local MCP tool server. A delayed accepted tool action finishes once while
@@ -379,15 +382,15 @@ make no real provider/model calls; they do not prove voice continuity or every
 third-party renderer's behavior. This branch does not restart a user preview,
 publish a release or change the application version.
 
-Verification with 0.11.9 and saved-body restoration: **1,065 Python tests passed, 11 skipped**,
-and **154 frontend unit tests passed**. The production build, renderer hot-load
-proof, MCP App proof, navigation shell proof, existing canvas and saved-artifact
-browser suites, panel-layout, empty-host and live-client browser suites passed.
-The source distribution and wheel built and passed release verification.
-The eight browser suites passed with the 0.11.7 integration. After integrating
-the configuration and storage fixes, the frontend was rebuilt and the renderer,
-actual-host-restart and MCP App browser proofs passed again. The renderer proof
-also exercises the recovery startup URL, including accurate fallback/ready status.
+Verification with main at 0.11.11 (`b804878`) and the dirty-view repair:
+**1,104 Python tests passed, 11 skipped**, and **154 frontend unit tests passed**.
+The production build and ten browser suites passed: dirty-view navigation,
+renderer hot loading, MCP Apps, navigation shell, canvas, saved artifacts,
+panel layout, actual host restart, empty host and live clients. The final
+navigation-queue refinement additionally reruns dirty-view, shell, live-client
+and review-during-send coverage. The source distribution and wheel built and
+passed release verification. The renderer proof also exercises recovery
+startup, including accurate fallback/ready status.
 
 The independently consumable saved-body restore fix (PR #76) restores ordinary
 content and surfaces from compact client records after a host restart. This

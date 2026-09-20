@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.11",
+      "title": "Reliable restart recovery and saved conversations",
+      "changes": [
+        "Invalid saved restart receipts no longer leave conversations and update actions blocked; the interrupted attempt remains recorded without claiming restart success.",
+        "Saved documents, diagrams, images and interactive surfaces reopen with their retained content after a host restart, while preserving conversation selection and unsent drafts.",
+        "Voice corrections are delivered to the existing conversation with their original request and approval boundaries intact.",
+        "Recovered background-work evidence is clearly labeled as a service update, while messages actually typed by the user retain their original attribution.",
+        "An older saved provider selection can resume through a uniquely matching configured instance of the same provider and model, preserving its saved reasoning effort."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.11.10",
+      "title": "Reliable provider settings and connection checks",
+      "changes": [
+        "Provider settings, model discovery and connection checks start correctly in the isolated runtime used by installed applications.",
+        "A provider helper that exits without a result now reports the exit status and recovery guidance instead of incorrectly saying dependencies are still installing."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.9",
       "title": "Preserve canvas resources across clients",
       "changes": [

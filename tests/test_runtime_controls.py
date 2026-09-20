@@ -7,6 +7,53 @@ import pytest
 from amplifier_web.runtime_controls import public_config, restore_redactions, validate_plan
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['unique', 'ambiguous', 'different-model', 'different-family', 'existing'])
+async def test_saved_provider_family_migration_preserves_model_and_effort(tmp_path, monkeypatch, case):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.runtime_controls import RuntimeControls
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    class Provider:
+        def __init__(self, family='openai', model='saved-model'):
+            self.family, self.model = family, model
+        async def get_info(self):
+            return {'id':self.family, 'defaults':{'model':self.model}}
+    providers = {'terra':Provider(), 'other':Provider(model='another-model')}
+    if case == 'ambiguous': providers['duplicate'] = Provider()
+    if case == 'different-model': providers['terra'] = Provider(model='changed-model')
+    if case == 'different-family': providers['terra'] = Provider(family='openai-chatgpt')
+    if case == 'existing': providers['openai'] = Provider(model='different-default')
+    loop = SimpleNamespace(root_provider=None)
+    class Coordinator:
+        config = {'providers':[]}
+        session_state = {}
+        def get(self, name): return {'providers':providers, 'orchestrator':loop}.get(name)
+        def get_capability(self, name): return None
+        def register_capability(self, *args): pass
+    controls = RuntimeControls(SimpleNamespace(session_id='restored', coordinator=Coordinator()),
+                               SimpleNamespace(generation=None, queued_inputs=0))
+    selection = {'instance':'openai', 'model':'saved-model', 'effort':'high'}
+    controls.state_path().parent.mkdir(parents=True)
+    controls.state_path().write_text(json.dumps({'selection':selection}))
+    if case in {'unique', 'existing'}:
+        await controls.restore()
+        expected = {**selection, 'instance':'terra' if case == 'unique' else 'openai'}
+        assert controls.selection == expected
+        assert loop.root_provider.original is providers[expected['instance']]
+        assert loop.root_provider.selection == expected
+        assert json.loads(controls.state_path().read_text())['selection'] == expected
+        # Restart uses the now stable instance ID without another migration.
+        await controls.restore()
+        assert controls.selection == expected
+    else:
+        with pytest.raises(ValueError, match='available provider instance'):
+            await controls.restore()
+        assert loop.root_provider is None
+        assert json.loads(controls.state_path().read_text())['selection'] == selection
+    await controls.close()
+
+
 class ControlsTests(unittest.TestCase):
     def test_redacted_secrets_restore_by_instance_after_reordering(self):
         old={'providers':[{'module':'provider-test','id':'a','config':{'api_key':'private-a','max_tokens':400}},

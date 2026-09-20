@@ -6,6 +6,12 @@ import json
 import os
 import sys
 
+# This file is launched by path in the isolated runtime, where the host package
+# is not installed. Expose only app code, never the host's site-packages.
+if not __package__:
+    from runtime_bootstrap import bootstrap_app_package
+    bootstrap_app_package()
+
 from amplifier_web.provider_environment import (
     close_provider,
     config_schema,

@@ -47,7 +47,7 @@ const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?v
 const initialSetup={title:'A new conversation',bundle:'anchors',workspace:''};
 function App(){
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[sending,setSending]=useState(null),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Converge'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView());
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -93,7 +93,10 @@ function App(){
   const pending=action==='view.update'?pendingView.current.add(args.patch||{},args.sessionId):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
   const settleTracking=trackAction();
+  const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
+   // Chat navigation has its own queue; it must not overtake a declared edit.
+   if(navigation&&dirtyBarrier)await dirtyBarrier;
    const result=await request('/api/actions',{method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(pending)pendingView.current.settle(pending);
    if(result.state)acceptState(result.state);
@@ -104,7 +107,13 @@ function App(){
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const queue=navigation?navigationQueue:exactReview?reviewQueue:commandQueue;
-  const promise=queue.current.then(execute,execute).catch(error=>{if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(settleTracking);queue.current=promise.catch(()=>{});return promise;
+  const promise=queue.current.then(execute,execute).catch(error=>{if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(settleTracking);queue.current=promise.catch(()=>{});
+  if(action==='canvas.views.dirty'){
+   canvasDirtyBarrier.current=promise;
+   const settled=()=>{if(canvasDirtyBarrier.current===promise)canvasDirtyBarrier.current=null};
+   promise.then(settled,settled);
+  }
+  return promise;
  },[acceptState,handleEffects]);
  const shell=useShell(state,dispatch,clientId);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);

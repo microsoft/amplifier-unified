@@ -64,7 +64,23 @@ try {
  // Primary edits block all transitions that would replace the primary mount.
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const primary=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved renderer edit');
+ // Slow the dirty declaration: the separate navigation queue must not overtake it.
+ let releaseDirty,dirtyHeld=false;
+ const dirtyGate=new Promise(resolve=>{releaseDirty=resolve});
+ const holdDirty=async route=>{
+  const request=route.request(),body=request.method()==='POST'?request.postDataJSON():{};
+  if(body.action==='canvas.views.dirty'&&body.args.dirty){dirtyHeld=true;await dirtyGate}
+  await route.continue();
+ };
+ await page.route('**/api/actions',holdDirty);
  await primary.fill('PRIMARY UNSAVED EDIT');
+ await expect.poll(()=>dirtyHeld).toBe(true);
+ const overtaken=page.waitForRequest(request=>request.method()==='POST'&&request.url().endsWith('/api/actions')&&request.postDataJSON().action==='session.select',{timeout:250}).then(()=>true,()=>false);
+ const navigation=action('session.select',{id:otherSession}).then(()=>({accepted:true}),error=>({error:error.message}));
+ assert.equal(await overtaken,false,'Navigation must wait for the preceding dirty declaration');
+ releaseDirty();
+ assert.match((await navigation).error,/viewer edit/);
+ await page.unroute('**/api/actions',holdDirty);
  await expect.poll(async()=>(await view('primary')).dirty).toBe(true);
  const before=(await inspect()).map(target);
  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
@@ -96,5 +112,5 @@ try {
  assert.equal((await state()).view.draft,'Keep composer target and draft');
  assert.equal((await state()).canvasArtifacts.length,2);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,checks:['Library hides and retains dirty renderer DOM','panel close preserves dirty secondary','primary and chat navigation retain dirty secondary','dirty primary prevents selection/composer/binding changes','explicit targeted recovery and close/reopen retain sources and draft']}));
+ console.log(JSON.stringify({passed:true,checks:['Library hides and retains dirty renderer DOM','panel close preserves dirty secondary','primary and chat navigation retain dirty secondary','dirty primary prevents selection/composer/binding changes','chat navigation waits for delayed dirty declaration','explicit targeted recovery and close/reopen retain sources and draft']}));
 } finally {await browser?.close();fixture.kill();}

@@ -329,11 +329,16 @@ class UpdateManager:
         self.task = None
         self.readiness_task = None
         self.closed = False
-        from .update_readiness import running_identity
+        from .update_readiness import running_identity,valid_target
         self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
-        restarted=state.get('pendingRestart') or {}
-        if restarted:
+        restarted=state.get('pendingRestart')
+        restart_repair=restarted is not None and not valid_target(restarted)
+        if restart_repair:
+            state.update(phase='interrupted',pendingRestart=None,pendingApp=None,
+                         error='The saved restart receipt was invalid and has been retired. No restart success was inferred.',
+                         detail='The interrupted restart was not acknowledged. Review the diagnostic receipt before retrying updates.')
+        elif restarted:
             state.update(phase='activating', pendingApp=None,
                          detail='Checking that the restarted server is serving the installed release…')
         elif state.get('phase') in {'checking','staging','validating','activating'}:
@@ -362,10 +367,10 @@ class UpdateManager:
         state['canRollback'] = 'previous' in active_release(self.home)
         from .update_diagnostics import UpdateDiagnostics
         self.diagnostics=UpdateDiagnostics(self)
-        from .update_readiness import valid_target
-        if restarted and not valid_target(restarted):
-            state['error'] = 'The saved restart receipt is incomplete. The running release cannot be confirmed from that receipt; review the update details.'
-        service._save()
+        if restart_repair:
+            self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
+        else:
+            service._save()
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
