@@ -54,7 +54,7 @@ try{
  assert.equal(await page.locator('#available-updates-list .a-check-result').count(),0);
  await page.getByRole('region',{name:'High-impact changes',exact:true}).waitFor();
  assert.equal(await page.locator('.a-release-notices article').count(),2);
- assert.equal(await page.locator('.a-release-entry').count(),3);
+ assert.equal(await page.locator('.a-release-entry').count(),4);
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-release-notices-desktop.png'});
  await page.getByRole('button',{name:'Mark notice reviewed',exact:true}).first().click();
  await page.waitForFunction(()=>window.amplifier.getState().attention.unread===2);
@@ -65,7 +65,7 @@ try{
  assert.equal(await page.getByRole('button',{name:'Maintenance',exact:true}).locator('.a-attention-badge').count(),0);
  assert.equal(await page.locator('#available-updates-list li').count(),1);
  assert.equal(await page.locator('.a-release-notices').count(),0);
- assert.equal(await page.locator('.a-release-entry').count(),3);
+ assert.equal(await page.locator('.a-release-entry').count(),4);
  assert.equal(await page.locator('.a-release-reviewed').count(),2);
  await page.reload();
  await page.getByRole('region',{name:'Changelog',exact:true}).waitFor();

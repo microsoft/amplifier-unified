@@ -12,6 +12,16 @@
       "notices": []
     },
     {
+      "version": "0.11.2",
+      "title": "Reliable first launch and review acknowledgments",
+      "changes": [
+        "An empty installation now opens with an editable composer; the first message creates one conversation.",
+        "Marking an Activity item reviewed stays responsive while a message send is waiting. Reviewing an older item cannot dismiss a newer occurrence.",
+        "Release checks now cover empty first launch and reviewing notices during a pending send."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.1",
       "title": "Live conversations across windows and devices",
       "changes": [

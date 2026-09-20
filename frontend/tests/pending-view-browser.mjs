@@ -27,7 +27,8 @@ try{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/state'){const target=new URL(route.request().url()).searchParams.get('sessionId');return route.fulfill({json:target==='off-page-copy'?{...state,sessions:[...state.sessions,{id:target,messages:[{id:'off-page-answer',role:'assistant',text:'**Saved answer to copy**'}]}]}:state})}
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
-  if(path==='/api/actions'){const body=route.request().postDataJSON();if(body.action==='message.copyResult'){copyResults.push(body.args);return route.fulfill({json:{accepted:true}})}calls.push(body);waiting.push({route,...body});return}
+  // Shell readiness/dirty reports are outside this controlled view/send fixture.
+  if(path==='/api/actions'){const body=route.request().postDataJSON();if(['shell.report','shell.view.update'].includes(body.action))return route.fulfill({json:{accepted:true,result:{}}});if(body.action==='message.copyResult'){copyResults.push(body.args);return route.fulfill({json:{accepted:true}})}calls.push(body);waiting.push({route,...body});return}
   return route.fulfill({json:{ok:true}});
  });
  await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Settings',exact:true}).waitFor();
@@ -53,7 +54,7 @@ try{
  state={...state,revision:state.revision+1,view:{...state.view,draft:'Older shared draft'}};
  await page.evaluate(state=>window.emitFixtureState(state),state);
  assert.equal(await composer.inputValue(),'First typed draft','SSE cannot erase the pre-debounce local draft');
- const firstDraft=await nextAction();assert.equal(firstDraft.args.patch.draft,'First typed draft');
+ const firstDraft=await nextAction();assert.equal(firstDraft.action,'view.update',JSON.stringify({action:firstDraft.action,args:firstDraft.args}));assert.equal(firstDraft.args.patch.draft,'First typed draft');
  await composer.fill('Newer typed draft');
  state={...state,revision:state.revision+1};await page.evaluate(state=>window.emitFixtureState(state),state);
  assert.equal(await composer.inputValue(),'Newer typed draft');
