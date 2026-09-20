@@ -38,6 +38,8 @@ import {executionData,turnPlacements} from './timeline-data';
 import {liveActivity} from './activity';
 import {resizeComposer} from './composer';
 import {ComposerOwnership} from './composer-ownership';
+import {createActionFeedback} from './action-feedback';
+import './action-feedback.css';
 import {createChatScroll} from './chat-scroll';
 import {followEarlierHistory} from './history-scroll';
 import {headerChatChoices,isTopLevelChat} from './chat-navigation';
@@ -53,6 +55,7 @@ const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 const initialSetup={title:'A new conversation',bundle:'work',workspace:''};
 function App(){
+ const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[sending,setSending]=useState(null),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const handleEffects=useCallback(effects=>{
@@ -104,7 +107,7 @@ function App(){
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   const pending=action==='view.update'?pendingView.current.add(args.patch||{},args.sessionId):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
-  const settleTracking=trackAction();
+  const settleTracking=trackAction(),settleFeedback=actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    // Chat navigation has its own queue; it must not overtake a declared edit.
@@ -120,7 +123,7 @@ function App(){
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const queue=navigation?navigationQueue:exactReview?reviewQueue:commandQueue;
-  const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(settleTracking);queue.current=promise.catch(()=>{});
+  const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
    const settled=()=>{if(canvasDirtyBarrier.current===promise)canvasDirtyBarrier.current=null};
@@ -129,6 +132,7 @@ function App(){
   return promise;
  },[acceptState,handleEffects]);
  const shell=useShell(state,dispatch,clientId);
+ useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
  const publishView=useCallback(()=>{if(latest.current)request('/api/view',{method:'POST',body:{...visibleView(root.current,clientId),voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'}}).catch(()=>{});},[]);
  useEffect(()=>{
@@ -254,7 +258,7 @@ function App(){
    </form>
   </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas state={state} act={act} dispatch={dispatch}/></McpAppThemeProvider></WorkspaceLayout>
   <FeedbackNotice state={state} act={act}/>
-  {panel&&<div className={`a-overlay ${panel==='settings'?'a-settings-overlay':''}`} data-part="overlay"><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{'new-session':'Start a conversation',appearance:'Make it feel like you',agent:'What the agent sees',settings:'Your Amplifier',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Remove chat?',runtime:'Session controls','session-details':'This conversation','subagent-history':'Subagent history'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
+  {panel&&<div className={`a-overlay ${panel==='settings'?'a-settings-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{'new-session':'Start a conversation',appearance:'Make it feel like you',agent:'What the agent sees',settings:'Your Amplifier',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Remove chat?',runtime:'Session controls','session-details':'This conversation','subagent-history':'Subagent history'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
    {error&&<div className="a-alert" role="alert"><span>{error}</span></div>}{panel==='new-session'&&<form onSubmit={create} data-action="session.create"><p>Your bundle brings the tools, agents, and instructions. Your workspace is where the work happens.</p>{Object.keys(initialSetup).map(key=><React.Fragment key={key}><label htmlFor={'setup-'+key}>{key[0].toUpperCase()+key.slice(1)}</label>{key==='workspace'?<PathField id={'setup-'+key} value={setup[key]} directory state={state} act={act} onChange={value=>{const next={...setup,[key]:value};setSetup(next);act('view.update',{patch:{sessionSetup:next}})}}/>:key==='bundle'?<BundlePicker id={'setup-'+key} value={setup[key]} state={state} act={act} onChange={value=>{const next={...setup,[key]:value};setSetup(next);act('view.update',{patch:{sessionSetup:next}})}}/>:<input id={'setup-'+key} value={setup[key]} data-action="view.update" onChange={e=>{const next={...setup,[key]:e.target.value};setSetup(next);act('view.update',{patch:{sessionSetup:next}})}} placeholder={key==='workspace'?'/absolute/path/to/your/project':key==='bundle'?'anchors or git+https://…':''}/>}</React.Fragment>)}<p className="a-caption">Use a community bundle name, local bundle file, or git URL supported by Amplifier Foundation.</p><div className="a-dialog-actions"><button className="a-primary" disabled={busy}>{busy?<Loader/>:<Plus/>}Create conversation</button></div></form>}
    {panel==='session-details'&&<><dl className="a-meta-grid"><div><dt>Bundle</dt><dd>{session?.bundle||state.settings.bundle}</dd></div><div><dt>Workspace</dt><dd>{session?.workspace||state.settings.workspace}</dd></div><div><dt>Orchestrator</dt><dd>{session?.orchestrator||'Bundle orchestrator'}</dd></div></dl><div className="a-dialog-actions"><button className="a-soft" data-action="view.update" onClick={()=>open('runtime')}><Settings/>Session controls</button><SubagentHistoryButton state={state} session={session} act={act}/><button className="a-soft" data-action="view.update" onClick={()=>open('worker')}><GitBranch/>Delegate work</button><button className="a-soft" data-action="view.update" onClick={()=>open('new-session')}><Plus/>New conversation options</button></div></>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
