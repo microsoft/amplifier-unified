@@ -1,6 +1,7 @@
 import {SettingsExperience} from './settings-experience';
 import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient} from './api';
+import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
 import {trackAction} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect} from './conversation-controls';
@@ -77,6 +78,7 @@ function App(){
      catch(e){await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'error',message:'Clipboard unavailable: '+e.message}}});throw e}
     }
     if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
+    if(effect.type==='canvas.checkpoint')await checkpointSurfaces(effect.sessionId,effect.id);
     if(effect.type==='call.end')await voiceClient.current.end();
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
@@ -99,6 +101,7 @@ function App(){
  },[]);
  const dispatch=useCallback((action,args={},meta={})=>{
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
+  if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.hasOwn(args.patch||{},'draft'))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
   const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId):null;

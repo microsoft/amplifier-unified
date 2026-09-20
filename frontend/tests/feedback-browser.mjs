@@ -57,7 +57,9 @@ try{
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture');
  await page.getByLabel('Details',{exact:true}).fill('This is a mocked browser test.');
- assert.equal(await page.getByRole('checkbox',{name:'Include app version and operating system'}).isChecked(),false);
+ const diagnostics=page.getByRole('checkbox',{name:'Include reproduction diagnostics'});
+ assert.equal(await diagnostics.isChecked(),true);
+ await diagnostics.uncheck();
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=';
  await page.getByLabel('Choose feedback files').setInputFiles({name:'picked-image.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
  await page.getByRole('button',{name:'Preview picked-image.png',exact:true}).waitFor();
