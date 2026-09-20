@@ -37,6 +37,14 @@ try{
  await page.reload();
  await expect(second.locator('[data-report-id="b-report-1"]')).toHaveCount(1);
  await expect(second.getByRole('checkbox')).toBeChecked();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ let interruptedRead=false;
+ await page.route('**/api/actions',async route=>{
+  if(!interruptedRead&&route.request().method()==='POST'&&route.request().postDataJSON()?.action==='coordination.wait'){interruptedRead=true;await route.abort('connectionreset')}else await route.continue();
+ });
+ await page.getByRole('button',{name:'Session details',exact:true}).click();
+ await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ await expect(page.getByText(/Waiting to reconnect:/)).toBeVisible();
  await emit({id:'worker-b',status:'idle',report:'Second worker finished its first report.',reportId:'b-report-1'});
  await emit({id:'worker-a',status:'idle',report:'First worker follow-up report.',reportId:'a-report-2'});
  await expect(first.locator('[data-report-id="a-report-2"]')).toHaveCount(1);
@@ -55,5 +63,5 @@ try{
  await expect(composer).toHaveValue('Preserve this unsent draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,providerCalls:false}));
+ console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,providerCalls:false}));
 }catch(error){await page?.screenshot({path:"/tmp/amplifier-coordination-failure.png"});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
