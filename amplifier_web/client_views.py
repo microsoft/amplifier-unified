@@ -117,6 +117,8 @@ class ClientViews:
         workspaces = {row["id"] for row in self.service._state.get("workspaces", [])}
         if record.get("selectedWorkspaceId") not in workspaces:
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
+        from .canvas_library import restore_body
+        restore_body(record.get("canvas", {}), self.service.db)
         # The empty key is the client's pre-conversation draft. Unlike None,
         # it keeps its identity through JSON persistence and reload.
         draft = record.get("drafts", {}).get(record.get("selectedSessionId") or "", "")
