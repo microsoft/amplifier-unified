@@ -1,0 +1,244 @@
+"""Explicit new-task scheduling through the same UI/agent action paths."""
+import copy
+import json
+import uuid
+from types import SimpleNamespace
+
+import pytest
+
+from amplifier_web.service import AppService, AppError
+from test_schedules import Runtime, attach, config, finish
+from test_task_continuity import controls
+
+
+class ConfiguredRuntime(Runtime):
+    async def control(self, sid, operation, args):
+        if sid not in self.workers:
+            control = self.workers[sid] = controls(sid)
+            path = control.state_path().with_name("configuration.json")
+            if path.exists(): control.coordinator.config = json.loads(path.read_text())
+            original = control.coordinator.get
+            control.coordinator.get = lambda name: {"synthetic": SimpleNamespace()} if name == "providers" else original(name)
+            await control.restore()
+        return await self.workers[sid].perform(operation, args)
+
+
+async def fixture(tmp_path, monkeypatch):
+    data = tmp_path / 'app'
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(data))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    runtime, now = ConfiguredRuntime(), [1800000000.0]
+    app = AppService(data, runtime, workspace=tmp_path)
+    attach(app, runtime, now)
+    await app.dispatch('session.create', {'title': 'Schedule owner'})
+    sid = app._session()['id']
+    directory = data / 'sessions' / sid
+    directory.mkdir(exist_ok=True, parents=True)
+    plan = {'session': {'context': {'module': 'context-simple'}}, 'providers': [{'module': 'synthetic', 'config': {'api_key': 'synthetic-private-value', 'default_model': 'test-model'}}]}
+    (directory / 'effective-configuration.json').write_text(json.dumps(plan))
+    control = controls(sid); control.coordinator.config = plan
+    control.selection = {'instance': 'synthetic', 'model': 'test-model', 'effort': 'high'}
+    control.persist(); await control.close()
+    app._session(sid)['selection'] = dict(control.selection)
+    return app, runtime, now, sid
+
+
+async def create(app, sid, now, **extra):
+    args = {'sessionId': sid, **config(now, 'task'), 'destination': 'new_task', 'newTaskTitle': 'Scheduled review', 'newTaskMaxTurns': 1, **extra}
+    preview = (await app.dispatch('schedule.preview', args))['result']
+    created = (await app.dispatch('schedule.create', {**args, 'expectedRevision': 0, 'previewHash': preview['previewHash']}, command_id='create-new-task'))['result']['schedule']
+    return created, preview
+
+
+async def test_new_tasks_are_distinct_user_owned_and_preserve_source_and_draft(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        record, preview = await create(app, sid, now[0])
+        assert record['taskId'] is None  # No source objective required.
+        assert 'synthetic-private-value' not in json.dumps(preview)
+        await app.dispatch('session.create', {'title': 'Keep selected'})
+        selected = app._session()['id']
+        await app.dispatch('view.update', {'patch': {'draft': 'Unsent draft'}})
+        source = copy.deepcopy(app._session(sid))
+        now[0] += 61
+        await app.schedules.tick(); await app.schedules.tick()
+        run = app.schedules.store.runs(sid)[0]
+        target = run['destinationSessionId']
+        assert run['phase'] == 'accepted' and run['creationConfirmed'], run['detail']
+        assert len(runtime.inputs) == 1 and runtime.inputs[0][0] == target != sid
+        assert run['taskId'] == runtime.workers[target].tasks.record()['id']
+        assert runtime.workers[target].tasks.record()['maxTurns'] == 1
+        assert app._session(target)['title'] == 'Scheduled review'
+        assert app._session(target)['selection'] == source['selection']
+        assert not app._session(target).get('parentSessionId')
+        assert app._session(target)['workspace'] == source['workspace']
+        plan = json.loads((app.data_dir / 'sessions' / target / 'configuration.json').read_text())
+        assert plan['providers'][0]['config']['default_model'] == 'test-model'
+        controls = json.loads((app.data_dir / 'sessions' / target / 'control-state.json').read_text())
+        assert controls.get('task', {}).get('id') != 'must-not-copy'
+        incoming = (await app.app_bridge('dispatch', {'action':'schedule.list','args':{}}, target))['result']
+        assert incoming['items'] == [] and incoming['incomingRuns'][0]['id'] == run['id']
+        read = (await app.app_bridge('dispatch', {'action': 'schedule.read', 'args': {'id': record['id']}}, target))['result']
+        assert read['readOnly'] and read['runs'][0]['id'] == run['id']
+        await finish(app, target, run, values={'count': 4})
+        assert app.schedules.store.run(sid, run['id'])['phase'] == 'completed'
+        now[0] += 60
+        await app.schedules.tick()
+        second = app.schedules.store.runs(sid)[0]
+        assert second['destinationSessionId'] not in {sid, target}
+        assert len(runtime.inputs) == 2
+        assert app.state['selectedSessionId'] == selected and app.state['view']['draft'] == 'Unsent draft'
+        assert app._session(sid)['messages'] == source['messages'] == []
+        assert app._session(sid).get('task') is None
+        with pytest.raises(AppError):
+            await app.app_bridge('dispatch', {'action': 'schedule.pause', 'args': {'id': record['id'], 'expectedRevision': record['revision']}}, target)
+        with pytest.raises(AppError):
+            await app.app_bridge('dispatch', {'action': 'schedule.report', 'args': {'runId': second['id'], 'expectedRevision': second['revision'], 'outcome': 'unchanged', 'detail': 'Wrong destination'}}, target)
+    finally: await app.close()
+
+
+async def test_agent_new_task_choice_requires_user_provenance_and_exact_configuration(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        args = {'sessionId': sid, **config(now[0]), 'destination': 'new_task'}
+        preview = (await app.app_bridge('dispatch', {'action': 'schedule.preview', 'args': args}, sid))['result']
+        request = {**args, 'expectedRevision': 0, 'previewHash': preview['previewHash']}
+        with pytest.raises(AppError, match='actual user message'):
+            await app.app_bridge('dispatch', {'action': 'schedule.create', 'args': request}, sid)
+        source = app._message(app._session(sid), 'user', 'Create a new task every minute to check the report.', inputOrigin='ui')
+        request['sourceMessageId'] = source['id']
+        result = await app.app_bridge('dispatch', {'action': 'schedule.create', 'id': 'user-new', 'args': request}, sid)
+        duplicate = await app.app_bridge('dispatch', {'action': 'schedule.create', 'id': 'user-new', 'args': request}, sid)
+        assert duplicate['result']['duplicate']
+        record = result['result']['schedule']
+        app._session(sid)['selection']['effort'] = 'low'
+        with pytest.raises(AppError, match='preview changed'):
+            await app.dispatch('schedule.create', request, command_id='stale')
+        now[0] += 61; await app.schedules.tick()
+        assert not runtime.inputs and len(app.state['sessions']) == 1
+        assert 'configuration' in app.schedules.store.get(sid, record['id'])['reviewReason']
+    finally: await app.close()
+
+
+@pytest.mark.parametrize('failure_point', ['before_create', 'after_create', 'after_task', 'after_admission'])
+async def test_unknown_new_task_preparation_or_submission_never_replays_after_restart(tmp_path, monkeypatch, failure_point):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    record, _ = await create(app, sid, now[0])
+    original = app.dispatch
+    async def interrupted(action, *args, **kwargs):
+        if kwargs.get('origin') == 'scheduler':
+            if action == 'session.create' and failure_point == 'before_create': raise RuntimeError('Connection lost before create')
+            result = await original(action, *args, **kwargs)
+            if (action == 'session.create' and failure_point == 'after_create') or (action == 'task.create' and failure_point == 'after_task'): raise RuntimeError('Connection lost after commit')
+            return result
+        return await original(action, *args, **kwargs)
+    app.dispatch = interrupted
+    if failure_point == 'after_admission': runtime.failure = RuntimeError('Submission receipt lost')
+    now[0] += 61; await app.schedules.tick()
+    run = app.schedules.store.runs(sid)[0]
+    assert run['phase'] == 'unknown' and run['destinationSessionId']
+    count = len(app.state['sessions'])
+    assert len(runtime.inputs) == (1 if failure_point == 'after_admission' else 0)
+    await app.close()
+    runtime2 = ConfiguredRuntime()
+    restored = AppService(tmp_path / 'app', runtime2, workspace=tmp_path)
+    attach(restored, runtime2, now)
+    try:
+        now[0] += 1000
+        await restored.schedules.tick(); await restored.schedules.tick()
+        assert len(restored.state['sessions']) == count and not runtime2.inputs
+        latest = restored.schedules.store.run(sid, run['id'])
+        assert latest['destinationSessionId'] == run['destinationSessionId'] and latest['phase'] == 'unknown'
+        await restored.dispatch('schedule.reconcile', {'sessionId': sid, 'runId': run['id'], 'expectedRevision': latest['revision'], 'resolution': 'abandoned', 'evidence': 'Inspected the reserved task and original effects; do not repeat.'})
+        await restored.schedules.tick()
+        assert not runtime2.inputs
+        assert restored.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
+    finally: await restored.close()
+
+
+@pytest.mark.parametrize('mutation', ['source_stop', 'destination_stop', 'destination_configuration', 'cancel'])
+async def test_changes_winning_admission_leave_one_visible_destination_without_execution(tmp_path, monkeypatch, mutation):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        record, _ = await create(app, sid, now[0])
+        def change():
+            run = app.schedules.store.runs(sid)[0]
+            if mutation == 'source_stop': app._session(sid)['interruptionRevision'] = 1
+            if mutation == 'destination_stop': app._session(run['destinationSessionId'])['interruptionRevision'] = 1
+            if mutation == 'destination_configuration': app._session(run['destinationSessionId'])['selection']['model'] = 'another'
+            if mutation == 'cancel':
+                saved = app.schedules.store.get(sid, record['id']); saved.update(status='cancelled', revision=2); app.schedules.store.put(saved)
+        runtime.before_admission = change
+        now[0] += 61; await app.schedules.tick()
+        assert not runtime.inputs
+        run = app.schedules.store.runs(sid)[0]
+        assert run['phase'] == 'skipped' and run['creationConfirmed']
+        assert len(app.state['sessions']) == 2
+    finally: await app.close()
+
+
+async def test_creation_command_receipt_and_reserved_id_cannot_overwrite_existing(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        identity = str(uuid.uuid4())
+        args = {'id': identity, 'select': False, 'title': 'Fresh'}
+        first = await app.dispatch('session.create', args, command_id='fresh')
+        second = await app.dispatch('session.create', args, command_id='fresh')
+        assert first['result']['sessionId'] == second['result']['sessionId'] == identity
+        assert app.state['selectedSessionId'] == sid
+        with pytest.raises(AppError, match='already exists'):
+            await app.dispatch('session.create', args, command_id='different')
+    finally: await app.close()
+
+
+async def test_source_task_pause_is_independent_and_mode_changes_require_review(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await app.dispatch('task.create', {'sessionId':sid,'expectedRevision':0,'objective':'Original independent objective'})
+        record, _ = await create(app,sid,now[0])
+        await app.dispatch('task.pause', {'sessionId':sid,'expectedRevision':1})
+        now[0]+=61; await app.schedules.tick()
+        run=app.schedules.store.runs(sid)[0]
+        assert run['phase']=='accepted',run['detail']
+        assert runtime.workers[sid].tasks.record()['status']=='paused'
+        await finish(app,run['destinationSessionId'],run)
+        await app.dispatch('task.resume',{'sessionId':sid,'expectedRevision':2})
+        fields={'sessionId':sid,**config(now[0]),'destination':'same_task'}
+        preview=(await app.dispatch('schedule.preview',fields))['result']
+        updated=(await app.dispatch('schedule.update',{**fields,'id':record['id'],'expectedRevision':record['revision'],'previewHash':preview['previewHash']}))['result']['schedule']
+        assert updated['destination']=='same_task' and 'newTaskConfiguration' not in updated
+        now[0]+=61;await app.schedules.tick()
+        assert runtime.inputs[-1][0]==sid
+    finally:await app.close()
+
+
+async def test_crash_with_only_reserved_creation_identity_is_not_replayed(tmp_path, monkeypatch):
+    app, runtime, now, sid=await fixture(tmp_path,monkeypatch)
+    record,_=await create(app,sid,now[0])
+    now[0]+=61
+    assert app.schedules.store.acquire(now[0])
+    run=app.schedules.store.claim(sid,record['id'],now[0])
+    destination=str(uuid.uuid4())
+    app.schedules.store.transition(sid,run['id'],['claimed'],'creating',now[0],destinationSessionId=destination)
+    await app.close()
+    second=ConfiguredRuntime();restored=AppService(tmp_path/'app',second,workspace=tmp_path);attach(restored,second,now)
+    try:
+        now[0]+=31;await restored.schedules.tick()
+        recovered=restored.schedules.store.run(sid,run['id'])
+        assert recovered['phase']=='unknown' and recovered['destinationSessionId']==destination
+        assert len(restored.state['sessions'])==1 and not second.inputs
+    finally:await restored.close()
+
+
+async def test_explicit_identity_cannot_replace_unloaded_native_history(tmp_path, monkeypatch):
+    app,runtime,now,sid=await fixture(tmp_path,monkeypatch)
+    try:
+        identity=str(uuid.uuid4())
+        native=tmp_path/'native'/'projects'/'unloaded-workspace'/'sessions'/identity
+        native.mkdir(parents=True)
+        transcript=native/'transcript.jsonl';transcript.write_text('preserve original history')
+        with pytest.raises(AppError,match='already exists'):
+            await app.dispatch('session.create',{'id':identity,'select':False})
+        assert transcript.read_text()=='preserve original history'
+        assert len(app.state['sessions'])==1
+    finally:await app.close()

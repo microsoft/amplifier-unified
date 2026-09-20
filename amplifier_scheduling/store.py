@@ -9,7 +9,7 @@ import uuid
 
 from .policy import due_occurrence
 
-ACTIVE_RUNS = ('claimed', 'submitting', 'accepted', 'running', 'unknown')
+ACTIVE_RUNS = ('creating', 'claimed', 'submitting', 'accepted', 'running', 'unknown')
 TERMINAL_RUNS = ('completed', 'failed', 'skipped', 'abandoned')
 
 
@@ -87,6 +87,17 @@ class ScheduleStore:
         if row is None: raise ValueError('This run does not belong to the conversation')
         return json.loads(row[0])
 
+    def execution_runs(self, session_id):
+        return [json.loads(row[0]) for row in self.db.execute(
+            "SELECT value FROM schedule_runs WHERE session_id=? OR json_extract(value,'$.destinationSessionId')=? ORDER BY due DESC", (session_id, session_id))]
+
+    def execution_run(self, session_id, identity):
+        row = self.db.execute("SELECT value FROM schedule_runs WHERE id=?", (identity,)).fetchone()
+        value = json.loads(row[0]) if row else None
+        if value is None or session_id not in {value['sessionId'], value.get('destinationSessionId')}:
+            raise ValueError('This run does not belong to the conversation')
+        return value
+
     def put_run(self, record):
         self.db.execute('INSERT OR REPLACE INTO schedule_runs VALUES(?,?,?,?,?,?)', (record['id'], record['scheduleId'], record['sessionId'], record['dueAt'], record['phase'], json.dumps(record)))
         terminal = [row['id'] for row in self.runs(record['sessionId'], record['scheduleId']) if row['phase'] in TERMINAL_RUNS]
@@ -102,7 +113,7 @@ class ScheduleStore:
             if new_owner:
                 # Claims may have crossed an external input boundary. Never
                 # infer from process death that submission did not happen.
-                for row in self.db.execute("SELECT value FROM schedule_runs WHERE phase IN ('claimed','submitting','accepted','running')").fetchall():
+                for row in self.db.execute("SELECT value FROM schedule_runs WHERE phase IN ('creating','claimed','submitting','accepted','running')").fetchall():
                     run = json.loads(row[0])
                     run.update(phase='unknown', revision=run['revision'] + 1, updatedAt=now, detail='Previous scheduler ownership ended; submission or outcome is uncertain. No replay was attempted.')
                     self.put_run(run)
@@ -125,7 +136,7 @@ class ScheduleStore:
             due = due_occurrence(schedule['spec'], schedule.get('nextDue'), now, schedule['missedRunPolicy'])
             if due is None: return None
             run_id = f"schedule:{identity}:run:{int(due['dueAt'])}"
-            run = {'id': run_id, 'scheduleId': identity, 'sessionId': session_id, 'taskId': schedule['taskId'], 'taskRevision': schedule['taskRevision'], 'scheduleRevision': schedule['revision'], 'dueAt': due['dueAt'], 'phase': 'skipped' if due['skip'] else 'claimed', 'revision': 1, 'owner': self.owner, 'inputId': run_id, 'createdAt': now, 'updatedAt': now, 'detail': 'Missed occurrence skipped by the saved policy.' if due['skip'] else 'Due occurrence claimed.'}
+            run = {'id': run_id, 'scheduleId': identity, 'sessionId': session_id, 'taskId': schedule.get('taskId'), 'taskRevision': schedule.get('taskRevision'), 'scheduleRevision': schedule['revision'], 'dueAt': due['dueAt'], 'phase': 'skipped' if due['skip'] else 'claimed', 'revision': 1, 'owner': self.owner, 'inputId': run_id, 'createdAt': now, 'updatedAt': now, 'detail': 'Missed occurrence skipped by the saved policy.' if due['skip'] else 'Due occurrence claimed.'}
             self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
             schedule.update(nextDue=due['nextDue'])
             if due['skip'] and due['nextDue'] is None:
@@ -147,7 +158,7 @@ class ScheduleStore:
         with self.transaction():
             run = self.run(session_id, identity)
             if run['phase'] not in phases: return run
-            if phase == 'submitting' and (run['owner'] != self.owner or not self.owns(now)): raise ValueError('Scheduler ownership changed before submission')
+            if phase in {'creating', 'submitting'} and (run['owner'] != self.owner or not self.owns(now)): raise ValueError('Scheduler ownership changed before submission')
             run.update(fields, phase=phase, revision=run['revision'] + 1, updatedAt=now)
             self.put_run(run)
             return run

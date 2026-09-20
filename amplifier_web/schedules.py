@@ -14,13 +14,14 @@ def definitions(schema, string):
     identity = {**sid, 'id': string(200)}
     revision = {'expectedRevision': {'type': 'integer', 'minimum': 0}}
     fields = {'prompt': {**string(16000), 'minLength': 1}, 'spec': {'type': 'object'}, 'kind': {'enum': ['task', 'monitor']}, 'missedRunPolicy': {'enum': ['skip', 'latest']}, 'notificationPolicy': {'enum': ['changes', 'always', 'failures_only']}}
+    destination = {'destination': {'enum': ['same_task', 'new_task']}, 'newTaskTitle': string(200), 'newTaskMaxTurns': {'type': 'integer', 'minimum': 1, 'maximum': 100}}
     authorization = {'previewHash': string(100), 'sourceMessageId': string(200)}
     return {
         'schedule.list': ('List saved schedules without starting work.', schema(sid)),
         'schedule.read': ('Read a schedule and its bounded durable run history. Unknown is never replayed.', schema(identity)),
-        'schedule.preview': ('Preview concrete timezone occurrences for an explicit user-requested schedule and the current task. Does not save or submit work.', schema({**sid, **fields})),
-        'schedule.create': ('Save and activate exactly the reviewed prompt/timing for an explicit user request. Agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
-        'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision, concrete preview and renewed explicit user provenance.', schema({**identity, **revision, **fields, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
+        'schedule.preview': ('Preview concrete timezone occurrences for an explicit user-requested schedule. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
+        'schedule.create': ('Save and activate exactly the reviewed prompt/timing for an explicit user request. Agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **destination, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
+        'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision, concrete preview and renewed explicit user provenance.', schema({**identity, **revision, **fields, **destination, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
         'schedule.pause': ('Pause future due runs. Current admitted work can finish; no rollback is claimed.', schema({**identity, **revision})),
         'schedule.resume': ('Deliberately resume after concrete review. Requires current preview and explicit user provenance; does not replay past uncertain runs.', schema({**identity, **revision, **authorization}, [*identity, *revision, 'previewHash'])),
         'schedule.cancel': ('Cancel future due runs while preserving run evidence. Does not undo admitted work.', schema({**identity, **revision})),
@@ -74,21 +75,28 @@ class Schedules:
         except ValueError: return None
     @staticmethod
     def operation_shape(row):
-        return {'id': row['id'], 'sessionId': row['sessionId'], 'source': 'schedule', 'kind': 'scheduled-run', 'state': {'claimed':'queued','submitting':'queued','accepted':'queued','unknown':'outcome_unknown','skipped':'cancelled','abandoned':'cancelled'}.get(row['phase'], row['phase']), 'revision': row['revision'], 'controlAvailable': False, 'evidence': copy.deepcopy(row), 'createdAt': row['createdAt'], 'updatedAt': row['updatedAt']}
+        return {'id': row['id'], 'sessionId': row['sessionId'], 'source': 'schedule', 'kind': 'scheduled-run', 'state': {'creating':'queued','claimed':'queued','submitting':'queued','accepted':'queued','unknown':'outcome_unknown','skipped':'cancelled','abandoned':'cancelled'}.get(row['phase'], row['phase']), 'revision': row['revision'], 'controlAvailable': False, 'evidence': copy.deepcopy(row), 'createdAt': row['createdAt'], 'updatedAt': row['updatedAt']}
 
-    async def task(self, sid):
+    async def task(self, sid, config=None):
         if not self.app.management or not self.app.runtime: raise ValueError('The runtime is unavailable')
         await self.app.history.ensure_loaded(sid)
         await self.app.management.ensure_runtime(self.app._session(sid))
+        if config and config.get('destination') == 'new_task': return None
         value = await self.app.runtime.control(sid, 'task.get', {})
         if not value.get('task'): raise ValueError('Save an explicit task before scheduling its continuation')
         return value['task']
 
     def configuration(self, args):
-        return {key: copy.deepcopy(args[key]) for key in ('prompt', 'kind', 'missedRunPolicy', 'notificationPolicy')} | {'spec': normalize(args['spec'])}
+        result = {key: copy.deepcopy(args[key]) for key in ('prompt', 'kind', 'missedRunPolicy', 'notificationPolicy')} | {'spec': normalize(args['spec']), 'destination': args.get('destination', 'same_task')}
+        if args.get('destination') == 'new_task':
+            result.update(destination='new_task', newTaskTitle=args.get('newTaskTitle') or 'Scheduled task', newTaskMaxTurns=args.get('newTaskMaxTurns', 1))
+        return result
 
     def reviewed(self, sid, config, task):
-        binding = {'sessionId': sid, 'taskId': task['id'], 'taskRevision': task['revision'], 'interruptionRevision': self.app._session(sid).get('interruptionRevision', 0), 'executionRevision': self.app._session(sid).get('executionRevision', 0), **config}
+        binding = {'sessionId': sid, 'taskId': task['id'] if task else None, 'taskRevision': task['revision'] if task else None, 'interruptionRevision': self.app._session(sid).get('interruptionRevision', 0), 'executionRevision': self.app._session(sid).get('executionRevision', 0), **config}
+        if config.get('destination') == 'new_task':
+            from .session_creation import template
+            binding['newTaskConfiguration'] = template(self.app, self.app._session(sid))[1]
         return {'previewHash': fingerprint(binding), 'binding': binding, 'occurrences': preview(config['spec'], self.clock(), 5), 'daylightSaving': 'Nonexistent local times are skipped; repeated local times run once at the first occurrence.', 'missedRunPolicy': config['missedRunPolicy'], 'notificationPolicy': config['notificationPolicy']}
 
     def authorization(self, sid, args, origin, *, previous=None):
@@ -106,13 +114,18 @@ class Schedules:
         self.app._session(sid)
         if action in {'schedule.list', 'schedule.read'}:
             async with self.app.lock:
-                result = {'items': self.store.list(sid)} if action == 'schedule.list' else {'schedule': self.store.get(sid, args['id']), 'runs': self.store.runs(sid, args['id'])}
+                owner = sid
+                if action == 'schedule.read':
+                    linked = next((row for row in self.store.execution_runs(sid) if row['scheduleId'] == args['id'] and row.get('destinationSessionId') == sid), None)
+                    if linked: owner = linked['sessionId']
+                result = {'items': self.store.list(sid), 'incomingRuns': [row for row in self.store.execution_runs(sid) if row.get('destinationSessionId') == sid]} if action == 'schedule.list' else {'schedule': self.store.get(owner, args['id']), 'runs': self.store.runs(owner, args['id']), 'readOnly': owner != sid}
                 self.sync()
                 self.app._publish()
                 return result
         if action in {'schedule.report', 'schedule.reconcile'}: return await self.run_command(action, args, origin, command_id or str(uuid.uuid4()))
         config = self.configuration(args) if action in {'schedule.preview', 'schedule.create', 'schedule.update'} else None
-        task = await self.task(sid) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
+        if action == 'schedule.resume': config = self.configuration(self.store.get(sid, args['id']))
+        task = await self.task(sid, config) if action in {'schedule.preview', 'schedule.create', 'schedule.update', 'schedule.resume'} else None
         if action == 'schedule.preview': return self.reviewed(sid, config, task)
         async with self.app.lock:
             def build(previous):
@@ -124,7 +137,7 @@ class Schedules:
                     record = previous
                     if record['status'] == 'cancelled': raise ValueError('This schedule is cancelled; create a new one explicitly')
                 if action in {'schedule.create', 'schedule.update', 'schedule.resume'}:
-                    if task['status'] != 'active': raise ValueError('Resume the saved task explicitly before activating its schedule')
+                    if task is not None and task['status'] != 'active': raise ValueError('Resume the saved task explicitly before activating its schedule')
                     effective = config or self.configuration(record)
                     reviewed = self.reviewed(sid, effective, task)
                     if args['previewHash'] != reviewed['previewHash']: raise ValueError('The task, stop intent, or schedule preview changed; preview again')
@@ -132,6 +145,7 @@ class Schedules:
                     authorization = self.authorization(sid, args, origin, previous=previous)
                     next_due = next_after(effective['spec'], now)
                     if next_due is None: raise ValueError('Choose a future occurrence; past one-shot work is not replayed')
+                    for key in ('newTaskConfiguration', 'newTaskTitle', 'newTaskMaxTurns'): record.pop(key, None)
                     record.update(reviewed['binding'], status='active', nextDue=next_due, authorization=authorization, reviewReason=None)
                 elif action == 'schedule.pause': record['status'] = 'paused'
                 elif action == 'schedule.cancel': record['status'] = 'cancelled'
@@ -145,6 +159,7 @@ class Schedules:
     async def run_command(self, action, args, origin, command_id):
         sid, identity, now = args['sessionId'], args['runId'], self.clock()
         async with self.app.lock:
+            owner = self.store.execution_run(sid, identity)['sessionId'] if action == 'schedule.report' else sid
             def edit(run):
                 if action == 'schedule.report':
                     if run['phase'] not in {'submitting', 'accepted', 'running'}: raise ValueError('Only an admitted current run can report monitor evidence')
@@ -160,7 +175,7 @@ class Schedules:
                         raise ValueError('Reconciliation needs the user’s actual finding after this run, not an older request')
                     run.update(phase=args['resolution'], reconciliation={'evidence': args['evidence'], 'provenance': provenance, 'at': now}, detail='Explicitly reconciled without replaying its input.')
                 run['updatedAt'] = now
-            result = self.store.run_command(sid, identity, args['expectedRevision'], command_id, fingerprint([action, args, origin]), edit)
+            result = self.store.run_command(owner, identity, args['expectedRevision'], command_id, fingerprint([action, args, origin]), edit)
             self.changed()
             return result
 
@@ -176,6 +191,13 @@ class Schedules:
             source = next((row for row in session['messages'] if row['id'] == authorization['messageId']), None)
             if source is not None and fingerprint(source.get('text', '')) != authorization.get('textDigest'):
                 return 'The original schedule request was edited. Review the saved authorization.'
+        if schedule.get('destination') == 'new_task':
+            from .session_creation import template
+            try: current_configuration = template(self.app, session)[1]
+            except (ValueError, OSError): return 'The saved configuration is unavailable. Review it before creating another task.'
+            if current_configuration != schedule['newTaskConfiguration']:
+                return 'The configuration for new tasks changed. Review the schedule before creating another task.'
+            return None
         if task['id'] != schedule['taskId'] or task['revision'] != schedule['taskRevision']:
             return 'The saved task has a newer objective, correction, or lifecycle revision. Review the schedule against it.'
         if task['status'] != 'active': return 'The saved task is paused, blocked, or completed.'
@@ -201,7 +223,7 @@ class Schedules:
             session = self.app._session(sid)
             if session.get('configurationBusy') or session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             try:
-                task = await self.task(sid)
+                task = await self.task(sid, schedule)
             except Exception as exc:
                 async with self.app.lock:
                     detail = 'Preparation failed before submission: ' + str(exc)[:500]
@@ -222,12 +244,23 @@ class Schedules:
                 run = self.store.claim(sid, current['id'], self.clock())
                 if run is None: continue
                 if run['phase'] == 'skipped': self.changed(); continue
+                if current.get('destination') == 'new_task':
+                    destination = str(uuid.uuid5(uuid.NAMESPACE_URL, 'unified-scheduled-task:' + run['id']))
+                    run = self.store.transition(sid, run['id'], ['claimed'], 'creating', self.clock(), destinationSessionId=destination, interruptionRevision=current['interruptionRevision'], executionRevision=current.get('executionRevision', 0))
+                    self.changed()
+            if current.get('destination') == 'new_task':
+                from .scheduled_destinations import create_destination
+                prepared = await create_destination(self, current, run)
+                if prepared is None: continue
+                run, session, task = prepared
+            async with self.app.lock:
+                target = session['id']
                 # This is the durable handoff boundary. A crash from this point
                 # leaves an uncertain input; retries never send it again.
-                run = self.store.transition(sid, run['id'], ['claimed'], 'submitting', self.clock(), interruptionRevision=current['interruptionRevision'], executionRevision=current.get('executionRevision', 0))
+                run = self.store.transition(sid, run['id'], ['claimed', 'creating'], 'submitting', self.clock(), interruptionRevision=current['interruptionRevision'], executionRevision=current.get('executionRevision', 0), destinationInterruptionRevision=run.get('destinationInterruptionRevision', session.get('interruptionRevision', 0)), destinationExecutionRevision=run.get('destinationExecutionRevision', session.get('executionRevision', 0)), taskId=task['id'], taskRevision=task['revision'])
                 text = current['prompt']
                 if current['kind'] == 'monitor':
-                    text += '\n\nScheduled monitor run ' + run['id'] + '. Inspect schedule.read for prior compared values, then record this run with schedule.report and actual values when available. Label evidence accurately; an unchanged claim is not proof. Do not complete the overall task merely because this run ends.'
+                    text += '\n\nScheduled monitor run ' + run['id'] + '. Inspect schedule.read with id ' + current['id'] + ' for prior compared values, then record this run with schedule.report and actual values when available. Label evidence accurately; an unchanged claim is not proof. Do not complete the overall task merely because this run ends.'
                 self.app._message(session, 'user', text, 'schedule', inputId=run['inputId'], inputOrigin='scheduler', scheduledRunId=run['id'], delivery={'status': 'sending'})
                 from .execution import ensure_turn
                 ensure_turn(session, run['inputId'], text)
@@ -241,23 +274,31 @@ class Schedules:
                     if not self.store.owns(self.clock()): return 'Scheduler ownership changed before admission.'
                     owner = self.app._session(sid)
                     if owner.get('configurationBusy') or owner.get('executionRevision', 0) != current.get('executionRevision', 0): return 'The task execution folder changed or is moving; this occurrence was skipped.'
+                    if current.get('destination') == 'new_task':
+                        reason = self.dependency_reason(owner, None, current)
+                        if reason: return reason
+                    destination = self.app._session(target)
+                    if run.get('destinationConfigurationHash'):
+                        from .session_creation import template
+                        if template(self.app, destination)[1]['configurationHash'] != run['destinationConfigurationHash']: return 'The new task configuration changed before admission.'
+                    if destination.get('configurationBusy') or destination.get('executionRevision', 0) != run['destinationExecutionRevision'] or destination.get('interruptionRevision', 0) != run['destinationInterruptionRevision']: return 'The destination task changed or stopped before input admission.'
                     if latest['status'] != 'active' or latest['revision'] != current['revision']: return 'The schedule changed before admission.'
                     if self.app._session(sid).get('interruptionRevision', 0) != current['interruptionRevision']: return 'The user stop won input admission; this occurrence was skipped.'
                     return None
-                result = await self.app.runtime.scheduled_input(sid, {'taskId': current['taskId'], 'taskRevision': current['taskRevision'], 'inputId': run['inputId'], 'text': text, 'kind': current['kind'], 'interruptionRevision': current['interruptionRevision']}, guard)
+                result = await self.app.runtime.scheduled_input(target, {'taskId': task['id'], 'taskRevision': task['revision'], 'inputId': run['inputId'], 'text': text, 'kind': current['kind'], 'interruptionRevision': run['destinationInterruptionRevision']}, guard)
                 phase = 'accepted' if result.get('accepted') else 'skipped'
-                detail = 'Input admitted to the existing task.' if result.get('accepted') else result.get('reason', 'Input was not admitted.')
+                detail = ('Input admitted to the new task.' if current.get('destination') == 'new_task' else 'Input admitted to the existing task.') if result.get('accepted') else result.get('reason', 'Input was not admitted.')
             except BaseException as exc:
                 phase, detail = 'unknown', 'Input handoff outcome is uncertain. No automatic replay: ' + str(exc)[:500]
                 cancelled = isinstance(exc, asyncio.CancelledError)
             else: cancelled = False
             async with self.app.lock:
                 saved = self.store.transition(sid, run['id'], ['submitting'], phase, self.clock(), detail=detail, observedInterruptionRevision=self.app._session(sid).get('interruptionRevision', 0))
-                self.app._delivery(self.app._session(sid), run['inputId'], 'accepted' if phase == 'accepted' else 'unknown' if phase == 'unknown' else 'rejected')
+                self.app._delivery(self.app._session(target), run['inputId'], 'accepted' if phase == 'accepted' else 'unknown' if phase == 'unknown' else 'rejected')
                 if saved['phase'] in {'unknown', 'skipped'}:
                     self.store.review(sid, current['id'], detail, self.clock())
-                    self.app._session(sid)['status'] = 'interrupted' if phase == 'unknown' else 'idle'
-                    if saved['phase'] == 'unknown': self.decide_notification(self.app._session(sid), saved)
+                    self.app._session(target)['status'] = 'interrupted' if phase == 'unknown' else 'idle'
+                    if saved['phase'] == 'unknown': self.decide_notification(self.app._session(target), saved)
                 self.changed()
             if cancelled: raise asyncio.CancelledError
 
@@ -268,33 +309,34 @@ class Schedules:
         monitor = payload.get('scheduled_monitor_input_id')
         if monitor and monitor not in scheduled: scheduled.append(monitor)
         for identity in scheduled:
-            try: run = self.store.run(session['id'], identity)
+            try: run = self.store.execution_run(session['id'], identity)
             except ValueError: continue
+            if run.get('destinationSessionId', run['sessionId']) != session['id']: continue
             event = payload.get('event')
             if event == 'generation.started':
-                self.store.transition(session['id'], identity, ['submitting', 'accepted'], 'running', self.clock(), generationId=payload.get('generation_id'))
+                self.store.transition(run['sessionId'], identity, ['submitting', 'accepted'], 'running', self.clock(), generationId=payload.get('generation_id'))
             elif event in {'generation.finished', 'generation.failed', 'generation.detached'}:
                 if monitor and event == 'generation.finished':
-                    self.store.transition(session['id'], identity, ['submitting', 'accepted', 'running'], 'running', self.clock(), monitorScope=True, parentFinished=event, pendingJobs=sorted(set(run.get('pendingJobs', []) + payload.get('active_job_ids', []))), detail=payload.get('text', 'Waiting for the monitor to finish.'))
+                    self.store.transition(run['sessionId'], identity, ['submitting', 'accepted', 'running'], 'running', self.clock(), monitorScope=True, parentFinished=event, pendingJobs=sorted(set(run.get('pendingJobs', []) + payload.get('active_job_ids', []))), detail=payload.get('text', 'Waiting for the monitor to finish.'))
                     continue
                 if payload.get('active_job_ids'):
-                    self.store.transition(session['id'], identity, ['submitting', 'accepted', 'running'], 'running', self.clock(), pendingJobs=payload['active_job_ids'], jobOutcomes={}, parentFinished=event, detail=payload.get('text', 'Waiting for delegated work.'))
+                    self.store.transition(run['sessionId'], identity, ['submitting', 'accepted', 'running'], 'running', self.clock(), pendingJobs=payload['active_job_ids'], jobOutcomes={}, parentFinished=event, detail=payload.get('text', 'Waiting for delegated work.'))
                     continue
                 phase = 'completed' if event == 'generation.finished' else 'unknown' if event == 'generation.detached' else 'failed'
-                run = self.store.transition(session['id'], identity, ['submitting', 'accepted', 'running'], phase, self.clock(), generationId=payload.get('generation_id'), detail=payload.get('text') or payload.get('error') or event)
+                run = self.store.transition(run['sessionId'], identity, ['submitting', 'accepted', 'running'], phase, self.clock(), generationId=payload.get('generation_id'), detail=payload.get('text') or payload.get('error') or event)
                 self.decide_notification(session, run)
         return bool(payload.get('scheduled_monitor_only')) if monitor else bool(scheduled) and len(scheduled) == len(ids)
 
     def decide_notification(self, session, run):
         with self.store.transaction():
-            run = self.store.run(session['id'], run['id'])
+            run = self.store.run(run['sessionId'], run['id'])
             if run.get('notificationDecision') is not None: return
-            schedule = self.store.get(session['id'], run['scheduleId'])
+            schedule = self.store.get(run['sessionId'], run['scheduleId'])
             policy = schedule['notificationPolicy']
             report = run.get('report', {})
             changed, source = None, 'unreported'
             if 'valuesDigest' in report:
-                previous = next((other for other in self.store.runs(session['id'], run['scheduleId']) if other['id'] != run['id'] and other['phase'] == 'completed' and 'valuesDigest' in other.get('report', {})), None)
+                previous = next((other for other in self.store.runs(run['sessionId'], run['scheduleId']) if other['id'] != run['id'] and other['phase'] == 'completed' and 'valuesDigest' in other.get('report', {})), None)
                 changed = previous is None or report['valuesDigest'] != previous['report']['valuesDigest']
                 source = 'compared_reported_values' if previous else 'initial_reported_values'
             elif report.get('outcome'):
@@ -317,33 +359,36 @@ class Schedules:
 
 
     def worker(self, session, payload):
-        for run in self.store.runs(session['id']):
+        for run in self.store.execution_runs(session['id']):
+            if run.get('destinationSessionId', run['sessionId']) != session['id']: continue
             if run['phase'] != 'running' or payload.get('id') not in run.get('pendingJobs', []): continue
             status = payload.get('status')
             if status not in {'completed', 'error', 'cancelled', 'interrupted'}: continue
             outcomes = {**run.get('jobOutcomes', {}), payload['id']: status}
             if run.get('monitorScope') or len(outcomes) < len(run['pendingJobs']):
-                self.store.transition(session['id'], run['id'], ['running'], 'running', self.clock(), jobOutcomes=outcomes)
+                self.store.transition(run['sessionId'], run['id'], ['running'], 'running', self.clock(), jobOutcomes=outcomes)
                 continue
             phase = 'unknown' if 'interrupted' in outcomes.values() else 'failed' if any(value != 'completed' for value in outcomes.values()) else 'completed'
-            result = self.store.transition(session['id'], run['id'], ['running'], phase, self.clock(), jobOutcomes=outcomes)
+            result = self.store.transition(run['sessionId'], run['id'], ['running'], phase, self.clock(), jobOutcomes=outcomes)
             self.decide_notification(session, result)
 
 
     def idle(self, session):
-        for run in self.store.runs(session['id']):
+        for run in self.store.execution_runs(session['id']):
+            if run.get('destinationSessionId', run['sessionId']) != session['id']: continue
             if run['phase'] != 'running' or not run.get('monitorScope') or not run.get('parentFinished'): continue
             outcomes = run.get('jobOutcomes', {})
             if len(outcomes) < len(run.get('pendingJobs', [])): continue
             phase = 'unknown' if 'interrupted' in outcomes.values() else 'failed' if any(value != 'completed' for value in outcomes.values()) else 'completed'
-            result = self.store.transition(session['id'], run['id'], ['running'], phase, self.clock())
+            result = self.store.transition(run['sessionId'], run['id'], ['running'], phase, self.clock())
             self.decide_notification(session, result)
 
 
     def runtime_ended(self, session):
-        for run in self.store.runs(session['id']):
+        for run in self.store.execution_runs(session['id']):
+            if run.get('destinationSessionId', run['sessionId']) != session['id']: continue
             if run['phase'] not in {'submitting', 'accepted', 'running'}: continue
             detail = 'The runtime exited before a confirmed scheduled-run outcome. Inspect the original effects; no input was replayed.'
-            value = self.store.transition(session['id'], run['id'], ['submitting', 'accepted', 'running'], 'unknown', self.clock(), detail=detail)
-            self.store.review(session['id'], run['scheduleId'], detail, self.clock())
+            value = self.store.transition(run['sessionId'], run['id'], ['submitting', 'accepted', 'running'], 'unknown', self.clock(), detail=detail)
+            self.store.review(run['sessionId'], run['scheduleId'], detail, self.clock())
             self.decide_notification(session, value)

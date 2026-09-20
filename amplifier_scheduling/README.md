@@ -16,9 +16,9 @@ No catch-up flood is produced after a long shutdown.
 `ScheduleStore` owns a separate private SQLite database. Schedule edits use exact
 revision CAS and stable command receipts. A database owner lease admits unique
 `(schedule_id,due_utc)` runs, with stable IDs and no overlap. Run claims persist
-before any external call. Hosts mark `submitting` before crossing an input
+before any external call. Hosts that create a destination first reserve its identity in `creating`. Hosts mark `submitting` before crossing an input
 boundary, and must never retry ambiguous handoff. A new owner converts previous
-claimed/submitting/accepted/running runs to `unknown` and schedules to visible
+creating/claimed/submitting/accepted/running runs to `unknown` and schedules to visible
 `needs_review`, retaining the original input identity and evidence. Unknown runs
 require deliberate reconciliation; they cannot release an overlapping new run.
 

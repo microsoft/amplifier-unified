@@ -52,7 +52,7 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
+    "session.create": ("Start a fresh conversation. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -800,7 +800,8 @@ class AppService:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             from .canvas_library import remember, restore, fork_artifacts
-            self.canvas_views.guard_transition(action, args)
+            if action != "session.create" or args.get("select", True):
+                self.canvas_views.guard_transition(action, args)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
@@ -906,17 +907,26 @@ class AppService:
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == "session.create":
-                session = self._new_session(args)
-                from .workspace_canvas import select_session_workspace
-                select_session_workspace(self.state, session)
+                from .session_creation import prepare, apply
+                try:
+                    inherited = prepare(self, args, origin, caller_session_id)
+                    session = self._new_session(args)
+                    if args.get('id'): session['id'] = args['id']
+                    apply(self, session, inherited)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
                 from .naming import persist
                 persist(self.data_dir,session,shared_rename=True)
                 self.state["sessions"].insert(0, session)
-                self.state["selectedSessionId"] = session["id"]
-                self.state["view"]["draft"] = ""
-                if client_id is not None and previous_scope[0] is None:
-                    drafts = self.clients.record().setdefault("drafts", {})
-                    self.clients.draft(session["id"], drafts.pop("", ""))
+                diagnostic_result = {"sessionId": session['id']}
+                if args.get('select', True):
+                    from .workspace_canvas import select_session_workspace
+                    select_session_workspace(self.state, session)
+                    self.state["selectedSessionId"] = session["id"]
+                    self.state["view"]["draft"] = ""
+                    if client_id is not None and previous_scope[0] is None:
+                        drafts = self.clients.record().setdefault("drafts", {})
+                        self.clients.draft(session["id"], drafts.pop("", ""))
             elif action == "session.select":
                 session = self._session(args["id"])
                 from .workspace_canvas import select_session_workspace

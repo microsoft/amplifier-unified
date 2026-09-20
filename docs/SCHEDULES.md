@@ -4,8 +4,10 @@ Scheduled work appears beside the saved task under Goals & modes. It records a
 concrete prompt, timezone recurrence, missed-run behavior, notification intent,
 current task identity/revision, execution-folder revision, and the user stop revision. UI and app_control
 share schedule.preview/create/list/read/update/pause/resume/cancel, plus report
-and reconcile. An active saved task is required; schedules never create a second
-task lifecycle or independently complete the original objective.
+and reconcile. `destination` defaults to `same_task`, which requires an active
+saved objective. The explicit `new_task` option creates a fresh user-owned task
+for each occurrence, with a reviewed title and `newTaskMaxTurns` (default 1).
+Neither mode independently completes the original objective.
 
 Preview shows future local/UTC occurrences and the exact saved instructions. Its
 hash binds timing, prompt, policies, task revision, execution-folder revision and stop revision. UI activation
@@ -27,7 +29,36 @@ input. It releases the lock after input admission, never after model execution o
 permission waits. The public runtime.control action cannot invoke this internal
 path. Normal tool approval hooks still run on every execution.
 
-The existing conversation receives a stable input ID and labelled schedule
+For `new_task`, preview also binds a hash of the source's effective configuration,
+provider/model/effort selection, budget settings, bundle, and execution workspace.
+The UI displays the workspace, bundle, model and turn cap before activation.
+Due execution rechecks this configuration and the source stop/execution revisions.
+The source objective is independent: its pause or completion does not pause a
+separately authorized new-task schedule. Pause/cancel the schedule to stop future
+creation; a source conversation Stop still requires schedule review.
+
+Each new-task occurrence first durably reserves a deterministic conversation UUID
+in its `creating` receipt, then uses shared `session.create` with `select:false`
+and reviewed configuration inheritance. This copies configuration through the
+existing private override mechanism, never transcript, task/goal, execution
+receipts, approvals, usage or workers. Shared `task.create` records the fresh
+objective and finite turn cap; its identity/revision is saved before scheduled
+input admission. Recurring occurrences have distinct destinations. Creation or
+submission uncertainty retains the reserved UUID and requires inspection and
+explicit reconciliation; it never automatically retries creation or input.
+Shared creation command receipts deduplicate the exact command, and another
+command cannot overwrite that identity. Source/destination stop or configuration
+changes winning input admission produce a skipped run, without undoing creation.
+
+Run receipts remain owned by the source schedule. The exact destination can read
+that schedule's history and report its own run (`schedule.list.incomingRuns`
+exposes this relationship), including prior monitor values;
+it cannot mutate the source schedule or report a sibling destination's run.
+Generation/worker outcomes settle the source-owned receipt. The UI exposes the
+reserved destination and a link once creation is confirmed. Existing browser
+selection and draft remain unchanged until the user follows that link.
+
+The chosen conversation receives a stable input ID and labelled schedule
 message, preserving selection, drafts and task identity. Session interruption
 revision is captured in the receipt and checked again under runtime admission;
 a stop that wins this boundary produces an explicit skipped run. Ambiguous
@@ -63,3 +94,12 @@ required questions, stop winning admission, and the actual loop-live input queue
 The Chromium fixture exercises the real app/controller/store with deterministic
 provider work. Live provider behavior, physical voice and deployment are not
 claimed by that fixture. Source composition and release remain integration work.
+
+New-task validation additionally covers no source objective, independent source
+pause, exact configuration hashes, mode changes, UI/agent provenance, recurring
+distinct destinations, wrong-session report rejection, creation/admission failure
+boundaries, and full host restart with no replay. The new Chromium fixture uses
+production host/worker/loop execution with a deterministic local provider and two
+real scheduled generations. It makes no paid calls and does not claim remote
+provider acceptance; same-task configured-provider evidence remains separately
+attributed in the Work parity handoff.

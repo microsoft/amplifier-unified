@@ -61,7 +61,8 @@
     "test:toolbar-browser": "node tests/app-toolbar-browser.mjs",
     "test:worktrees-browser": "node tests/worktrees-browser.mjs",
     "test:connectors-browser": "node tests/connectors-browser.mjs",
-    "test:capacity-browser": "node tests/capacity-browser.mjs"
+    "test:capacity-browser": "node tests/capacity-browser.mjs",
+    "test:scheduled-new-tasks-browser": "node tests/scheduled-new-tasks-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
