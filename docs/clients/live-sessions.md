@@ -66,7 +66,7 @@ Example command body:
 ```
 
 Session commands include send/stop, worker spawn/stop/steer, approval responses,
-runtime controls, history loading, rename, and takeover. A session argument that
+runtime controls, background preparation, history loading, rename, and takeover. A session argument that
 conflicts with the URL is rejected. The SPA uses the same service dispatch through
 `/api/actions`; session operations capture their target before awaiting history or
 runtime admission.
@@ -80,6 +80,25 @@ automatically rerun by attachment, reload, or SSE reconnection.
 The optional `expectedRevision` checks the app's global state revision, including
 presentation changes; it is not a per-session revision. Do not use it as a
 mandatory send precondition during active streaming.
+
+### Optional preparation on navigation
+
+After discovering `session.warm` in `GET /api/actions`, a client can issue it
+through the session command endpoint with empty arguments. It schedules
+background preparation under the host's policy without submitting input or
+changing the client's selection. Acceptance means scheduled, not ready.
+`session.preparation.status` exposes `preparing`, `ready`, `warm`, `active`,
+`cold`, or `unavailable` when known. The web's `session.select` schedules the
+same preparation automatically; a TUI that keeps navigation local can call
+`session.warm` immediately when a conversation is selected.
+
+Reading a session or opening its event stream does not itself warm it. Warmth
+is advisory: a worker can retire or another host can acquire ownership before
+the next command. Send through the normal command API regardless of warmth.
+Preparation never requests takeover, submits input, or replays earlier work.
+The host defaults to 32 idle workers for 12 hours, with two simultaneous
+background starts. Idle workers release the Foundation writer lock. Client
+disconnect does not stop active work or reset the idle-retention clock.
 
 ## Reconnect and lifetime
 

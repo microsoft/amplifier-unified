@@ -148,7 +148,20 @@ Examples of session command arguments:
 | `session.rename` | `{"title":"Release review"}` |
 | `session.takeover` | `{}`; only following explicit user intent. |
 | `session.history` | Optional `before` and `limit`; discover schema before use. |
+| `session.warm` | `{}`; optional background preparation on selection, when advertised by the host. |
 | `runtime.control` | `operation` and optional `args`; discover schema before use. |
+
+On hosts advertising `session.warm`, the TUI may display the selected
+conversation immediately and request preparation in parallel. Do not wait for
+preparation before rendering history or accepting a draft. A normal send is
+valid whether preparation is pending, warm, cold, or unavailable. Command
+acceptance only schedules preparation; it is not a readiness guarantee.
+`session.preparation.status` is advisory host state. Preparation never performs
+takeover. Older hosts without this action remain usable through ordinary send.
+See [optional preparation](live-sessions.md#optional-preparation-on-navigation)
+for retention and lifecycle details. This optional addition is newer than the
+released live-client baseline described above; discover it rather than assuming
+that every supported host provides it.
 
 The command body is:
 

@@ -44,12 +44,18 @@ async def main(home):
     workspace = home / "workspace"
     workspace.mkdir()
     runtime = Runtime()
+    if '--retention' in sys.argv:
+        from amplifier_web.runtime import RuntimeManager
+        # Settings exercise the actual manager policy without starting a model.
+        runtime = RuntimeManager(command=[sys.executable, '-c', 'raise RuntimeError("Unexpected worker start in settings fixture")'])
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
                            voice=False, background_updates=False)
     app["control_token"] = "fixture-browser-control-token"
 
     async def inspect(request):
-        return web.json_response({"sent": runtime.sent})
+        return web.json_response({"sent": getattr(runtime, 'sent', []),
+            "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
+            "workerCount": len(getattr(runtime, 'workers', {}))})
 
     app.router.add_get("/fixture", inspect)
     runner = web.AppRunner(app)

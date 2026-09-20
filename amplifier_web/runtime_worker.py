@@ -405,6 +405,23 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op == "park":
+            await self.park()
+            publish({"op": "reply", "id": data.get("id"), "result": {"parked": self.parked}})
+            return
+        if op == "retire":
+            async with self.command_lock:
+                loop = self.session.coordinator.get("orchestrator") if self.session else None
+                settled = bool(self.parked and not self.ownership.yielding
+                    and not self.approvals and not self.bridges and not self.remounting
+                    and not self.runtime.queued_inputs and self.runtime.inbox.empty()
+                    and not self.runtime.generation
+                    and not (self.naming and self.naming.pending and not self.naming.pending.done())
+                    and not (loop and (loop.pending or loop._active_jobs())))
+                publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
+                if settled:
+                    self.shutdown.set()
+            return
         if op not in {"send", "resume", "control", "worker.steer", "worker.stop", "approval"}:
             await self._command_serial(data)
             return
