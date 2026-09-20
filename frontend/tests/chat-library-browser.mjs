@@ -178,12 +178,12 @@ try{
   await agent('view.update',{patch:{navChatScope:'all'}});await waitScope('all');
   beta=(await state()).chatNavigation.items.find(chat=>chat.title==='Beta 002');
  }
- const touchTitle=(await state()).sessions.find(chat=>chat.id===beta.id).title;
- // A saved previous Converge skin is injected after new base CSS. Its hidden
+ const touchTitle=beta.title;
+ // A saved custom skin is injected after new base CSS. Its hidden
  // actions/nowrap rules must not make the new controls inaccessible on touch.
- const legacyCss=await readFile(new URL('../../tests/fixtures/legacy_converge.css',import.meta.url),'utf8');
+ const legacyCss=await readFile(new URL('../../tests/fixtures/legacy_theme.css',import.meta.url),'utf8');
  assert.ok(legacyCss.includes('#amp-one .a-nav-chat .a-nav-chat-edit{width:22px;height:30px;display:none;flex-shrink:0}'));
- await agent('theme.apply',{name:'Saved previous Converge',css:legacyCss});
+ await agent('theme.apply',{name:'Saved custom skin',css:legacyCss});
  const touchContext=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true,deviceScaleFactor:2,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const touchPage=await touchContext.newPage();touchPage.on('pageerror',error=>errors.push(error.message));
  try{
@@ -191,7 +191,7 @@ try{
   await touchPage.getByRole('group',{name:'Chat view'}).waitFor();
   await touchPage.getByRole('button',{name:'All chats',exact:true}).tap();
   await touchPage.waitForFunction(()=>window.amplifier.getShellState()?.snapshots?.chats?.view.navChatScope==='all');
-  await touchPage.waitForFunction(()=>window.amplifier.getState().theme.name==='Saved previous Converge');
+  await touchPage.waitForFunction(()=>window.amplifier.getState().theme.name==='Saved custom skin');
   assert.equal(await touchPage.evaluate(()=>matchMedia('(hover: none)').matches&&matchMedia('(pointer: coarse)').matches),true);
   const selectedBefore=await touchPage.evaluate(()=>window.amplifier.getState().selectedSessionId);
   assert.notEqual(selectedBefore,beta.id);
@@ -215,7 +215,7 @@ try{
   throw error;
  }finally{await touchContext.close()}
  assert.deepEqual(errors,[]);
- console.log(legacyTouchOnly?'Saved previous Converge real-touch checks passed: visible unselected-row Pin, wrapped full paths, tap without selecting, saved skin retained.':'Chat library browser checks passed: 206 roots, bounded pages, keyboard scope switch, full paths, fnmatch search, pins first, true activity recency, agent parity, real service restart pin/unpin persistence, narrow layout, correct new-chat workspace, real touch with saved previous Converge, no provider calls.');
+ console.log(legacyTouchOnly?'Saved custom skin real-touch checks passed: visible unselected-row Pin, wrapped full paths, tap without selecting, saved skin retained.':'Chat library browser checks passed: 206 roots, bounded pages, keyboard scope switch, full paths, fnmatch search, pins first, true activity recency, agent parity, real service restart pin/unpin persistence, narrow layout, correct new-chat workspace, real touch with saved custom skin, no provider calls.');
 }catch(error){
  await page?.screenshot({path:'/tmp/chat-library-views-failure.png'}).catch(()=>{});
  if(fixtureLog)console.error(fixtureLog);

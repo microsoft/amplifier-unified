@@ -19,7 +19,7 @@ try{
  await action('session.create',{});await action('view.update',{patch:{canvasControlsPinned:true,canvasWidth:650}});
  const draft='Keep this conversation draft through all theme changes';
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);await page.waitForFunction(draft=>window.amplifier.getState().view.draft===draft,draft);
- const base=await readFile(root+'amplifier_web/static/converge.amplifier.css','utf8');
+ const base=await readFile(root+'amplifier_web/static/unified.amplifier.css','utf8');
  const source=themeSurface(base),row=(await action('canvas.apps.create',source)).result,id=row.id;
  const inspect=()=>action('canvas.apps.inspect',{id}).then(r=>r.result);
  const cas=async()=>{const r=await inspect();return {id,sessionId:r.sessionId,expectedRevision:r.app.revision,expectedStateRevision:r.app.stateRevision}};

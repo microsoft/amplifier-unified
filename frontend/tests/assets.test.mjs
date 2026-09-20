@@ -11,9 +11,9 @@ test('packaged page loads its real stylesheet without JavaScript boot',()=>{
  const css=readFileSync(join(root,link[1]),'utf8');assert.ok(css.includes('#amp-one'));assert.ok(css.includes('.a-layout'));assert.ok(css.includes('radial-gradient'));assert.ok(!css.includes('@scope'));
  for(const [,path] of html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g))assert.ok(existsSync(join(root,path)),`bundled ${path} exists`);
 });
-test('shared single-file Converge theme matches the built-in theme',()=>{
- const css=readFileSync(join(root,'converge.amplifier.css'),'utf8');
- assert.equal(css,readFileSync(new URL('../src/converge.css',import.meta.url),'utf8'));
+test('shared single-file Amplifier Unified theme matches the built-in theme',()=>{
+ const css=readFileSync(join(root,'unified.amplifier.css'),'utf8');
+ assert.equal(css,readFileSync(new URL('../src/unified.css',import.meta.url),'utf8'));
  assert.match(css,/data:image\/png;base64,/);assert.ok(css.includes('.a-dialog'));assert.ok(css.includes('.a-call'));
  assert.ok(!/@import\b/.test(css));
 });

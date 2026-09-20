@@ -18,7 +18,7 @@ Browser effects (call media, notification permission, and file download) are del
 
 ## Themes
 
-`src/converge.css` is the complete Converge skin. It includes an embedded Amplifier logo from microsoft/amplifier and has no external asset dependencies. The build always links a real CSS file in HTML; theme application does not depend on enabling a disabled stylesheet or on `@scope` support. The same source is copied to `static/converge.amplifier.css` for reset and export.
+`src/unified.css` is the complete Amplifier Unified skin. It includes an embedded Amplifier logo from microsoft/amplifier and has no external asset dependencies. The build always links a real CSS file in HTML; theme application does not depend on enabling a disabled stylesheet or on `@scope` support. The same source is copied to `static/unified.amplifier.css` for reset and export.
 
 The stable root is `#amp-one`. Named `data-part` surfaces include `header`, `brand`, `session-heading`, `workspace`, `conversation`, `modalities`, `voice`, `notification`, `messages`, `composer`, `work-column`, `workers`, `approvals`, `context`, `overlay`, and `dialog`. A skin can replace variables or any component styles. The Appearance panel supports editing, importing, previewing, applying, reverting, and exporting the full CSS file. Applied skins are validated by the Python service; use embedded data assets rather than remote URLs.
 
