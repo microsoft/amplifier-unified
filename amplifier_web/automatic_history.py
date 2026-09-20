@@ -66,7 +66,13 @@ def display_message(row, index, session, *, include_internal=False):
     if not text:
         return None
     from .session_store import message_time
-    provenance=(row.get('metadata') or {}).get('amplifier_input',{})
+    metadata=row.get('metadata') or {}
+    provenance=metadata.get('amplifier_input',{})
+    recovery=metadata.get('live_recovery_job')
+    if 'amplifier_input' not in metadata and isinstance(recovery,str) and 0<len(recovery)<=128:
+        # Earlier loop-live versions recorded recovery ownership separately.
+        # Read that host metadata; matching text alone is never provenance.
+        provenance={'version':1,'kind':'service','id':recovery,'source':'local-job-recovery'}
     observation={}
     if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
@@ -177,6 +183,12 @@ def merge_web_history(session, incoming):
             cursor = match + 1
         merged.append(message)
     merged.extend(incoming[cursor:])
+    for message in merged:
+        match=indexed.get(message.get('nativeIndex'))
+        if match and (match[1]['role'],match[1]['text'])==(message.get('role'),message.get('text')) and match[1].get('observation'):
+            # Upgrade already-saved display copies without changing identities,
+            # canonical history, or similarly worded user messages.
+            message['observation']=copy.deepcopy(match[1]['observation'])
     session['messages'] = merged
     session['nativeBoundary'] = incoming[-1]['nativeIndex'] if incoming else -1
     session['nativeBoundaryId'] = incoming[-1]['id'] if incoming else None
