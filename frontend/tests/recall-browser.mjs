@@ -12,7 +12,7 @@ try{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(ready.url);await openSettingsPage(page,'recall');
  const recall=page.getByRole('region',{name:'Indexed recall'}),memory=page.getByRole('region',{name:'Saved memory'});
  await recall.getByRole('button',{name:'Update search index'}).click();await expect(recall.getByRole('status')).toContainText('ready');
- await recall.getByLabel('Search conversation text').fill('paint indigo');await recall.getByRole('button',{name:'Search past work'}).click();
+ await recall.getByLabel('Search conversations, tasks and outputs').fill('paint indigo');await recall.getByRole('button',{name:'Search past work'}).click();
  await expect(recall.getByText('Original design decision',{exact:true})).toBeVisible();await recall.getByRole('button',{name:'Read source',exact:true}).click();
  await expect(recall.getByLabel('Verified source')).toContainText('The approved paint decision is indigo.');
  await memory.getByLabel('Memory note').fill('Use indigo in the report.');await memory.getByRole('button',{name:'Save memory',exact:true}).click();
