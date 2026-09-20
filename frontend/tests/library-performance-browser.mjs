@@ -58,7 +58,7 @@ try{
     assert.equal(measured.value.accepted,true);actionSamples.push(measured);delete measured.value;
    }
    const actionMetrics=await api('/api/fixture/metrics');
-   assert.equal(actionMetrics.publications,samples,'one lightweight command must not multiply publications');
+   assert.equal(actionMetrics.publications,samples,'one lightweight command must not multiply publications: '+JSON.stringify(actionMetrics));
 
    // Agents retain the entire navigation catalog even when browser transport is bounded.
    const agent=async path=>(await api('/api/fixture/agent',{args:{path}})).value;
@@ -102,6 +102,7 @@ try{
    });
    const navigationStart=performance.now();await page.goto(browserTarget);await page.locator('#amp-one').waitFor();
    await page.waitForFunction(()=>window.amplifier?.getState().sharedHistory?.loading===false);
+   await page.waitForFunction(expected=>document.querySelectorAll('.a-nav-chat').length===expected,Math.min(100,scenario.roots));
    const initialVisibleMs=performance.now()-navigationStart;
    assert.equal(await page.locator('.a-nav-chat').count(),Math.min(100,scenario.roots));
    const domNodes=await page.locator('*').count();

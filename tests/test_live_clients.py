@@ -43,6 +43,7 @@ async def test_views_drafts_selection_and_device_effects_are_independent(live):
     assert "Private A" not in json.dumps(b) and "Private B" not in json.dumps(a)
     await command(service, "browser-a", "session.select", {"id": second})
     assert snapshot(service, "browser-a")["view"]["draft"] == ""
+    assert service._session(first).get("draft", "") == ""
     # A delayed save belongs to its original conversation, not current selection.
     await command(service, "browser-a", "view.update", {"sessionId": first, "patch": {"draft": "Later A"}})
     assert snapshot(service, "browser-a")["view"]["draft"] == ""

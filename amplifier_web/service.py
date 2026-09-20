@@ -937,7 +937,7 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
-            if previous_scope[0] != self.state.get('selectedSessionId'):
+            if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
                 selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
