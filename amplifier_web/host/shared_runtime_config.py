@@ -67,6 +67,12 @@ def resolve_config(config, *, workspace, session_id):
         selected.setdefault(section, {})["hooks"] = [copy.deepcopy(row) for row in rows if row.get("module") == "hooks-routing"]
     host = HostConfig(root, workspace, selected, root / "cache", root)
     existing = [copy.deepcopy(row) for row in result.get("hooks", []) if row.get("module") == "hooks-routing"]
+    for hook in existing:
+        hook.setdefault("source", ROUTING_SOURCE)
+        # Opting into shared policy must not retain a private matrix or role
+        # override merely because the corresponding shared setting is absent.
+        for key in ("default_matrix", "overrides", "custom_routing_dirs"):
+            hook.get("config", {}).pop(key, None)
     model = SimpleNamespace(providers=[], tools=[], session={},
                             hooks=existing or [{"module": "hooks-routing", "source": ROUTING_SOURCE}])
     _apply_settings(model, host)

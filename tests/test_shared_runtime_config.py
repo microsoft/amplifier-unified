@@ -62,6 +62,20 @@ def test_disabled_instances_and_no_private_provider_fallback(setup):
         bridge.resolve_config(base, workspace=workspace, session_id='native-session')
 
 
+def test_private_routing_choices_do_not_survive_shared_adoption(setup):
+    _, workspace, _, base = setup
+    base['hooks'].append({'module': 'hooks-routing', 'config': {
+        'default_matrix': 'private-matrix', 'overrides': {'reasoning': {'candidates': [{'provider': 'provider-old', 'model': 'private-model'}]}},
+        'custom_routing_dirs': ['/private/routing'], 'max_concurrent_role_resolutions': 2}})
+    result = bridge.resolve_config(base, workspace=workspace, session_id='native-session')
+    route = result['hooks'][-1]
+    assert route['source'] == bridge.ROUTING_SOURCE
+    assert route['config']['default_matrix'] == 'team'
+    assert 'overrides' not in route['config']
+    assert '/private/routing' not in route['config']['custom_routing_dirs']
+    assert route['config']['max_concurrent_role_resolutions'] == 2
+
+
 def test_shared_sources_override_stale_private_sources(setup):
     _, workspace, paths, base = setup
     base['module_sources'] = {'provider-a': 'old', 'hooks-routing': 'old-route', 'tool-domain': 'domain-source'}
