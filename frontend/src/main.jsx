@@ -53,7 +53,7 @@ const initialSetup={title:'A new conversation',bundle:'work',workspace:''};
 function App(){
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
- const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve());
+ const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
@@ -102,7 +102,7 @@ function App(){
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
   const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
-  const pending=action==='view.update'?pendingView.current.add(args.patch||{},args.sessionId):null;
+  const pending=action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
   const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
@@ -209,11 +209,26 @@ function App(){
   if(!stagedDraft.current||payload?.sessionId===sessionId)return;
   // A new chat's edit/send must not cancel the previous chat's unsaved debounce.
   // Queue its explicitly bound save without blocking independent navigation.
-  clearTimeout(draftTimer.current);act('view.update',payload);
-  pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;
+  clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));
+  stagedDraft.current=null;
  }
- function editDraft(value){const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);stagedDraft.current=pendingView.current.add({draft:value},sessionId);stagedDraftPayload.current={patch:{draft:value},sessionId};if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{pendingView.current.settle(stagedDraft.current);stagedDraft.current=null;act('view.update',{patch:{draft:value},sessionId})},220)}
- async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>result.state.sessions.find(row=>row.id===result.state.selectedSessionId)).finally(()=>{creatingSession.current=null});return creatingSession.current}
+ function saveDraft(payload,token){
+  if(draftSaves.current.has(payload))return draftSaves.current.get(payload);
+  const save=(async()=>{
+  // Autosave may become ready before the first conversation has an ID. Keep its
+  // original optimistic position, then save against the conversation it created.
+  if(payload.sessionId===null&&creatingSession.current){const current=await creatingSession.current;payload.sessionId=current.id;pendingView.current.bindDraft(token,current.id)}
+  try{return await dispatch('view.update',payload,{pendingViewToken:token})}
+  finally{if(stagedDraft.current===token)stagedDraft.current=null}
+  })();
+  draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
+ }
+ function editDraft(value){const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>setError(actionErrorMessage(e)))},220)}
+ async function ensureSession(){const current=latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{}).then(result=>{
+  const created=result.state.sessions.find(row=>row.id===result.state.selectedSessionId),payload=stagedDraftPayload.current;
+  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));if(latest.current)setState(pendingView.current.apply(latest.current))}
+  return created;
+ }).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=ensureSession();uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{const current=await target;for(const file of files)await dispatch('attachment.add',{sessionId:current.id,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
@@ -244,9 +259,8 @@ function App(){
   const blankToken=stagedDraft.current;
   let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,text:submittedText,via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
+   await saveDraft(stagedDraftPayload.current,blankToken);
    const current=session||await ensureSession();entry=outbox.update(id,{sessionId:current.id});
-   await dispatch('view.update',{sessionId:current.id,patch:{draft:''}});
-   pendingView.current.settle(blankToken);if(stagedDraft.current===blankToken)stagedDraft.current=null;
    await deliver(entry);
   }catch(error){outbox.update(id,{status:'failed',error:actionErrorMessage(error)});}
   finally{pendingView.current.settle(blankToken);if(stagedDraft.current===blankToken)stagedDraft.current=null;if(latest.current)setState(pendingView.current.apply(latest.current));}
