@@ -111,7 +111,7 @@ wheels = [
 [[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.2.0"
-source = { git = "https://github.com/bkrabach/amplifier-bundle-context-intelligence?rev=79a6162253c7f8c66e5d2af7e9c8ffcdf38865dd#79a6162253c7f8c66e5d2af7e9c8ffcdf38865dd" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=9d9759d6357ffc99fdbfb9e040136996b6c4ca9c#9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" }
 dependencies = [
     { name = "azure-identity" },
 ]
@@ -180,7 +180,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
-    { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/bkrabach/amplifier-bundle-context-intelligence?rev=79a6162253c7f8c66e5d2af7e9c8ffcdf38865dd" },
+    { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" },
     { name = "amplifier-core", specifier = "==1.6.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e" },
     { name = "cryptography", specifier = ">=44,<46" },
