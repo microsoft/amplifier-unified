@@ -154,6 +154,9 @@ ACTION_DEFINITIONS = {
 }
 
 
+from .operations import definitions as operation_definitions
+ACTION_DEFINITIONS.update(operation_definitions())
+
 class AppError(Exception):
     def __init__(self, message, status=400, *, code=None):
         super().__init__(message)
@@ -328,6 +331,8 @@ class AppService:
         self.clients = ClientViews(self)
         self._client_snapshots = {}
         self._refresh_shared_preferences()
+        from .operations import Operations
+        self.operations = Operations(self)
         self._save()
 
     def default_theme(self):
@@ -579,6 +584,8 @@ class AppService:
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
+        if action.startswith("operations."):
+            return await self.operations.dispatch(action, args, origin)
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         if action == 'runtime.control' and args.get('operation') in {'history.edit','history.rewind'}:
@@ -1478,6 +1485,7 @@ class AppService:
                     session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
                     session.pop('health', None)
             elif kind == "runtime.ended":
+                self.operations.interrupted(session["id"])
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
@@ -1570,6 +1578,7 @@ class AppService:
                     worker.update(payload)
                 else:
                     session["workers"].append(copy.deepcopy(payload))
+                self.operations.notify()
                 retrying = payload.get("phase") == "retrying"
                 activity = self._activity(session, "retrying" if retrying else "workers", "A worker is retrying a model request" if retrying else "Delegated work is reporting progress")
                 activity["lastEvent"] = {"worker": payload.get("name", "Worker"), "status": payload.get("status"), "at": time.time()}
@@ -1638,6 +1647,8 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == "operations.observe":
+            return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:
@@ -1663,6 +1674,10 @@ class AppService:
             action_args=copy.deepcopy(args.get('args',{}))
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
+            if args['action'].startswith('operations.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Operation actions must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'].startswith('canvas.apps.'):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
@@ -1790,4 +1805,5 @@ class AppService:
             self._publish()
         else:
             self._save()
+        await self.operations.close()
         self.db.close()

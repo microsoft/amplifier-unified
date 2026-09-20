@@ -243,6 +243,8 @@ class SmartToolsManager:
         overview = self._overview(operation)
         self.service.db.execute("INSERT OR REPLACE INTO smart_tool_operations VALUES (?, ?)", (operation["id"], json.dumps(overview)))
         operation.update(overview)
+        if getattr(self.service, "operations", None):
+            self.service.operations.notify()
         # In-flight records are excluded from result retention. Enforce the
         # completed-result budget once a result/outcome can actually change it.
         if operation.get('status') not in {'queued', 'running'}:
