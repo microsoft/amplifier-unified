@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.15.1",
+      "title": "Continue here from the message box",
+      "changes": [
+        "When another app owns the conversation, a clear overlay covers the message box with a Continue here action. Saved history and navigation remain available.",
+        "The message box stays blocked while takeover is pending or has failed. Your draft is preserved, and a failed takeover can be retried explicitly.",
+        "The takeover overlay supports keyboard navigation and narrow mobile layouts, and restores typing focus after a successful request when you have stayed in the message box."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.15.0",
       "title": "Work by default and bundle display names",
       "changes": [
