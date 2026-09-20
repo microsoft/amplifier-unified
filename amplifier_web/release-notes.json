@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.8",
+      "title": "Shared model settings for native runtimes",
+      "changes": [
+        "An optional host adapter lets compatible native runtimes read shared provider settings from the user, workspace and native-session scopes while retaining their own domain bundles and instructions.",
+        "The adapter uses normal model routing, preserves delegated model preferences and keeps saved-session configuration checks. Installing this release does not enable it or change an existing manager.",
+        "A shareable TUI integration guide documents settings precedence, provider instances, credentials, routing, voice preferences and cross-app adoption checks."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.7",
       "title": "Reliable live-session activation and terminal client handoff",
       "changes": [
