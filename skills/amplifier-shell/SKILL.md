@@ -1,6 +1,6 @@
 ---
 name: amplifier-shell
-description: "Customize Amplifier Unified presentation or build shell extensions. USE WHEN changing layouts, themes, sidebar modules, or artifact viewers and validating hot-loaded components. DO NOT USE WHEN changing AmplifierSession tools, providers, or orchestration; use runtime bundle guidance."
+description: "Customize Amplifier Unified presentation or build shell extensions. USE WHEN changing layouts, themes, sidebar modules, or artifact viewers, interactive conversation surfaces, and validating hot-loaded components. DO NOT USE WHEN changing AmplifierSession tools, providers, or orchestration; use runtime bundle guidance."
 ---
 
 # Amplifier Unified shell
@@ -32,6 +32,9 @@ actions are known, or work is clearly limited to an offline package.
 
 - **Change existing presentation:** Read [presentation.md](presentation.md).
   Reuse installed modules, layouts and themes before creating code.
+- **Create interactive UX for a conversation:** Read
+  [conversation-surfaces.md](conversation-surfaces.md). Keep one surface ID and
+  refine its existing tab, preserving shared user/agent state.
 - **Build or replace a component:** Read [authoring.md](authoring.md), then the
   relevant contract in [the shell guide](../../docs/shell/README.md).
   The public SDK is [packages/shell-sdk](../../packages/shell-sdk/index.d.ts).

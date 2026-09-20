@@ -190,6 +190,18 @@ from .shell_modules import ShellModules, definitions as shell_definitions
 ACTION_DEFINITIONS.update(shell_definitions(schema, string))
 from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
+from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
+ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
+ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
+ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
+for theme_action in ('theme.apply', 'theme.preview'):
+    theme_spec = ACTION_DEFINITIONS[theme_action][1]
+    theme_spec['properties']['tokens'] = {'type': 'object', 'minProperties': 1, 'additionalProperties': False,
+        'properties': {key: {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'} for key in THEME_TOKENS}}
+    theme_spec['required'] = ['name']
+    theme_spec['oneOf'] = [{'required': ['css'], 'not': {'required': ['tokens']}},
+                           {'required': ['tokens'], 'not': {'required': ['css']}}]
+
 
 
 class AppService:
@@ -386,6 +398,8 @@ class AppService:
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
     def _save(self):
+        from .canvas_apps import sync
+        sync(self)
         self._browser_snapshot = None
         self._client_snapshots.clear()
         from .state_storage import normalize_state
@@ -540,7 +554,7 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
-        if action.startswith('canvas.views.') and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
@@ -654,7 +668,10 @@ class AppService:
                         pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
-                if action.startswith('canvas.views.'):
+                if action.startswith('canvas.apps.'):
+                    from .canvas_apps import command
+                    diagnostic_result = command(self, action, args, origin)
+                elif action.startswith('canvas.views.'):
                     diagnostic_result, view_effects = self.canvas_views.command(action, args, origin)
                     effects.extend(view_effects)
                 elif action in {'canvas.select','canvas.reopen','canvas.tabClose'}:
@@ -1009,9 +1026,9 @@ class AppService:
                     SettingsStore(self.data_dir).update(self.state["settings"]["workspace"], "global", save_shared)
                 self.state["settings"].update(copy.deepcopy(patch))
                 self._refresh_shared_preferences()
-            elif action == "theme.apply":
-                validate_theme(args["css"])
-                self.state["theme"] = {"name": args["name"] or "Custom skin", "css": args["css"]}
+            elif action in {'theme.apply', 'theme.preview', 'theme.revert'}:
+                from .canvas_apps import theme_command
+                theme_command(self, action, args)
             elif action == "theme.reset":
                 self.state["theme"] = {"name": "Converge", "css": self.default_theme()}
             elif action == "notification.request":
@@ -1053,7 +1070,11 @@ class AppService:
                     self.state['view'].pop(key, None)
             view_action = args.get('action') if action == 'canvas.views.command' else action
             if action not in {'session.pin', 'canvas.views.inspect', 'canvas.views.status'} and view_action != 'canvas.snapshot' and not action.startswith(('diagnostics.','view.','attention.','canvas.snapshot')):
-                artifact_id = args.get('resourceId') if action.startswith('canvas.views.') else self.state.get('canvas',{}).get('id')
+                artifact_id = self.state.get('canvas', {}).get('id')
+                if action.startswith('canvas.views.'):
+                    artifact_id = args.get('resourceId')
+                elif action.startswith('canvas.apps.'):
+                    artifact_id = args.get('id', (diagnostic_result or {}).get('id'))
                 owner_id = args.get('sessionId',self.state.get('selectedSessionId'))
                 if action.startswith('canvas.views.'):
                     artifact = next((row for row in self.state.get('canvasArtifacts', []) if row['id'] == artifact_id), {})
@@ -1426,6 +1447,10 @@ class AppService:
             action_args=copy.deepcopy(args.get('args',{}))
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
+            if args['action'].startswith('canvas.apps.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Surface actions must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))

@@ -17,6 +17,7 @@ from ..shared_settings import read_yaml, read_settings
 from ..session_files import amplifier_home
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@b3bdab2adcc2a8fe477aca64c20b77528a95e1df"
+WORK_SOURCE = "git+https://github.com/bkrabach/amplifier-bundle-work@d09fa8ae95c1da5ff6a5c96f87be0f8aab62b581#subdirectory=bundle.md"
 _KEY_FILE_VALUES = {}
 
 
@@ -166,7 +167,13 @@ class HostConfig:
 
     @property
     def registrations(self):
-        return {"foundation": FOUNDATION_SOURCE, "anchors": "git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=bundles/anchors/bundle.md", **self.settings.get("bundle", {}).get("added", {}), **self.bundle_sources}
+        return {
+            "foundation": FOUNDATION_SOURCE,
+            "anchors": "git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=bundles/anchors/bundle.md",
+            "work": WORK_SOURCE,
+            **self.settings.get("bundle", {}).get("added", {}),
+            **self.bundle_sources,
+        }
 
     def resolve_source(self, source):
         # Source overrides also support namespace-relative includes.

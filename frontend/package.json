@@ -37,7 +37,8 @@
     "test:canvas-renderers-browser": "node tests/canvas-renderers-browser.mjs",
     "test:canvas-dirty-browser": "node tests/canvas-dirty-browser.mjs",
     "test:cache-usage-browser": "node tests/cache-usage-browser.mjs",
-    "test:bundle-browser": "node tests/bundle-browser.mjs"
+    "test:bundle-browser": "node tests/bundle-browser.mjs",
+    "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
