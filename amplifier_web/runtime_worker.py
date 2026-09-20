@@ -125,6 +125,9 @@ class Worker:
             if event.get("phase") == "started":
                 self.operation_ids.add(identity)
             try:
+                from amplifier_web.computation import KERNEL_TRANSPORT
+                if event.get("source") == "tool-bash" and KERNEL_TRANSPORT.get():
+                    return {"capturedBy": "computation"}
                 return await self.bridge("operations.observe", {
                     "runtimeSessionId": coordinator.session_id, "event": event})
             finally:
@@ -480,7 +483,7 @@ class Worker:
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
-                detached_cancel = op == "control" and data.get("operation") == "operations.cancel"
+                detached_cancel = op == "control" and (data.get("operation") == "operations.cancel" or data.get("operation", "").startswith("kernels."))
                 if detached_cancel:
                     self.operation_controls += 1
                 else:

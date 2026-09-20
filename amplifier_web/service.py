@@ -156,6 +156,8 @@ ACTION_DEFINITIONS = {
 
 from .operations import definitions as operation_definitions
 ACTION_DEFINITIONS.update(operation_definitions())
+from .computation import definitions as computation_definitions
+ACTION_DEFINITIONS.update(computation_definitions())
 
 class AppError(Exception):
     def __init__(self, message, status=400, *, code=None):
@@ -584,6 +586,9 @@ class AppService:
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
+        if action.startswith("kernels."):
+            from .computation import dispatch
+            return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
             return await self.operations.dispatch(action, args, origin)
         if action.startswith("shell."):
@@ -1674,7 +1679,7 @@ class AppService:
             action_args=copy.deepcopy(args.get('args',{}))
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
-            if args['action'].startswith('operations.'):
+            if args['action'].startswith(('operations.', 'kernels.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Operation actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
