@@ -18,3 +18,20 @@ export interface NavigationSnapshot {
 /** React is supplied by the host; native packages must not bundle another copy. */
 export function defineModule<T>(factory: (runtime: {React: unknown}) => T): typeof factory;
 export function useNavigation(React: any, host: ShellHost): NavigationSnapshot;
+export interface CanvasSnapshot {
+ readonly viewId: string;
+ readonly resource: null | {id:string;kind:string;title?:string;content?:string;surface?:unknown;url?:string;path?:string;revision:string};
+ readonly view: Readonly<Record<string, unknown>>;
+}
+export interface CanvasHost {
+ readonly apiVersion: '1.0';
+ readonly instanceId: string;
+ readonly viewId: string;
+ getSnapshot(): Readonly<CanvasSnapshot>;
+ /** Explicit source read, including large stored documents. Rejects stale view bindings. */
+ readSource(): Promise<string>;
+ subscribe(listener: () => void): () => void;
+ dispatch(action: 'view.update' | 'view.report', args: Record<string, unknown>): Promise<unknown>;
+ setDirty(dirty: boolean): Promise<unknown>;
+}
+export function useCanvas(React: any, host: CanvasHost): CanvasSnapshot;

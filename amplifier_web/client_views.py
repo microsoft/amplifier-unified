@@ -170,6 +170,7 @@ class ClientViews:
         if record is None:
             return snapshot
         snapshot.pop("canvasTabs", None)
+        snapshot['canvasWorkspace'] = self.service.canvas_views.project()
         from .canvas_library import presentation
         snapshot["canvasArtifacts"] = [{**row, **copy.deepcopy(presentation(self.service.state, row))}
                                        for row in snapshot.get("canvasArtifacts", [])]

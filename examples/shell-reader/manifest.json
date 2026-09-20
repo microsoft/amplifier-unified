@@ -1,0 +1,10 @@
+{
+  "id": "example.document-reader",
+  "label": "Reading view",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "profile": "trusted-native-renderer-v1",
+  "stateSchema": "canvas-view-v1",
+  "resourceKinds": ["markdown", "text"],
+  "capabilities": ["canvas.resource.read", "canvas.view.update"]
+}

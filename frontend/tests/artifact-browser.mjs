@@ -7,11 +7,12 @@ const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.u
 const demo=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end('<h1>Launched app</h1><button onclick="this.textContent=\'It works\'">Try demo</button><p id="isolation"></p><script>try{parent.document.title;document.getElementById("isolation").textContent="UNSAFE"}catch(e){document.getElementById("isolation").textContent="Isolated from Amplifier"}</script>')});
 await new Promise(resolve=>demo.listen(0,'127.0.0.1',resolve));
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
-const browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1400,height:950}}),errors=[];
+const browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1400,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 try{
  await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
+ await action('view.update',{patch:{canvasControlsPinned:true}});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Make visuals');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>{const s=window.amplifier.getState();return s.sessions.find(x=>x.id===s.selectedSessionId)?.status==='idle'});
  await action('canvas.show',{kind:'markdown',title:'Saved plan',content:'# The plan\n\nKept across tabs.'});

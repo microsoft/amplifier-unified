@@ -28,6 +28,21 @@ MANIFEST = {'type': 'object', 'additionalProperties': False, 'required': ['id', 
     'apiVersion': {'const': API}, 'profile': {'const': PROFILE},
     'stateSchema': IDENTITY, 'capabilities': {'type': 'array', 'uniqueItems': True, 'maxItems': 6, 'contains': {'const': 'navigation.read'}, 'items': {'enum': CAPABILITIES}},
 }}
+RENDERER_MANIFEST = copy.deepcopy(MANIFEST)
+RENDERER_MANIFEST['required'].append('resourceKinds')
+RENDERER_MANIFEST['properties'].update({
+    'profile': {'const': 'trusted-native-renderer-v1'},
+    'label': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+    'capabilities': {'type': 'array', 'uniqueItems': True, 'maxItems': 3,
+        'contains': {'const': 'canvas.resource.read'},
+        'items': {'enum': ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']}},
+    'resourceKinds': {'type': 'array', 'uniqueItems': True, 'minItems': 1, 'maxItems': 12,
+        'items': {'enum': ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']}},
+})
+MANIFEST = {'allOf': [
+    {'type': 'object', 'properties': {'profile': {'enum': [PROFILE, 'trusted-native-renderer-v1']}}, 'required': ['profile']},
+    {'if': {'properties': {'profile': {'const': PROFILE}}}, 'then': MANIFEST, 'else': RENDERER_MANIFEST},
+]}
 INSTANCE = {'type': 'object', 'additionalProperties': False, 'required': ['id', 'package', 'slot'], 'properties': {
     'id': IDENTITY, 'package': {'type': 'string', 'maxLength': 100}, 'slot': {'const': 'navigation'},
     'scope': {'type': 'object', 'additionalProperties': False, 'properties': {'workspaceId': IDENTITY, 'mode': {'enum': ['follow', 'pinned', 'all']}}, 'required': ['mode']},
@@ -65,7 +80,7 @@ def definitions(schema, string):
     return {
         'shell.inspect': ('Inspect client composition, package manifests, validation and browser activation evidence.', schema(client)),
         'shell.query': ('Read one module instance\'s bounded navigation snapshot, using its own scope and filters.', schema({**client, 'instanceId': IDENTITY})),
-        'shell.packages.stage': ('Stage a trusted native navigation package; this does not execute or activate it.', schema({'manifest': MANIFEST, 'source': string(250000)})),
+        'shell.packages.stage': ('Stage a trusted native navigation or artifact-renderer package; this does not execute or activate it.', schema({'manifest': MANIFEST, 'source': string(250000)})),
         'shell.packages.validate': ('Run host-owned import and browser lifecycle checks of the staged digest. Requires the local validator toolchain.', schema({'digest': string(64)})),
         'shell.changes.prepare': ('Validate a proposed client composition and return a reviewable change; does not activate it.', schema({**client, 'composition': COMPOSITION, 'expectedRevision': {'type': 'integer', 'minimum': 0}})),
         'shell.changes.preview': ('Preview a prepared composition in the target client. Browser activation is separately reported.', schema(change)),
@@ -155,7 +170,7 @@ class ShellModules:
 
     def host_fingerprint(self):
         # Receipts expire when the actual harness/runtime or validator changes.
-        paths = [Path(__file__), Path(__file__).with_name('shell_validator.mjs'), *sorted((Path(__file__).parent / 'static').rglob('*.js')), Path(__file__).parent / 'static/shell-validation.html']
+        paths = [Path(__file__), Path(__file__).with_name('canvas_views.py'), Path(__file__).with_name('shell_validator.mjs'), *sorted((Path(__file__).parent / 'static').rglob('*.js')), Path(__file__).parent / 'static/shell-validation.html']
         signature = [(str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in paths if path.exists()]
         if getattr(self, '_host_signature', None) != signature:
             digest = hashlib.sha256((API + PROFILE).encode())
@@ -177,7 +192,8 @@ class ShellModules:
         if len(set(ids)) != len(ids):
             fail('Module instance IDs must be unique.')
         for item in composition['instances']:
-            self.manifest(item['package'])
+            if self.manifest(item['package'])['profile'] != PROFILE:
+                fail('The navigation slot requires a navigation package.')
             scope = item.get('scope', {})
             if scope.get('mode') == 'pinned' and not scope.get('workspaceId'):
                 fail('Pinned modules require a workspaceId.')
@@ -275,9 +291,12 @@ class ShellModules:
         self.source(digest)
         if fingerprint != self.host_fingerprint():
             fail('Host changed during validation; retry.', 409)
-        receipt = {'id': str(uuid.uuid4()), 'digest': digest, 'hostFingerprint': fingerprint, 'apiVersion': API, 'profile': PROFILE, 'validatedAt': time.time(), **result}
+        receipt = {'id': str(uuid.uuid4()), 'digest': digest, 'hostFingerprint': fingerprint, 'apiVersion': API, 'profile': record['manifest']['profile'], 'validatedAt': time.time(), **result}
         record['validation'] = receipt
         self.put('package', digest, record)
+        if record['manifest']['profile'] == 'trusted-native-renderer-v1':
+            async with self.service.lock:
+                self.service._publish()
         return receipt
 
     async def dispatch(self, action, args, origin, command_id):

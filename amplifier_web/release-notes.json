@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.11.13",
+      "title": "Flexible artifact viewers with protected unsaved edits",
+      "changes": [
+        "Choose a validated artifact viewer through Open with, including separately built viewers loaded while the app is running.",
+        "Pin a second ordinary artifact view while the primary view follows your work; each view keeps its own viewer and settings without changing the saved source or composer target.",
+        "Library browsing preserves mounted viewers and unsaved edits. Actions that would discard a declared edit wait for you to finish it or explicitly recover the viewer.",
+        "Viewer controls reject stale targets, and missing or failed viewers can fall back to the standard viewer while retaining the saved artifact."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.12",
       "title": "Preserve drafts during quick conversation switches",
       "changes": [
