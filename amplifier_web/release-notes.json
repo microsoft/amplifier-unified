@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.12.1",
+      "title": "Show standalone bundles in conversation pickers",
+      "changes": [
+        "Conversation and default bundle pickers now show built-in conversation profiles and explicit standalone registrations, excluding cached add-ons and source-only aliases.",
+        "Capability bundles remain available under Add capabilities. Existing conversations and defaults retain their selections."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.12.0",
+      "title": "Choose bundles per conversation and set scoped defaults",
+      "changes": [
+        "Choose a root bundle beside the model, with friendly names and descriptions.",
+        "Preview and switch an idle conversation to another bundle, retaining history and compatible model choices; failed loads restore the previous configuration.",
+        "Fork with another bundle while preserving the original conversation, saved history, voice references, and artifact snapshots.",
+        "Set a default for this Unified app, this workspace on this computer, or shared Amplifier settings, using the same controls available to agents.",
+        "Bundle switches replace instructions and reset previous module edits, modes, and budget overrides. Existing conversations keep their roots when a default changes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.11.13",
       "title": "Flexible artifact viewers with protected unsaved edits",
       "changes": [

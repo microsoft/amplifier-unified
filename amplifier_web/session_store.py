@@ -199,7 +199,7 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None):
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -281,19 +281,31 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
         "preserve_system":True,"fork":{"source_session_id":source_id,"through_user_turn":through_turn, "before_user_turn":before_turn,
                                      "created":now,"jobs_replayed":False},
         "turn_count":through_turn}
+    if bundle:
+        metadata.update(bundle_name=bundle, bundle=bundle, preserve_system=False)
+        retained = [(index, row) for index, row in enumerate(messages) if row.get('role') not in {'system', 'developer'}]
+        remap = {old: new for new, (old, _) in enumerate(retained)}
+        for row in visible:
+            if 'nativeIndex' in row:
+                old = row.pop('nativeIndex')
+                if old in remap: row['nativeIndex'] = remap[old]
+        messages = [row for _, row in retained]
     # Carry only host configuration, not job ownership or child session files.
     copied = {}
     for name in ("configuration.json","control-state.json"):
         path = source_dir / name
-        if path.is_file():
+        if path.is_file() and not (bundle and name == "configuration.json"):
             data = json.loads(path.read_text())
             if name == "control-state.json":
                 data["goal"] = None
+                if bundle:
+                    from .bundle_selection import reset_controls
+                    data = reset_controls(data, reset_model=reset_model)
             copied[name] = json.dumps(data,indent=2)
     effective = source_dir / "effective-configuration.json"
-    if effective.is_file():
+    if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
-    store.save(target_id,messages,metadata,preserve_system=True)
+    store.save(target_id,messages,metadata,preserve_system=not bool(bundle))
     for name,value in copied.items():
         write_private(target_dir / name,value)
     if source.get('sharedHistoryOffset', 0) or user_offset:
@@ -307,4 +319,4 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             'sharedHistoryTotal': sum(row.get('role') in {'user', 'assistant'} and bool(text_content(row))
                                       and not (row.get('metadata') or {}).get('ephemeral') for row in messages),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
-            **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") else {})}
+            **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") and not reset_model else {})}
