@@ -615,6 +615,13 @@ class Management:
                             if path.exists():shutil.rmtree(path)
                 self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Shared CLI transcripts and event files are retained.'}
                 self.service._publish()
+        elif action=='maintenance.restoreResource':
+            from .resource_files import restore
+            async with self.service.lock:
+                roots=[self.service._state,*self.service.clients.records.values()]
+                result=restore(self.service.db,roots,args['id'],args['value'])
+                self.service.state.setdefault('maintenance',{})['resourceRecovery']=result
+                self.service._publish()
         elif action=='maintenance.backup':
             from .recovery import backup
             result=await backup(self.service)

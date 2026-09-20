@@ -117,6 +117,10 @@ def maintenance(service):
     if now - getattr(service, '_last_storage_sweep', now - 61) < 60:
         return
     service._last_storage_sweep = now
-    stale = collect(service.db, service.state)
+    # A bound client is only a projection: it hides shared presentation fields
+    # and all other clients. Retention must see every retained in-memory root.
+    clients = getattr(service, 'clients', None)
+    roots = [service._state, *clients.records.values()] if clients else service._state
+    stale = collect(service.db, roots)
     service.db.commit()
     remove_files(service.db, stale)
