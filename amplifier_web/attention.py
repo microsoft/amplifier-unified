@@ -40,6 +40,11 @@ def snapshot(state):
     if local.get('storageError') or local.get('configurationError') or local.get('dropped') or local.get('outboxDropped') or local.get('expiredPending'):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=local)
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
     for session in state.get('sessions',[]):
+        for question in session.get('questions', []):
+            if question['status'] == 'pending':
+                add('question:'+question['id'], 'Answer requested' if question['required'] else 'Optional question', 'chats', 'chats', question['prompt'], question['revision'], sessionId=session['id'], workspace=session.get('workspace'))
+            elif (question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}:
+                add('question:'+question['id'], 'Answer saved; delivery needs attention', 'chats', 'chats', question['prompt'], question['delivery'], sessionId=session['id'], workspace=session.get('workspace'))
         completion=session.get('completion')
         if completion:
             add('completion:'+session['id'],'Response ready','chats','chats',version=completion['id'],sessionId=session['id'],workspace=session.get('workspace'),label=session.get('title','Conversation'),completedAt=completion.get('at'))
