@@ -9,6 +9,8 @@ FORBIDDEN = {'amplifier_app_cli', 'amplifier_loop_live_cli', 'amplifier_workspac
 
 def test_no_cli_host_imports():
     for path in (ROOT / 'amplifier_web').rglob('*.py'):
+        if '.venv' in path.parts:
+            continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
@@ -32,3 +34,18 @@ def test_generation_completion_keeps_delivered_and_accepted_distinct():
     assert payload['accepted_input_ids'] == ['queued']
     assert payload['active_job_ids'] == ['j']
     assert 'provider_payload' not in payload
+
+
+def test_shipped_ecosystem_sources_do_not_freeze_upstream_revisions():
+    import re
+    roots = [ROOT / 'amplifier_web', ROOT / 'behaviors', ROOT / 'scripts/work_profile', ROOT / '.github']
+    paths = [ROOT / 'pyproject.toml'] + [p for root in roots for p in root.rglob('*')
+        if p.suffix in {'.py', '.toml', '.yaml', '.yml', '.txt'} and not any(
+            part in {'.venv', 'vendor', 'tests', 'static', '__pycache__'} for part in p.parts)]
+    fixed = re.compile(r'git\+https://github.com/(?:microsoft|bkrabach)/amplifier[^\s"\'#@]*@(?:[a-f0-9]{7,40}|v?\d+\.[^\s"\']+)')
+    for path in paths:
+        assert not fixed.search(path.read_text()), str(path)
+    manifest = tomllib.loads((ROOT / 'amplifier_web/runtime_deps/pyproject.toml').read_text())
+    for name, source in manifest['tool']['uv']['sources'].items():
+        if 'git' in source:
+            assert (source.get('branch') or source.get('rev')) == 'main' and 'tag' not in source, name

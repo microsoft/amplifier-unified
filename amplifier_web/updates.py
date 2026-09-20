@@ -1,10 +1,11 @@
 """App-owned ecosystem updates: read-only checks, isolated staging, atomic promotion.
 
-Only mutable Git sources in our Foundation cache are refreshable. Version/SHA
-pins, local worktrees, the patched engine and host libraries stay explicit.
+Mutable Git sources in the Foundation cache and worker environment are
+refreshable. User-supplied pins and local worktrees remain explicit choices.
 """
 from __future__ import annotations
 import asyncio
+from collections.abc import Mapping
 import hashlib
 import json
 import os
@@ -120,8 +121,20 @@ def configured_sources(service):
     selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
                       for s in state['sessions']
                       if not (s.get('historyManaged') and s.get('historyReadOnlyReason')))
-    selections.update((w['path'], None, None) for w in state.get('workspaces', [])
-                      if isinstance(w.get('path'), str) and w['path'].strip())
+    for workspace in state.get('workspaces', []):
+        # Native history retains an unavailable, pathless workspace placeholder.
+        # It is not a source-selection error, unlike malformed workspace rows.
+        if (isinstance(workspace, Mapping)
+                and isinstance(workspace.get('nativeProject'), str)
+                and workspace.get('nativeProject')
+                and 'path' in workspace and workspace['path'] is None
+                and workspace.get('available') is False):
+            continue
+        path = workspace.get('path') if isinstance(workspace, Mapping) else None
+        if not isinstance(path, str) or not path.strip():
+            incomplete = True
+            continue
+        selections.add((path, None, None))
     try:
         path = foundation_home(home)/'registry.json'
         registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
@@ -450,7 +463,9 @@ class UpdateManager:
                 'id', 'workspace', 'bundle', 'runtimeSessionId', 'nativeIdentity',
                 'historyManaged', 'historyReadOnlyReason') if key in row}
                 for row in state['sessions']],
-            'workspaces': [{'path': row.get('path')} for row in state.get('workspaces', [])],
+            'workspaces': [{key: row[key] for key in ('nativeProject', 'path', 'available') if key in row}
+                           if isinstance(row, Mapping) else row
+                           for row in state.get('workspaces', [])],
         })
         snapshot.source_issues = []
         configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
@@ -490,13 +505,8 @@ class UpdateManager:
             rows.append({'id': 'historical-source-configuration', 'label': 'Older conversation settings', 'status': 'historical',
                 'eligible': False, 'kind': 'history', 'sourceIssues': historical_issues,
                 'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
-        return rows
-
-    def protected_items(self):
-        rows = []
-        rows.extend({'id':'host:'+name,'label':name,'kind':'host library','status':'pinned',
-            'detail':'Compatibility pin; updated with a tested application release.'}
-            for name in ['amplifier-core','amplifier-foundation','amplifier-module-loop-streaming','amplifier-module-loop-live'])
+        from .runtime_environment import inventory
+        rows.extend(inventory(self.home))
         return rows
 
     async def command(self, action):
@@ -530,6 +540,7 @@ class UpdateManager:
                         return sha
                 async def check_row(row):
                     if not row.get('eligible'): return
+                    if row.get('kind') == 'runtime environment': return
                     key = (row['url'],row['ref'])
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
@@ -557,9 +568,9 @@ class UpdateManager:
                 application['runningRevision'] = self.running_identity['revision']
                 app_available=application.get('status')=='update'
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
-                    items=public+self.protected_items()+[application],application=application,appAvailable=app_available,
+                    items=public+[application],application=application,appAvailable=app_available,
                     available=sum(r['status']=='update' for r in public)+int(app_available),
-                    lastCheck=time.time(), detail='Check complete. Pins, failed checks and caches with unknown usage are listed separately.')
+                    lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency sources were checked.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
@@ -600,7 +611,10 @@ class UpdateManager:
             source=foundation_home(self.home)
             try:
                 await self.publish(phase='staging',detail='Preparing an isolated copy of the ecosystem…',error=None)
-                await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,shutil.copytree,source,stage/'foundation',symlinks=True)
+                if source.exists():
+                    await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,shutil.copytree,source,stage/'foundation',symlinks=True)
+                else:
+                    (stage/'foundation').mkdir()
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await asyncio.to_thread(shutil.copytree,self.home/name,stage/name)
                 from .session_files import amplifier_home
@@ -615,6 +629,8 @@ class UpdateManager:
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
                 for row in candidates:
+                    if row.get('kind') in {'runtime dependency', 'runtime environment'}:
+                        continue
                     target=stage/'foundation'/row['path']
                     if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
                     current=await process('git','rev-parse','HEAD',cwd=target)
@@ -650,8 +666,10 @@ class UpdateManager:
         await self.activate()
 
     async def validate(self,stage,release):
+        from .runtime_environment import stage as stage_runtime
+        await stage_runtime(self, release, [row for row in self.inventory if row.get('status') == 'update' and row.get('eligible')])
         from .runtime import RuntimeManager
-        command=RuntimeManager()._command(release=release)
+        command=RuntimeManager()._command(release=release, home=self.home)
         command[-1]=str(Path(__file__).with_name('update_probe.py'))
         state=self.service.get_state()
         # Browsing historical CLI projects does not opt their old bundles into

@@ -8,7 +8,7 @@ A local Python host serving a bundled React interface. One conversation supports
 uv run --project /path/to/amplifier-web amplifier-unified --workspace /path/to/your/project
 ```
 
-Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, use the `work` default or choose another standalone bundle, and send a message. The runtime prepares its pinned environment on first use. Work currently requires GitHub access to its private bundle repository; Anchors remains available in the bundle picker. Explicit app, workspace, and shared bundle choices still take precedence, and existing conversations keep their saved bundle. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
+Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, use the `work` default or choose another standalone bundle, and send a message. The runtime prepares its branch-tracking environment on first use. Work currently requires GitHub access to its private bundle repository; Anchors remains available in the bundle picker. Explicit app, workspace, and shared bundle choices still take precedence, and existing conversations keep their saved bundle. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
 
 The first message may take several minutes while the runtime environment and configured modules are prepared. The conversation shows the current preparation phase and elapsed time; your message remains queued until preparation finishes. A preparation timeout reports an error instead of silently resending it.
 
@@ -61,7 +61,7 @@ It checks external-link navigation and the browser's actual form `Origin`;
 handwritten HTTP headers alone miss these failures. PAM is stubbed only in the
 isolated test, which never uses real credentials or changes system certificate trust.
 
-The runtime dependencies are pinned separately under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
+The runtime dependencies follow branches declared under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
 
 ## Deployment, PAM, and HTTPS
 
@@ -167,7 +167,7 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ### Automatic CLI workspaces and chats
 
-Unified pins Foundation's native `session.history` reader/writer and
+Unified uses Foundation's native `session.history` reader/writer and
 `session.shared_state` ownership lock. CLI lock participation
 requires the upgraded shared-root adapter; restart older CLI processes after
 updating. Native Windows CLI persistence remains available, but shared-session

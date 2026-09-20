@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.2",
+      "title": "Keep Work and its ecosystem current",
+      "changes": [
+        "Work and the bundled tools, context, live loop, skills and routing now follow their current branches instead of fixed commits.",
+        "Ecosystem checks include the conversation worker libraries. Updates prepare and validate a separate environment, then activate when work and calls are idle.",
+        "Rollback retains the installed dependency manifest and revisions, including after an app update or removal of a disposable runtime cache. New app dependency declarations appear as ecosystem updates."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.1",
+      "title": "See the actual work behind each action",
+      "changes": [
+        "Expand work to see commands and their output, exit codes, file contents and highlighted changes, task checklists, app actions, and delegated work.",
+        "Collapsed actions identify the command or file involved. Detailed timing, usage, call IDs, and original inputs and results remain available under Details, without repeated completion messages.",
+        "Streaming tool results are now retained correctly, including failures and empty output. Long saved content loads on expansion with retry and copy controls. Older steps whose content was never saved say so explicitly."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.0",
       "title": "Shared canvas awareness and reliable editing",
       "changes": [

@@ -20,7 +20,7 @@ from ..provider_environment import materialize_bundle_providers
 from ..session_files import amplifier_home
 from ..shared_settings import read_settings
 
-ROUTING_SOURCE = "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@201e13d47894afed0ba60cb794d8308fded79705#subdirectory=modules/hooks-routing"
+ROUTING_SOURCE = "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=modules/hooks-routing"
 _CREDENTIAL = re.compile(r"^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|github[_-]?token|token|password|secret|authorization|credential|client_secret)$", re.I)
 
 

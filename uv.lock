@@ -111,7 +111,7 @@ wheels = [
 [[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=9d9759d6357ffc99fdbfb9e040136996b6c4ca9c#9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main#9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" }
 dependencies = [
     { name = "azure-identity" },
 ]
@@ -144,7 +144,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e#3796a32351d32a93ccbb5e230c9ffe02964db42e" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#3796a32351d32a93ccbb5e230c9ffe02964db42e" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "pyyaml" },
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.19.0"
+version = "0.19.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -188,9 +188,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
-    { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" },
-    { name = "amplifier-core", specifier = "==1.6.1" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e" },
+    { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
+    { name = "amplifier-core", specifier = ">=1.6.1" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
     { name = "cryptography", specifier = ">=44,<46" },
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },
