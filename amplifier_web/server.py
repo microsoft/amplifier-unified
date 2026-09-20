@@ -23,7 +23,7 @@ def _set_response_headers(response: web.StreamResponse, path: str) -> web.Stream
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") or path == "/login" else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
@@ -80,6 +80,16 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+
+    async def mcp_oauth_callback(request):
+        await service.smart_tools.oauth.callback(request.query, validate_origin(f"{request.scheme}://{request.host}"))
+        raise web.HTTPSeeOther("/oauth/mcp/complete", headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+
+    async def mcp_oauth_complete(request):
+        return web.Response(text="Authorization response received. Return to Amplifier Unified to check the connection.")
+
+    app.router.add_get("/oauth/mcp/callback", mcp_oauth_callback, allow_head=False)
+    app.router.add_get("/oauth/mcp/complete", mcp_oauth_complete)
     app["runtime"] = runtime
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
@@ -279,7 +289,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def smart_canvas_tools(request):
         _, binding = service.smart_canvas.binding(request.match_info['identity'])
         server = next(s for s in service.state['smartTools']['servers'] if s['id'] == binding['serverId'])
-        tools = [t for t in server.get('tools',[]) if t['name'] in binding['allowedTools']]
+        tools = [t for t in await service.smart_tools.list_tools(server['id'], origin='app') if t['name'] in binding['allowedTools']]
         return web.json_response({'tools':tools})
 
     app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)

@@ -32,7 +32,10 @@ EXTRA_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 def configuration_key(config):
     """Bind an open surface to the exact executable configuration it reviewed."""
-    values = {key: config.get(key) for key in ("id", "command", "args", "env", "cwd")}
+    fields = ("id", "command", "args", "env", "cwd")
+    if config.get("transport", "stdio") != "stdio":
+        fields += ("transport", "url", "headers", "auth")
+    values = {key: config.get(key) for key in fields}
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -115,99 +118,19 @@ def _manifest(text):
     return _bounded(data, 32_000)
 
 
-class _Connection:
-    """One task owns both the SDK client and its sequential request queue."""
-
-    def __init__(self, config, secrets):
-        self.config = copy.deepcopy(config)
-        self.secrets = secrets
-        self.queue = asyncio.Queue(maxsize=64)
-        self.ready = asyncio.get_running_loop().create_future()
-        self.task = asyncio.create_task(self._run())
-        self.failure = None
-
-    async def _run(self):
-        from mcp import Client, StdioServerParameters
-        from mcp.client.extension import advertise
-        from mcp.client.stdio import stdio_client
-        params = StdioServerParameters(
-            command=self.config["command"], args=self.config.get("args", []),
-            env=self.secrets, cwd=self.config.get("cwd") or None,
-        )
-        current = None
-        try:
-            # Server stderr can contain credentials. Keep it out of application
-            # state and HTTP responses, including when a handshake fails.
-            with open(os.devnull, "w") as errlog:
-                async with Client(
-                    stdio_client(params, errlog=errlog), read_timeout_seconds=30,
-                    extensions=[advertise("io.modelcontextprotocol/ui", {"mimeTypes": [APP_MIME]})],
-                    cache=None,
-                ) as client:
-                    instructions = client.instructions or ""
-                    self.ready.set_result({
-                        "protocolVersion": client.protocol_version,
-                        "serverInfo": _json(client.server_info),
-                        "capabilities": _json(client.server_capabilities),
-                        "instructions": instructions[:16_000],
-                        "instructionsTruncated": len(instructions) > 16_000,
-                    })
-                    while True:
-                        request = await self.queue.get()
-                        if request is None:
-                            break
-                        method, args, kwargs, current = request
-                        if current.cancelled():
-                            continue
-                        try:
-                            result = await getattr(client, method)(*args, **kwargs)
-                            if not current.done():
-                                current.set_result(_json(result))
-                        except Exception as exc:
-                            if not current.done():
-                                current.set_exception(exc)
-                        finally:
-                            current = None
-        except BaseException as exc:
-            self.failure = exc
-            if not self.ready.done():
-                self.ready.set_exception(ValueError("The MCP server could not start or complete its connection handshake."))
-            if current and not current.done():
-                current.set_exception(ValueError("The MCP connection closed. Work was not replayed."))
-        finally:
-            while not self.queue.empty():
-                pending = self.queue.get_nowait()
-                if pending and not pending[3].done():
-                    pending[3].set_exception(ValueError("The MCP connection closed. Work was not replayed."))
-
-    async def request(self, method, *args, timeout=60, **kwargs):
-        if self.task.done():
-            raise ValueError("The MCP connection is closed. Reconnect before sending another request.")
-        future = asyncio.get_running_loop().create_future()
-        try:
-            self.queue.put_nowait((method, args, kwargs, future))
-        except asyncio.QueueFull:
-            raise ValueError("This tool has too many pending requests. Try again when it finishes.") from None
-        try:
-            return await asyncio.wait_for(future, timeout)
-        except TimeoutError:
-            # A timed-out write may have reached the server. Never retry it.
-            # Disconnect so a late response cannot be confused with newer work.
-            await self.close()
-            raise ValueError("The tool timed out. It may have started work; it was not replayed. Reconnect and inspect the tool's state.") from None
-
-    async def close(self):
-        if not self.task.done():
-            self.task.cancel()
-        await asyncio.gather(self.task, return_exceptions=True)
+from .mcp_connection import Connection as _Connection
+from .smart_tool_lifecycle import Lifecycle
 
 
-class SmartToolsManager:
+class SmartToolsManager(Lifecycle):
     def __init__(self, service):
         self.service = service
         self.root = Path(service.data_dir) / "smart-tools"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.connections = {}
+        self.schemas = {}
+        from .mcp_oauth import Authorization
+        self.oauth = Authorization(self)
         self.connection_locks = {}
         self.install_lock = asyncio.Lock()
         self.closed = False
@@ -217,7 +140,7 @@ class SmartToolsManager:
         for field in ("servers", "operations", "catalog", "installations"):
             state.setdefault(field, [])
         for server in state["servers"]:
-            server["status"] = "disconnected"
+            server.update(status="disconnected", connectionState="disconnected", tools=[], loadedSchemas={}, catalogState="stale", account={"status":"unknown"}, login={"id":server["id"],"phase":"idle"})
         for operation in state["operations"]:
             # The receipt may be newer than the last coalesced app snapshot.
             # Import legacy overview-only records, never overwrite a durable result.
@@ -306,16 +229,17 @@ class SmartToolsManager:
     def _redact(self, value):
         secrets = {
             os.environ[source] for server in self.state["servers"]
-            for source in server.get("env", {}).values()
+            for source in [*server.get("env", {}).values(), *server.get("headers", {}).values()]
             if source in os.environ and len(os.environ[source]) >= 4
         }
+        secrets.update(self.oauth.secret_values())
         def clean(item):
             if isinstance(item, str):
                 for secret in secrets:
                     item = item.replace(secret, "[redacted]")
                 return re.sub(r"(https?://)[^/\s:@]+:[^/\s@]+@", r"\1[redacted]@", item)
             if isinstance(item, dict):
-                return {key: "[redacted]" if key.lower() in {"api_key", "apikey", "access_token", "authorization", "password", "client_secret"} else clean(val) for key, val in item.items()}
+                return {key: "[redacted]" if key.lower() in {"api_key", "apikey", "access_token", "refresh_token", "id_token", "authorization", "password", "client_secret"} else clean(val) for key, val in item.items()}
             if isinstance(item, list):
                 return [clean(val) for val in item]
             return item
@@ -325,7 +249,7 @@ class SmartToolsManager:
         args = copy.deepcopy(args)
         operation = {
             "id": command_id, "action": action, "origin": origin,
-            "target": {key: args[key] for key in ("id", "name", "repository", "ref", "path", "sessionId", "uri") if key in args},
+            "target": {key: args[key] for key in ("id", "name", "repository", "ref", "path", "sessionId", "uri", "names", "query") if key in args},
             "status": "running", "createdAt": time.time(), "updatedAt": time.time(),
         }
         if action in {"smartTools.call", "smartTools.resources", "smartTools.readResource"}:
@@ -368,21 +292,36 @@ class SmartToolsManager:
         if self.closed:
             raise ValueError("Smart Tools are shutting down.")
         name = action.removeprefix("smartTools.")
+        if name == "authStart":
+            return await self.oauth.start(args["id"], args.get("redirectOrigin"))
+        if name == "authStatus":
+            return self.oauth.status(args["id"])
+        if name == "authCancel":
+            return await self.oauth.cancel(args["id"])
+        if name == "authForget":
+            return await self.oauth.forget(args["id"])
         if name == "configure":
             return await self.configure(args)
         if name == "result":
             return await self.inspect_operation(args["operationId"])
         if name == "remove":
+            await self.oauth.forget(args["id"])
             async with self.connection_locks.setdefault(args["id"], asyncio.Lock()):
                 await self._disconnect(args["id"])
                 return await self._change(lambda state: state.update(servers=[row for row in state["servers"] if row["id"] != args["id"]]))
-        if name == "connect":
-            return await self.connect(args["id"])
+        if name in {"connect", "reconnect"}:
+            return await self.connect(args["id"], reconnect=name == "reconnect")
+        if name == "discover":
+            return await self.discover(args, origin)
+        if name == "schemas":
+            return await self.load_schemas(args, origin)
+        if name == "uninstall":
+            return await self.uninstall(args["id"])
         if name == "disconnect":
             await self.disconnect(args["id"])
             return {"id": args["id"], "status": "disconnected"}
         if name == "call":
-            return await self.call_tool(args["id"], args["name"], args.get("arguments", {}), origin=origin, timeout_seconds=args.get("timeoutSeconds", 60), allowed_tools=args.get("_allowedTools"), expected_configuration=args.get("_configuration"))
+            return await self.call_tool(args["id"], args["name"], args.get("arguments", {}), origin=origin, timeout_seconds=args.get("timeoutSeconds", 60), allowed_tools=args.get("_allowedTools"), expected_configuration=args.get("_configuration"), expected_catalog=args.get("catalogRevision"))
         if name in {"resources", "readResource"}:
             return await self.resource_request(args["id"], "read" if name == "readResource" else args.get("kind", "list"), uri=args.get("uri"), cursor=args.get("cursor"), expected_configuration=args.get("_configuration"))
         if name == "catalog":
@@ -392,119 +331,6 @@ class SmartToolsManager:
         if name == "install":
             return await self.install(args)
         raise ValueError("Unknown Smart Tool action.")
-
-    async def configure(self, args):
-        identity = args.get("id") or uuid.uuid4().hex
-        command = args.get("command", "")
-        if not isinstance(command, str) or not command.strip() or len(command) > 4000 or "\x00" in command:
-            raise ValueError("Choose the MCP server executable.")
-        argv = args.get("args", [])
-        if not isinstance(argv, list) or len(argv) > 100 or any(not isinstance(arg, str) or len(arg) > 8000 or "\x00" in arg for arg in argv):
-            raise ValueError("Arguments must be a list of text values.")
-        env = args.get("env", {})
-        if not isinstance(env, dict) or len(env) > 50 or any(not isinstance(k, str) or not isinstance(v, str) or not ENV_NAME.fullmatch(k) or not ENV_NAME.fullmatch(v) for k, v in env.items()):
-            raise ValueError("Environment configuration maps variable names to existing environment variable names; do not paste secret values.")
-        cwd = args.get("cwd")
-        if cwd:
-            cwd = str(Path(cwd).expanduser().resolve())
-            if not Path(cwd).is_dir():
-                raise ValueError("The server working folder does not exist.")
-        row = {"id": identity, "name": str(args.get("name") or Path(command).name)[:120], "command": command, "args": argv, "env": env, "cwd": cwd, "status": "disconnected", "tools": [], "uiCapable": False, "updatedAt": time.time()}
-        def save(state):
-            state["servers"] = [item for item in state["servers"] if item["id"] != identity] + [row]
-            return row
-        async with self.connection_locks.setdefault(identity, asyncio.Lock()):
-            if any(item["id"] == identity for item in self.state["servers"]):
-                await self._disconnect(identity)
-            return await self._change(save)
-
-    async def connect(self, identity):
-        lock = self.connection_locks.setdefault(identity, asyncio.Lock())
-        async with lock:
-            row = self._server(identity)
-            connection = self.connections.get(identity)
-            if connection and not connection.task.done():
-                return copy.deepcopy(row)
-            env = {}
-            for name, source in row.get("env", {}).items():
-                if not os.environ.get(source):
-                    raise ValueError(f"Environment variable {source} is not set. Set it before connecting.")
-                env[name] = os.environ[source]
-            await self._change(lambda _: row.update(status="connecting", error=None))
-            connection = _Connection(row, env)
-            try:
-                info = self._redact(_bounded(await asyncio.wait_for(asyncio.shield(connection.ready), 30), 128_000))
-                tools = []
-                cursor = None
-                for _ in range(20):
-                    page = await connection.request("list_tools", cursor=cursor, timeout=30)
-                    tools.extend(page.get("tools", []))
-                    if len(tools) > MAX_TOOLS:
-                        raise ValueError("This server exposes too many tools for one connection.")
-                    cursor = page.get("nextCursor")
-                    if not cursor:
-                        break
-                else:
-                    raise ValueError("Tool discovery did not finish after 20 pages.")
-                _bounded(tools, 1_000_000)
-                self.connections[identity] = connection
-                await self._change(lambda _: row.update(status="connected", tools=self._redact(tools), uiCapable=any(_ui(tool).get("resourceUri") for tool in tools), **info, error=None, updatedAt=time.time()))
-                return copy.deepcopy(row)
-            except BaseException as exc:
-                await connection.close()
-                # Consume a startup future exception even if timeout raced it.
-                if connection.ready.done() and not connection.ready.cancelled():
-                    connection.ready.exception()
-                message = "The MCP server did not become ready within 30 seconds." if isinstance(exc, TimeoutError) else self._redact(str(exc))[:1000]
-                await self._change(lambda _: row.update(status="error", error=message))
-                raise ValueError(message or "The MCP connection failed.") from None
-
-    async def disconnect(self, identity):
-        async with self.connection_locks.setdefault(identity, asyncio.Lock()):
-            await self._disconnect(identity)
-
-    async def _disconnect(self, identity):
-        row = self._server(identity)
-        connection = self.connections.pop(identity, None)
-        if connection:
-            await connection.close()
-        await self._change(lambda _: row.update(status="disconnected", updatedAt=time.time()))
-
-    async def _connection(self, identity):
-        self._server(identity)
-        connection = self.connections.get(identity)
-        if not connection or connection.task.done():
-            if connection:
-                await self._change(lambda _: self._server(identity).update(status="disconnected"))
-            raise ValueError("Connect this tool before using it. Previous requests are never replayed.")
-        return connection
-
-    async def list_tools(self, identity, origin="agent"):
-        await self._connection(identity)
-        return [copy.deepcopy(tool) for tool in self._server(identity).get("tools", []) if _visible(tool, origin)]
-
-    async def call_tool(self, identity, name, arguments, origin="ui", timeout_seconds=60, allowed_tools=None, expected_configuration=None):
-        connection = await self._connection(identity)
-        if expected_configuration is not None and configuration_key(self._server(identity)) != expected_configuration:
-            raise ValueError("This tool's connection settings changed. Reopen its view before using it.")
-        tool = next((tool for tool in self._server(identity)["tools"] if tool.get("name") == name), None)
-        if not tool or not _visible(tool, origin) or (allowed_tools is not None and name not in allowed_tools):
-            raise ValueError("This tool is not available to this caller.")
-        if not isinstance(arguments, dict):
-            raise ValueError("Tool arguments must be a JSON object.")
-        _bounded(arguments, 256_000)
-        try:
-            jsonschema.validate(arguments, tool.get("inputSchema", {"type": "object"}))
-        except (jsonschema.ValidationError, jsonschema.SchemaError) as exc:
-            raise ValueError(f"The tool arguments do not match its schema: {exc.message[:300]}") from None
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 300:
-            raise ValueError("The request timeout must be between 0 and 300 seconds.")
-        try:
-            result = await connection.request("call_tool", name, arguments, read_timeout_seconds=timeout_seconds, timeout=timeout_seconds + 1)
-            return self._redact(_bounded(result))
-        finally:
-            if connection.task.done():
-                await self._change(lambda _: self._server(identity).update(status="disconnected"))
 
     async def resource_request(self, identity, kind, *, uri=None, cursor=None, expected_configuration=None):
         """Forward bounded MCP resource requests, never resolve URIs in the host.
@@ -680,6 +506,8 @@ class SmartToolsManager:
                 shutil.rmtree(checkout, ignore_errors=True)
 
     async def close(self):
+        await self.oauth.close()
         self.closed = True
         await asyncio.gather(*(connection.close() for connection in self.connections.values()), return_exceptions=True)
         self.connections.clear()
+        self.schemas.clear()

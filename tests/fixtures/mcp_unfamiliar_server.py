@@ -46,6 +46,12 @@ def failing() -> str:
     raise ValueError("Fixture rejected the request")
 
 
+@server.tool()
+def exit_fixture() -> str:
+    """Test-only abrupt transport death."""
+    os._exit(17)
+
+
 @server.resource("ui://board/main", mime_type="text/html;profile=mcp-app", meta={"ui": {"csp": {"resourceDomains": ["https://example.com"]}}})
 def board_view() -> str:
     return "<!doctype html><html><body><button>Shared board</button></body></html>"
