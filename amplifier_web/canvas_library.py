@@ -8,6 +8,32 @@ import uuid
 from .state_storage import resource
 
 
+def restore_body(canvas, db):
+    """Restore a client's compact saved body for its ordinary viewer.
+
+    HTML and Babylon already read their source through the document endpoint;
+    keep those potentially large bodies out of browser snapshots.
+    """
+    reference = canvas.get('contentResource')
+    if not reference or canvas.get('kind') in {'html', 'babylon'}:
+        return
+    try:
+        body = resource(db, reference['$resource'])
+        if not isinstance(body, dict):
+            raise ValueError('Invalid saved canvas body.')
+    except (KeyError, ValueError, OSError, TypeError):
+        # A damaged older artifact must not prevent attaching to the client.
+        # Keep the reference for recovery rather than saving an empty body.
+        canvas.setdefault('renderReports', {})['stored-source'] = {
+            'status': 'error', 'message': 'The saved artifact source is unavailable.'}
+        return
+    for key in ('content', 'surface'):
+        if key in body:
+            canvas[key] = copy.deepcopy(body[key])
+    canvas.pop('contentResource', None)
+    canvas.get('renderReports', {}).pop('stored-source', None)
+
+
 def presentation(state, row):
     """Tabs and viewer controls belong to the attached client."""
     tabs = state.get('canvasTabs')
@@ -74,6 +100,7 @@ def load(state, db, identity, *, open_panel=True):
     mcp_state = canvas.pop('mcpState', None)
     if mcp_state:
         canvas['mcp'] = resource(db,mcp_state['$resource'])
+    restore_body(canvas, db)
     local['tabOpen'] = True
     local['lastViewedAt'] = time.time()
     state['canvas'] = canvas
