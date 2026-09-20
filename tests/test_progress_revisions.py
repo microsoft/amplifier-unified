@@ -23,7 +23,7 @@ async def test_cas_rejects_revision_before_pending_stream_and_keeps_delta(app_fa
     assert app.browser_state() is before
     with pytest.raises(AppError, match='app changed'):
         await app.dispatch('view.update', {'patch':{'scheme':'dark'}}, expected_revision=revision)
-    assert app.state['view']['scheme'] == 'light'
+    assert app.state['view']['scheme'] == 'system'
     assert app.state['revision'] == revision + 1
     assert queue.get_nowait()['sessions'][0]['streaming'] == 'pending answer'
     saved = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])

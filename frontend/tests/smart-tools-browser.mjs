@@ -9,6 +9,9 @@ import assert from 'node:assert/strict';
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Independent counter',version:'1.0.0'},{});
+let hostUpdates=0;
+const showHostContext=()=>{const context=app.getHostContext()||{};document.body.dataset.theme=context.theme||'';document.body.dataset.displayMode=context.displayMode||'';document.body.dataset.hostUpdates=String(hostUpdates);};
+app.onhostcontextchanged=()=>{hostUpdates++;showHostContext();};
 const draw=async result=>{const value=result.structuredContent;document.querySelector('#count').textContent=String(value.count);await app.updateModelContext({structuredContent:value});};
 app.ontoolresult=draw;
 document.querySelector('#add').onclick=async()=>draw(await app.callServerTool({name:'counter_add',arguments:{amount:1}}));
@@ -17,6 +20,7 @@ document.querySelector('#media').onclick=async()=>{
  catch(error){document.querySelector('#resource').textContent=error.message}
 };
 await app.connect();
+showHostContext();
 await app.listServerResources();
 await draw(await app.callServerTool({name:'counter_read',arguments:{}}));
 document.querySelector('#isolation').textContent=(()=>{try{return parent.document.title}catch{return 'Parent isolated'}})();
@@ -33,12 +37,21 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1450,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.message)});page.on('console',msg=>{if(msg.type()==='error')console.log('CONSOLE',msg.text().slice(0,700))});
+ await page.addInitScript(()=>{
+  let dark=true;
+  const listeners=new Set();
+  window.matchMedia=query=>({media:query,get matches(){return query==='(prefers-color-scheme: dark)'&&dark},addEventListener:(type,listener)=>{if(type==='change')listeners.add(listener)},removeEventListener:(type,listener)=>{if(type==='change')listeners.delete(listener)}});
+  window.setSystemTheme=next=>{dark=next;for(const listener of listeners)listener({matches:dark,media:'(prefers-color-scheme: dark)'})};
+ });
  await page.goto('http://127.0.0.1:8967/');await page.waitForSelector('#amp-one');
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ await action('view.update',{patch:{scheme:'system'}});
  const opened=await action('smartTools.open',{id:'counter',tool:'counter_read'});
  await page.waitForFunction(()=>window.amplifier.getState().canvas.kind==='mcp-app');
  const frame=page.frameLocator('.a-canvas-html');
  try{await frame.getByText('Parent isolated',{exact:true}).waitFor({timeout:12000})}catch(e){console.log(await page.locator('.a-canvas-body').innerText());console.log(await frame.locator('body').innerText());throw e}
+ assert.equal(await frame.locator('body').getAttribute('data-theme'),'dark','System appearance must initialize the official MCP App with the resolved dark theme');
+ assert.equal(await frame.locator('body').getAttribute('data-display-mode'),'inline','Theme updates must retain the complete host context');
  const stableFrame=await page.locator('.a-canvas-html').boundingBox();
  await frame.getByRole('button',{name:'Read media'}).click();
  await frame.locator('#resource').filter({hasText:'Retained preview'}).waitFor();
@@ -60,6 +73,25 @@ try{
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
  assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,1,'Nested content cannot call host tools');
+ // System changes update the existing bridge. They must neither replace the
+ // iframe nor replay the app's startup tool request.
+ const themeOperationCount=state.smartTools.operations.length;
+ await frame.locator('body').evaluate(el=>el.dataset.themeMarker='same-frame');
+ await page.evaluate(()=>window.setSystemTheme(false));
+ await frame.locator('body[data-theme="light"]').waitFor();
+ assert.equal(await frame.locator('body').getAttribute('data-theme-marker'),'same-frame');
+ assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,themeOperationCount);
+ await action('view.update',{patch:{scheme:'dark'}});
+ await frame.locator('body[data-theme="dark"]').waitFor();
+ await page.evaluate(()=>window.setSystemTheme(false));
+ assert.equal(await frame.locator('body').getAttribute('data-theme'),'dark','An explicit dark preference must override system media changes');
+ await action('view.update',{patch:{scheme:'light'}});
+ await frame.locator('body[data-theme="light"]').waitFor();
+ await page.evaluate(()=>window.setSystemTheme(true));
+ assert.equal(await frame.locator('body').getAttribute('data-theme'),'light','An explicit light preference must override system media changes');
+ assert.equal((await page.evaluate(()=>window.amplifier.getState())).smartTools.operations.length,themeOperationCount);
+ await action('view.update',{patch:{scheme:'system'}});
+ await frame.locator('body[data-theme="dark"]').waitFor();
  // Layout changes must not reconnect the MCP App or replay its startup tools.
  const operationCount=state.smartTools.operations.length;
  await frame.locator('body').evaluate(el=>el.dataset.liveMarker='same-frame');
@@ -76,7 +108,11 @@ try{
  const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4}});
  await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='completed'),receipt.operationId);
  state=await page.evaluate(()=>window.amplifier.getState());assert.equal(state.smartTools.operations.find(o=>o.id===receipt.operationId).result.structuredContent.count,5);
- await action('canvas.close',{});await action('canvas.select',{id:savedId});
+ await action('canvas.close',{});
+ const reopen=action('canvas.select',{id:savedId});
+ await page.evaluate(()=>window.setSystemTheme(false));
+ await reopen;
+ await frame.locator('body[data-theme="light"]').waitFor();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-smart-tools-canvas.png'});
  // A saved view cannot silently acquire a replacement server configuration.

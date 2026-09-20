@@ -71,7 +71,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
         return "worker.updated", {**base, "id": event.get("job_id"),
-            "status": event.get("status") or statuses.get(kind[4:], "running"),
+            "status": (statuses.get(event.get("status"), event.get("status")) or "interrupted") if kind == "job.recovered" else statuses.get(kind[4:]) or event.get("status") or "running",
             "callId": event.get("call_id"), "name": event.get("agent") or "Delegated work",
             "kind": "job", "event": kind, "updatedAt": event.get("time")}
     if kind == "worker.activity":

@@ -1,3 +1,4 @@
+import {readDetail} from './detail-read.js';
 // Browser navigation carries only visible catalog pages. Copy is still allowed
 // for an explicitly addressed message without switching the shared selection.
 export async function messageTextForCopy(state,effect,request){
@@ -8,5 +9,5 @@ export async function messageTextForCopy(state,effect,request){
   message=find(scoped.state||scoped);
  }
  if(!message)throw Error('Message no longer available');
- return message.text||'';
+ return message.textDetail?readDetail(message.textDetail,request):message.text||'';
 }
