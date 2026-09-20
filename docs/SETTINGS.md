@@ -4,12 +4,12 @@ Settings now has a persistent sidebar with 24 destinations in 11 sections. Appea
 
 ## Completeness contract
 
-The [inventory](settings-inventory.csv) tracks all 321 requirements from the settings audit plus six conversation diagnosis/recovery requirements added to main during implementation across 25 feature areas. Each row has an explicit destination, ownership boundary and validation evidence for its area. Area validation does not imply that every listed backend outcome was separately induced in a browser. The source review verifies that the original controls and handlers remain; automated tests check their contracts and affected workflows.
+The [inventory](settings-inventory.csv) tracks all 321 requirements from the settings audit plus six conversation diagnosis/recovery requirements added to main during implementation (327 requirements across 25 feature areas). Each row has an explicit destination, ownership boundary and validation evidence for its area. Area validation does not imply that every listed backend outcome was separately induced in a browser. The source review verifies that the original controls and handlers remain; automated tests check their contracts and affected workflows.
 
 | Area | Destination | Native implementation |
 | --- | --- | --- |
 | Appearance (separate top-bar panel) | appearance | main.jsx |
-| Setup > Conversation defaults > Voice | voice | main.jsx |
+| Setup > Conversation defaults > Voice | voice | settings-personal.jsx |
 | Maintenance > Notifications | notifications | maintenance.jsx |
 | Setup > Model providers | providers | setup.jsx |
 | Setup > Model routing | routing | setup.jsx |
@@ -22,14 +22,14 @@ The [inventory](settings-inventory.csv) tracks all 321 requirements from the set
 | Maintenance > Updates | updates | updates.jsx |
 | Maintenance > Diagnostics & Context Intelligence | diagnostics | diagnostics.jsx |
 | Maintenance > Conversation history | history | maintenance.jsx |
-| Setup > Current conversation | conversation | main.jsx |
+| Setup > Current conversation | conversation | conversation-controls.jsx; conversation-export.jsx |
 | Maintenance > Backup and repair | repair | maintenance.jsx |
 | Maintenance > Advanced recovery | reset | maintenance.jsx |
 | Maintenance > Ready conversations | ready-conversations | worker-retention.jsx |
 | Capabilities > Advanced module & source registries | registries | registry.jsx |
 | Maintenance > File access | permissions | maintenance.jsx |
 | Maintenance > Terminal and automation | automation | maintenance.jsx |
-| Setup > Install Amplifier | install-app | main.jsx |
+| Setup > Install Amplifier | install-app | settings-personal.jsx |
 | Shared settings controls | shared | settings-ui.jsx; list-filter.jsx; attention.jsx |
 | Adjacent: conversation bundle popup | conversation | bundle-controls.jsx |
 | Adjacent: Session controls | runtime | runtime-settings.jsx |
