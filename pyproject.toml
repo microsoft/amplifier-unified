@@ -50,6 +50,7 @@ default = true
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1"]
+artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=11,<13"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

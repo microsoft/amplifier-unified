@@ -514,6 +514,12 @@ class Worker:
                 else:
                     self.shutdown.set()
                 return
+            elif op == "dependencies":
+                if __package__:
+                    from .artifact_runtime import discover
+                else:
+                    from artifact_runtime import discover
+                result = await discover('worker')
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
             elif op == "send":

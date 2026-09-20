@@ -387,7 +387,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire"}:
+        if op not in {"park", "retire", "dependencies"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -474,6 +474,18 @@ class RuntimeManager:
 
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
+
+    async def dependencies(self, session_id):
+        """Inspect an existing worker without warming or acquiring its session."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'No ready session runtime.'}
+        if row['ready'].exception() is not None:
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
+        try:
+            return {**await self._request(session_id, 'dependencies'), 'sessionId': session_id}
+        except RuntimeError:
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 
     async def shared_state_probe(self, request):
         """Run one read-only shared-state request inside the isolated runtime."""

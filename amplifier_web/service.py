@@ -27,6 +27,7 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
+    "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200)}, [])),
     "diagnostics.configure": ("Configure local Context Intelligence capture and explicitly enabled per-server stream routes. API keys are environment references. Changing a destination cancels its queued deliveries; already accepted or in-flight data cannot be recalled.", schema({"config":{"type":"object"}})),
     "diagnostics.test": ("Test saved destination authentication and write access by sending one synthetic probe; no conversation content.", schema({"id":string(100)})),
     "diagnostics.environment": ("Check that a credential environment variable exists in the service without revealing it.",schema({"name":string(200)})),
@@ -573,6 +574,21 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action == 'runtime.dependencies':
+            from .artifact_runtime import discover
+            async with self.lock:
+                if expected_revision is not None and expected_revision != self.state['revision']:
+                    raise AppError('The app changed. Refresh its state and retry.', 409)
+                sid = args.get('sessionId') or self.state.get('selectedSessionId')
+                if sid:
+                    self._session(sid)
+            host = await discover('host')
+            worker = {'status': 'unavailable', 'reason': 'No running session runtime.', 'sessionId': sid}
+            if sid and self.runtime and hasattr(self.runtime, 'dependencies'):
+                worker = await self.runtime.dependencies(sid)
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
+                'result': {'host': host, 'worker': worker},
+                **({'state': self.browser_state()} if include_state else {})}
         if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -1667,7 +1683,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
+            if args['action'] in {'canvas.show','smartTools.call','smartTools.open','runtime.dependencies'}:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
