@@ -102,13 +102,17 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
 
 
 class RuntimeManager:
-    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600, progress_interval=5):
+    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600, progress_interval=5, retention=None):
         self.app_bridge = app_bridge
         self.command = command
         self.startup_timeout = startup_timeout
         self.progress_interval = progress_interval
         self.workers: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._closed = False
+        self._retired = {}
+        from .runtime_retention import WorkerRetention
+        self.retention = WorkerRetention(self, retention)
 
     def has_pending_operations(self):
         """Preparing a worker or waiting for its reply must defer host updates."""
@@ -116,6 +120,14 @@ class RuntimeManager:
             row.get("inflight") and row["process"].returncode is None
             for row in self.workers.values()
         )
+
+    def configure_retention(self, settings):
+        from .runtime_retention import validate_retention
+        updated = validate_retention(settings)
+        if updated['max_background_starts'] != self.retention.settings['max_background_starts']:
+            raise ValueError('Changing background startup concurrency requires a host restart.')
+        self.retention.settings = updated
+        self.retention.wake()
 
     def _command(self, release=None):
         if self.command:
@@ -143,41 +155,54 @@ class RuntimeManager:
     async def start(self, session: dict, emit: Emitter):
         sid = session["id"]
         async with self._locks.setdefault(sid, asyncio.Lock()):
-            current = self.workers.get(sid)
-            if current and current["process"].returncode is None:
-                current["emit"] = emit
-                await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
-                return
-            await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
-                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
-            from .host.config import worker_environment
-            proc = await asyncio.create_subprocess_exec(*self._command(), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
-                start_new_session=os.name != "nt", env=worker_environment())
-            row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
-                   "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
-                   "started_at": time.monotonic(), "phase": "runtime-setup",
-                   "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
-            self.workers[sid] = row
-            row["reader"] = asyncio.create_task(self._read(sid, row))
-            row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
-            row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
-            # The worker restores normal history from its checkpoint. Sending the
-            # browser's execution logs, catalogs and attachment history is redundant.
-            config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
-            config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
-            row['runtime_id'] = config['id']
-            if session.get('forkContext'):
-                config['messages'] = session.get('messages', [])
-            try:
-                await self._write(row, {"op": "start", "session": config})
-                await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
-            except TimeoutError as exc:
-                await self.stop(sid)
-                raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
-            except BaseException:
-                await self.stop(sid)
-                raise
+            await self._start_locked(session, emit)
+
+    async def _start_locked(self, session, emit):
+        if self._closed:
+            raise RuntimeError("The runtime host is closing.")
+        sid = session["id"]
+        self._retired.pop(sid, None)
+        current = self.workers.get(sid)
+        if current and current["process"].returncode is None:
+            current["emit"] = emit
+            current['start_session'] = {key: session[key] for key in (
+                'id', 'workspace', 'workingDirectory', 'bundle', 'selection',
+                'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
+            await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
+            return
+        await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
+            "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
+        from .host.config import worker_environment
+        proc = await asyncio.create_subprocess_exec(*self._command(), stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
+            start_new_session=os.name != "nt", env=worker_environment())
+        row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
+               "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
+               "started_at": time.monotonic(), "phase": "runtime-setup",
+               "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
+        self.workers[sid] = row
+        row["reader"] = asyncio.create_task(self._read(sid, row))
+        row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
+        row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
+        # The worker restores normal history from its checkpoint. Sending the
+        # browser's execution logs, catalogs and attachment history is redundant.
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
+        config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
+        row['runtime_id'] = config['id']
+        row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
+        row['parked'] = False
+        self.retention.wake()
+        if session.get('forkContext'):
+            config['messages'] = session.get('messages', [])
+        try:
+            await self._write(row, {"op": "start", "session": config})
+            await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
+        except TimeoutError as exc:
+            await self.stop(sid)
+            raise RuntimeError(f"Amplifier preparation exceeded {self.startup_timeout:g} seconds and was stopped before accepting your message. Check the configured bundle, then retry.") from exc
+        except BaseException:
+            await self.stop(sid)
+            raise
 
     async def _progress(self, sid, row):
         while not row["ready"].done() and not row["closing"]:
@@ -237,6 +262,14 @@ class RuntimeManager:
                             future.set_exception(_worker_error(data))
                         else:
                             future.set_result(data.get("result"))
+                elif data.get("type") == "runtime.parked":
+                    row["parked"] = True
+                    row["parked_at"] = self.retention.clock()
+                    self.retention.wake()
+                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'warm'})
+                elif data.get("type") == "runtime.reactivated":
+                    row["parked"] = False
+                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])
@@ -296,6 +329,19 @@ class RuntimeManager:
                     future.set_exception(RuntimeError("Amplifier worker disconnected"))
 
     async def _request(self, sid, op, **args):
+        # The admission portion holds the same lock as retirement. Waiting for
+        # replies does not: a tool control may itself await an approval/bridge.
+        async with self._locks.setdefault(sid, asyncio.Lock()):
+            if sid not in self.workers and sid in self._retired and op in {"send", "control", "resume"}:
+                session, emit = self._retired[sid]
+                await self._start_locked(session, emit)
+            pending = await self._admit(sid, op, args)
+        return await self._reply(*pending, op=op, args=args)
+
+    async def _request_unlocked(self, sid, op, **args):
+        return await self._reply(*await self._admit(sid, op, args), op=op, args=args)
+
+    async def _admit(self, sid, op, args):
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
@@ -305,13 +351,23 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
+        if op not in {"park", "retire"}:
+            row["parked"] = False
         try:
-            try:
-                await self._write(row, {"op": op, "id": identity, **args})
-            except (ValueError, TypeError):
-                # Encoding rejected this command before writing to the pipe.
-                row["inflight"].discard(identity)
-                raise
+            await self._write(row, {"op": op, "id": identity, **args})
+        except (ValueError, TypeError):
+            row["inflight"].discard(identity)
+            row["pending"].pop(identity, None)
+            raise
+        except BaseException:
+            # A partial transport write has an unknown outcome. Keep the
+            # in-flight fence until its reply or process exit, just like timeout.
+            row["pending"].pop(identity, None)
+            raise
+        return row, identity, future
+
+    async def _reply(self, row, identity, future, *, op, args):
+        try:
             timeout = None if op == "control" and args.get("operation") == "bundle.switch" else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)
@@ -319,6 +375,26 @@ class RuntimeManager:
                 raise RuntimeError("The runtime operation has not returned yet. It may still be running; do not automatically repeat it.") from exc
         finally:
             row["pending"].pop(identity, None)
+
+    async def prewarm(self, session, emit):
+        if self._closed or not self.retention.settings["prewarm_on_select"] or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
+            return
+        # Browsing an already loaded chat neither reacquires its writer lock nor
+        # extends its idle lifetime. Actual input still validates state on wake.
+        if self.workers.get(session["id"], {}).get("process") is not None:
+            row = self.workers[session["id"]]
+            if row["process"].returncode is None:
+                return
+        async with self.retention.background:
+            # Policy or another admission may have changed while this startup
+            # waited behind other background preparations.
+            if self._closed or not self.retention.settings["prewarm_on_select"] or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
+                return
+            row = self.workers.get(session["id"])
+            if row and row["process"].returncode is None:
+                return
+            await self.start(session, emit)
+            await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
@@ -393,6 +469,7 @@ class RuntimeManager:
         return await self._request(session_id, "worker.stop", worker_id=worker_id)
 
     async def stop(self, session_id):
+        self._retired.pop(session_id, None)
         row = self.workers.get(session_id)
         if not row:
             return
@@ -427,11 +504,15 @@ class RuntimeManager:
             if not task.done():
                 task.cancel()
         await asyncio.gather(row["reader"], row["stderr_task"], row["heartbeat"], *row["bridge_tasks"], return_exceptions=True)
-        await row["emit"]("runtime.status", {"sessionId": session_id, "status": "stopped"})
+        await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
+                          {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         self.workers.pop(session_id, None)
 
     async def close(self):
+        self._closed = True
+        await self.retention.close()
         await asyncio.gather(*(self.stop(sid) for sid in list(self.workers)), return_exceptions=True)
+        self._retired.clear()
 
     async def spawn_worker(self, session, instruction, input_id, emit):
         """Ask the configured root to delegate through its normal tool hooks."""

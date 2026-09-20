@@ -38,7 +38,9 @@
     "test:canvas-dirty-browser": "node tests/canvas-dirty-browser.mjs",
     "test:cache-usage-browser": "node tests/cache-usage-browser.mjs",
     "test:bundle-browser": "node tests/bundle-browser.mjs",
-    "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs"
+    "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
+    "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
+    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

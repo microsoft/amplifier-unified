@@ -34,5 +34,5 @@ export function useConversationDetail(source,beforeApply){
   }catch(e){if(current.current===id)setError(e.message)}finally{if(current.current===id)setBusy('')}
  }
  const controls=<>{session?.messageWindow?.offset>0&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier('messages')}>Load earlier messages</button>}{session?.executionWindow?.offset>0&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier('nodes')}>Load earlier activity</button>}{busy&&<span role="status">Loading earlier {busy==='nodes'?'activity':'messages'}…</span>}{error&&<p role="alert">{error}</p>}</>;
- return {session,controls};
+ return {session,controls,earlier,busy};
 }

@@ -1,5 +1,5 @@
 import {ModelSelect} from './model-select';
-import React,{useEffect,useState,useRef} from 'react';
+import React,{useEffect,useState} from 'react';
 import {ChevronDown,Pin,PinOff,RefreshCw,X,Paperclip} from 'lucide-react';
 import {ResultNotice} from './settings-ui';
 import {modelOptions,providerFields} from './setup-data';
@@ -20,8 +20,6 @@ export function ModelControl({state,session,act,ensureSession,working}){
  const providers=catalog?.providers||[],selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const modelEntry=controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:providers.length?{phase:'working',models:[]}:null);
  const choices=providerFields({info:selected?.info,configSchema:selected?.configSchema},{model:draft.model,default_model:draft.model}).find(field=>field.id==='reasoning_effort')?.choices||[];
- const loaded=useRef(null);
- useEffect(()=>{if(!unavailable&&!session?.historyManaged&&(!session?.deferRuntimeUntilInteraction||session?.status==='ready'||session?.runtimeReport)&&session?.id&&['ready','idle'].includes(session.status)&&loaded.current!==session.id){loaded.current=session.id;act('runtime.control',{sessionId:session.id,operation:'configuration.providers',args:{}})}},[session?.id,session?.status,session?.historyManaged,session?.deferRuntimeUntilInteraction,session?.runtimeReport,unavailable]);
  const op=state.actionStatus?.['runtime.control'],pending=['queued','working'].includes(op?.phase);
  const control=(operation,args={})=>act('runtime.control',{sessionId:session.id,operation,args});
  async function show(){if(open){edit({open:false});return}const current=await ensureSession();edit({open:true,sessionId:current.id,instance:effective.instance||effective.id||'',model:effective.model||'',effort:effective.effort||''});act('runtime.control',{sessionId:current.id,operation:'configuration.providers',args:{}})}

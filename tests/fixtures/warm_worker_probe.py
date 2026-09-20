@@ -100,14 +100,30 @@ Reply with the fixture response.
     assert [event["text"] for event in events if event.get("type") == "assistant.message"] == [
         "fixture response", "fixture response"]
     assert [row["content"] for row in checkpoint["messages"] if row["role"] == "user"][-2:] == ["one", "two"]
+    await worker.command({"op": "retire", "id": "retire-request"})
+    assert worker.shutdown.is_set(), events
+    await worker.run()
+    restored = Worker()
+    await restored.start(config)
+    await restored.command({"op": "send", "id": "three-request", "input_id": "three", "text": "three"})
+    for _ in range(200):
+        if restored.parked:
+            break
+        await asyncio.sleep(.02)
+    assert restored.parked, events
+    messages = SessionHistoryStore(sessions_dir(workspace) / config["id"]).load_messages()
+    assert [row['content'] for row in messages if (row.get('metadata') or {}).get('amplifier_input', {}).get('kind') == 'user'] == ['one', 'two', 'three']
+    assert len([event for event in events if event.get('type') == 'assistant.message']) == 3
     print(json.dumps({
         "cold_prepare_seconds": round(cold_seconds, 6),
         "stamp_only_dispatch_seconds": round(warm_seconds, 6),
         "same_mounted_session": True,
         "two_authoritative_turns": True,
+        "retired_safely": True,
+        "resumed_without_replay": True,
     }))
-    worker.shutdown.set()
-    await worker.run()
+    restored.shutdown.set()
+    await restored.run()
 
 
 asyncio.run(main())

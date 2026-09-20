@@ -397,8 +397,17 @@ class AutomaticHistory:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
                         self.service._publish()
 
-    async def load(self, session_id, *, before=None, limit=100):
+    async def refresh_session(self, session_id):
+        await self.load(session_id, only_if_changed=True)
+
+    async def load(self, session_id, *, before=None, limit=100, only_if_changed=False):
         async with self.loads.setdefault(session_id, asyncio.Lock()):
+            if only_if_changed:
+                candidate = self.service._session(session_id)
+                if candidate.get('historyLoaded', True) and not candidate.get('historyError'):
+                    stamp = await asyncio.to_thread(revision, copy.deepcopy(candidate))
+                    if stamp == candidate.get('nativeRevision'):
+                        return
             async with self.service.lock:
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                 if not session or not session.get('nativeProject') or session.get('status') in BUSY or session.get('configurationBusy'):
@@ -458,7 +467,7 @@ class AutomaticHistory:
                 raise ValueError('This project folder is unavailable. Its saved chats can be read, but the folder must be restored before continuing work.')
             current_revision = await asyncio.to_thread(revision, copy.deepcopy(session))
             if not session.get('historyLoaded', True) or session.get('historyLoading') or current_revision != session.get('nativeRevision'):
-                await self.load(session_id)
+                await self.load(session_id, only_if_changed=True)
                 session = self.service._session(session_id)
             if session.get('historyError'):
                 raise ValueError(session['historyError'])

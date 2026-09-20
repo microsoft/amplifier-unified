@@ -74,9 +74,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.server_config = config
     if runtime is None:
         from .runtime import RuntimeManager
-        runtime = RuntimeManager(app_bridge=service.app_bridge)
+        runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"])
         service.runtime = runtime
         service.state["runtime"]["available"] = True
+    if hasattr(runtime, 'retention'):
+        service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
     app["runtime"] = runtime
     from .smart_tools import SmartToolsManager
