@@ -17,10 +17,8 @@ try{
  const page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);
- const action=async(name,args)=>{
-  const response=await page.request.post(url+'/api/actions',{data:{action:name,args,id:crypto.randomUUID()}});
-  assert.equal(response.ok(),true,await response.text());return response.json();
- };
+ await page.waitForFunction(()=>window.amplifier?.dispatch);
+ const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const created=await action('session.create',{title:'Runtime inspection'});
  const sid=created.state.selectedSessionId;
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this draft');
