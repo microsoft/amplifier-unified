@@ -146,6 +146,9 @@ class Worker:
                     self.tasks.add(task)
                     task.add_done_callback(self.tasks.discard)
         coordinator.register_capability("operations.observe", observe_operation)
+        async def admit_questions(question_ids):
+            return await self.bridge("questions.admit", {"questionIds": question_ids})
+        coordinator.register_capability("questions.admit", admit_questions)
         def public_stream():
             from amplifier_web.execution_events import CALL_PURPOSE
             return not CALL_PURPOSE.get()
@@ -500,7 +503,7 @@ class Worker:
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
-                detached_cancel = op == "control" and (data.get("operation") == "operations.cancel" or data.get("operation", "").startswith("kernels."))
+                detached_cancel = op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
                     self.operation_controls += 1
                 else:

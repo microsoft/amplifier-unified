@@ -20,14 +20,23 @@ try{
  await expect(panel.getByRole('button',{name:'Stop command'})).toHaveCount(0);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),ready.sessionId);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep this unsent draft');
+ await panel.getByRole('textbox',{name:'Command to start'}).fill("printf 'effect\n' >> effect.txt; printf 'input ready\n'; IFS= read -r value; printf 'got:%s\n' \"$value\"");
+ await panel.getByRole('button',{name:'Start command',exact:true}).click();
+ await expect(panel.locator('pre')).toContainText('input ready');
+ await panel.getByRole('textbox',{name:'Command input'}).fill('browser input\n');
+ await panel.getByRole('button',{name:'Send command input'}).click();
+ await expect(panel.locator('pre')).toContainText('got:browser input');
+ await expect(panel.locator('strong')).toHaveText('Completed');
+ assert.equal((await (await page.request.get(ready.url+'/fixture/effects')).json()).count,1);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep this unsent draft');
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-operations-desktop.png'});
  await page.reload();
  await page.getByRole('button',{name:'Operations',exact:true}).click();
- await panel.getByRole('button',{name:'Command · Completed'}).click();
+ await panel.getByRole('button',{name:'Command · Completed'}).last().click();
  await expect(panel.locator('pre')).toContainText('Build finished');
  await page.setViewportSize({width:390,height:844});
  assert.ok(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth));
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-operations-mobile.png'});
  assert.deepEqual(errors,[]);
- console.log('Operations browser passed: live evidence, real change wait, completion, reload, draft/selection preserved, mobile bounds.');
+ console.log('Operations browser passed: durable evidence plus real approved-path process submission/stdin, one effect, completion, reload, draft/selection preserved and mobile bounds.');
 }finally{await browser?.close();fixture.kill();}

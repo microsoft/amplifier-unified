@@ -475,3 +475,116 @@ async def test_registered_receipt_adapter_keeps_original_store_authoritative(app
     original["sessionId"] = "another-owner"
     with pytest.raises(AppError, match="different owner"):
         await app.dispatch("operations.read", {"sessionId": sid, "id": original["id"]})
+
+
+async def test_process_submission_receipt_prevents_duplicates_and_changed_retries(app):
+    sid = app._session()['id']
+    runtime = SimpleNamespace(control=AsyncMock(return_value={'result': {'success': True, 'output': {'process_id': 'new-process'}}}), close=AsyncMock())
+    app.runtime = runtime
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    args = {'sessionId': sid, 'requestId': 'submission-1', 'command': 'printf ok'}
+    first = await app.dispatch('operations.submit', args)
+    again = await app.dispatch('operations.submit', args)
+    assert first == again
+    assert first['result']['operationId'] == 'new-process'
+    assert first['result']['state'] == 'accepted'
+    runtime.control.assert_awaited_once()
+    with pytest.raises(AppError, match='different operation'):
+        await app.dispatch('operations.submit', {**args, 'command': 'printf changed'})
+    read = await app.dispatch('operations.request', {'sessionId': sid, 'requestId': 'submission-1'})
+    assert read['result'] == first['result']
+
+
+async def test_failed_transport_request_is_unknown_and_not_replayed_after_restart(tmp_path):
+    runtime = SimpleNamespace(control=AsyncMock(side_effect=RuntimeError('transport lost')), close=AsyncMock())
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    sid = app._session()['id']
+    args = {'sessionId': sid, 'requestId': 'uncertain-1', 'command': 'printf ok'}
+    with pytest.raises(AppError, match='transport lost'):
+        await app.dispatch('operations.submit', args)
+    await app.close()
+    restored = AppService(tmp_path, workspace=tmp_path)
+    try:
+        result = await restored.dispatch('operations.submit', args)
+        assert result['result']['state'] == 'outcome_unknown'
+        runtime.control.assert_awaited_once()
+    finally:
+        await restored.close()
+
+
+async def test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime(app):
+    sid = app._session()['id']
+    await app.operations.observe(sid, 'runtime-owned', event())
+    app.runtime = SimpleNamespace(control=AsyncMock(return_value={'result': {'success': True, 'output': {'process_id': 'p1'}}}), close=AsyncMock())
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    args = {'sessionId': sid, 'id': 'p1', 'requestId': 'write-1', 'stdin': 'hello\n'}
+    first = await app.dispatch('operations.write', args, origin='agent')
+    sent = app.runtime.control.await_args.args
+    assert sent[0:2] == (sid, 'operations.write')
+    assert sent[2]['runtimeSessionId'] == 'runtime-owned'
+    assert sent[2]['ownerId'] == 'mount1'
+    assert sent[2]['stdin'] == 'hello\n'
+    app.management.ensure_runtime.assert_not_awaited()
+    await app.operations.observe(sid, 'runtime-owned', final(sequence=2))
+    assert (await app.dispatch('operations.write', args, origin='agent')) == first
+    with pytest.raises(AppError, match='unavailable'):
+        await app.dispatch('operations.write', {**args, 'requestId': 'write-2'})
+    app.runtime.control.assert_awaited_once()
+
+
+async def test_process_question_dependency_is_session_bound_and_checked_before_admission(app):
+    sid = app._session()['id']
+    app.runtime = SimpleNamespace(control=AsyncMock(), close=AsyncMock())
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    question = await app.dispatch('question.create', {'sessionId': sid, 'prompt': 'Choose a target', 'required': True, 'dependency': 'start command'})
+    identity = question['result']['id']
+    with pytest.raises(AppError, match='explicit answer'):
+        await app.dispatch('operations.submit', {'sessionId': sid, 'requestId': 'dependent-1', 'command': 'printf ok', 'questionIds': [identity]})
+    app.runtime.control.assert_not_awaited()
+    assert app.operations.requests.list(sid) == []
+    with pytest.raises(AppError, match='explicit answer'):
+        await app.app_bridge('questions.admit', {'questionIds': [identity]}, sid)
+    await app.dispatch('session.create', {})
+    other = app._session()['id']
+    with pytest.raises(Exception):
+        await app.app_bridge('questions.admit', {'questionIds': [identity]}, other)
+
+
+async def test_exact_mount_and_question_recheck_after_approval_before_real_spawn(app, tmp_path):
+    bash = pytest.importorskip('amplifier_module_tool_bash')
+    from amplifier_web.runtime_controls import RuntimeControls
+    sid = app._session()['id']
+    tool = bash.BashTool({'managed_processes': True, 'managed_stdin': True, 'safety_profile': 'unrestricted'})
+    target = tmp_path / 'effect'
+    approved = False
+    async def hook(name, data):
+        nonlocal approved
+        if name == 'tool:pre':
+            approved = True
+        return SimpleNamespace(action='continue')
+    async def admission(ids):
+        assert approved
+        assert ids == ['exact-question']
+        raise ValueError('Question was superseded during approval')
+    tool._processes.admission = lambda: admission
+    coordinator = SimpleNamespace(get=lambda name: {'bash': tool} if name == 'tools' else None,
+                                  get_capability=lambda name: None,
+                                  hooks=SimpleNamespace(emit=hook),
+                                  process_hook_result=AsyncMock(side_effect=lambda result,*args:result))
+    controls = object.__new__(RuntimeControls)
+    controls.coordinator = coordinator
+    controls.session = SimpleNamespace(session_id=sid)
+    try:
+        command = f'{shlex.quote(sys.executable)} -c ' + shlex.quote(f'from pathlib import Path;Path({str(target)!r}).touch()')
+        result = await controls.perform('operations.submit', {'command': command, 'questionIds': ['exact-question']})
+        assert result['result']['success'] is False
+        assert not target.exists()
+        tool._processes.admission = lambda: None
+        started = await tool.execute({'action':'start','command':f'{shlex.quote(sys.executable)} -c '+shlex.quote('import time;time.sleep(30)')})
+        pid = started.output['process_id']
+        with pytest.raises(ValueError, match='different or retired'):
+            await controls.perform('operations.write', {'runtimeSessionId':sid,'processId':pid,'ownerId':'wrong-mount','stdin':'unsafe'})
+    finally:
+        await tool.close()

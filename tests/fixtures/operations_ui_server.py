@@ -3,6 +3,8 @@
 import asyncio
 import json
 import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from pathlib import Path
 
 import settings_ui_server as fixture
@@ -28,6 +30,35 @@ async def main(home):
     app = await fixture.main(home)
     service = app["service"]
     sid = service._session()["id"]
+    from amplifier_module_tool_bash import BashTool
+    from amplifier_web.runtime_controls import RuntimeControls
+    tool = BashTool({"managed_processes": True, "managed_stdin": True,
+                     "managed_pty": True, "safety_profile": "unrestricted",
+                     "working_dir": service._session()["workspace"]})
+    tool._processes.observer = lambda: (lambda value: service.operations.observe(sid, sid, value))
+    tool._processes.admission = lambda: (lambda ids: service.app_bridge("questions.admit", {"questionIds": ids}, sid))
+    hooks = SimpleNamespace(emit=AsyncMock(return_value=SimpleNamespace(action="continue")))
+    coordinator = SimpleNamespace(get=lambda name: {"bash": tool} if name == "tools" else None,
+                                  get_capability=lambda name: None, hooks=hooks,
+                                  process_hook_result=AsyncMock(side_effect=lambda value, *args: value))
+    controls = object.__new__(RuntimeControls)
+    controls.coordinator = coordinator
+    controls.session = SimpleNamespace(session_id=sid)
+    controls.lock = asyncio.Lock()
+    original_control = service.runtime.control
+    async def control(owner, operation, args):
+        if operation.startswith("operations."):
+            return await controls.perform(operation, args)
+        return await original_control(owner, operation, args)
+    service.runtime.control = control
+    async def cleanup_tool(app):
+        await tool.close()
+    app.on_cleanup.append(cleanup_tool)
+
+    async def effects(request):
+        path = Path(service._session(sid)["workspace"]) / "effect.txt"
+        return web.json_response({"count": len(path.read_text().splitlines()) if path.exists() else 0})
+    app.router.add_get("/fixture/effects", effects)
     await service.operations.observe(
         sid, sid, event(1, "started", status={"state": "running"})
     )

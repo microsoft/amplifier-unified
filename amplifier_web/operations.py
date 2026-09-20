@@ -21,6 +21,24 @@ def definitions():
         "maxBytes": {"type": "integer", "minimum": 4096, "maximum": 100000},
     }
     return {
+        "operations.submit": (
+            "Start an owned command through the existing shell approval path. Keep requestId stable when retrying; unknown requests never replay. questionIds binds only work depending on those exact answers.",
+            schema({"sessionId": string(200), "requestId": string(200), "command": string(65536),
+                    "timeout": {"type": "integer", "minimum": 1, "maximum": 3600},
+                    "pty": {"type": "boolean"},
+                    "questionIds": {"type": "array", "maxItems": 32, "uniqueItems": True,
+                                    "items": {"type": "string", "minLength": 1, "maxLength": 200}}},
+                   ["sessionId", "requestId", "command"]),
+        ),
+        "operations.write": (
+            "Write input to the exact owned process through existing shell approvals. Raw input also requires the trusted mount policy. Keep requestId stable; uncertain input is never automatically retried.",
+            schema({**common, "requestId": string(200), "stdin": string(65536), "closeStdin": {"type": "boolean"}},
+                   ["sessionId", "id", "requestId"]),
+        ),
+        "operations.request": (
+            "Read the saved admission or input receipt without replaying it.",
+            schema({"sessionId": string(200), "requestId": string(200)}, ["sessionId", "requestId"]),
+        ),
         "operations.list": (
             "Read observed operations for a conversation without selecting or running it. Existing Smart Tool receipts and workers share this view.",
             schema(
@@ -62,6 +80,8 @@ class Operations:
         self.service = service
         self.journal = OperationJournal(service.data_dir / "operations.sqlite3")
         self.journal.recover()
+        from .operation_requests import OperationRequests
+        self.requests = OperationRequests(self.journal)
         self.changed = asyncio.Event()
         self.closed = False
         self.pending = set()
@@ -261,7 +281,7 @@ class Operations:
             result["controlAvailable"] = False
         return result
 
-    async def dispatch(self, action, args, origin):
+    async def dispatch(self, action, args, origin, command_id=None):
         from .service import AppError
 
         sid = args["sessionId"]
@@ -274,12 +294,18 @@ class Operations:
                 values.sort(key=lambda row: row.get("createdAt") or 0, reverse=True)
                 result = {
                     "operations": values[: args.get("limit", 50)],
+                    "requests": self.requests.list(sid),
                     "capabilities": {
                         "durableProcessOutput": True,
-                        "pty": False,
+                        "pty": None,
+                        "ptyRequiresHostOptIn": True,
                         "nativeWindows": False,
                     },
                 }
+            elif action in {"operations.submit", "operations.write"}:
+                result = await self.mutate(action, args, origin)
+            elif action == "operations.request":
+                result = self.requests.read(sid, args["requestId"])
             elif action == "operations.cancel":
                 result = await self.cancel(sid, args["id"], origin)
             elif action == "operations.wait":
@@ -308,8 +334,57 @@ class Operations:
             else:
                 result = self.read(args)
             return {"accepted": True, "result": result, "effects": []}
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RuntimeError) as exc:
             raise AppError(str(exc), 409) from exc
+
+    async def mutate(self, action, args, origin):
+        sid = args["sessionId"]
+        session = self.service._session(sid)
+        existing = self.requests.existing(sid, action, args, origin)
+        if existing is not None:
+            return existing
+        if session.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "taking-over"}:
+            raise ValueError("This conversation is read-only on this host")
+        if not args["requestId"].strip():
+            raise ValueError("A stable requestId is required")
+        runtime = self.service.runtime
+        if runtime is None:
+            raise ValueError("A conversation runtime is required")
+        if action == "operations.submit":
+            for question_id in args.get("questionIds", []):
+                self.service.questions.answer_for_dependency(sid, question_id)
+            payload = {"command": args["command"], "questionIds": args.get("questionIds", []),
+                       **{key: args[key] for key in ("timeout", "pty") if key in args}}
+        else:
+            value = self.status(sid, args["id"])
+            if value["source"] != "process" or not value.get("controlAvailable") or value["state"] not in ACTIVE:
+                raise ValueError("The original process is unavailable; input was not sent")
+            payload = {"processId": value["sourceId"], "runtimeSessionId": value["runtimeSessionId"],
+                       "ownerId": value["ownerId"], "operationId": args["id"],
+                       "stdin": args.get("stdin", ""), "closeStdin": args.get("closeStdin", False)}
+        receipt, fresh = self.requests.begin(sid, action, args, origin)
+        if not fresh:
+            return receipt
+        self.notify()
+        try:
+            if action == "operations.submit" and self.service.management is not None:
+                await self.service.management.ensure_runtime(session)
+            response = await runtime.control(sid, action, {**payload, "actor": origin})
+            result = response.get("result", response)
+            if result.get("success") is False:
+                return self.requests.finish(receipt, "rejected", error=result.get("error", {}))
+            output = result.get("output", {})
+            if result.get("success") is not True or not isinstance(output, dict) or not output.get("process_id"):
+                raise ValueError("The runtime did not return confirmed process admission evidence")
+            identity = output.get("process_id") or args.get("id")
+            return self.requests.finish(receipt, "accepted", operationId=identity,
+                callId=response.get("callId"),
+                admission={key: output[key] for key in ("process_id", "owner_id", "state", "returncode", "pty", "stdin_closed", "eof_semantics") if key in output})
+        except BaseException:
+            self.requests.finish(receipt, "outcome_unknown", message="The host did not confirm this request. It was not replayed; inspect saved operation evidence before deciding what to do next.")
+            raise
+        finally:
+            self.notify()
 
     async def cancel(self, session_id, identity, origin):
         value = self.status(session_id, identity)

@@ -255,7 +255,14 @@ class RuntimeControls:
             return await self.invoke({"name": "compute", "arguments": arguments},
                 bound_arguments=arguments, checkpoint=False,
                 provenance={"source": operation, "actor": args.get("actor", "ui")})
-        if operation == "operations.cancel":
+        if operation == "operations.submit":
+            arguments = {"action": "start", "command": args.get("command"),
+                         "question_ids": args.get("questionIds", []),
+                         **{key: args[key] for key in ("timeout", "pty") if key in args}}
+            return await self.invoke({"name": "bash", "arguments": arguments},
+                bound_arguments=arguments, checkpoint=False,
+                provenance={"source": operation, "actor": args.get("actor", "ui")})
+        if operation in {"operations.cancel", "operations.write"}:
             coordinator = self.coordinator
             target = args.get("runtimeSessionId")
             if target != self.session.session_id:
@@ -264,10 +271,13 @@ class RuntimeControls:
                 if child is None:
                     raise ValueError("The operation's owning session is no longer mounted")
                 coordinator = child.coordinator
-            arguments = {"action": "terminate", "process_id": args.get("processId")}
+            arguments = {"action": "terminate" if operation == "operations.cancel" else "write", "process_id": args.get("processId")}
+            if operation == "operations.write":
+                arguments.update(stdin=args.get("stdin", ""), close_stdin=args.get("closeStdin", False))
             return await self.invoke({"name": "bash", "arguments": arguments},
                 coordinator=coordinator, bound_arguments=arguments,
-                provenance={"source": "operations.cancel", "actor": args.get("actor", "ui"),
+                expected_process_owner=(args.get("processId"), args.get("ownerId")),
+                provenance={"source": operation, "actor": args.get("actor", "ui"),
                             "operation_id": args.get("operationId")}, checkpoint=False)
         async with self.lock:
             return await self._perform(operation, args)
@@ -644,7 +654,7 @@ class RuntimeControls:
         await self.checkpoint()
         return await self.mode("mode.list", {})
 
-    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True):
+    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None):
         coordinator = coordinator or self.coordinator
         bound_arguments = copy.deepcopy(bound_arguments)
         import jsonschema
@@ -671,6 +681,18 @@ class RuntimeControls:
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
         try:
+            if name == "bash" and arguments.get("question_ids"):
+                # Older mounted modules must not silently ignore new dependency
+                # arguments even if their JSON schema permits extra fields.
+                properties = getattr(tool, "input_schema", {}).get("properties", {})
+                if "question_ids" not in properties:
+                    raise ValueError("The mounted shell cannot enforce question dependencies")
+            if expected_process_owner is not None:
+                checker = getattr(tool, "validate_process_owner", None)
+                if checker is None and arguments.get("action") == "write":
+                    raise ValueError("The mounted shell does not support identity-bound input")
+                if checker is not None:
+                    checker(*expected_process_owner)
             result = await tool.execute(arguments)
             await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
             if checkpoint:

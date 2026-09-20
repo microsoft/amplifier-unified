@@ -694,7 +694,7 @@ class AppService:
             from .computation import dispatch
             return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
-            return await self.operations.dispatch(action, args, origin)
+            return await self.operations.dispatch(action, args, origin, command_id)
         if action.startswith("voice.visual."):
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
@@ -1852,6 +1852,17 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == "questions.admit":
+            async with self.lock:
+                self._session(session_id)
+                values = args.get("questionIds")
+                if (not isinstance(values, list) or len(values) > 32
+                        or any(not isinstance(q, str) or not 1 <= len(q) <= 200 for q in values)
+                        or len(set(values)) != len(values)):
+                    raise AppError("Invalid required question IDs")
+                for question_id in values:
+                    self.questions.answer_for_dependency(session_id, question_id)
+                return {"admitted": True, "questionIds": values}
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "voice.visual.read":

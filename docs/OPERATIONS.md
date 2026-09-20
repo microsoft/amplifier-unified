@@ -3,7 +3,9 @@
 Unified exposes one conversation-scoped view of managed processes, existing
 Smart Tool receipts, and workers through `operations.list`, `operations.status`,
 `operations.read`, `operations.wait`, and `operations.cancel`. The Operations panel
-and agent app actions use these same actions. Reading or waiting does not select
+and agent app actions use these same actions, plus `operations.submit`,
+`operations.write`, and `operations.request` for explicit execution/input and
+their durable admission receipts. Reading or waiting does not select
 a conversation, change its draft, activate a runtime, or replay work.
 
 ## Ownership and admission
@@ -19,10 +21,25 @@ configuration. This change does not enable it in default bundles. The host
 registers a local callback, never a remote callback URL. The portable journal is
 producer-neutral; the host currently accepts only tool-bash process events.
 
-These actions observe existing work; there is no generic operation submission
-endpoint. Existing shell dispatch admits process starts with its existing hooks,
-policy and permissions. A future submission adapter must check any exact required
-question IDs before admitting dependent work; unrelated work remains independent.
+`operations.submit` starts a command through existing shell hooks and permissions.
+`questionIds` binds only work depending on exact answers. The host checks them
+before mounting, and the Bash `questions.admit` capability checks again after
+approval, immediately before spawning. Pending/cancelled/superseded or foreign
+questions do not release dependent work. Unrelated work remains independent.
+
+`operations.write` binds the saved conversation, runtime, mounted owner and opaque
+process identity. It uses the same approvals and checks the owner after hooks.
+It cannot start or restore a missing process. Raw input additionally needs the
+trusted unrestricted Bash stdin policy; a command allowlist is not stdin approval.
+
+Both actions require a stable `requestId`. The journal commits an admission
+receipt before dispatch; repeating the same request returns that receipt, while
+changing its arguments or actor is rejected. Restart/transport interruption marks
+unfinished admission as `outcome_unknown` without replay. `operations.request`
+reads it and `operations.list` exposes recent receipts. An accepted request proves
+tool admission, not process completion or successful external effects. Command
+and stdin bodies are not stored in these admission receipts; their signature and
+bounded admission metadata are retained; output stays in the existing journal.
 
 Cancellation uses the existing `RuntimeControls.invoke` tool pre/post/error and
 coordinator permission path, with actor, source and operation attribution. It
@@ -102,8 +119,11 @@ terminal status. An idle worker is waiting for input, not completed. Large outpu
 references can point to an actual saved operation ID and cursor via the shared
 read action; arbitrary historic tool payloads are not silently archived here.
 
-PTY, terminal resizing, native Windows managed execution, and reconnecting to a
-live process after host death are unavailable. Raw interpreter input still needs
+POSIX terminals require trusted `managed_pty=true` plus per-request `pty=true`.
+They use an actual controlling terminal and merge stdout/stderr. Terminal EOF is
+canonical EOF, not a pipe half-close; raw-mode EOF is explicitly unavailable.
+Terminal sizing, native Windows managed execution, and reconnecting to a live
+process after host death are unavailable. Raw interpreter input still needs
 an explicit trusted mount policy; command allowlists do not authorize stdin.
 Full original binary output storage and guaranteed lossless delivery are not
 provided by this text observer. There is no automatic retry of input, execution,

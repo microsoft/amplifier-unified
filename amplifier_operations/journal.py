@@ -269,6 +269,12 @@ class OperationJournal:
                     controlAvailable=state in ACTIVE,
                     pid=status.get("pid"),
                     timeout=status.get("timeout"),
+                    pty=status.get("pty") is True,
+                    stdinAllowed=status.get("stdin_allowed") is True,
+                    stdinClosed=status.get("stdin_closed") is True,
+                    outputStreams=status.get("output_streams"),
+                    eofSemantics=status.get("eof_semantics"),
+                    questionIds=status.get("question_ids", []),
                 )
                 # A source's local ring can truncate while this journal still
                 # captured everything. Only observer gaps affect journal capture.
