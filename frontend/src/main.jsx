@@ -73,7 +73,7 @@ function App(){
      catch(e){await request('/api/actions',{method:'POST',body:{action:'canvas.report',args:{id:effect.canvasId,part:'clipboard',status:'error',message:'Clipboard unavailable: '+e.message}}});throw e}
     }
     if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
-    if(effect.type==='call.end')await voiceClient.current.end();
+    if(effect.type==='call.end')await voiceClient.current.end(effect.args||{});
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
    }).catch(e=>setError(actionErrorMessage(e)));

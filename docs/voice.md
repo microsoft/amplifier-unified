@@ -32,3 +32,35 @@ Sources verified during implementation:
 - [Realtime call API](https://developers.openai.com/api/reference/typescript/resources/realtime/subresources/calls/methods/create)
 
 The local Relay example also informed lifecycle and sideband separation.
+
+
+### Ending a call
+
+`call.end` uses the same host action for the UI and agent. UI hang-up releases
+microphone and speaker immediately. Agent actions default to `graceful: true`;
+callers can explicitly pass `graceful: false` for an immediate stop.
+
+A graceful end pins the call ID and stops accepting new voice delegations while
+allowing an already admitted answer up to six seconds to return. The browser
+mutes capture, keeps output connected, then drains for up to twelve seconds:
+
+- Realtime waits for `output_audio_buffer.stopped` (or a cleared buffer), with a
+  short transport tail. `response.done` and transcript completion are insufficient.
+- Live has no output-audio-done event. The browser observes decoded media, waits
+  for 1.2 seconds of quiet after sound, and includes output latency. This is a
+  bounded best-effort pause, not proof of a complete utterance or audible delivery.
+  Missing/blocked media evidence falls back to the timeout.
+
+The host has an independent twenty-second deadline if the browser disappears.
+Then normal provider finalization runs (at most eight seconds); final usage is
+confirmed only when the protocol acknowledges it. An explicit hang-up, page exit,
+or connection failure can interrupt draining. Ending voice never cancels admitted
+Amplifier work, and final transcripts continue to be recorded during finalization.
+No goodbye text matching, new cues, or automatic semantic hang-up is introduced.
+
+Protocol references: [Live lifecycle](https://developers.openai.com/api/docs/guides/live-conversations)
+and [Realtime server events](https://developers.openai.com/api/reference/resources/realtime/server-events).
+
+`npm run test:voice-ending-browser` checks real Chromium MediaStream/Web Audio
+playback with a synthetic tone. It does not make a provider call or prove physical
+speaker/headphone delivery.

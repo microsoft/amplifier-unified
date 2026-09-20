@@ -331,3 +331,79 @@ async def test_provider_finalization_releases_call_without_cancelling_work():
     await asyncio.gather(*list(call.tasks))
     assert call.closed and socket.closed and call.final.is_set()
     assert call.close_result['workContinues'] is True
+
+async def test_graceful_end_delivers_pending_live_result_before_closing():
+    service, socket = Service(), Socket()
+    call = VoiceCall(VoiceService(service), 'main')
+    call.id, call.socket = 'live_1', socket
+    await call.record('user', 'End our call', 'u1')
+    call.background(call.delegate_live('d1'))
+    await asyncio.sleep(0)
+    ending = asyncio.create_task(call.prepare_end())
+    await asyncio.sleep(0)
+    assert call.ending and not call.closing and not socket.closed
+    assert not any(event['type'] == 'session.close' for event in socket.sent)
+    # New work is rejected, while the already admitted answer can still arrive.
+    await call.handle({'type': 'session.delegation.created', 'delegation': {'id': 'd2'}})
+    assert 'd2' not in call.delegations
+    service.result.set()
+    result = await ending
+    assert result['closing'] and result['maxDrainMs'] > 0
+    assert socket.sent[-1]['type'] == 'session.commentary.append'
+    assert not socket.closed
+    call.final.set()
+    await call.close()
+    assert socket.closed and call.end_timeout.cancelled()
+
+
+async def test_graceful_realtime_end_waits_for_result_without_suppressing_response():
+    service, socket = Service(), Socket()
+    manager = VoiceService(service)
+    manager.request = AsyncMock(return_value=({}, '', {}))
+    call = VoiceCall(manager, 'main')
+    call.id, call.socket, call.provider = 'call_1', socket, 'realtime'
+    call.background(call.realtime_tool({'call_id': 'd1', 'name': 'amplifier_delegate', 'arguments': '{"text":"End call"}'}))
+    await asyncio.sleep(0)
+    ending = asyncio.create_task(call.prepare_end())
+    await asyncio.sleep(0)
+    service.result.set()
+    await ending
+    assert any(event['type'] == 'conversation.item.create' for event in socket.sent)
+    assert any(event['type'] == 'response.create' for event in socket.sent)
+    manager.request.assert_not_called()
+    await call.close()
+
+
+async def test_graceful_end_timeout_keeps_backend_work_running(monkeypatch):
+    monkeypatch.setattr('amplifier_web.voice.GRACEFUL_END_SECONDS', 0.03)
+    service = Service()
+    manager = VoiceService(service)
+    manager.request = AsyncMock(return_value=({}, '', {}))
+    call = VoiceCall(manager, 'main')
+    call.id, call.socket, call.provider = 'call_1', Socket(), 'realtime'
+    work = asyncio.create_task(service.result.wait())
+    call.tasks.add(work)
+    await call.prepare_end()
+    await call.end_timeout
+    assert call.closed and not work.cancelled() and not work.done()
+    service.result.set()
+    await work
+
+
+async def test_immediate_end_preempts_prepare_and_rejects_stale_call():
+    service = Service()
+    manager = VoiceService(service)
+    manager.request = AsyncMock(return_value=({}, '', {}))
+    call = manager.call = VoiceCall(manager, 'main')
+    call.id, call.socket, call.provider = 'call_1', Socket(), 'realtime'
+    work = asyncio.create_task(service.result.wait())
+    call.tasks.add(work)
+    preparing = asyncio.create_task(manager.end('call_1', graceful=True))
+    await asyncio.sleep(0)
+    await asyncio.wait_for(manager.end('call_1'), 0.2)
+    assert call.closed and not work.cancelled()
+    with pytest.raises(VoiceError, match='no longer active'):
+        await manager.end('previous_call', graceful=True)
+    service.result.set()
+    await work
+    await preparing

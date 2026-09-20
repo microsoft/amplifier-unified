@@ -308,3 +308,24 @@ async def test_background_activity_cannot_restart_finished_conversation(service)
     await service.on_runtime_event(*normalize_event({'type':'session.idle'},sid))
     await service.on_runtime_event(*normalize_event({'type':'runtime.activity','phase':'model'},sid))
     assert session['status']=='idle'
+
+async def test_call_end_uses_shared_action_with_agent_drain_and_immediate_user_stop(service):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    manager = SimpleNamespace(end=AsyncMock(return_value={}), close=AsyncMock())
+    service.voice_service = manager
+    service.state['voice'].update(id='call_1', status='connected')
+    agent = await service.dispatch('call.end', {}, origin='agent', command_id='agent-end')
+    assert agent['effects'][0]['args'] == {'id': 'call_1', 'graceful': True}
+    await asyncio.gather(*service.tasks)
+    manager.end.assert_awaited_with('call_1', graceful=True)
+    again = await service.dispatch('call.end', {}, origin='agent', command_id='agent-end')
+    assert again['duplicate'] and manager.end.await_count == 1
+    user = await service.dispatch('call.end', {}, origin='ui')
+    assert user['effects'][0]['args'] == {'id': 'call_1', 'graceful': False}
+    await asyncio.gather(*service.tasks)
+    manager.end.assert_awaited_with('call_1', graceful=False)
+    await service.dispatch('call.end', {'graceful': False}, origin='agent')
+    await asyncio.gather(*service.tasks)
+    manager.end.assert_awaited_with('call_1', graceful=False)
+    assert not service.runtime.stopped

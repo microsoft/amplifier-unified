@@ -1,3 +1,5 @@
+import {VoicePlayback} from "./voice-playback.js";
+
 /** Browser media transport. The server owns credentials, delegation, and state. */
 export class VoiceClient {
   constructor({request, onState = () => {}, onError = () => {}}) {
@@ -11,6 +13,8 @@ export class VoiceClient {
     this.events = null;
     this.audio = null;
     this.readySent = false;
+    this.playback = new VoicePlayback();
+    this.ending = null;
     this.onPageHide = () => {
       if (this.state.id) this.request('/api/voice/end', {method: 'POST', body: {id: this.state.id}, keepalive: true}).catch(() => {});
       this.release();
@@ -24,11 +28,12 @@ export class VoiceClient {
   }
 
   async start({provider = 'auto', sessionId = null} = {}) {
-    if (['connecting', 'connected'].includes(this.state.status)) return this.state;
+    if (['connecting', 'connected', 'ending'].includes(this.state.status)) return this.state;
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
       throw new Error('Voice needs a browser with microphone and WebRTC support, on localhost or HTTPS.');
     }
     const generation = ++this.generation;
+    this.playback = new VoicePlayback();
     this.update({status: 'connecting', error: null, muted: false});
     try {
       const config = await this.request('/api/voice/config');
@@ -67,9 +72,11 @@ export class VoiceClient {
         // Sideband records authoritative transcript; never execute browser events as tools.
         try {
           const data = JSON.parse(event.data);
+          if (generation !== this.generation) return;
+          this.playback.event(data);
           if (data.type === 'session.closed' && generation === this.generation) {
             this.release();
-            this.update({status: 'ended', finalized: true});
+            this.update({status: 'ended', finalized: true, id: null});
           }
         } catch (_) { /* Ignore malformed provider captions. */ }
       });
@@ -109,26 +116,59 @@ export class VoiceClient {
   }
 
   setMuted(muted) {
-    const value = Boolean(muted);
+    const value = this.state.status === 'ending' || Boolean(muted);
     this.stream?.getAudioTracks().forEach(track => { track.enabled = !value; });
     this.update({muted: value});
   }
 
-  async end() {
-    ++this.generation;
+  async end({id = this.state.id, graceful = false} = {}) {
+    // Effects are broadcast. Only the browser holding this exact call drains it.
+    if (id && id !== this.state.id) return;
+    if (!this.state.id && !this.peer && this.state.status !== 'connecting') return;
+    if (graceful && this.ending) return this.ending.promise;
+    const identity = this.state.id;
+    if (graceful && identity && this.peer) {
+      const controller = new AbortController();
+      const ending = {controller, promise: null, timer: null};
+      this.ending = ending;
+      ending.timer = setTimeout(() => this.end({id: identity}).catch(this.onError), 20000);
+      const since = performance.now();
+      this.update({status: 'ending', muted: true});
+      this.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
+      ending.promise = (async () => {
+        try {
+          const ready = await this.request('/api/voice/end', {method: 'POST', body: {id: identity, graceful: true}, signal: controller.signal});
+          if (controller.signal.aborted || this.state.id !== identity) return;
+          if (!ready.closed) {
+            const drain = await this.playback.drain({provider: this.state.provider, audio: this.audio, peer: this.peer, signal: controller.signal, since, timeoutMs: ready.maxDrainMs});
+            if (!controller.signal.aborted) this.update({playbackDrain: drain});
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+        } finally {
+          if (!controller.signal.aborted && this.state.id === identity) await this.end({id: identity});
+        }
+      })();
+      return ending.promise;
+    }
+    const generation = ++this.generation;
     this.update({status: 'ending'});
-    this.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
+    // A user stop releases microphone and speaker immediately, even while the
+    // provider takes time to finalize transcript/usage or its request fails.
+    this.release();
     let result;
     try {
-      result = await this.request('/api/voice/end', {method: 'POST', body: {id: this.state.id || null}});
+      result = await this.request('/api/voice/end', {method: 'POST', body: {id: identity || null}});
       return result;
     } finally {
-      this.release();
-      this.update({status: 'ended', finalized: result?.finalized || false, id: null});
+      if (generation === this.generation) this.update({status: 'ended', finalized: result?.finalized || false, id: null});
     }
   }
 
   release() {
+    clearTimeout(this.ending?.timer);
+    this.ending?.controller.abort();
+    this.ending = null;
     clearTimeout(this.connectionTimer);
     this.stream?.getTracks().forEach(track => track.stop());
     this.events?.close();

@@ -147,7 +147,7 @@ ACTION_DEFINITIONS = {
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema()),
     "call.mute": ("Mute or unmute the call microphone", schema({"muted": {"type": "boolean"}})),
-    "call.end": ("End audio while leaving the work running", schema()),
+    "call.end": ("End the call after pending speech (agent), or immediately (UI), leaving work running", schema({"graceful": {"type": "boolean"}}, [])),
 }
 
 
@@ -1071,7 +1071,8 @@ class AppService:
                 elif action == "call.mute":
                     self.state["voice"]["muted"] = args["muted"]
                 elif self.voice_service:
-                    pending.append((self._end_call, ()))
+                    call_args.update(id=self.state["voice"].get("id"), graceful=args.get("graceful", origin != "ui"))
+                    pending.append((self._end_call, (call_args["id"], call_args["graceful"])))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
             if action in {'session.create','session.fork','message.edit'}:
@@ -1231,9 +1232,9 @@ class AppService:
             current.pop("lockOwner", None)
             self._publish()
 
-    async def _end_call(self):
+    async def _end_call(self, identity=None, graceful=False):
         try:
-            await self.voice_service.end()
+            await self.voice_service.end(identity, graceful=graceful)
         except Exception as exc:
             await self.set_voice_status({"status": "error", "error": str(exc)})
 
