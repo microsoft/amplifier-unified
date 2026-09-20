@@ -710,7 +710,7 @@ class UpdateManager:
             try:
                 # New work is gated during this short phase. Old sessions remain
                 # durable; only idle worker processes are closed, then resumed normally.
-                if self.service.runtime: await self.service.runtime.close()
+                if self.service.runtime: await self.service.runtime.reset()
                 write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
                 if rollback:
                     async with self.service.lock:

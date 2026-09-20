@@ -549,6 +549,11 @@ class RuntimeManager:
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         self.workers.pop(session_id, None)
 
+    async def reset(self):
+        """Retire workers at an idle update boundary, retaining this host."""
+        await self.close()
+        self._closed = False
+
     async def close(self):
         self._closed = True
         await self.retention.close()

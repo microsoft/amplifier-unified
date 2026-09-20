@@ -308,3 +308,30 @@ async def test_background_activity_cannot_restart_finished_conversation(service)
     await service.on_runtime_event(*normalize_event({'type':'session.idle'},sid))
     await service.on_runtime_event(*normalize_event({'type':'runtime.activity','phase':'model'},sid))
     assert session['status']=='idle'
+
+
+async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(tmp_path):
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.updates import UpdateManager
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        await runtime.close()
+        request = {'text': 'Keep this unsent request'}
+        with pytest.raises(RuntimeError, match='host is closing'):
+            await app.dispatch('conversation.send', request, command_id='failed-start')
+        session = app.get_state()['sessions'][0]
+        assert session['status'] == 'error'
+        assert 'not automatically replayed' in session['error']
+        message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
+        assert message['text'] == request['text']
+        assert message['delivery']['status'] == 'unknown'
+        assert session['execution']['turns'][-1]['phase'] == 'error'
+        assert not UpdateManager(app).busy()
+        duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
+        assert duplicate['duplicate'] is True
+        assert duplicate['delivery'] == 'unknown'
+        assert not runtime.workers
+    finally:
+        await app.close()
