@@ -144,9 +144,10 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#3796a32351d32a93ccbb5e230c9ffe02964db42e" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#52dec7e276db62f720448c8e2ec176b9cbffde2d" }
 dependencies = [
     { name = "amplifier-core" },
+    { name = "filelock" },
     { name = "pyyaml" },
 ]
 
