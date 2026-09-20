@@ -2073,6 +2073,7 @@ class AppService:
 
     async def close(self):
         self.closed = True
+        await self.voice_visual.close()
         await self.schedules.close()
         await self.worktrees.close()
         await self.warmup.close()

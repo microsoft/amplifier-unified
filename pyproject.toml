@@ -21,6 +21,9 @@ dependencies = [
     "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
 ]
 
+[project.optional-dependencies]
+native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use"]
+
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"
 

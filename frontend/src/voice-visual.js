@@ -27,8 +27,23 @@ export class VoiceVisualClient {
    this.grant=grant;this.expiry=setTimeout(()=>this.stop(),Math.max(0,grant.expiresAt*1000-Date.now()));this.state({status:'ready',source,grantId:grant.id});
   } catch(error){this.stop();this.state({status:'error',error:error.name==='NotAllowedError'?'Screen permission was not granted.':error.message});throw error}
  }
+ async checkNative() {
+  const voice=this.getVoice();
+  const native=await this.request('/api/voice/visual/native/status',{method:'POST',body:{sessionId:voice.sessionId,callId:voice.id}});
+  if(!this.active(voice.id))throw Error('The call ended while checking the desktop host.');
+  this.state({native});return native;
+ }
+ async chooseNative() {
+  const voice=this.getVoice(),native=this.value?.native;
+  if(!native?.available||!this.active(voice.id))throw Error('Check the desktop host before granting access.');
+  this.stop();const generation=this.generation;
+  const grant=await this.request('/api/voice/visual/grant',{method:'POST',body:{sessionId:voice.sessionId,callId:voice.id,source:{kind:'native-foreground',hostId:native.host.id,hostInstanceId:native.hostInstanceId}}});
+  if(generation!==this.generation||!this.active(voice.id)){await this.request('/api/voice/visual/revoke',{method:'POST',body:{grantId:grant.id}}).catch(()=>{});throw Error('The call changed; source permission was discarded.');}
+  this.grant=grant;this.expiry=setTimeout(()=>this.stop(),Math.max(0,grant.expiresAt*1000-Date.now()));this.state({status:'ready',source:grant.source,grantId:grant.id});
+ }
  sync(voice,connected,serverVisual) {
-  if(this.stream&&(!connected||!this.active(this.grant?.callId||voice?.id)||this.grant&&(serverVisual?.available===false||serverVisual?.id&&serverVisual.id!==this.grant.id)))this.stop();
+  if(this.grant&&(!connected||!this.active(this.grant?.callId||voice?.id)||this.grant&&(serverVisual?.available===false||serverVisual?.id&&serverVisual.id!==this.grant.id)))this.stop();
+  if(this.grant&&serverVisual?.lastCapture?.grantId===this.grant.id&&serverVisual.lastCapture.capturedAt!==this.value?.capturedAt)this.state({capturedAt:serverVisual.lastCapture.capturedAt});
  }
  async capture(command) {
   const grant=this.grant,generation=this.generation;

@@ -129,3 +129,17 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path):
     assert inspect_session(tmp_path, session)['failure']['category'] == 'invalid_image'
     assert exception_details(ValueError('unknown error with secret=never-copy'))['category'] == 'unknown'
     await app.close()
+
+
+def test_structured_computer_stop_survives_exception_chain_without_payload_leak():
+    from amplifier_web.session_health import failure_details
+    inner=ValueError('secret arbitrary provider payload')
+    inner.code='computer_result_not_image';inner.tool_call_id='call_42';inner.result_kind='error'
+    outer=RuntimeError('Turn failed');outer.__cause__=inner
+    detail=exception_details(outer)
+    assert detail['category']=='computer_capture_stop' and detail['toolCallId']=='call_42'
+    assert detail['resultKind']=='error' and detail['retryable'] is False and detail['replayed'] is False
+    assert 'secret' not in json.dumps(detail) and 'does not clear' in detail['guidance']
+    assert failure_details({'code':inner.code,'tool_call_id':'wrong\nsecret','result_kind':'arbitrary secret'})['code']==inner.code
+    assert 'toolCallId' not in failure_details({'code':inner.code,'tool_call_id':'wrong\nsecret'})
+    assert 'resultKind' not in failure_details({'code':inner.code,'result_kind':'arbitrary secret'})

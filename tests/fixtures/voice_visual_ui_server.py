@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,14 @@ async def main(home):
             await service.set_voice_status({'status':'ended'})
             return {'closed':True}
     service.voice_service=Manager()
+    class SyntheticNative:
+        calls=[]
+        async def run(self, operation):
+            self.calls.append(operation)
+            if operation=='status': return {'available':True,'status':'ready','permission':'granted'}
+            return {'image':'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+                    'capturedAt':time.time(),'window':{'id':'fixture-42','title':'Synthetic native window','application':'Fixture application','bounds':[0,0,1,1]}}
+    service.voice_visual.native=SyntheticNative()
     async def config(request):return web.json_response({'available':True})
     async def connect(request):
         data=await request.json();sid=data['sessionId'];call=SimpleNamespace(id='fixture-call',session_id=sid,closed=False,closing=False,client_id=service.clients.current.get())
@@ -35,7 +44,7 @@ async def main(home):
     async def ready(request):await service.set_voice_status({'status':'connected'});return web.json_response({'ready':True})
     async def end(request):return web.json_response(await service.voice_service.end())
     async def inspect(request):
-        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent})
+        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent,'nativeCalls':service.voice_visual.native.calls})
     async def agent(request):
         payload=await request.json()
         return web.json_response(await service.app_bridge('dispatch',payload,service.voice_service.call.session_id))
