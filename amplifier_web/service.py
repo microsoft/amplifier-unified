@@ -1294,6 +1294,9 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == "history":
+            from .history_query import query_history
+            return await query_history(self, args, session_id)
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state

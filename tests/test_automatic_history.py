@@ -704,3 +704,19 @@ async def test_structured_service_observation_is_retained_without_attribution_to
     assert 'observation' not in messages[1]
     assert files_snapshot(directory)==before
     assert 'observation' not in display_message({'role':'user','content':text,'metadata':{'amplifier_input':{'version':99,'kind':'service'}}},0,row)
+@pytest.mark.asyncio
+async def test_agent_history_search_reads_unloaded_native_chat_without_selection(app_factory, tmp_path):
+    workspace = tmp_path / "history-search-workspace"
+    directory = native_session(workspace, "search-target", [
+        {"role": "user", "content": "Historical unique decision"},
+        {"role": "assistant", "content": "Saved answer"}])
+    app = app_factory(workspace=workspace)
+    await app.history.refresh()
+    target = next(row for row in app.state["sessions"] if row.get("nativeIdentity") == "search-target")
+    before = copy.deepcopy(app.state)
+    files = files_snapshot(directory)
+    result = await app.app_bridge("history", {"action": "search", "query": "unique decision"}, target["id"])
+    assert any(row["id"] == target["id"] for row in result["items"])
+    assert app.state == before
+    assert files_snapshot(directory) == files
+    assert app.runtime.started == [] and app.runtime.sent == []
