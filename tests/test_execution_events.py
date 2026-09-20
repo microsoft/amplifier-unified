@@ -68,9 +68,94 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
 
 def test_worker_report_and_tool_failure_are_visible_without_raw_payloads():
     events=ExecutionEvents('root',lambda event:None)
-    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'bash','tool_input':{'command':'secret content','token':'private'}})
-    assert 'secret content' not in str(events.nodes) and 'private' not in str(events.nodes)
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'bash','tool_input':{'command':'ls -la','token':'private'}})
+    assert 'ls -la' in events.nodes['tool:root:call']['input'] and 'private' not in str(events.nodes)
     events.hook('root','tool:post',{'tool_call_id':'call','tool_result':{'success':False,'error':{'message':'private'}}})
     assert events.nodes['tool:root:call']['phase']=='error'
     events.lifecycle({'type':'child.updated','sessionId':'child','status':'completed','report':'Completed the requested review.'})
     assert events.nodes['worker:child']['summary']=='Completed the requested review.'
+
+
+def test_public_tool_details_redact_credentials_and_private_blocks(monkeypatch):
+    monkeypatch.setenv('FIXTURE_API_KEY','unique-fixture-credential')
+    events=ExecutionEvents('root',lambda event:None)
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'app','tool_input':{'action':'feedback.get','authorization':'Bearer hidden','nested':{'access_token':'also-hidden'},'url':'https://user:pass@example.test','text':'unique-fixture-credential'}})
+    events.hook('root','tool:post',{'tool_call_id':'call','tool_result':{'success':False,'output':{'url':'https://github.com/example/repo/issues/2','content':[{'type':'text','text':'Public output'},{'type':'thinking','text':'protected thought'}]},'error':{'message':'Missing item','raw':'private dump'}}})
+    row=events.nodes['tool:root:call']
+    assert row['phase']=='error' and row['summary']=='Failed app · feedback.get'
+    assert 'Public output' in row['output'] and 'https://github.com/example/repo/issues/2' in row['output']
+    assert 'Missing item' in row['error']
+    for forbidden in ('unique-fixture-credential','also-hidden','Bearer hidden','user:pass','protected thought','private dump'):
+        assert forbidden not in str(row)
+    normalized=normalize_event({'type':'execution.event','event':row},'root')[1]
+    assert normalized['input']==row['input'] and normalized['output']==row['output']
+    private=normalize_event({'type':'execution.event','event':{**row,'kind':'llm'}},'root')[1]
+    assert all(key not in private for key in ('input','output','error'))
+
+
+def test_public_tool_details_are_bounded_and_never_stringify_objects():
+    from amplifier_web.execution_details import tool_detail,DETAIL_LIMIT
+    class Private:
+        def __str__(self):return 'must not appear'
+    assert tool_detail(Private())=='[unsupported detail]'
+    text=tool_detail({'output':'x'*200000})
+    assert len(text)<DETAIL_LIMIT+100 and 'omitted' in text
+    assert 'private content omitted' in tool_detail({'analysis':'private','nested':{'visibility':'hidden','text':'private'}})
+
+
+def test_private_tool_block_cannot_leak_through_collapsed_purpose():
+    events=ExecutionEvents('root',lambda event:None)
+    events.hook('root','tool:pre',{'tool_call_id':'private','tool_name':'fixture','tool_input':{'visibility':'private','description':'Do not expose this description'}})
+    assert 'Do not expose' not in str(events.nodes)
+
+
+def test_usage_inspection_does_not_duplicate_large_tool_content():
+    events=ExecutionEvents('root',lambda event:None)
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{'text':'x'*64000}})
+    assert 'input' in events.nodes['tool:root:call']
+    assert 'input' not in events.usage()['trace'][0]
+
+
+def test_tool_text_redacts_userinfo_tokens_assignments_and_private_keys():
+    from amplifier_web.execution_details import tool_detail
+    result=tool_detail('https://a-secret-token@example.test/path TEAM_KEY=some-key token=another-token\n-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----')
+    result += tool_detail('{"api_key":"json-string-credential"}')
+    for forbidden in ('a-secret-token','some-key','another-token','private-material','json-string-credential'):
+        assert forbidden not in result
+
+
+def test_repeated_tool_completion_preserves_end_time_and_retry_clears_old_result(monkeypatch):
+    events=ExecutionEvents('root',lambda event:None)
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:10)
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{}})
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:12)
+    result={'tool_call_id':'call','tool_result':{'success':False,'error':'failed once'}}
+    events.hook('root','tool:post',result)
+    monkeypatch.setattr('amplifier_web.execution_events.time.time',lambda:20)
+    events.hook('root','tool:post',result)
+    assert events.nodes['tool:root:call']['endedAt']==12
+    events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'fixture','tool_input':{}})
+    row=events.nodes['tool:root:call']
+    assert row['phase']=='running' and row['startedAt']==10
+    assert all(row.get(key) is None for key in ('endedAt','output','error'))
+    from amplifier_web.execution import ingest
+    session={}
+    ingest(session,{**row,'phase':'error','endedAt':12,'error':'failed once'})
+    ingest(session,row)
+    assert session['execution']['nodes'][0]['endedAt'] is None
+    assert session['execution']['nodes'][0]['error'] is None
+
+
+async def test_unwrappable_provider_hook_fallback_preserves_background_lifecycle():
+    from amplifier_web.execution_events import CALL_PURPOSE
+    events=ExecutionEvents('root',lambda event:None)
+    events.turn_id='foreground'
+    token=CALL_PURPOSE.set({'label':'Auxiliary call','turnId':'earlier','lifecycle':'background'})
+    try:
+        events.hook('root','llm:request',{'model':'fixture'})
+        pending=next(iter(events.nodes.values()))
+        assert pending['lifecycle']=='background' and pending['turnId']=='earlier'
+        events.hook('root','llm:response',{'usage':{'input_tokens':2,'output_tokens':1}})
+        assert events.nodes[pending['id']]['phase']=='completed'
+        assert events.nodes[pending['id']]['lifecycle']=='background'
+    finally:CALL_PURPOSE.reset(token)

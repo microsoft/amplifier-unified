@@ -13,7 +13,7 @@ import uuid
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
 from .updates import work_paused
 
 
@@ -632,7 +632,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -991,7 +991,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -1034,6 +1034,9 @@ class AppService:
                 view=self.state['view']
                 if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
+            elif action in {"feedback.get", "feedback.comment"}:
+                if self.feedback.followups.accept(action, args, origin):
+                    pending.append((self.feedback.followups.run, (args['requestId'],)))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':
@@ -1165,7 +1168,7 @@ class AppService:
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
-            if action == "feedback.submit":
+            if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
@@ -1363,6 +1366,10 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+            elif kind == "runtime.ended":
+                # A turn may finish before naming does; only the runtime host
+                # can confirm that no independent call can still be running.
+                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked
