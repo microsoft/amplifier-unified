@@ -37,7 +37,7 @@ The [inventory](settings-inventory.csv) tracks all 321 requirements from the set
 ## Boundaries and state
 
 - Unified-specific screens depend on integrations the app explicitly consumes. Loaded bundle modules are inspected and configured generically; their names never become hard-coded navigation entries. This follows [Amplifier repository rules](https://github.com/microsoft/amplifier/blob/main/docs/REPOSITORY_RULES.md).
-- Diagnostics configures the app’s Context Intelligence client. Optional bundle hooks remain generic module configuration. File access retains the existing filesystem integration; it does not add new module-specific assumptions.
+- Diagnostics configures the app’s Context Intelligence client. Optional bundle hooks remain generic module configuration. File access edits the existing scoped write overrides through Unified’s shared policy API. The editor does not claim to display every effective restriction inherited from settings or bundles, and navigation does not add module-specific assumptions.
 - `settingsSection` and `settingsExpanded` stay the public navigation contract. Old saved pages and agent actions resolve into the new structure. `panel: appearance` remains supported.
 - Visited editors remain mounted until the dialog closes. Ordinary drafts use the existing shared view state; private provider keys and notification credentials stay only in component memory until explicitly saved. Closing a dialog never saves a draft.
 - The shared activity and outside-dismissal contracts remain in effect. Pending receipts are distinct from completed background work, and navigation remains usable during independent operations.
