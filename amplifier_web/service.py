@@ -225,6 +225,8 @@ from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
 from .voice_visual import VoiceVisual, definitions as visual_definitions
 ACTION_DEFINITIONS.update(visual_definitions(schema, string))
+from .worktrees import definitions as worktree_definitions
+ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -375,6 +377,8 @@ class AppService:
         self.coordination = Coordination(self)
         from .schedules import Schedules
         self.schedules = Schedules(self)
+        from .worktrees import Worktrees
+        self.worktrees = Worktrees(self)
         self._refresh_shared_preferences()
         from .operations import Operations
         self.operations = Operations(self)
@@ -469,6 +473,7 @@ class AppService:
     def _save(self):
         self.questions.sync()
         self.schedules.sync()
+        self.worktrees.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -689,6 +694,12 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
+        if action.startswith('worktree.'):
+            try:
+                result = await self.worktrees.dispatch(action, args, origin, command_id)
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action in {'question.answer', 'conversation.send', 'worker.spawn', 'worker.message', 'worker.steer', 'worker.stop', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
@@ -1855,6 +1866,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'].startswith('worktree.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Worktree actions must target the calling task.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
             if args['action'].startswith(('operations.', 'kernels.')):
@@ -1984,6 +1999,7 @@ class AppService:
     async def close(self):
         self.closed = True
         await self.schedules.close()
+        await self.worktrees.close()
         await self.warmup.close()
         await self.history.close()
         if self.update_manager:

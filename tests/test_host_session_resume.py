@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -229,3 +230,20 @@ async def test_manual_rename_during_active_turn_survives_next_native_save(mounte
     assert h.store.load('native-root')[1]['name'] == 'Manual name during work'
     assert h.store.load('native-root')[1]['name_source'] == 'manual'
     assert h.writes == []
+
+
+async def test_execution_checkout_keeps_native_history_home(mounted_host, tmp_path):
+    h = mounted_host
+    checkout = tmp_path / 'execution-checkout'; checkout.mkdir()
+    messages = [{'role': 'user', 'content': 'Retain my saved source'}, {'role': 'assistant', 'content': 'Original evidence'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    original = h.path.read_bytes()
+    _, _, report = await h.prepare(execution_workspace=checkout)
+    assert h.prepared.create_session.call_args.kwargs['session_cwd'] == checkout
+    assert Path.cwd() == checkout
+    assert h.path.read_bytes() == original
+    assert h.context.messages == messages
+    assert report['execution_workspace'] == str(checkout)
+    assert report['workspace'] != str(checkout)
+    assert h.capabilities['web.history_workspace'] == report['workspace']
+    h.session.execute.assert_not_called()

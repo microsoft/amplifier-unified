@@ -251,7 +251,8 @@ class Worker:
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
-                write_guard=self.activation_gate.check_current, resolved_root=resolved_root)
+                write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
+                execution_workspace=config.get("workingDirectory"))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)

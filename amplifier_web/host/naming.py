@@ -18,7 +18,7 @@ class LiveSessionNaming:
     def __init__(self,coordinator,home,publish,completed_inputs=()):
         self.coordinator=coordinator
         from .storage import SessionStore
-        workspace=coordinator.config.get("project_dir") or coordinator.config.get("working_dir") or Path.cwd()
+        workspace=getattr(coordinator, "get_capability", lambda _: None)("web.history_workspace") or coordinator.config.get("project_dir") or coordinator.config.get("working_dir") or Path.cwd()
         self.store=SessionStore.for_app(home, workspace)
         self.directory=self.store.directory(coordinator.session_id)
         self.publish=publish
