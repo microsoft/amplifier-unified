@@ -51,7 +51,7 @@ def retained_references(db, state):
     pending = list(references(state))
     # Persisted client records remain roots even before ClientViews is loaded
     # at startup, and when their browser is disconnected or another is bound.
-    for table in ('smart_tool_operations', 'client_views'):
+    for table in ('smart_tool_operations', 'client_views', 'conversation_shares'):
         if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
             for (text,) in db.execute('SELECT value FROM ' + table):
                 pending.extend(references(json.loads(text)))

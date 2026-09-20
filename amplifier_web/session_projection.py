@@ -56,6 +56,9 @@ def persist(home, state, cache):
         result['canvas']['$body'] = artifact['body']
     result['sessions'] = []
     retained = set(state.get('pinnedSessionIds', [])) | {state.get('selectedSessionId')}
+    library = state.get('conversationOrganization', {})
+    retained.update(library.get('archived', {}))
+    retained.update(sid for row in library.get('collections', []) for sid in row['sessionIds'])
     for session in state.get('sessions', []):
         if session.get('historyManaged'):
             from .automatic_history import INDEX_FIELDS

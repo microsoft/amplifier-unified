@@ -23,7 +23,7 @@ def _set_response_headers(response: web.StreamResponse, path: str) -> web.Stream
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") or path == "/login" else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/")) or path == "/login" else "no-cache"
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
@@ -325,6 +325,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.json_response(operation)
 
     app.router.add_get('/api/smart-tools/operations/{identity}', smart_operation)
+    async def shared_conversation(request):
+        async with service.lock:
+            content = service.conversation_library.public_snapshot(request.match_info['token'])
+        if content is None:
+            raise web.HTTPNotFound(text='This snapshot link is unavailable.')
+        return web.Response(text=content, content_type='text/html', headers={
+            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            'X-Robots-Tag': 'noindex, nofollow, noarchive'})
+    app.router.add_get('/share/{token}', shared_conversation)
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", post_login)
     app.router.add_get("/setup", setup)

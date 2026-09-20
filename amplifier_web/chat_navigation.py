@@ -66,6 +66,10 @@ def initialize(state):
 
 
 def view_patch(patch):
+    if 'navArchive' in patch and patch['navArchive'] not in ('active', 'archived', 'all'):
+        raise ValueError('Choose active, archived or all conversations.')
+    if 'navCollection' in patch and patch['navCollection'] is not None and (not isinstance(patch['navCollection'], str) or len(patch['navCollection']) > 200):
+        raise ValueError('Choose a valid collection ID or null.')
     if 'subagentHistory' in patch:
         value = patch['subagentHistory']
         if not isinstance(value, dict) or set(value) - {'sessionId', 'filter', 'index'}:
@@ -124,9 +128,26 @@ def snapshot(state):
     counts = dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)
     unread = state.get('attention', {}).get('sessions', {})
     pins = set(state.get('pinnedSessionIds', []))
+    pin_order = {sid: i for i, sid in enumerate(state.get('pinnedSessionIds', []))}
+    organization = state.get('conversationOrganization', {})
+    archived = organization.get('archived', {})
+    archive_filter = view.get('navArchive', 'active')
+    if archive_filter != 'active':
+        scope['archive'] = archive_filter
+    collection_id = view.get('navCollection')
+    collection = next((row for row in organization.get('collections', []) if row['id'] == collection_id), None)
+    collection_order = {sid: i for i, sid in enumerate(collection['sessionIds'])} if collection else {}
+    if collection_id:
+        scope['collectionId'] = collection_id
+    memberships = {sid: row['id'] for row in organization.get('collections', []) for sid in row['sessionIds']}
     rows = []
     for session in state.get('sessions', []):
         if not is_top_level(session):
+            continue
+        is_archived = session['id'] in archived
+        if (archive_filter == 'active' and is_archived) or (archive_filter == 'archived' and not is_archived):
+            continue
+        if collection_id and session['id'] not in collection_order:
             continue
         workspace = by_id.get(session.get('workspaceId')) or by_path.get(session.get('workspace'))
         if workspace is None or (mode == 'workspace' and (selected is None or workspace['id'] != selected['id'])):
@@ -146,9 +167,13 @@ def snapshot(state):
                      'workspaceLabel': labels[workspace['path']], 'activity': summary,
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
+                     **({'archived': True} if is_archived else {}),
+                     **({'collectionId': memberships[session['id']]} if session['id'] in memberships else {}),
                      'recentActivityAt': recent_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
-    rows.sort(key=lambda row: (not row['pinned'], -row['recentActivityAt']))
+    rows.sort(key=lambda row: (not row['pinned'],
+        pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
+        else collection_order.get(row['id'], 0) if collection_id and not row['pinned'] else -row['recentActivityAt']))
     saved = view.get('navChatPage')
     matched = isinstance(saved, dict) and all(saved.get(key) == value for key, value in scope.items())
     inferred = next((i // PAGE_SIZE for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0

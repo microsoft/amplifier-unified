@@ -35,7 +35,7 @@ def direct_child(row, parent):
 
 def navigation(state):
     chat = chat_snapshot(state)
-    header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': ''}
+    header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': '', 'navArchive': 'active', 'navCollection': None}
     scope = {'mode': 'workspace', 'workspaceId': state.get('selectedWorkspaceId'),
              'filter': '', 'selectedSessionId': state.get('selectedSessionId')}
     header_view['navChatPage'] = {**scope, 'index': 0}
@@ -80,6 +80,8 @@ def snapshot(state, derived, *, session_id=None):
     result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': sum(direct_child(child, row) for child in state.get('sessions', []))} if row['id'] == selected else {})}
                           for row in state.get('sessions', []) if row['id'] in visible]
+    from .conversation_library import projection as organization_projection
+    result['conversationOrganization'] = organization_projection(state, visible)
     workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
