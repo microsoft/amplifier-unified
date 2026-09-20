@@ -42,8 +42,22 @@ class Worktrees:
                 record.update(phase='unknown', revision=record['revision']+1, detail='The app restarted during handoff. No input was replayed; inspect and reconcile explicitly.')
                 self.save(record)
         self.sync()
+        self.bind_runtime()
+
+    def execution_state(self, sid):
+        session = self.app._session(sid)
+        return {'directory': session.get('workingDirectory') or session['workspace'],
+                'revision': session.get('executionRevision', 0),
+                'fenced': any(row['phase'] in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', []))}
+
+    def bind_runtime(self):
+        binding = getattr(self.app.runtime, 'bind_execution_state', None)
+        if callable(binding): binding(self.execution_state)
 
     def start(self):
+        # Production creates its runtime after AppService hydration. Install
+        # the reader before accepting inputs, including restored unknown moves.
+        self.bind_runtime()
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'register_source'):
             operations.register_source('worktree', self.operation_records, self.operation_record)

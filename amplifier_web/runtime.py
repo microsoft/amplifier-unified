@@ -114,8 +114,25 @@ class RuntimeManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._closed = False
         self._retired = {}
+        self._execution_state = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
+
+    def bind_execution_state(self, read):
+        """Host-owned synchronous authority; never supplied by a model command."""
+        self._execution_state = read
+
+    def _check_execution(self, sid, session=None, *, allow_fenced=False):
+        if self._execution_state is None:
+            return
+        current = self._execution_state(sid)
+        if current['fenced'] and not allow_fenced:
+            raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
+        if session is not None and (
+            session.get('executionRevision', 0) != current['revision']
+            or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
+        ):
+            raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
 
     def has_pending_operations(self):
         """Preparing a worker or waiting for its reply must defer host updates."""
@@ -174,12 +191,13 @@ class RuntimeManager:
         if self._closed:
             raise RuntimeError("The runtime host is closing.")
         sid = session["id"]
+        self._check_execution(sid, session)
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
             current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
-                'id', 'workspace', 'workingDirectory', 'bundle', 'selection',
+                'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
             await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
             return
@@ -199,7 +217,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
@@ -374,6 +392,16 @@ class RuntimeManager:
         return await self._reply(*await self._admit(sid, op, args), op=op, args=args)
 
     async def _admit(self, sid, op, args):
+        # Handoff holds this same admission lock while releasing its writer.
+        # The host fence persists until the durable execution-state commit, so
+        # queued controls cannot resurrect the old checkout in the gap.
+        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies'} or (
+            op == 'control' and args.get('operation') in {
+                'operations.cancel', 'kernels.interrupt', 'kernels.close',
+                'task.pause', 'task.block', 'task.complete',
+            }
+        )
+        self._check_execution(sid, allow_fenced=safe)
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")

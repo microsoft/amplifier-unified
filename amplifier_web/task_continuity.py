@@ -191,11 +191,11 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         raise AppError("The Amplifier runtime is unavailable.")
     for identity in args.get("questionIds", []):
         service.questions.store.get(sid, identity)
-    await service.management.ensure_runtime(session)
     forwarded = {key: value for key, value in args.items() if key != "sessionId"}
     if operation != "task.get":
         forwarded.update(commandId=command_id or str(uuid.uuid4()), origin=origin)
     try:
+        await service.management.ensure_runtime(session)
         result = await service.runtime.control(sid, operation, forwarded)
     except ValueError as exc:
         raise AppError(str(exc), 409) from None

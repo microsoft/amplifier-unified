@@ -58,3 +58,12 @@ the normal size limits. A filtered repository may consequently look dirty under 
 raw-byte inspection even when ordinary Git hides its conversion difference. This
 policy prevents passive inspection and managed creation from running repository
 conversion commands or downloading external content implicitly.
+
+The runtime admission lock consults an authoritative host execution-state reader.
+Pending and unknown handoffs fence starts and new commands until the saved target
+and revision commit; a stale queued start is also rejected after the commit. This
+applies to generic runtime inspection, task controls, schedule preparation, warming
+and retired-worker reactivation, not only the Send button. Approval responses,
+interruption and shutdown remain available for a still-owned runtime. The guard
+uses the existing handoff records and never treats mutable caller arguments as
+permission to clear an unresolved handoff.
