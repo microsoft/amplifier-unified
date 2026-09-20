@@ -380,7 +380,10 @@ class AutomaticHistory:
                                 title = row.get('name') or row.get('title') or previous['title']
                                 if title != previous['title']:
                                     previous['title'] = title; changed = True
-                                source = row.get('nameSource') or 'manual'
+                                # Native catalog names are not local UI overrides.
+                                # Keeping this provenance avoids persisting the
+                                # entire discovered library after each refresh.
+                                source = 'native' if previous.get('historyManaged') else row.get('nameSource') or 'manual'
                                 if row.get('name') and previous.get('titleSource') != source:
                                     previous['titleSource'] = source; changed = True
                             if previous.get('historyManaged') and previous.get('historyReadOnlyReason') != row.get('readOnlyReason'):

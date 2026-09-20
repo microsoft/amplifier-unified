@@ -765,6 +765,7 @@ async def test_canonical_manual_title_refreshes_after_web_and_cli_renames(tmp_pa
     assert app._session(row['id'])['title'] == 'Third CLI title'
     await app.close()
     restored = app_factory()
+    await restored.history.refresh()
     assert restored._session(row['id'])['nativeNameSource'] == 'manual'
 
 
@@ -880,3 +881,14 @@ async def test_agent_history_search_reads_unloaded_native_chat_without_selection
     assert app.state == before
     assert files_snapshot(directory) == files
     assert app.runtime.started == [] and app.runtime.sent == []
+
+
+async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(tmp_path, app_factory):
+    native_session(tmp_path / 'cli', 'one', metadata={'name_source':'manual'})
+    native_session(tmp_path / 'cli', 'two')
+    app = app_factory()
+    await app.history.refresh()
+    await app.history.refresh()
+    assert all(row['titleSource'] == 'native' for row in native_rows(app))
+    persisted = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    assert not persisted['sessions']
