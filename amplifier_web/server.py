@@ -12,6 +12,7 @@ from . import __version__
 from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
+from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
 
@@ -46,7 +47,7 @@ async def boundaries(request, handler):
         if exc.code:
             payload['code'] = exc.code
         if exc.code == 'session_busy':
-            payload['state'] = request.app['service'].browser_state()
+            payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
         return _set_response_headers(web.json_response(payload, status=exc.status), request.path)
     except (json.JSONDecodeError, ValueError, KeyError) as exc:
         return _set_response_headers(web.json_response({"error": "Invalid request: " + str(exc), "accepted": False}, status=400), request.path)
@@ -57,7 +58,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                      preload_providers=True, server_config=None):
     data_dir = Path(data_dir).expanduser().resolve()
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
-    app = web.Application(middlewares=[boundaries, auth_required], client_max_size=13_000_000)
+    app = web.Application(middlewares=[boundaries, auth_required, client_context], client_max_size=13_000_000)
     app["server_config"] = config
     app["permitted_hosts"] = frozenset({"localhost", "127.0.0.1", "::1"} |
                                        {canonical_host(urlsplit(origin).hostname) for origin in config["public_origins"]})
@@ -123,8 +124,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if request.method == "GET":
             return web.json_response(service.get_actions())
         payload = await request.json()
-        result = await service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
-                                        command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"))
+        task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
+                                        command_id=payload.get("id"), expected_revision=payload.get("expectedRevision")))
+        result = await asyncio.shield(task)
         return web.json_response(result)
 
     async def view(request):
@@ -171,7 +173,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             queue = service.subscribe()
             snapshot = service.browser_state()
             while True:
-                await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
+                if "shellClientId" in snapshot:
+                    await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())
+                else:
+                    await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
                 try:
                     snapshot = await asyncio.wait_for(queue.get(), 20)
                 except TimeoutError:
@@ -296,6 +301,27 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post("/api/actions", actions)
     app.router.add_post("/api/view", view)
     app.router.add_get("/api/events", events)
+    from .live_clients import setup_routes as setup_clients
+    setup_clients(app, streams)
+
+    async def shell_state(request):
+        from .shell_modules import IDENTITY
+        from jsonschema import validate, ValidationError
+        client_id = request.query.get('clientId', '')
+        try:
+            validate(client_id, IDENTITY)
+        except ValidationError:
+            raise AppError('A valid shell clientId is required.') from None
+        return web.json_response(service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1'))
+
+    async def shell_package(request):
+        digest = request.match_info['digest']
+        service.shell.manifest(digest)
+        return web.Response(text=service.shell.source(digest), content_type='text/javascript', headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/shell', shell_state)
+    app.router.add_get('/api/shell/packages/{digest}.mjs', shell_package)
+
     if voice:
         from .voice import setup_routes
         service.voice_service = setup_routes(app)

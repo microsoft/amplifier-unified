@@ -58,7 +58,7 @@ try{
     assert.equal(measured.value.accepted,true);actionSamples.push(measured);delete measured.value;
    }
    const actionMetrics=await api('/api/fixture/metrics');
-   assert.equal(actionMetrics.publications,samples,'one lightweight command must not multiply publications');
+   assert.equal(actionMetrics.publications,samples,'one lightweight command must not multiply publications: '+JSON.stringify(actionMetrics));
 
    // Agents retain the entire navigation catalog even when browser transport is bounded.
    const agent=async path=>(await api('/api/fixture/agent',{args:{path}})).value;
@@ -102,19 +102,26 @@ try{
    });
    const navigationStart=performance.now();await page.goto(browserTarget);await page.locator('#amp-one').waitFor();
    await page.waitForFunction(()=>window.amplifier?.getState().sharedHistory?.loading===false);
+   await page.waitForFunction(expected=>document.querySelectorAll('.a-nav-chat').length===expected,Math.min(100,scenario.roots));
    const initialVisibleMs=performance.now()-navigationStart;
    assert.equal(await page.locator('.a-nav-chat').count(),Math.min(100,scenario.roots));
    const domNodes=await page.locator('*').count();
    await page.waitForTimeout(600); // Let initial observational /api/view settle; outside measured window.
    await api('/api/fixture/reset',{});
    await page.evaluate(()=>{window.performanceFixture={sseFrames:0,sseBytes:0,sseMaxBytes:0,longTasks:[]}});
-   const settings=[],maintenance=[];
+   const settings=[],capabilities=[],maintenance=[],maintenanceSettled=[];
    const painted=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(performance.now())))));
    for(let sample=0;sample<samples;sample++){
     const start=await page.getByRole('button',{name:'Settings',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
     await page.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();settings.push((await painted())-start);
+    // Capabilities automatically reads bundles. Exercise that real background
+    // work before leaving: optimistic paint alone can conceal server stalls.
+    const catalogStart=await page.getByRole('button',{name:'Capabilities',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
+    await page.locator('button.a-settings-group-title').filter({hasText:'Add capabilities'}).waitFor();capabilities.push((await painted())-catalogStart);
     const next=await page.getByRole('button',{name:'Maintenance',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
     await page.locator('button.a-settings-group-title').filter({hasText:'Conversation history'}).waitFor();maintenance.push((await painted())-next);
+    await settled(); // Includes the 250ms quiet window defined above.
+    maintenanceSettled.push((await page.evaluate(()=>performance.now()))-next);
     await page.getByRole('button',{name:'Setup',exact:true}).click();
     await page.getByRole('button',{name:'Close panel',exact:true}).click();
     await page.getByRole('dialog').waitFor({state:'hidden'});
@@ -127,7 +134,7 @@ try{
     stateTtfbMs:stats(stateSamples.map(row=>row.ttfbMs)),stateTotalMs:stats(stateSamples.map(row=>row.totalMs)),
     stateDecodeMs:stats(stateSamples.map(row=>row.decodeMs)),stateServer:readMetrics,
     viewRoundtripMs:stats(actionSamples.map(row=>row.totalMs)),viewResponseBytes:actionSamples.map(row=>row.bytes),viewServer:actionMetrics,
-    initialVisibleMs:round(initialVisibleMs),settingsClickToPaintMs:stats(settings),maintenanceClickToPaintMs:stats(maintenance),
+    initialVisibleMs:round(initialVisibleMs),settingsClickToPaintMs:stats(settings),capabilitiesClickToPaintMs:stats(capabilities),maintenanceClickToPaintMs:stats(maintenance),maintenanceSettledMs:stats(maintenanceSettled),
     domNodes,browserServer:browserMetrics,sseFrames:observations.sseFrames,sseBytes:observations.sseBytes,sseMaxBytes:observations.sseMaxBytes,
     longTaskCount:observations.longTasks.length,maxLongTaskMs:round(Math.max(0,...observations.longTasks)),agentNavigationParity:true};
    result.cases.push(row);

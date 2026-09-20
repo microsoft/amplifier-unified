@@ -134,6 +134,8 @@ class Management:
             self.service._publish()
 
     async def command(self,action,args,command_id=None):
+        if action == 'bundles.list':
+            return await self.list_bundles(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
         independent=action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test'}
         async with (nullcontext() if independent else self.lock):
@@ -166,12 +168,68 @@ class Management:
                             if session['id']==guarded:session['configurationBusy']=False
                         self.service._publish()
 
+    async def list_bundles(self, args, command_id):
+        """Read the catalog with one start and one atomic completion snapshot.
+
+        Keep the mutation lock: a refresh must not race bundle edits. Publishing
+        each bookkeeping field separately made this inexpensive read block all
+        HTTP clients while rebuilding the same navigation seven times.
+        """
+        action = 'bundles.list'
+        try:
+            if self.lock.locked():
+                await self.provider_status(action, args, command_id, 'queued')
+            await self.lock.acquire()
+        except asyncio.CancelledError:
+            await self._bundle_list_transition(args, command_id, 'error',
+                error='Bundle refresh cancelled.', active=False)
+            raise
+        try:
+            await self._bundle_list_transition(args, command_id, 'working')
+            # Uncontended async locks do not yield. Let ready clients consume
+            # the start snapshot before the final catalog is published.
+            await asyncio.sleep(0)
+            from .bundles import BundleManager
+            workspace = self.configuration_session(args)['workspace']
+            result = await BundleManager(self.service.data_dir).perform(
+                action, {**args, 'workspace': workspace})
+            await self._bundle_list_transition(args, command_id, 'ready',
+                values={key: result[key] for key in ('bundles', 'registeredBundles') if key in result})
+        except asyncio.CancelledError:
+            await self._bundle_list_transition(args, command_id, 'error', error='Bundle refresh cancelled.')
+            raise
+        except Exception as exc:
+            await self._bundle_list_transition(args, command_id, 'error', error=str(exc)[:1000])
+        finally:
+            self.lock.release()
+
+    async def _bundle_list_transition(self, args, command_id, phase, *, error=None, values=None, active=True):
+        async with self.service.lock:
+            state = self.service.state
+            state.update(values or {})
+            statuses = state.setdefault('actionStatus', {})
+            previous = statuses.get('bundles.list', {})
+            if phase == 'working' or previous.get('commandId') == command_id:
+                statuses['bundles.list'] = {'phase': phase, 'error': error,
+                    'commandId': command_id, 'updatedAt': time.time(),
+                    'target': {key: args[key] for key in ('id', 'section', 'name', 'controlId') if key in args}}
+            if active:
+                state['management'] = {'phase': phase, 'operation': 'bundles.list', 'error': error}
+            if phase in {'ready', 'error'}:
+                self._record_completion(command_id, phase, error)
+            self.service._publish()
+
+    def _record_completion(self, identity, phase, error=None):
+        if identity:
+            results = self.service.state.setdefault('managementResults', {})
+            results[identity] = {'phase': phase, 'error': error}
+            while len(results) > 100:
+                results.pop(next(iter(results)))
+
     async def complete(self,identity,phase,error=None):
         if not identity:return
         async with self.service.lock:
-            results=self.service.state.setdefault('managementResults',{})
-            results[identity]={'phase':phase,'error':error}
-            while len(results)>100:results.pop(next(iter(results)))
+            self._record_completion(identity, phase, error)
             self.service._publish()
 
     def session(self,args):

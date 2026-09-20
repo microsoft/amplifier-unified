@@ -39,6 +39,14 @@ and sample count. Byte/row bounds are the stable regression checks. The suite
 also verifies one publication per lightweight action, full catalog navigation
 through agent actions/state, bounded sidebar rendering, and zero runtime calls.
 
+Each settings cycle also visits Capabilities, triggering the real automatic
+bundle-list read before switching to Maintenance. `maintenanceSettledMs`
+includes its pending action/view requests and a 250 ms quiet window; it is
+reported separately from click-to-paint so optimistic rendering cannot hide a
+server backlog. The focused bundle-publication tests enforce the smaller
+publication budget and atomic catalog/completion receipts, while workspace
+reconciliation tests enforce linear lookup growth without wall-clock thresholds.
+
 The index input is generated in memory; initial filesystem discovery is not part
 of this benchmark. The largest case creates 4000 empty workspace folders to keep
 availability checks representative. Source code and application data remain
@@ -48,6 +56,7 @@ isolated from the user's running instance.
 
 On the same macOS ARM64 host, three samples per case using packaged production
 assets, v0.10.3 versus the bounded-library change (September 19, 2026):
+This historical run preceded the additional Capabilities step described above.
 
 | Session summaries | State bytes before → after | View action median | Settings paint median |
 | ---: | ---: | ---: | ---: |
