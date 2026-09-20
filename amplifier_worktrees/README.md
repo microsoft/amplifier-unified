@@ -29,3 +29,8 @@ or permission controller.
 Managed storage must be outside the source checkout. This avoids storing the
 manifest itself among the source files being copied. A checkout can be a source
 for another checkout under the same managed parent.
+
+Configured clean/smudge/process filters are disabled per invocation, with no source
+configuration edits. Inspection, checkout and apply operate on raw Git/worktree
+representations. LFS pointers stay pointers in clean checkouts; materialized dirty
+files are carried only within the normal explicit-copy bounds.

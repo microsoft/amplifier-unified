@@ -48,3 +48,13 @@ from the deterministic browser runtime. The browser exercises the real Git
 library/app/controller, handoff/reload/unknown/reconcile, cleanup and mobile UI.
 Live provider execution in a moved checkout and cross-device behavior remain
 integration acceptance, not claims from those fixtures.
+
+Every managed Git invocation disables configured clean, smudge and process filters,
+including inspection, checkout, patch application and cleanup. Source/global config
+is unchanged. These operations preserve raw Git and worktree representations rather
+than running conversion programs: clean LFS checkouts contain committed pointers,
+while explicitly carried local materialized bytes remain local changes subject to
+the normal size limits. A filtered repository may consequently look dirty under the
+raw-byte inspection even when ordinary Git hides its conversion difference. This
+policy prevents passive inspection and managed creation from running repository
+conversion commands or downloading external content implicitly.

@@ -33,16 +33,30 @@ def atomic(path, value):
         if os.path.exists(temporary): os.unlink(temporary)
 
 
-def git(path, *arguments, data=None):
+def _git(path, *arguments, data=None, overrides=(), allow_missing=False, limit=MAX_BYTES):
     """Fixed argv only. Disable repository hooks and external diff helpers."""
-    command = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-C', str(path), *arguments]
+    command = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', *overrides, '-C', str(path), *arguments]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
         result = subprocess.run(command, input=data, stdout=output, stderr=error, timeout=30, env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
-        if output.tell() > MAX_BYTES or error.tell() > MAX_BYTES: raise ValueError('Git output exceeds the managed operation limit')
+        if output.tell() > limit or error.tell() > limit: raise ValueError('Git output exceeds the managed operation limit')
         output.seek(0); error.seek(0)
         raw, detail = output.read(), error.read().decode('utf-8', 'replace')
-        if result.returncode: raise ValueError(detail.strip()[:4000] or 'Git could not complete this operation')
+        if result.returncode and not (allow_missing and result.returncode == 1): raise ValueError(detail.strip()[:4000] or 'Git could not complete this operation')
         return raw
+
+
+def git(path, *arguments, data=None):
+    # Status/diff run clean filters, checkout runs smudge/process filters, and
+    # apply --index can also convert content. Disable all configured drivers for
+    # every managed operation without changing source or global configuration.
+    keys = _git(path, 'config', '--null', '--name-only', '--get-regexp',
+                r'^filter\..*\.(clean|smudge|process|required)$', allow_missing=True, limit=65536)
+    drivers = {key.rsplit('.', 1)[0] for key in keys.decode().split('\0') if key}
+    overrides = []
+    for driver in sorted(drivers):
+        for suffix, value in (('clean', ''), ('smudge', ''), ('process', ''), ('required', 'false')):
+            overrides.extend(('-c', driver + '.' + suffix + '=' + value))
+    return _git(path, *arguments, data=data, overrides=overrides)
 
 
 def text(path, *args): return git(path, *args).decode().strip()
@@ -101,7 +115,8 @@ def snapshot(path):
             if entry:
                 key, _, value = entry.partition(' '); row[key] = value or True
         worktrees.append(row)
-    return {'root': str(root), 'repository': str(repository), 'head': head, 'branch': text(root, 'branch', '--show-current'), 'dirty': bool(status), 'status': status.replace('\0', '\n'), 'sourceRevision': revision, 'untracked': files, 'worktrees': worktrees}, cached, changes
+    return {'root': str(root), 'repository': str(repository), 'head': head, 'branch': text(root, 'branch', '--show-current'), 'dirty': bool(status), 'status': status.replace('\0', '\n'), 'sourceRevision': revision, 'untracked': files, 'worktrees': worktrees,
+            'filterPolicy': 'disabled; raw Git and worktree bytes, including LFS pointers or locally materialized contents'}, cached, changes
 
 
 class GitWorktrees:
