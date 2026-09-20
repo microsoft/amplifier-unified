@@ -6,6 +6,7 @@ export function createPendingView(){
  return {
   add(patch,sessionId){const token=Symbol();patches.set(token,{patch:{...patch},sessionId});return token},
   settle(token){patches.delete(token)},
+  bindDraft(token,sessionId){const entry=patches.get(token);if(entry&&Object.hasOwn(entry.patch,'draft'))entry.sessionId=sessionId},
   apply(state){
    if(!state||!patches.size)return state;
    let view={...state.view};
