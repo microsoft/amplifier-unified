@@ -86,6 +86,11 @@ jobs:
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:review-during-send-browser
+      - name: Verify action content and execution detail loading
+        working-directory: frontend
+        run: |
+          npm run test:execution-browser
+          npm run test:execution-actions-browser
       - name: Verify stable navigation and workspace drill-in
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
         working-directory: frontend
