@@ -12,7 +12,7 @@ import stat
 from .config import expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
-LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@2f08207b1aede0cebd789d86907dd3e4ef2d8fa5"
+LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@7a2a9b9ed0ddf2f1927f5d0e7aba42698c1e4c8d"
 
 
 def redact(value):
