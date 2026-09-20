@@ -371,6 +371,9 @@ class Management:
                     self.service._publish()
                 self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.remove','providers.move','routing.save','routing.use'}:await self.invalidate_configuration()
+        elif action in {'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+            from .bundle_actions import perform
+            await perform(self, action, args)
         elif action.startswith(('bundle.','bundles.')):
             from .bundles import BundleManager
             manager=BundleManager(self.service.data_dir)
@@ -435,6 +438,8 @@ class Management:
                     self.service._session(session['id'])['pendingConfiguration']={'phase':'ready','detail':'Changes are applied to the loaded session.','appliedAt':time.time()}
                     self.service._publish()
         elif action=='runtime.control':
+            if args['operation'].startswith('bundle.'):
+                raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             session=self.session(args)
             mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset'}
             if mutating:

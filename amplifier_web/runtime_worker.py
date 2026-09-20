@@ -170,7 +170,7 @@ class Worker:
                 return
             await asyncio.sleep(2)
 
-    async def start(self, config):
+    async def start(self, config, *, raise_errors=False, recover_bundle=True):
         progress = None
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
@@ -206,6 +206,9 @@ class Worker:
             if self.shared_handle is None:
                 self.shared_handle = await asyncio.to_thread(
                     self.shared_store.acquire, app="amplifier-unified", pid=os.getpid())
+            if recover_bundle:
+                from amplifier_web.bundle_selection import BundleTransaction
+                BundleTransaction(self.home, workspace, config["id"]).restore()
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -271,12 +274,14 @@ class Worker:
             report["tools"] = list(self.session.coordinator.get("tools"))
             # Keep absolute module sources and full mount plans on disk. The UI
             # gets a compact capability report, not credentials or config blobs.
-            public = {key: report.get(key) for key in ("bundle", "workspace", "session_id", "resumed", "providers",
+            public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
             publish({"type": "runtime.ready", "report": public})
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if raise_errors:
+                raise
             error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
             if type(exc).__name__ == "SessionBusyError":
                 error.update(code="session_busy", owner=getattr(exc, "owner", None))
@@ -470,7 +475,18 @@ class Worker:
                     activation=self.activation))
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
-                result = await self.controls.perform(data["operation"], data.get("arguments", {}))
+                arguments = data.get("arguments", {})
+                if data["operation"] == "bundle.preview":
+                    from amplifier_web.bundle_selection import preview
+                    self.controls.require_idle()
+                    self.bundle_preview = {**await asyncio.wait_for(preview(self.controls, self.workspace, arguments['bundle']), 150),
+                                           'previewId': str(uuid.uuid4())}
+                    result = self.bundle_preview
+                elif data["operation"] == "bundle.switch":
+                    from amplifier_web.bundle_selection import switch
+                    result = await switch(self, arguments)
+                else:
+                    result = await self.controls.perform(data["operation"], arguments)
             elif op in {"worker.steer", "worker.stop"}:
                 children = self.session.coordinator.get_capability("live.children")
                 wid = data["worker_id"]
