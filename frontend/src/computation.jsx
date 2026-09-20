@@ -46,8 +46,8 @@ export function ComputationPanel({sessionId}){
     <label>Cell code<textarea aria-label="Cell code" rows={5} value={code} onChange={e=>setCode(e.target.value)} spellCheck={false}/></label>
     <button type="button" data-action="kernels.execute" disabled={busy||kernel.state!=='idle'||!code.trim()} onClick={()=>perform('execute')}>Run cell</button>
     <button type="button" data-action="kernels.interrupt" disabled={busy||kernel.state!=='running'} onClick={()=>perform('interrupt')}>Interrupt</button>
-    <button type="button" data-action="kernels.reset" disabled={busy||kernel.operationState==='outcome_unknown'} onClick={()=>perform('reset')}>Reset variables</button>
-    <button type="button" data-action="kernels.close" disabled={busy||kernel.operationState==='outcome_unknown'} onClick={()=>perform('close')}>Close runtime</button>
+    <button type="button" data-action="kernels.reset" disabled={busy||kernel.state==='closed'||Boolean(kernel.operationState&&kernel.operationState!=='running')} onClick={()=>perform('reset')}>Reset variables</button>
+    <button type="button" data-action="kernels.close" disabled={busy||kernel.state==='closed'||Boolean(kernel.operationState&&kernel.operationState!=='running')} onClick={()=>perform('close')}>Close runtime</button>
    </div>}
    {detail&&<div aria-live="polite"><strong>{detail.state}</strong>{detail.captureComplete===false||detail.outputComplete===false&&detail.state!=='running'?<p>Some output may be unavailable.</p>:null}
     <pre>{detail.chunks?.map(row=>row.text).join('')}{detail.evidence?.result??detail.evidence?.error??''}</pre>
