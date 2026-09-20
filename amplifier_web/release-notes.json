@@ -40,6 +40,15 @@
       ]
     },
     {
+      "version": "0.19.5",
+      "title": "Keep conversations ready after ecosystem updates",
+      "changes": [
+        "Ecosystem updates and rollbacks now retire old workers while keeping the runtime available for your next message.",
+        "If a message cannot reach its worker, the conversation shows an error instead of staying marked as working. Delivery remains unconfirmed and no work is automatically replayed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.4",
       "title": "Keep conversation names consistent across apps",
       "changes": [

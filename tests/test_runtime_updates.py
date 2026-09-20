@@ -143,6 +143,8 @@ async def test_update_manager_installs_runtime_only_and_manifest_updates(environ
     class Runtime:
         async def close(self):
             closed.append(True)
+        async def reset(self):
+            closed.append(True)
     async def app_check():
         return {'id': 'application', 'status': 'current'}
     monkeypatch.setattr(app_updates, 'check', app_check)
