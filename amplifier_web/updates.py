@@ -555,7 +555,7 @@ class UpdateManager:
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
                     items=public+[application],application=application,appAvailable=app_available,
                     available=sum(r['status']=='update' for r in public)+int(app_available),
-                    lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency updates are ready to review.')
+                    lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency sources were checked.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
