@@ -54,7 +54,8 @@
     "test:session-health-browser": "node tests/session-health-browser.mjs",
     "test:questions-browser": "node tests/questions-browser.mjs",
     "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
-    "test:task-continuity-browser": "node tests/task-continuity-browser.mjs"
+    "test:task-continuity-browser": "node tests/task-continuity-browser.mjs",
+    "test:schedules-browser": "node tests/schedules-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

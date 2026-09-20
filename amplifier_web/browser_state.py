@@ -94,6 +94,7 @@ def snapshot(state, derived, *, session_id=None):
                       **({'text': message.get('text', '')[:500]} if state.get('notificationSettings', {}).get('preview', True) else {})}
                      for row in state.get('sessions', []) for message in row.get('messages', [])
                      if message.get('role') == 'assistant' and message.get('via') == 'text']
+    notifications.extend({key: value for key, value in row.items() if key != 'text' or state.get('notificationSettings', {}).get('preview', True)} for row in state.get('scheduleNotifications', []))
     notifications.sort(key=lambda row: row.get('createdAt', 0))
     result['notificationMessages'] = notifications[-100:]
     roots = (row for row in state.get('sessions', []) if is_top_level(row))

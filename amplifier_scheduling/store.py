@@ -1,0 +1,168 @@
+"""SQLite authority for schedule revisions, due identities, leases and receipts."""
+from contextlib import contextmanager
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import uuid
+
+from .policy import due_occurrence
+
+ACTIVE_RUNS = ('claimed', 'submitting', 'accepted', 'running', 'unknown')
+TERMINAL_RUNS = ('completed', 'failed', 'skipped', 'abandoned')
+
+
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+class ScheduleStore:
+    def __init__(self, path, *, owner=None, history_limit=100):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, timeout=5, isolation_level=None)
+        path.chmod(0o600)
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS schedules(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS schedule_runs(id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, session_id TEXT NOT NULL, due REAL NOT NULL, phase TEXT NOT NULL, value TEXT NOT NULL);
+            CREATE UNIQUE INDEX IF NOT EXISTS schedule_due ON schedule_runs(schedule_id,due);
+            CREATE TABLE IF NOT EXISTS schedule_commands(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, result TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS scheduler_lease(id INTEGER PRIMARY KEY, owner TEXT NOT NULL, expires REAL NOT NULL);
+        ''')
+        self.owner = owner or str(uuid.uuid4())
+        self.history_limit = history_limit
+        self.recovered = []
+
+    @contextmanager
+    def transaction(self):
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            yield
+            self.db.execute('COMMIT')
+        except BaseException:
+            self.db.execute('ROLLBACK')
+            raise
+
+    def close(self): self.db.close()
+
+    def list(self, session_id=None):
+        rows = self.db.execute('SELECT value FROM schedules' + (' WHERE session_id=?' if session_id else ''), (session_id,) if session_id else ())
+        return [json.loads(row[0]) for row in rows]
+
+    def get(self, session_id, identity):
+        row = self.db.execute('SELECT value FROM schedules WHERE id=? AND session_id=?', (identity, session_id)).fetchone()
+        if row is None: raise ValueError('This schedule does not belong to the conversation')
+        return json.loads(row[0])
+
+    def put(self, record):
+        self.db.execute('INSERT OR REPLACE INTO schedules VALUES(?,?,?)', (record['id'], record['sessionId'], json.dumps(record)))
+
+    def mutate(self, operation, args, command_id, build):
+        """Pure builder runs inside a transaction; retries return original receipt."""
+        if not isinstance(command_id, str) or not command_id: raise ValueError('A stable schedule command ID is required')
+        signature = fingerprint([operation, args])
+        with self.transaction():
+            receipt = self.db.execute('SELECT fingerprint,result FROM schedule_commands WHERE id=?', (command_id,)).fetchone()
+            if receipt:
+                if receipt[0] != signature: raise ValueError('This command ID has different schedule contents')
+                return {**json.loads(receipt[1]), 'duplicate': True}
+            previous = self.get(args['sessionId'], args['id']) if args.get('id') else None
+            revision = previous['revision'] if previous else 0
+            if type(args.get('expectedRevision')) is not int or args['expectedRevision'] != revision: raise ValueError('The schedule revision changed; inspect it before editing')
+            record = build(copy.deepcopy(previous))
+            record['revision'] = revision + 1
+            self.put(record)
+            result = {'schedule': record}
+            self.db.execute('INSERT INTO schedule_commands VALUES(?,?,?)', (command_id, signature, json.dumps(result)))
+            return result
+
+    def runs(self, session_id, schedule_id=None):
+        suffix, args = (' AND schedule_id=?', (session_id, schedule_id)) if schedule_id else ('', (session_id,))
+        return [json.loads(row[0]) for row in self.db.execute('SELECT value FROM schedule_runs WHERE session_id=?' + suffix + ' ORDER BY due DESC', args)]
+
+    def run(self, session_id, identity):
+        row = self.db.execute('SELECT value FROM schedule_runs WHERE session_id=? AND id=?', (session_id, identity)).fetchone()
+        if row is None: raise ValueError('This run does not belong to the conversation')
+        return json.loads(row[0])
+
+    def put_run(self, record):
+        self.db.execute('INSERT OR REPLACE INTO schedule_runs VALUES(?,?,?,?,?,?)', (record['id'], record['scheduleId'], record['sessionId'], record['dueAt'], record['phase'], json.dumps(record)))
+        terminal = [row['id'] for row in self.runs(record['sessionId'], record['scheduleId']) if row['phase'] in TERMINAL_RUNS]
+        for identity in terminal[self.history_limit:]: self.db.execute('DELETE FROM schedule_runs WHERE id=?', (identity,))
+
+    def acquire(self, now, ttl=30):
+        self.recovered = []
+        with self.transaction():
+            lease = self.db.execute('SELECT owner,expires FROM scheduler_lease WHERE id=1').fetchone()
+            if lease and lease[0] != self.owner and lease[1] > now: return False
+            new_owner = lease is None or lease[0] != self.owner
+            self.db.execute('INSERT OR REPLACE INTO scheduler_lease VALUES(1,?,?)', (self.owner, now + ttl))
+            if new_owner:
+                # Claims may have crossed an external input boundary. Never
+                # infer from process death that submission did not happen.
+                for row in self.db.execute("SELECT value FROM schedule_runs WHERE phase IN ('claimed','submitting','accepted','running')").fetchall():
+                    run = json.loads(row[0])
+                    run.update(phase='unknown', revision=run['revision'] + 1, updatedAt=now, detail='Previous scheduler ownership ended; submission or outcome is uncertain. No replay was attempted.')
+                    self.put_run(run)
+                    self.recovered.append(run)
+                    schedule = self.get(run['sessionId'], run['scheduleId'])
+                    if schedule['status'] == 'active':
+                        schedule.update(status='needs_review', revision=schedule['revision'] + 1, reviewReason=run['detail'])
+                        self.put(schedule)
+            return True
+
+    def owns(self, now):
+        row = self.db.execute('SELECT owner,expires FROM scheduler_lease WHERE id=1').fetchone()
+        return bool(row and row[0] == self.owner and row[1] > now)
+
+    def claim(self, session_id, identity, now):
+        with self.transaction():
+            if not self.owns(now): raise ValueError('Scheduler lease is no longer held')
+            schedule = self.get(session_id, identity)
+            if schedule['status'] != 'active' or any(run['phase'] in ACTIVE_RUNS for run in self.runs(session_id, identity)): return None
+            due = due_occurrence(schedule['spec'], schedule.get('nextDue'), now, schedule['missedRunPolicy'])
+            if due is None: return None
+            run_id = f"schedule:{identity}:run:{int(due['dueAt'])}"
+            run = {'id': run_id, 'scheduleId': identity, 'sessionId': session_id, 'taskId': schedule['taskId'], 'taskRevision': schedule['taskRevision'], 'scheduleRevision': schedule['revision'], 'dueAt': due['dueAt'], 'phase': 'skipped' if due['skip'] else 'claimed', 'revision': 1, 'owner': self.owner, 'inputId': run_id, 'createdAt': now, 'updatedAt': now, 'detail': 'Missed occurrence skipped by the saved policy.' if due['skip'] else 'Due occurrence claimed.'}
+            self.db.execute('INSERT INTO schedule_runs VALUES(?,?,?,?,?,?)', (run_id, identity, session_id, run['dueAt'], run['phase'], json.dumps(run)))
+            schedule.update(nextDue=due['nextDue'])
+            if due['skip'] and due['nextDue'] is None:
+                schedule['status'] = 'completed'
+                schedule['revision'] += 1
+            self.put(schedule)
+            self.put_run(run)
+            return run
+
+    def review(self, session_id, identity, reason, now):
+        with self.transaction():
+            record = self.get(session_id, identity)
+            if record['status'] == 'active':
+                record.update(status='needs_review', revision=record['revision'] + 1, reviewReason=reason, updatedAt=now)
+                self.put(record)
+            return record
+
+    def transition(self, session_id, identity, phases, phase, now, **fields):
+        with self.transaction():
+            run = self.run(session_id, identity)
+            if run['phase'] not in phases: return run
+            if phase == 'submitting' and (run['owner'] != self.owner or not self.owns(now)): raise ValueError('Scheduler ownership changed before submission')
+            run.update(fields, phase=phase, revision=run['revision'] + 1, updatedAt=now)
+            self.put_run(run)
+            return run
+
+    def run_command(self, session_id, identity, revision, command_id, signature, edit):
+        with self.transaction():
+            previous = self.db.execute('SELECT fingerprint,result FROM schedule_commands WHERE id=?', (command_id,)).fetchone()
+            if previous:
+                if previous[0] != signature: raise ValueError('This command ID has different run contents')
+                return {**json.loads(previous[1]), 'duplicate': True}
+            run = self.run(session_id, identity)
+            if type(revision) is not int or revision != run['revision']: raise ValueError('The scheduled run revision changed')
+            edit(run)
+            run['revision'] += 1
+            self.put_run(run)
+            result = {'run': run}
+            self.db.execute('INSERT INTO schedule_commands VALUES(?,?,?)', (command_id, signature, json.dumps(result)))
+            return result

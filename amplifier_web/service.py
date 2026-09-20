@@ -205,6 +205,8 @@ from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
+from .schedules import definitions as schedule_definitions
+ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -333,6 +335,8 @@ class AppService:
         self._client_snapshots = {}
         from .questions import Questions
         self.questions = Questions(self)
+        from .schedules import Schedules
+        self.schedules = Schedules(self)
         self._refresh_shared_preferences()
         self._save()
 
@@ -424,6 +428,7 @@ class AppService:
 
     def _save(self):
         self.questions.sync()
+        self.schedules.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -571,6 +576,8 @@ class AppService:
             args.setdefault('sessionId', self.state.get('selectedSessionId'))
             if not args['sessionId']:
                 raise AppError('Select a conversation first.', 404)
+        if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
+            raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('task.'):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
@@ -582,6 +589,12 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action.startswith('schedule.'):
+            try:
+                result = await self.schedules.dispatch(action, args, origin, command_id)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('task.'):
             from .task_continuity import dispatch as task_dispatch
             return await task_dispatch(self, action, args, origin, command_id, include_state)
@@ -1500,6 +1513,7 @@ class AppService:
                     session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
                     session.pop('health', None)
             elif kind == "runtime.ended":
+                self.schedules.runtime_ended(session)
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
@@ -1526,6 +1540,7 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 session["status"] = payload.get("status", "idle")
+                if session["status"] == "idle": self.schedules.idle(session)
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
@@ -1563,6 +1578,7 @@ class AppService:
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
+                scheduled_generation = self.schedules.generation(session, payload)
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
@@ -1572,21 +1588,22 @@ class AppService:
                 elif payload.get('event') == 'generation.failed':
                     session['turnErrorType'] = payload.get('error_type')
                 if payload.get("event") == "generation.finished":
-                    if not payload.get("rootSessionId") or payload.get("rootSessionId")==payload.get("sessionId"):
+                    if not scheduled_generation and (not payload.get("rootSessionId") or payload.get("rootSessionId")==payload.get("sessionId")):
                         from .attention import completed
                         completed(session,event)
-                    if self.management:
+                    if self.management and not scheduled_generation:
                         self._task(self._notify_completion(copy.deepcopy(session),copy.deepcopy(payload)))
                     pending = payload.get("active_job_ids", [])
                     self._activity(session, "waiting-workers" if pending else "processing",
                         f"Waiting for {len(pending)} delegated tasks" if pending else "Response ready")
             elif kind == "assistant.message":
                 original = next((m for m in reversed(session["messages"]) if m.get("inputId") == payload.get("inputId") and m["role"] == "user"), {})
-                self._message(session, "assistant", payload.get("text", ""), original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), source="amplifier")
+                self._message(session, "assistant", payload.get("text", ""), "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), source="amplifier")
                 session.pop("streaming", None)
             elif kind == "assistant.delta":
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
             elif kind == "worker.updated":
+                self.schedules.worker(session, payload)
                 worker = next((w for w in session["workers"] if w["id"] == payload.get("id")), None)
                 if worker:
                     worker.update(payload)
@@ -1683,9 +1700,9 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action'].startswith(('question.', 'task.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith('task.')):
+            if args['action'].startswith(('question.', 'task.', 'schedule.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith('task.')):
                 if action_args.get('sessionId', session_id) != session_id:
-                    raise AppError('Task and question actions must target the calling conversation.', 409)
+                    raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
@@ -1796,6 +1813,7 @@ class AppService:
 
     async def close(self):
         self.closed = True
+        await self.schedules.close()
         await self.warmup.close()
         await self.history.close()
         if self.update_manager:
@@ -1816,4 +1834,5 @@ class AppService:
             self._publish()
         else:
             self._save()
+        self.schedules.store.close()
         self.db.close()

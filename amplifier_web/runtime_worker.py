@@ -90,6 +90,9 @@ class Worker:
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
+        if self.controls:
+            from amplifier_web.scheduled_input import finish as finish_scheduled_input
+            finish_scheduled_input(self.controls, event)
         if event.get('type') == 'generation.started':
             self.context_inputs = []
         if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
@@ -527,7 +530,10 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data["operation"] == "bundle.preview":
+                if data["operation"] == "schedule.submit":
+                    from amplifier_web.scheduled_input import admit
+                    result = await admit(self.controls, self.runtime, arguments, self.activation)
+                elif data["operation"] == "bundle.preview":
                     from amplifier_web.bundle_selection import preview
                     self.controls.require_idle()
                     self.bundle_preview = {**await asyncio.wait_for(preview(self.controls, self.workspace, arguments['bundle']), 150),
