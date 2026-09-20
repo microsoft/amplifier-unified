@@ -74,7 +74,7 @@ def persist(home, state, cache):
         path = view_path(home, session)
         # Native event activity is a lazy view, never another persisted event
         # or message cache. Runtime-owned execution nodes retain their history.
-        value = {key: item for key, item in session.items() if key != 'historyActivity'}
+        value = {key: item for key, item in session.items() if key not in {'historyActivity', 'questions'}}
         if 'execution' in value:
             value['execution'] = {**value['execution'],
                 'nodes': [row for row in value['execution'].get('nodes', []) if not row.get('nativeHistory')],
