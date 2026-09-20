@@ -170,7 +170,7 @@ class Worker:
                 return
             await asyncio.sleep(2)
 
-    async def start(self, config, *, raise_errors=False, recover_bundle=True):
+    async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
@@ -220,7 +220,7 @@ class Worker:
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
-                write_guard=self.activation_gate.check_current)
+                write_guard=self.activation_gate.check_current, resolved_root=resolved_root)
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
