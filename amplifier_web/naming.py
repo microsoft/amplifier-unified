@@ -72,7 +72,8 @@ def refresh(home, session, *, migrate=False):
     metadata = adopt(directory, session) if migrate else SessionMetadataStore(directory).read()
     if metadata.get('name'):
         source = metadata.get('name_source', 'manual')
-        session.update(title=metadata['name'], titleSource='native' if session.get('historyManaged') else source, nativeNameSource=source)
+        display_source = ('manual' if session.get('titleSource') == 'manual' else 'native') if session.get('historyManaged') else source
+        session.update(title=metadata['name'], titleSource=display_source, nativeNameSource=source)
     if 'description' in metadata:
         session['description'] = metadata['description']
     return metadata

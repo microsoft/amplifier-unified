@@ -383,7 +383,7 @@ class AutomaticHistory:
                                 # Native catalog names are not local UI overrides.
                                 # Keeping this provenance avoids persisting the
                                 # entire discovered library after each refresh.
-                                source = 'native' if previous.get('historyManaged') else row.get('nameSource') or 'manual'
+                                source = ('manual' if previous.get('titleSource') == 'manual' else 'native') if previous.get('historyManaged') else row.get('nameSource') or 'manual'
                                 if row.get('name') and previous.get('titleSource') != source:
                                     previous['titleSource'] = source; changed = True
                             if previous.get('historyManaged') and previous.get('historyReadOnlyReason') != row.get('readOnlyReason'):
