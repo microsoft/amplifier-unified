@@ -34,3 +34,8 @@ Configured clean/smudge/process filters are disabled per invocation, with no sou
 configuration edits. Inspection, checkout and apply operate on raw Git/worktree
 representations. LFS pointers stay pointers in clean checkouts; materialized dirty
 files are carried only within the normal explicit-copy bounds.
+
+A host may inject an opaque JSON `execution_host` descriptor at construction. It
+is copied into new create/attach records as `executionHost`, never derived from
+private machine data by this library. Legacy records are not rewritten. The host
+owns identity validation and guards before mutation or runtime admission.

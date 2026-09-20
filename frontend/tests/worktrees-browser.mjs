@@ -11,8 +11,9 @@ try{
  await page.goto(ready.url);await expect(page.locator('.a-settings-experience')).toBeVisible();await openSettingsPage(page,'runtime');
  const panel=page.getByRole('region',{name:'Task worktrees'});
  await panel.getByRole('button',{name:'Inspect repository',exact:true}).click();await expect(panel.getByText('main · Checkout clean',{exact:true})).toBeVisible();
- await panel.getByRole('button',{name:'Create managed checkout'}).click();const card=panel.locator('[data-worktree-id]').first();await expect(card.getByRole('status')).toHaveText('Checkout ready');
- await card.getByRole('button',{name:'Move execution here'}).click();await expect(panel.getByText('Handoff applied',{exact:true})).toBeVisible();await expect(panel.locator('[data-part="execution-directory"]')).not.toHaveText(ready.root);
+ await expect(panel.locator('[data-part=execution-host]')).toHaveText(ready.host.label);
+ await panel.getByRole('button',{name:'Create managed checkout'}).click();const card=panel.locator('[data-worktree-id]').first();await expect(card.getByRole('status')).toHaveText('Checkout ready');await expect(card.getByText('Local host: '+ready.host.label,{exact:true})).toBeVisible();
+ await card.getByRole('button',{name:'Move execution here'}).click();await expect(panel.getByText('Handoff applied',{exact:true})).toBeVisible();await expect(panel.locator('[data-handoff-id]').first().getByText('Local host: '+ready.host.label,{exact:true})).toBeVisible();await expect(panel.locator('[data-part="execution-directory"]')).not.toHaveText(ready.root);
  await card.getByRole('button',{name:'Inspect checkout and manifest'}).click();await expect(panel.getByText('Checkout inspection',{exact:true})).toBeVisible();
  await panel.locator('[data-part="execution-directory"]').scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/unified-worktrees-desktop.png'});
  await page.reload();await expect(page.locator('.a-settings-experience')).toBeVisible();await openSettingsPage(page,'runtime');await expect(panel.locator('[data-part="execution-directory"]')).not.toHaveText(ready.root);

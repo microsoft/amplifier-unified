@@ -9,6 +9,7 @@ from aiohttp import web
 import settings_ui_server as fixture
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from amplifier_worktrees.git import git
+from amplifier_web.host_identity import local_host_identity
 
 async def main(home):
     app = await fixture.main(home)
@@ -28,7 +29,7 @@ async def main(home):
     runner=web.AppRunner(app); await runner.setup(); site=web.TCPSite(runner,'127.0.0.1',0); await site.start()
     url=f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
     app['allowed_origins']=app['allowed_origins']|{url}
-    print(json.dumps({'url':url,'sessionId':session['id'],'root':str(root)}),flush=True)
+    print(json.dumps({'url':url,'sessionId':session['id'],'root':str(root),'host':local_host_identity()}),flush=True)
     try: await asyncio.Event().wait()
     finally: await runner.cleanup()
 if __name__=='__main__':

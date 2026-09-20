@@ -67,3 +67,16 @@ and retired-worker reactivation, not only the Send button. Approval responses,
 interruption and shutdown remain available for a still-owned runtime. The guard
 uses the existing handoff records and never treats mutable caller arguments as
 permission to clear an unresolved handoff.
+
+Execution host association is explicit in `worktree.inspect/list` (`currentHost`
+and `executionHost`), newly created/attached checkout records, task execution state,
+and handoff receipts. The host descriptor uses the existing Foundation owner
+hostname: `{scope: "local", id: hostname, label: hostname,
+identitySource: "foundation-owner-hostname"}`. It survives app/worker restart on
+the same named host; it is not a hardware identifier, global machine identity or
+cryptographic attestation. A server instance identifier is separate and ephemeral.
+The actual release receipt additionally preserves the released writer (if one
+was active) and the temporary held Foundation proof owner's hostname, app, process ID and acquisition ID, excluding username/home details.
+An explicitly different recorded host blocks mutation/handoff; inspection remains
+available. Older records with no recorded host retain unknown provenance and are
+not rewritten. No remote host selection or cross-host migration is implemented.

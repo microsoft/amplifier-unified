@@ -1,5 +1,6 @@
 """Bounded Git operations; no shell strings or automatic recovery replay."""
 from contextlib import contextmanager
+import copy
 import hashlib
 import json
 import os
@@ -120,7 +121,8 @@ def snapshot(path):
 
 
 class GitWorktrees:
-    def __init__(self, directory):
+    def __init__(self, directory, *, execution_host=None):
+        self.execution_host = copy.deepcopy(execution_host)
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
@@ -173,7 +175,7 @@ class GitWorktrees:
             if branch:
                 bounded_ref(branch); git(root, 'check-ref-format', 'refs/heads/' + branch)
             target = self.directory / 'checkouts' / identity
-            record = {'id': identity, 'revision': 1, 'signature': signature, 'sessionId': session_id, 'source': str(root), 'repository': str(repository), 'path': str(target), 'head': commit, 'branch': branch, 'mode': mode, 'status': 'creating', 'owned': True, 'createdAt': time.time(), 'sourceRevision': before['sourceRevision'], 'manifest': {'sourceUnchanged': True, 'stagedPatchSha256': digest(cached), 'unstagedPatchSha256': digest(changes), 'untracked': before['untracked'] if mode == 'carry_dirty' else [], 'ignoredFilesIncluded': False}}
+            record = {'id': identity, 'revision': 1, 'signature': signature, 'sessionId': session_id, 'executionHost': copy.deepcopy(self.execution_host), 'source': str(root), 'repository': str(repository), 'path': str(target), 'head': commit, 'branch': branch, 'mode': mode, 'status': 'creating', 'owned': True, 'createdAt': time.time(), 'sourceRevision': before['sourceRevision'], 'manifest': {'sourceUnchanged': True, 'stagedPatchSha256': digest(cached), 'unstagedPatchSha256': digest(changes), 'untracked': before['untracked'] if mode == 'carry_dirty' else [], 'ignoredFilesIncluded': False}}
             evidence = self.directory / 'manifests' / identity
             record['manifest']['evidenceDirectory'] = str(evidence)
             self.save(record)
@@ -223,7 +225,7 @@ class GitWorktrees:
                 return record
             checked = snapshot(target)[0]
             if str(target) not in [row.get('worktree') for row in checked['worktrees']]: raise ValueError('Git does not register that worktree')
-            record = {'id': identity, 'revision': 1, 'sessionId': session_id, 'path': str(target), 'source': str(Path(source).resolve()), 'repository': str(repository), 'head': checked['head'], 'branch': checked['branch'], 'status': 'ready', 'owned': False, 'mode': 'attached', 'createdAt': time.time(), 'manifest': {'sourceUnchanged': True}}
+            record = {'id': identity, 'revision': 1, 'sessionId': session_id, 'executionHost': copy.deepcopy(self.execution_host), 'path': str(target), 'source': str(Path(source).resolve()), 'repository': str(repository), 'head': checked['head'], 'branch': checked['branch'], 'status': 'ready', 'owned': False, 'mode': 'attached', 'createdAt': time.time(), 'manifest': {'sourceUnchanged': True}}
             self.save(record); return record
 
     def status(self, identity):

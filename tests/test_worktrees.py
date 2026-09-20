@@ -162,6 +162,14 @@ async def test_runtime_cooperative_release_is_confirmed_without_replay(tmp_path,
     try:
         result = await manager.quiesce_for_handoff({'id':'s','workspace':str(tmp_path)}, 'move')
         assert result['quiesced'] and not result['inputsReplayed']
+        from amplifier_web.host_identity import local_host_identity
+        assert result['executionHost'] == local_host_identity()
+        assert result['releaseOwner']['hostname'] == result['executionHost']['id']
+        assert result['releaseOwner']['app'] == 'amplifier-unified-handoff'
+        assert result['releaseOwner']['acquisition_id']
+        assert 'user' not in result['releaseOwner']
+        assert result['releasedOwner']['app'] == 'amplifier-unified'
+        assert result['releasedOwner']['acquisition_id'] != result['releaseOwner']['acquisition_id']
         assert saved == ['checkpoint'] and not held.active
         manager.stop.assert_awaited_once_with('s')
         next_owner = store.acquire(app='next'); next_owner.release()
@@ -223,3 +231,43 @@ async def test_pending_handoff_cannot_overlap_or_delete_its_target(tmp_path, mon
         assert app._session(sid)['executionRevision'] == 1
     finally:
         release.set(); await app.close()
+
+
+async def test_local_host_association_survives_restart_and_foreign_target_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr('amplifier_web.host_identity.socket.gethostname', lambda: 'fixture-owner-host')
+    app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        inspected = (await app.dispatch('worktree.inspect', {'sessionId':sid}))['result']
+        host = inspected['executionHost']
+        assert host['id'] == 'fixture-owner-host' and host['identitySource'] == 'foundation-owner-hostname'
+        created = (await app.dispatch('worktree.create', {'sessionId':sid,'sourceRevision':inspected['repository']['sourceRevision']}, command_id='host-create'))['result']
+        attached = (await app.dispatch('worktree.attach', {'sessionId':sid,'path':str(root)}, command_id='host-attach'))['result']
+        assert created['executionHost'] == attached['executionHost'] == host
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId':sid,'id':created['id'],'expectedExecutionRevision':0}, command_id='host-move'))['result']
+        await settle(app)
+        assert receipt['executionHost'] == host and app._session(sid)['executionHost'] == host
+    finally:
+        await app.close()
+    app = AppService(tmp_path/'app', runtime, workspace=root)
+    try:
+        assert app.worktrees.git.get(created['id'])['executionHost'] == host
+        assert app.worktrees.read(sid, receipt['id'])['executionHost'] == host
+        assert runtime.quiesce_for_handoff.await_count == 1
+        monkeypatch.setattr('amplifier_web.host_identity.socket.gethostname', lambda: 'different-host')
+        # Inspection remains available, but a hostname change cannot become an
+        # implicit cross-host migration or release the wrong local owner.
+        info = (await app.dispatch('worktree.inspect', {'sessionId':sid}))['result']
+        assert info['currentHost']['id'] == 'different-host' and info['executionHost'] == host
+        assert app.worktrees.execution_state(sid)['hostMatches'] is False
+        from amplifier_web.runtime import RuntimeManager
+        admission = RuntimeManager()
+        admission.bind_execution_state(app.worktrees.execution_state)
+        with pytest.raises(ValueError, match='saved execution host'):
+            admission._check_execution(sid)
+        admission._check_execution(sid, allow_fenced=True)
+        await admission.retention.close()
+        with pytest.raises(AppError, match='different local host'):
+            await app.dispatch('worktree.handoff', {'sessionId':sid,'id':None,'expectedExecutionRevision':1}, command_id='foreign-move')
+        assert runtime.quiesce_for_handoff.await_count == 1
+    finally:
+        await app.close()

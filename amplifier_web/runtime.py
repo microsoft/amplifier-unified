@@ -129,6 +129,8 @@ class RuntimeManager:
         if self._execution_state is None:
             return
         current = self._execution_state(sid)
+        if current.get('hostMatches') is False and not allow_fenced:
+            raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
         if current['fenced'] and not allow_fenced:
             raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
         if session is not None and (
@@ -513,11 +515,13 @@ class RuntimeManager:
         store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
         async with self._admission(sid):
             row = self.workers.get(sid)
+            released_owner = None
             try:
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             except SessionBusyError as busy:
                 if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
                     raise SessionInUseError(busy.owner) from None
+                released_owner = {key: busy.owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in busy.owner}
                 result = await request_release(store, expected_owner=busy.owner, request_id=request_id, requester_app='Unified checkout handoff', timeout=30)
                 if result.status != 'released':
                     raise RuntimeError(f'Checkout handoff could not confirm saved writer release ({result.status}). {result.message}')
@@ -526,7 +530,10 @@ class RuntimeManager:
                 # Parked workers already saved before relinquishing their lock.
                 # A released worker cannot write while this proof handle is held.
                 await self.stop(sid)
-                return {'quiesced': True, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
+                from .host_identity import local_host_identity, require_local_host
+                owner = held.owner
+                require_local_host(owner.get('hostname'))
+                return {'quiesced': True, 'executionHost': local_host_identity(), 'releasedOwner': released_owner, 'releaseOwner': {key: owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in owner}, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
             finally:
                 await asyncio.to_thread(held.release)
 

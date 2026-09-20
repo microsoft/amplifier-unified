@@ -8,6 +8,7 @@ import uuid
 
 from amplifier_worktrees import GitWorktrees
 from amplifier_worktrees.git import atomic, digest
+from .host_identity import local_host_identity, require_local_host
 
 
 def definitions(schema, string):
@@ -29,7 +30,7 @@ def definitions(schema, string):
 class Worktrees:
     def __init__(self, service):
         self.app = service
-        self.git = GitWorktrees(service.data_dir / 'managed-worktrees')
+        self.git = GitWorktrees(service.data_dir / 'managed-worktrees', execution_host=local_host_identity())
         self.receipt_dir = service.data_dir / 'worktree-handoffs'
         self.receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.jobs = set()
@@ -46,7 +47,9 @@ class Worktrees:
 
     def execution_state(self, sid):
         session = self.app._session(sid)
-        return {'directory': session.get('workingDirectory') or session['workspace'],
+        host = session.get('executionHost')
+        host_matches = not host or (host.get('scope') == 'local' and host.get('id') == local_host_identity()['id'])
+        return {'hostMatches': host_matches, 'executionHost': copy.deepcopy(host), 'directory': session.get('workingDirectory') or session['workspace'],
                 'revision': session.get('executionRevision', 0),
                 'fenced': any(row['phase'] in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', []))}
 
@@ -91,6 +94,14 @@ class Worktrees:
         if record.get('sessionId') != sid: raise ValueError('This checkout belongs to another task')
         return record
 
+    @staticmethod
+    def check_host(record):
+        host = record.get('executionHost')
+        if host:
+            if host.get('scope') != 'local':
+                raise ValueError('Cross-host execution is unavailable.')
+            require_local_host(host.get('id'))
+
     def sync(self):
         records = self.git.records()
         handoffs = [json.loads(path.read_text()) for path in sorted(self.receipt_dir.glob('*.json'))]
@@ -118,7 +129,7 @@ class Worktrees:
     async def _dispatch(self, action, args, origin, command_id):
         sid = args['sessionId']; session = self.app._session(sid)
         if action in {'worktree.inspect', 'worktree.list'}:
-            result = {'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'settingsScope': session['workspace'], 'items': [r for r in self.git.records() if r.get('sessionId') == sid], 'handoffs': self.receipts(sid)}
+            result = {'currentHost': local_host_identity(), 'executionHost': session.get('executionHost') or local_host_identity(), 'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'settingsScope': session['workspace'], 'items': [r for r in self.git.records() if r.get('sessionId') == sid], 'handoffs': self.receipts(sid)}
             if action == 'worktree.inspect': result['repository'] = await asyncio.to_thread(self.git.inspect, result['executionDirectory'])
             async with self.app.lock:
                 session['worktreeInspection'] = result
@@ -130,6 +141,7 @@ class Worktrees:
             async with self.app.lock:
                 session['worktreeStatus'] = result; self.changed()
             return result
+        self.check_host(session)
         identity = command_id or str(uuid.uuid4())
         if action in {'worktree.handoff', 'worktree.reconcile'}:
             return await self.handoff(action, args, origin, identity)
@@ -139,6 +151,7 @@ class Worktrees:
             result = await asyncio.to_thread(self.git.attach, args['path'], source=session['workspace'], command_id=identity, session_id=sid)
         elif action == 'worktree.remove':
             record = self.record(sid, args['id'])
+            self.check_host(record)
             if any((s.get('workingDirectory') or s['workspace']) == record['path'] for s in self.app.state['sessions']): raise ValueError('A task still uses this checkout; hand it back first')
             if any(r['phase'] in {'pending', 'unknown'} and record['path'] in {r['source'], r['target']} for s in self.app.state['sessions'] for r in self.receipts(s['id'])): raise ValueError('An unresolved handoff still refers to this checkout')
             result = await asyncio.to_thread(self.git.remove, args['id'], args['expectedRevision'], identity)
@@ -161,6 +174,7 @@ class Worktrees:
             previous = None
             if action == 'worktree.reconcile':
                 previous = self.read(sid, args['id'])
+                self.check_host(previous)
                 if previous['revision'] != args['expectedRevision'] or previous['phase'] != 'unknown': raise ValueError('Inspect the current unknown handoff before reconciliation')
                 if origin != 'ui':
                     source = next((m for m in session['messages'] if m['id'] == args.get('sourceMessageId') and m.get('role') == 'user' and m.get('inputOrigin') in {'ui', 'user', 'voice'} and not m.get('questionId') and not m.get('scheduledRunId')), None)
@@ -169,9 +183,10 @@ class Worktrees:
             else:
                 if session.get('configurationBusy'): raise ValueError('Another configuration change or handoff is unresolved')
                 if session.get('executionRevision', 0) != args['expectedExecutionRevision']: raise ValueError('The execution folder revision changed; inspect it again')
+                if args.get('id'): self.check_host(self.record(sid, args['id']))
                 target = self.record(sid, args['id'])['path'] if args.get('id') else session['workspace']
                 if args.get('id') and self.record(sid, args['id'])['status'] != 'ready': raise ValueError('The checkout is not ready; inspect its conflicts first')
-            record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
+            record = {'id': identity, 'sessionId': sid, 'signature': signature, 'revision': 1, 'phase': 'pending', 'executionHost': local_host_identity(), 'source': session.get('workingDirectory') or session['workspace'], 'target': target, 'historyHome': session['workspace'], 'executionRevision': session.get('executionRevision', 0), 'createdAt': time.time(), 'inputsReplayed': False, 'origin': origin, 'detail': 'Saving and releasing the old runtime before changing its execution folder.', 'preserved': {'messageIds': [m['id'] for m in session['messages']], 'taskId': session.get('task', {}).get('id') if session.get('task') else None}, 'reconciles': previous['id'] if previous else None, 'evidence': args.get('evidence')}
             self.save(record)
             session['configurationBusy'] = True
             self.changed()
@@ -184,16 +199,18 @@ class Worktrees:
             # The pending receipt is durable independently of bridge delivery.
             # Quiescence never waits on a model-held command lock.
             await asyncio.sleep(0)
+            self.check_host(record)
             checked = await asyncio.to_thread(self.git.inspect, record['target'])
             home = await asyncio.to_thread(self.git.inspect, record['historyHome'])
             if checked['repository'] != home['repository']: raise ValueError('The target is no longer in the original repository')
             if not self.app.runtime or not hasattr(self.app.runtime, 'quiesce_for_handoff'): raise ValueError('This runtime cannot confirm safe handoff')
             evidence = await self.app.runtime.quiesce_for_handoff(session, record['id'])
+            self.check_host(evidence)
             if not evidence.get('quiesced'): raise RuntimeError('Runtime release was not confirmed')
             async with self.app.lock:
                 current = self.app._session(record['sessionId'])
                 if current.get('executionRevision', 0) != record['executionRevision']: raise ValueError('The execution folder changed during handoff')
-                current.update(workingDirectory=record['target'], executionRevision=record['executionRevision']+1, configurationBusy=False, status='idle')
+                current.update(workingDirectory=record['target'], executionHost=copy.deepcopy(record['executionHost']), executionRevision=record['executionRevision']+1, configurationBusy=False, status='idle')
                 current['ownership'] = {'status': 'available'}
                 current.pop('lockOwner', None)
                 record.update(phase='applied', revision=2, updatedAt=time.time(), release=evidence, detail='Execution folder changed. Saved history remains in its original home; no input was sent.')
