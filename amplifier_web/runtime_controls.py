@@ -227,6 +227,16 @@ class RuntimeControls:
             return await self._perform(operation, args)
 
     async def _perform(self, operation, args):
+        if operation in {"native.status", "native.compact"}:
+            native = self.coordinator.get_capability("web.native_provider")
+            if native is None:
+                return {"supported": False, "steering": "request_boundary", "reason": "Native transport is unavailable in this runtime."}
+            if operation == "native.status":
+                return native.status()
+            self.require_idle()
+            result = await native.compact()
+            await self.checkpoint()
+            return result
         if operation == "configuration.inspect":
             return self.configuration()
         if operation == "history.snapshot":

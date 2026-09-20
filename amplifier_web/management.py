@@ -441,7 +441,7 @@ class Management:
             if args['operation'].startswith('bundle.'):
                 raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             session=self.session(args)
-            mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset'}
+            mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
             if mutating:
                 async with self.service.lock:
                     current=self.service._session(session['id'])
@@ -464,7 +464,7 @@ class Management:
                     result['configuration']=inspected
                 refreshed={}
                 if result.get('requiresRestart'):refreshed['configuration.providers']=await self.service.runtime.control(session['id'],'configuration.providers',{})
-                refresh={'mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
+                refresh={'native.compact':'native.status','mode.set':'mode.list','mode.clear':'mode.list','goals.set':'goals.get','goals.clear':'goals.get','budget.set':'budget.get','provider.select':'configuration.providers','provider.reset':'configuration.providers','configuration.toggle':'configuration.inspect'}.get(args['operation'])
                 if refresh:refreshed[refresh]=await self.service.runtime.control(session['id'],refresh,{})
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
