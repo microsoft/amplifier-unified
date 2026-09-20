@@ -15,6 +15,7 @@ from .execution_details import tool_detail
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
+CURRENT_PROVIDER = contextvars.ContextVar("amplifier_web_public_provider", default=None)
 
 
 def public_usage(value):
@@ -56,6 +57,7 @@ class ExecutionEvents:
         self.nodes = {}
         self.admission_guard = None
         self.provider_wrappers = {}
+        self.streaming_calls = set()
 
     def publish(self, row):
         row = {**row, "revision": self.nodes.get(row["id"], {}).get("revision", 0) + 1}
@@ -107,8 +109,7 @@ class ExecutionEvents:
         original = getattr(provider,"complete",None)
         if not callable(original):
             return provider
-        @wraps(original)
-        async def complete(request, **kwargs):
+        async def begin(request):
             parent,turn = self.parent(sid)
             purpose=CALL_PURPOSE.get()
             if purpose:parent,turn=None,purpose.get('turnId',turn)
@@ -124,7 +125,15 @@ class ExecutionEvents:
                    "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
             if self.admission_guard:
                 await self.admission_guard(row)
+            return row
+
+        @wraps(original)
+        async def complete(request, **kwargs):
+            if CURRENT_PROVIDER.get() == id(provider):
+                return await original(request, **kwargs)
+            row = await begin(request)
             token = CURRENT_CALL.set(row["id"])
+            owner = CURRENT_PROVIDER.set(id(provider))
             self.publish(row)
             try:
                 response = await original(request, **kwargs)
@@ -137,10 +146,70 @@ class ExecutionEvents:
                 raise
             finally:
                 CURRENT_CALL.reset(token)
+                CURRENT_PROVIDER.reset(owner)
+
+        original_stream = getattr(provider, "stream", None)
+        async def stream(request, **kwargs):
+            if CURRENT_PROVIDER.get() == id(provider):
+                iterator = original_stream(request, **kwargs)
+                try:
+                    async for chunk in iterator:
+                        yield chunk
+                finally:
+                    if callable(getattr(iterator, "aclose", None)):
+                        await iterator.aclose()
+                return
+            row = await begin(request)
+            self.streaming_calls.add(row["id"])
+            self.publish(row)
+            iterator = None
+            phase = "completed"
+            async def scoped(awaitable):
+                # Do not leak context across a yield or retain a token that
+                # another task (timeout/close) would have to reset.
+                token = CURRENT_CALL.set(row["id"])
+                owner = CURRENT_PROVIDER.set(id(provider))
+                try:
+                    return await awaitable
+                finally:
+                    CURRENT_CALL.reset(token)
+                    CURRENT_PROVIDER.reset(owner)
+            try:
+                iterator = original_stream(request, **kwargs).__aiter__()
+                while True:
+                    try:
+                        chunk = await scoped(anext(iterator))
+                    except StopAsyncIteration:
+                        break
+                    # Stream usage is a whole-call cumulative snapshot, not a
+                    # token delta. A later snapshot replaces the receipt.
+                    usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
+                    if usage is not None:
+                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage)})
+                    yield chunk
+            except GeneratorExit:
+                phase = "interrupted"
+                raise
+            except BaseException as exc:
+                phase = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+                raise
+            finally:
+                try:
+                    if callable(getattr(iterator, "aclose", None)):
+                        await scoped(iterator.aclose())
+                except BaseException:
+                    phase = "error"
+                    raise
+                finally:
+                    self.publish({**self.nodes[row["id"]], "phase": phase, "endedAt": time.time()})
+                    self.streaming_calls.discard(row["id"])
+
         # Providers are plugin instances implementing the public complete
         # protocol. No SDK internals or request payloads are inspected.
         try:
             provider.complete = complete
+            if callable(original_stream):
+                provider.stream = stream
             provider._amplifier_web_observed = True
         except (AttributeError,TypeError):
             # Immutable provider instances still get the same authoritative
@@ -150,6 +219,8 @@ class ExecutionEvents:
                 def __getattr__(self, name): return getattr(provider, name)
             wrapper = ObservedProvider()
             wrapper.complete = complete
+            if callable(original_stream):
+                wrapper.stream = stream
             self.provider_wrappers[id(provider)] = wrapper
             return wrapper
         return provider
@@ -200,6 +271,8 @@ class ExecutionEvents:
                 row = self.nodes.get(current)
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
+                elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
+                    self.publish({**row, "usage": public_usage(data["usage"])})
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)
