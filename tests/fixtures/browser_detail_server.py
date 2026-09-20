@@ -8,9 +8,12 @@ from aiohttp import web
 from amplifier_web.server import create_app
 
 class Runtime:
+    def __init__(self): self.starts=0; self.sends=0
     async def start(self, session, emit):
+        self.starts+=1
         await emit('runtime.status', {'sessionId':session['id'], 'status':'ready'})
     async def send(self, session, text, input_id, emit):
+        self.sends+=1
         await emit('assistant.message', {'sessionId':session['id'], 'text':'Synthetic reply.', 'inputId':input_id})
         await emit('runtime.status', {'sessionId':session['id'], 'status':'idle'})
     async def control(self, *args): return {}
@@ -41,7 +44,25 @@ async def main():
         baseline=copy.deepcopy(service.state)
         async def control(request):
             args=await request.json(); op=args.get('op')
-            if op=='reset':
+            if op=='native-history':
+                from amplifier_web.session_files import project_slug
+                native=temp/'native'/'projects'/project_slug(alpha)/'sessions'/'paging-fixture'
+                native.mkdir(parents=True)
+                (native/'metadata.json').write_text(json.dumps({'session_id':'paging-fixture',
+                    'working_dir':str(alpha),'name':'Live saved history','bundle':'bundle:anchors'}))
+                (native/'transcript.jsonl').write_text(''.join(json.dumps({'role':'user' if i%2==0 else 'assistant',
+                    'content':f'Saved message {i}\n\n'+('A retained paragraph. '*25)})+'\n' for i in range(305)))
+                await service.history.refresh()
+                row=next(row for row in service.state['sessions'] if row.get('nativeIdentity')=='paging-fixture')
+                await service.history.load(row['id'])
+                row.update(status='ready',preparation={'status':'active'})
+                service.state.update(selectedSessionId=row['id'],selectedWorkspaceId=row['workspaceId'])
+            elif op=='live-response':
+                row=service._session(args['id'])
+                await service.on_runtime_event('runtime.status',{'sessionId':row['id'],'status':'working'})
+                await service.on_runtime_event('assistant.message',{'sessionId':row['id'],'text':'A new live response.'})
+                await service.on_runtime_event('assistant.delta',{'sessionId':row['id'],'text':'Still writing...'})
+            elif op=='reset':
                 revision=service.state['revision']
                 service.state.clear();service.state.update(copy.deepcopy(baseline));service.state['revision']=revision
             elif op=='patch':
@@ -70,6 +91,7 @@ async def main():
                     for i in range(args.get('count',205))])
             service._publish()
             return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
+                'runtimeStarts':service.runtime.starts,'runtimeSends':service.runtime.sends,
                 'retainedSessions':len(service.state['sessions']),
                 'retainedMessages':sum(len(row.get('messages',[])) for row in service.state['sessions']),
                 'canonicalBytes':len(json.dumps(service.state['sessions']).encode())})

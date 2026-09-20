@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.14.1",
+      "title": "Read earlier messages in live conversations",
+      "changes": [
+        "Load earlier messages and automatic scroll-back now work while a conversation runtime is ready or busy.",
+        "Earlier pages preserve incoming responses, drafts, and current work, including when new messages have been saved since the last history refresh.",
+        "Overlapping page requests keep message identities and reading position; incompatible saved-history changes remain visible as a retryable error."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.14.0",
       "title": "Ready conversations and responsive source checks",
       "changes": [
