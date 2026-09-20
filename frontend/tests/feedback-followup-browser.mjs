@@ -50,7 +50,7 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
- await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByLabel('Submitted report',{exact:true}).selectOption('original-feedback');
  await page.getByRole('button',{name:'Refresh report',exact:true}).click();
  await page.getByText('Feedback report loaded.',{exact:true}).waitFor();
@@ -59,7 +59,7 @@ try{
  const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  other.on('pageerror',error=>errors.push(error.message));
  await other.goto(vite.resolvedUrls.local[0]);await other.waitForSelector('#amp-one');
- await other.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await other.getByRole('button',{name:'More app options',exact:true}).click();await other.getByRole('button',{name:'Send feedback',exact:true}).click();
  await other.getByLabel('Submitted report',{exact:true}).selectOption('original-feedback');
  await other.getByLabel('Add a comment',{exact:true}).fill('Unsent draft on the other browser.');
  await other.evaluate(()=>window.amplifier.dispatch('feedback.get',{requestId:'second-browser-read',feedbackId:'original-feedback',page:2}));
