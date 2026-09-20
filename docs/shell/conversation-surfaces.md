@@ -53,7 +53,8 @@ const draw = snapshot => {
 canvasApp.subscribe(draw);
 canvasApp.ready.then(draw);
 document.querySelector('#choice').onchange = event => {
-  canvasApp.emit('choose', {value: event.target.value}).catch(showError);
+  canvasApp.emit('choose', {value: event.target.value},
+    {commit: canvasApp.getEditVersion()}).catch(showError);
 };
 ```
 
@@ -61,14 +62,32 @@ document.querySelector('#choice').onchange = event => {
 - `getSnapshot()` / `subscribe(fn)`: read shared state, manifest, revisions,
   events, host request status, and current theme context. Subscribe returns an
   unsubscribe function. Theme and state updates do not recreate the frame.
-- `emit(name, payload)`: validate a declared event and apply its field mapping
+- `emit(name, payload, {commit}?)`: validate a declared event and apply its field mapping
   on the host. `updates` maps top-level state fields to payload fields. The
   agent invokes exactly the same operation with `canvas.apps.event`.
-- `patch(object)`: merge top-level fields using `canvas.apps.state`.
+- `patch(object, {commit}?)`: merge top-level fields using `canvas.apps.state`.
 - `request(name, input)`: queue a declared host request for review.
-- `setDirty(boolean)`: declare additional unsaved work, such as a drawn sketch.
-  Form inputs automatically mark the view dirty; successful state/event writes
-  acknowledge compatible input. Keep important values in shared state.
+- `beginEdit()`: immediately protect a custom local edit and return its integer
+  edit version. Call before changing a drawing or other non-form input.
+- `getEditVersion()`: capture the current local edit version. Native form input
+  advances it automatically before your input handler runs.
+- Pass `{commit: capturedVersion}` to a state/event write only when that write
+  saves all unfinished input through that version. A successful unrelated event
+  does **not** mark input saved. Older acknowledgements cannot clear newer edits.
+- `setDirty(true)` remains available and immediately begins an edit, then
+  acknowledges its declaration. `setDirty(false)` explicitly discards the edit
+  captured at call time; use only for a user-requested cancel, never after a failed save.
+- `reportError(error)` / `reportReady()`: report a rendering failure or successful
+  recovery. State acknowledgements do not clear rendering errors.
+- `observeCanvas(canvas, draw)`: observe positive visible canvas dimensions,
+  change the backing size only when needed, set the device-pixel transform,
+  and call `draw({context, width, height, dpr})`. Returns `{redraw, disconnect}`.
+  Hidden canvases are skipped and redrawn when revealed. Draw from saved state;
+  changing the backing size still clears pixels and resets context attributes.
+
+Existing surfaces that relied on implicit save acknowledgement must pass an
+explicit commit version. Without it the host conservatively retains unsaved
+input protection. Ordinary shared-state writes remain compatible.
 
 State and event calls resolve with an acknowledged snapshot. Display errors;
 do not silently retry a rejected edit over someone else's change. Avoid
@@ -80,8 +99,9 @@ from two users may conflict even when they touch different fields.
 
 `canvas.apps.inspect {id}` returns the current manifest, state, requests and
 retained versions. Use `includeSource: true` to read the complete current HTML;
-use `requestId` to read the exact input of a pending host request. The normal
-agent overview remains bounded; explicit inspection gives the shared model.
+use `requestId` to read the exact input of a pending host request. The result also lists view client IDs, dirty flags and browser render status.
+Canvas action results use a compact context with target-client information;
+use `get_state` with a JSON Pointer for broader app state.
 
 Mutations require `id`, `expectedRevision` and `expectedStateRevision` from
 inspection. Use stable command IDs when retrying an uncertain transport
@@ -100,7 +120,9 @@ Revising or restoring supersedes pending host requests.
 Dirty mounted views block definition replacement. If an input races a remote
 revision before the host receives the dirty declaration, the browser retains
 the old frame and offers an explicit discard-and-load control. Read and
-reconcile the shared state before retrying. Never invoke viewer recovery to
+reconcile the shared state before retrying. Provide a Save/Retry control for
+local edits whose first save failed. Save the complete compatible edit, inspect
+again, then revise; explain any remaining unsaved work to the user. Never invoke viewer recovery to
 discard someone else's unfinished work automatically.
 
 State survives refresh and conversation reopening. Forks copy the retained
@@ -155,6 +177,57 @@ events; 20 request results with at most five pending. Schemas exclude
 references and regexes; data excludes reserved prototype/resource keys.
 Complex state reducers, arbitrary host capabilities, automatic agent wakeups,
 cross-host sync and app distribution remain outside this version.
+
+## Drawing, tabs and save failures
+
+User choices, sliders, pen selection and completed strokes belong in typed shared
+state with declared events. Pointer position, animation frames and a stroke still
+being drawn may stay local temporarily. Keep stroke data within the state/event
+limits; bound/simplify point lists and commit completed strokes in batches.
+
+```javascript
+let local = null;
+let pendingSave = false;
+const painter = canvasApp.observeCanvas(canvas, ({context, width, height}) => {
+  context.clearRect(0, 0, width, height);
+  context.lineWidth = 2.5; context.lineCap = 'round';
+  drawStrokes(context, local ?? canvasApp.getSnapshot()?.app.state.strokes ?? []);
+});
+function beginStroke() {
+  canvasApp.beginEdit();
+  local = structuredClone(canvasApp.getSnapshot().app.state.strokes);
+  // Append normalized points to local, then painter.redraw() while drawing.
+}
+async function saveDrawing() {
+  const commit = canvasApp.getEditVersion();
+  const strokes = structuredClone(local);
+  pendingSave = true;
+  try {
+    await canvasApp.patch({strokes}, {commit});
+    if (canvasApp.getEditVersion() === commit) local = null;
+  } catch (error) {
+    showError(error); // Keep local strokes; a visible Save/Retry calls this again.
+  } finally { pendingSave = false; painter.redraw(); }
+}
+canvasApp.subscribe(() => { if (!pendingSave) painter.redraw(); });
+```
+
+Render all strokes from normalized coordinates after resizing or returning to a
+tab. Do not set canvas width/height on every click or snapshot. Use CSS dimensions
+independent of the backing size. For a clock, skip hidden or very small bounds
+before calculating its radius; redraw on reveal and respect reduced motion.
+Subscriptions are deduplicated and deferred while local writes are pending, but
+an author must still preserve unsaved local work when new shared state arrives.
+
+For authorized theme application, the agent (outside the sandbox) performs:
+
+1. Inspect the surface and intended browser client.
+2. Queue the declared apply request using current revisions and small tokens.
+3. Inspect its exact request input and current revisions.
+4. Call `canvas.apps.resolve` with `id`, `clientId`, `requestId`, `approve: true`,
+   `expectedRevision`, and `expectedStateRevision`.
+5. Verify the request result and the target view. Do not ask again for permission
+   already supplied by the user. Resolve only the change that was authorized.
 
 ## Acceptance evidence
 

@@ -125,7 +125,7 @@ def definitions(schema, string):
                   schema({**cas, 'name': string(80), 'payload': {'type': 'object'}}, [*required, 'name', 'payload'])),
         'request': ('Ask the host to preview, apply or revert a theme. Queues a reviewable request; does not execute it.',
                     schema({**cas, 'name': string(80), 'input': {'type': 'object'}}, [*required, 'name', 'input'])),
-        'resolve': ('Approve or reject a pending host request. The sandbox cannot call this action. Requires an attached target client.',
+        'resolve': ('Approve or reject a pending host request. Agents may resolve changes already authorized by the user on an explicit attached clientId. Only the sandbox cannot call this action.',
                     schema({**cas, 'requestId': string(100), 'approve': {'type': 'boolean'}}, [*required, 'requestId', 'approve'])),
     }
     return {'canvas.apps.' + name: value for name, value in actions.items()}
@@ -221,6 +221,12 @@ def command(service, action, args, origin):
         fail('This surface is unavailable in the calling conversation.', 404)
     if name == 'inspect':
         result = snapshot(row, db, args.get('includeSource', False))
+        result['views'] = [{'clientId': identity, 'viewId': key.split(':', 1)[0],
+                            'dirty': bool(preference.get('dirty')), 'renderStatus': preference.get('activation')}
+                           for identity, client in service.clients.records.items()
+                           for key, preference in client.get('canvasViews', {}).get('preferences', {}).items()
+                           if key.endswith(':' + row['id'])]
+
         if args.get('requestId'):
             request = next((r for r in row['app']['requests'] if r['id'] == args['requestId']), None)
             if not request:
@@ -234,7 +240,7 @@ def command(service, action, args, origin):
         for client in service.clients.records.values():
             for key, preference in client.get('canvasViews', {}).get('preferences', {}).items():
                 if key.endswith(':' + row['id']) and preference.get('dirty'):
-                    fail('Finish or cancel the surface edit before refining it.', 409)
+                    fail('Finish or cancel the surface edit before refining it. Inspect this surface for dirty view client IDs; save its unfinished input before retrying.', 409)
         if name == 'restore':
             version = next((v for v in app['versions'] if v['version'] == args['version']), None)
             if not version:

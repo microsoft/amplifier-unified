@@ -83,6 +83,9 @@ jobs:
       - name: Verify shared conversation surfaces and isolation
         working-directory: frontend
         run: npm run test:canvas-apps-browser
+      - name: Verify shared drawing, resize and save recovery
+        working-directory: frontend
+        run: npm run test:canvas-drawing-browser
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}

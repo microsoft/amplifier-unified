@@ -13,7 +13,10 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
 3. Bind controls through `canvasApp.ready`, `subscribe`, `emit` and `patch`.
    Show errors and retain unfinished input. Use semantic labels, keyboard
    controls and inherited theme/accessibility context. Use `setDirty` for
-   unsaved work beyond ordinary form inputs.
+   unsaved work beyond ordinary form inputs. Prefer synchronous `beginEdit()`
+   for custom controls. Capture `getEditVersion()` and pass `{commit: version}`
+   only to the write that saves that unfinished input; unrelated events never
+   acknowledge it. Keep failed saves locally with a visible Save/Retry control.
 4. Inspect current state and both revisions before acting as the user or
    refining the design. Use `canvas.apps.event` for the same interaction as a
    click. Revision conflicts require reconciliation, not blind overwrite.
@@ -27,11 +30,18 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    do not copy its entire stylesheet into the surface. Pending requests
    do nothing until reviewed and resolved outside the sandbox. Agents can
    resolve already-authorized changes on the explicit target client; the
-   surface itself cannot grant permission.
+   surface itself cannot grant permission. Finish an authorized apply with
+   `canvas.apps.resolve {id, clientId, requestId, approve:true, expectedRevision,
+   expectedStateRevision}`; queuing alone is not completion.
 7. Verify the actual running view: one tab after refinement, user/agent parity,
    visible theme effects, retained state on refresh, intact chat draft/history,
    and a usable revert path. Distinguish deterministic tests from an actual
-   model-generated demo.
+   model-generated demo. For drawing use `canvasApp.observeCanvas` and redraw
+   normalized saved strokes; never reset a canvas on every snapshot. Skip
+   hidden/zero-size clocks, resize on reveal, and share sliders/colors/strokes.
+   Inspect `views` for dirty flags and render errors. A created artifact or a
+   successful state write does not prove a healthy render. Report only checks
+   actually performed.
 
 These surfaces serve the session's task. A custom theme chooser is a useful
 example to generate on demand, not a built-in app to ship. Publishing,

@@ -1367,12 +1367,22 @@ class AppService:
                 session["status"] = "error"
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
-                session["error"] = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                detail = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                error_type = payload.get('errorType') or session.get('turnErrorType')
+                session['errorType'] = error_type
+                session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
+                    'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
+                    if error_type == 'ContextLengthError' else detail)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                if payload.get('event') == 'generation.started':
+                    session.pop('turnErrorType', None)
+                    session.pop('errorType', None)
+                elif payload.get('event') == 'generation.failed':
+                    session['turnErrorType'] = payload.get('error_type')
                 if payload.get("event") == "generation.finished":
                     if not payload.get("rootSessionId") or payload.get("rootSessionId")==payload.get("sessionId"):
                         from .attention import completed
@@ -1488,7 +1498,12 @@ class AppService:
                 action_args.setdefault('sessionId',session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             await self._flush_pending_progress()
-            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}
+            if args['action'].startswith('canvas.apps.'):
+                from .agent_state import surface_context
+                context = surface_context(self.state_context(), session_id, self.clients.records)
+            else:
+                context = read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)
+            return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 
     async def update_device(self, payload):

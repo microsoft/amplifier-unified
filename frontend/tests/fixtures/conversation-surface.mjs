@@ -15,13 +15,13 @@ export function themeSurface(baseCss, refinement=false){
  const cards=document.querySelector('.cards'),note=document.querySelector('#note'),status=document.querySelector('#status');
  const perform=promise=>promise.catch(error=>{status.textContent=error.message});
  function render(snapshot){current=snapshot.app.state;
-  if(!cards.children.length){for(const theme of current.themes){const label=document.createElement('label');label.className='card';label.innerHTML='<span class="swatch"><i></i><i></i></span><span><strong></strong><p></p></span><input type="radio" name="theme">';const radio=label.querySelector('input');radio.value=theme.id;radio.setAttribute('aria-label',theme.name);radio.onchange=()=>perform(canvasApp.emit('choose',{value:theme.id}));cards.append(label)}}
+  if(!cards.children.length){for(const theme of current.themes){const label=document.createElement('label');label.className='card';label.innerHTML='<span class="swatch"><i></i><i></i></span><span><strong></strong><p></p></span><input type="radio" name="theme">';const radio=label.querySelector('input');radio.value=theme.id;radio.setAttribute('aria-label',theme.name);radio.onchange=()=>perform(canvasApp.emit('choose',{value:theme.id},{commit:canvasApp.getEditVersion()}));cards.append(label)}}
   [...cards.children].forEach((label,index)=>{const theme=current.themes[index];label.querySelector('strong').textContent=theme.name;label.querySelector('p').textContent=theme.description;label.querySelector('input').checked=current.selected===theme.id;label.querySelector('.swatch').style.background=theme.bg;label.querySelector('i').style.background=theme.accent;label.querySelector('i:last-child').style.background=theme.surface});
   if(document.activeElement!==note)note.value=current.note;
   const last=snapshot.app.requests.at(-1);if(last)status.textContent=last.status==='pending'?'Review this change in the host controls above.':last.status==='applied'?'Theme change completed.':last.status==='rejected'?'Theme change declined.':'Earlier request replaced by the new design.';
  }
  canvasApp.subscribe(render);canvasApp.ready.then(render);
- note.oninput=()=>perform(canvasApp.emit('note',{value:note.value}));
+ note.oninput=()=>perform(canvasApp.emit('note',{value:note.value},{commit:canvasApp.getEditVersion()}));
  for(const name of ['preview','apply','revert'])document.querySelector('#'+name).onclick=()=>{const theme=current.themes.find(t=>t.id===current.selected);const css=base+'\\n#amp-one{'+['bg','surface','soft','ink','muted','line','accent','tint'].map(k=>'--a-'+k+':'+theme[k]).join(';')+'}';perform(canvasApp.request(name,name==='revert'?{}:{name:theme.name,css}))};
  </script></body></html>`;
  return {title:'Your custom themes',manifest,content,initialState:{selected:'fjord',note:'',themes}};
