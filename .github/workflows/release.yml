@@ -51,8 +51,10 @@ jobs:
           git diff --exit-code -- amplifier_web/static
       - name: Verify typed surface context through Core and loop-live
         run: |
-          uv sync --project amplifier_web/runtime_deps
-          UNIFIED_RUNTIME_PYTHON="$PWD/amplifier_web/runtime_deps/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
+          mkdir -p "$RUNNER_TEMP/surface-runtime"
+          cp amplifier_web/runtime_deps/pyproject.toml "$RUNNER_TEMP/surface-runtime/pyproject.toml"
+          uv sync --project "$RUNNER_TEMP/surface-runtime"
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
