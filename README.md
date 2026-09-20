@@ -8,7 +8,7 @@ A local Python host serving a bundled React interface. One conversation supports
 uv run --project /path/to/amplifier-web amplifier-unified --workspace /path/to/your/project
 ```
 
-Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, choose a community bundle URI or the configured `anchors` default, and send a message. The runtime prepares its pinned environment on first use. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
+Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, use the `work` default or choose another standalone bundle, and send a message. The runtime prepares its pinned environment on first use. Work currently requires GitHub access to its private bundle repository; Anchors remains available in the bundle picker. Explicit app, workspace, and shared bundle choices still take precedence, and existing conversations keep their saved bundle. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
 
 The first message may take several minutes while the runtime environment and configured modules are prepared. The conversation shows the current preparation phase and elapsed time; your message remains queued until preparation finishes. A preparation timeout reports an error instead of silently resending it.
 

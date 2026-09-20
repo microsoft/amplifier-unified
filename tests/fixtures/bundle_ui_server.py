@@ -36,7 +36,7 @@ async def main(home):
     workspace=home/'workspace';workspace.mkdir()
     app=await create_app(home,workspace=workspace,runtime=Runtime(),voice=False,background_updates=False)
     app['control_token']='bundle-fixture-control';app['allowed_origins']|={'http://127.0.0.1:8963'}
-    service=app['service'];await service.dispatch('session.create',{'title':'Bundle acceptance'})
+    service=app['service'];await service.dispatch('session.create',{'title':'Bundle acceptance','bundle':'anchors'})
     session=service._session();session['messages']=[{'id':'saved-user','createdAt':time.time(),'role':'user','text':'Keep my original history.'},{'id':'saved-answer','createdAt':time.time(),'role':'assistant','text':'Saved response.'}]
     SessionStore.for_app(home,workspace).save(session['id'],[{'role':row['role'],'content':row['text']} for row in session['messages']],{'bundle_name':'anchors'})
     service._publish();return app

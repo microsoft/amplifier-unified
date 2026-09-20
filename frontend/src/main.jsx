@@ -48,7 +48,7 @@ import './unified.css';
 const icons={call:Phone,text:Bell,chat:MessageCircle};
 const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
-const initialSetup={title:'A new conversation',bundle:'anchors',workspace:''};
+const initialSetup={title:'A new conversation',bundle:'work',workspace:''};
 function App(){
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[sending,setSending]=useState(null),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[setup,setSetup]=useState(initialSetup),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
@@ -182,7 +182,7 @@ function App(){
  },[state,connected,act]);
  useEffect(()=>{voiceClient.current=new VoiceClient({request,onState:setVoice,onError:e=>setError(e.message||String(e))});return()=>{voiceClient.current?.dispose()}},[]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
- const open=p=>{setError('');if(p==='new-session'){const next={title:'A new conversation',bundle:state.settings?.bundle||'anchors',workspace:state.settings?.workspace||''};setSetup(next);act('view.update',{patch:{panel:p,sessionSetup:next}})}else act('view.update',{patch:{panel:p}})};
+ const open=p=>{setError('');if(p==='new-session'){const next={title:'A new conversation',bundle:state.settings?.bundle||'work',workspace:state.settings?.workspace||''};setSetup(next);act('view.update',{patch:{panel:p,sessionSetup:next}})}else act('view.update',{patch:{panel:p}})};
  const close=()=>{setPreview(false);act('view.update',{patch:{panel:null}})};
  useEffect(()=>{
   if(!panel)return;
