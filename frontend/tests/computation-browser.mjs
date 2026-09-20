@@ -38,6 +38,9 @@ try{
   await panel.getByRole('button',{name:'Close runtime'}).click();
   await expect(panel.getByLabel('Cell code')).toHaveCount(0);
  }
+ await panel.getByRole('button',{name:'Node · closed · Generation 2'}).click();
+ await expect(panel.getByRole('button',{name:'Reset variables'})).toBeDisabled();
+ await expect(panel.getByRole('button',{name:'Close runtime'})).toBeDisabled();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),ready.sessionId);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep computation draft');
  await page.reload();
