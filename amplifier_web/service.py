@@ -51,7 +51,7 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft; submit the first message to create the chat.", schema({"workspace": string(4000)}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000)}, [])),
     "session.create": ("Create a chat with a community bundle; UI drafts use session.draft until first submission", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000), "fromDraft":{"type":"boolean"}, "selection": {"type":"object", "properties": {"instance":string(200), "model":string(500), "effort":string(100)}, "additionalProperties":False}}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
