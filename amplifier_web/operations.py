@@ -65,6 +65,7 @@ class Operations:
         self.changed = asyncio.Event()
         self.closed = False
         self.pending = set()
+        self.adapters = {}
 
     def notify(self):
         previous = self.changed
@@ -102,6 +103,29 @@ class Operations:
             "revision": value["revision"],
             "duplicate": not changed,
         }
+
+    def register_source(self, name, list_records, read_record):
+        """Register host-owned read adapters; never an agent execution callback.
+
+        Callbacks return the common operation shape with fully prefixed IDs,
+        bound sessionId, state, revision and evidence. The original source stays
+        authoritative and calls notify() only when that source changes.
+        """
+        if not name or ":" in name or name in {"process", "smart-tool", "worker"}:
+            raise ValueError("Invalid operation adapter name")
+        if name in self.adapters:
+            raise ValueError("Operation adapter already registered")
+        self.adapters[name] = (list_records, read_record)
+
+    @staticmethod
+    def adapted(name, session_id, value):
+        if value is None:
+            raise ValueError("Operation not found in this conversation")
+        if value.get("sessionId") != session_id or not value.get("id", "").startswith(
+            name + ":"
+        ):
+            raise ValueError("Operation adapter returned a different owner or identity")
+        return copy.deepcopy(value)
 
     @staticmethod
     def projection(source, session_id, value):
@@ -162,10 +186,21 @@ class Operations:
             self.projection("worker", session_id, row)
             for row in session.get("workers", [])
         )
+        for name, (listing, _) in self.adapters.items():
+            values.extend(
+                self.adapted(name, session_id, row) for row in listing(session_id)
+            )
         return values
 
     def status(self, session_id, identity):
         self.service._session(session_id)
+        prefix = identity.partition(":")[0]
+        if prefix in self.adapters:
+            _, reading = self.adapters[prefix]
+            value = self.adapted(prefix, session_id, reading(session_id, identity))
+            if value["id"] != identity:
+                raise ValueError("Operation adapter returned a different identity")
+            return value
         if identity.startswith("smart-tool:"):
             if not self.service.smart_tools:
                 raise ValueError("Operation not found in this conversation")

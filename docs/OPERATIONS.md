@@ -118,3 +118,10 @@ output beyond its local ring; otherwise that optional integration test skips.
 live output, final state, reconnect, selected conversation/draft preservation and
 mobile bounds against the production build. These checks do not claim a live
 provider conversation or full Work bundle composition has been deployed.
+
+Additional host receipt stores can register a read-only adapter with
+`service.operations.register_source(name, list_records, read_record)`. Callbacks
+receive the bound session ID (and exact prefixed ID for read) and return common
+operation records. Identity/session mismatches are rejected. The original store
+owns execution and evidence and calls `operations.notify()` when it changes.
+This registration is a trusted host seam, not an agent-defined callback.
