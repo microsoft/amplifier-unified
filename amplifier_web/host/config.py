@@ -191,12 +191,17 @@ def prepare_registry(config):
 
 
 def load_config(workspace, *, home=None, legacy_home=None, session_id=None):
-    home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
-    # legacy_home remains an explicit path alias for older embedding callers;
-    # the former one-time-import environment variable no longer selects config.
     shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
     _load_keys(shared / "keys.env")
+    return read_config(workspace, home=home, shared_home=shared, session_id=session_id)
+
+
+def read_config(workspace, *, home=None, shared_home=None, session_id=None):
+    """Read runtime settings without loading keys, preparing caches or writing."""
+    home = Path(home or app_home()).expanduser().resolve()
+    workspace = Path(workspace).expanduser().resolve(strict=True)
+    shared = Path(shared_home or amplifier_home()).expanduser().resolve()
     settings = read_settings(workspace, shared_home=shared, session_id=session_id)
     from ..updates import foundation_home
     registry_home = foundation_home(home)

@@ -1,6 +1,6 @@
 # Amplifier TUI: Unified-backed live sessions
 
-Status: Ready for TUI implementation against Unified 0.11.6.
+Status: Ready for TUI implementation against Unified 0.11.7.
 
 ## Outcome and scope
 
@@ -21,13 +21,13 @@ amplifier-app-tui repository has been modified by this work.
 ## Release baseline and source of truth
 
 - Protocol: version 1, HTTP commands and SSE snapshots.
-- Required host baseline: [Unified 0.11.6](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.6)
+- Required host baseline: [Unified 0.11.7](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.7)
   or a later compatible release. Use the immutable release tag to resolve its commit.
 - Pinned loop-live: `11a730ac24463cb5bea8bd65385f494aa8f0f454`.
   This includes the scheduling/ownership fix from
   [loop-live PR 5](https://github.com/bkrabach/amplifier-module-loop-live/pull/5).
 - Empty-composer draft support first shipped in Unified 0.11.4; the live-client
-  transport first shipped in 0.11.1. Use 0.11.6 for the combined tested baseline.
+  transport first shipped in 0.11.1. Use 0.11.7 for the combined tested baseline.
 - Detailed contract: [live-sessions.md](live-sessions.md).
 - Server: `amplifier_web/live_clients.py`.
 - Python adapter: `amplifier_web/session_client.py`.
@@ -39,7 +39,7 @@ amplifier-app-tui repository has been modified by this work.
 For TUI settings or a separate standalone runtime, see the companion
 [shared-configuration guide](https://github.com/bkrabach/amplifier-unified/blob/85013b9b7a98b377dbfe04d2ed53f7108abaf515/docs/TUI-SHARED-CONFIGURATION.md)
 from [PR 69](https://github.com/bkrabach/amplifier-unified/pull/69). That optional
-adapter is a separate contribution, not part of the 0.11.6 host baseline. A
+adapter is a separate contribution, not part of the 0.11.7 host baseline. A
 connected TUI uses the host's configured runtime and does not need that helper
 to attach to live sessions.
 

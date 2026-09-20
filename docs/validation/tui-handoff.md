@@ -1,4 +1,4 @@
-# Unified 0.11.6 live-client handoff validation
+# Unified 0.11.7 live-client handoff validation
 
 The deliverable is the [TUI integration contract](../clients/tui-handoff.md) and
 a released host/adapter baseline. It does not include an implementation in the
@@ -6,7 +6,7 @@ separate amplifier-app-tui repository.
 
 ## Revisions and correction
 
-- Unified: 0.11.6, based on 0.11.5 (`8f1b943`). The immutable release tag identifies
+- Unified: 0.11.7, based on 0.11.6 (`52786c1`). The immutable release tag identifies
   the final host commit.
 - loop-live: merged `11a730ac24463cb5bea8bd65385f494aa8f0f454`, selected by both
   the host mount plan and packaged runtime manifest.
@@ -60,12 +60,15 @@ The browser fixtures independently pass:
 These browser fixtures use a synthetic runtime; the terminal lifecycle probe
 uses the real worker with a fixture provider. They provide different evidence.
 
-Final local gates: **932 Python tests passed, 5 skipped**, with the actual
-terminal-runtime and warm-worker probes enabled; **152 frontend tests passed**.
-All three browser scenarios above passed against the release candidate.
-The production frontend was regenerated for 0.11.6. Source archive and wheel
+Final local gates after integrating 0.11.6: **1,025 Python tests passed,
+5 skipped**, with the actual terminal-runtime and warm-worker probes enabled;
+**154 frontend tests passed**. All three browser scenarios above passed against
+the release candidate, along with the maintenance release's cache-usage browser
+check on desktop and mobile.
+The production frontend was regenerated for 0.11.7. Source archive and wheel
 builds passed, and release verification matched their source, version, release
-notes and static assets to the tested checkout.
+notes and static assets to the tested checkout. A repeated build produced no
+static-asset changes, and an isolated installed-wheel readiness probe passed.
 
 ## Coordinated real-provider browser evidence
 
@@ -78,7 +81,7 @@ visually inspected by that task.
 Those runs used Unified 0.11.4 (`9112dc3`) and loop fix candidate `171414e`.
 The loop implementation and regression test were checked byte-for-byte equal
 to merged `11a730a`. They are supporting live-model evidence, not a claim that
-the final 0.11.6 release was itself rerun against every provider/profile.
+the final 0.11.7 release was itself rerun against every provider/profile.
 The detailed sanitized report lives in the loop repository's
 [Work profile validation](https://github.com/bkrabach/amplifier-module-loop-live/blob/ee09dba/docs/work-profile-validation.md).
 
