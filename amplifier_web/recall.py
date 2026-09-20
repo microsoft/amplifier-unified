@@ -1,6 +1,7 @@
 """Passive registered-history indexing and explicit scoped memory actions."""
 import asyncio
 import copy
+import json
 import time
 import uuid
 
@@ -61,6 +62,24 @@ class Recall:
             await asyncio.gather(self.task, return_exceptions=True)
         self.store.close()
 
+    def metadata_rows(self, session_id):
+        """Compact deterministic task/output references, never inferred memories."""
+        rows=[]
+        task=self.app.state.get('runtimeControl',{}).get(session_id,{}).get('task.get',{}).get('task')
+        if task:
+            summary={key:task.get(key) for key in ('objective','status','constraints','corrections','blockedReason','completionEvidence','artifactRefs')}
+            rows.append({'id':'task:'+task['id'],'role':'task','sourceKind':'task','recordId':task['id'],
+                'recordRevision':task.get('revision'),'text':json.dumps(summary,ensure_ascii=False,sort_keys=True)})
+        outputs=getattr(self.app,'outputs',None)
+        if outputs:
+            for encoded, in self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created,id',(session_id,)):
+                record=json.loads(encoded)
+                if not record.get('linked'):continue
+                summary={key:record.get(key) for key in ('title','kind','version','versionEvidence','externalVersion','path','url','sha256','parentId','evidenceIds','origin')}
+                rows.append({'id':'output:'+record['id'],'role':'artifact','sourceKind':'output','recordId':record['id'],
+                    'recordRevision':record['revision'],'text':json.dumps(summary,ensure_ascii=False,sort_keys=True)})
+        return rows
+
     async def refresh(self):
         from .history_query import _rows, _identity
         errors, indexed, unchanged = [], 0, 0
@@ -76,12 +95,16 @@ class Recall:
                         if source is None:
                             raise FileNotFoundError('Source removed during indexing')
                         session = copy.deepcopy(source)
-                    signature = await asyncio.to_thread(source_signature, session)
+                        metadata=self.metadata_rows(session_id)
+                    source_stamp=await asyncio.to_thread(source_signature,session)
+                    signature=digest([source_stamp,metadata])
                     if signatures.get(session['id']) != signature:
                         rows, revision = await asyncio.to_thread(_rows, session)
-                        if signature != await asyncio.to_thread(source_signature, session):
+                        async with self.app.lock:
+                            current_metadata=self.metadata_rows(session_id)
+                        if signature != digest([await asyncio.to_thread(source_signature,session),current_metadata]):
                             raise ValueError('Source changed during indexing')
-                        await asyncio.to_thread(self.store.replace, _identity(session), signature, revision, rows)
+                        await asyncio.to_thread(self.store.replace, _identity(session), signature, {'history':revision,'metadata':digest(metadata)}, [*rows,*metadata])
                         indexed += 1
                     else:
                         unchanged += 1
@@ -138,7 +161,8 @@ class Recall:
             elif action == 'recall.read':
                 async with self.app.lock:
                     source = copy.deepcopy(self.app._session(args['sourceSessionId']))
-                signature = await asyncio.to_thread(source_signature, source)
+                    metadata=self.metadata_rows(source['id'])
+                signature = digest([await asyncio.to_thread(source_signature,source),metadata])
                 indexed = await asyncio.to_thread(self.store.signatures)
                 if indexed.get(source['id']) != signature:
                     raise ValueError('The source changed since indexing. Refresh and search again; stale text was not returned.')

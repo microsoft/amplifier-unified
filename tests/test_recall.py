@@ -156,3 +156,27 @@ async def test_native_evidence_is_read_only_and_external_edits_invalidate(tmp_pa
         found=(await app.dispatch('recall.search',{'sessionId':sid,'query':'corrected orange','scope':'all'}))['result']['items']
         assert len(found)==1 and found[0]['sessionId']==match['sessionId']
     finally:await app.close()
+
+
+async def test_task_and_output_metadata_are_indexed_with_exact_correction_revisions(tmp_path):
+    app=AppService(tmp_path/'app',workspace=tmp_path,runtime=Runtime())
+    try:
+        sid=await make(app)
+        app.state.setdefault('runtimeControl',{})[sid]={'task.get':{'task':{'id':'saved-task','revision':1,'objective':'Investigate harbor routes','status':'active','constraints':['Preserve originals'],'corrections':[]}}}
+        output=(await app.dispatch('outputs.write',{'sessionId':sid,'title':'Orchid dataset memo','content':'Exact output content','variant':'document'}))['result']
+        await refresh(app)
+        task=(await app.dispatch('recall.search',{'sessionId':sid,'query':'harbor','scope':'task'}))['result']['items'][0]
+        artifact=(await app.dispatch('recall.search',{'sessionId':sid,'query':'orchid','scope':'task'}))['result']['items'][0]
+        assert task['sourceKind']=='task' and task['recordRevision']==1
+        assert artifact['sourceKind']=='output' and artifact['recordId']==output['id']
+        app.state['runtimeControl'][sid]['task.get']['task'].update(revision=2,objective='Investigate river routes')
+        with pytest.raises(AppError,match='source changed'):
+            await app.dispatch('recall.read',{'sessionId':sid,'sourceSessionId':sid,'messageId':task['messageId'],'sourceRevision':task['sourceRevision']})
+        await app.dispatch('outputs.unlink',{'sessionId':sid,'id':output['id'],'expectedRevision':1})
+        await refresh(app)
+        assert not (await app.dispatch('recall.search',{'sessionId':sid,'query':'orchid'}))['result']['items']
+        result=(await app.dispatch('recall.search',{'sessionId':sid,'query':'river'}))['result']['items'][0]
+        read=(await app.dispatch('recall.read',{'sessionId':sid,'sourceSessionId':sid,'messageId':result['messageId'],'sourceRevision':result['sourceRevision']}))['result']
+        assert read['recordRevision']==2 and 'river' in read['text']
+        assert not app.runtime.sent
+    finally:await app.close()

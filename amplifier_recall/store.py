@@ -47,11 +47,12 @@ class RecallStore:
                 (sid, signature, json.dumps(revision), json.dumps(session)))
             values = []
             for index, row in enumerate(rows):
-                if row.get('role') not in {'user', 'assistant'} or not isinstance(row.get('text'), str):
+                if row.get('role') not in {'user', 'assistant', 'task', 'artifact'} or not isinstance(row.get('text'), str):
                     continue
                 identity = row.get('id') or digest([sid, index, row.get('role'), row['text']])
                 metadata = {'index': index, 'messageId': identity, 'role': row['role'], 'via': row.get('via'),
-                    'sha256': hashlib.sha256(row['text'].encode()).hexdigest()}
+                    'sha256': hashlib.sha256(row['text'].encode()).hexdigest(),
+                    'sourceKind':row.get('sourceKind','message'), 'recordId':row.get('recordId'), 'recordRevision':row.get('recordRevision')}
                 values.append((row['text'], sid, identity, json.dumps(metadata)))
             self.db.executemany('INSERT INTO messages VALUES (?,?,?,?)', values)
         return len(values)
