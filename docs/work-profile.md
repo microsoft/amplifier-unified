@@ -138,3 +138,30 @@ Reports distinguish actual calls from unavailable capabilities and never claim
 success from a pending receipt. Raw history and temporary provider configuration
 are private test evidence; redact copied credentials after completed runs before
 sharing or archiving that evidence.
+
+
+
+## Composed worker coordination acceptance
+
+`scripts/work_profile/coordination_acceptance.py` is a separate opt-in live check
+for reviewed local Work sources. Build this checkout's frontend first, use the
+acceptance environment above with those reviewed module sources available, then
+run with `--allow-live --provider <existing-instance> --bundle /absolute/work/bundle.md
+--module-root /absolute/review-workspace --output /absolute/private/new-run`.
+It reuses the local source overlay in `parity_acceptance.profile`; that workspace
+must contain the named reviewed module worktrees. It keeps native transport off
+and preserves the configured model and reasoning effort.
+
+The fixture creates a fresh private host and synthetic Git repository, starts
+two real persistent workers and one managed process, sends a correction and side
+question while all remain active, waits by cursor, submits an explicit worker
+follow-up through Chromium, then reconnects without replaying the work. Append-only
+synthetic effect receipts verify one process execution each. Stable report and
+command IDs verify consumed reports and acknowledged follow-ups are not duplicated.
+These checks do not establish recovery after host process restart or physical
+voice/audio acceptance. Failed runs remain evidence and are never replayed.
+
+After shutdown the runner redacts the selected credential from generated fixture
+text/config files. SQLite is scanned without editing; counts remain in the private
+report. Dependency caches and symlinks are excluded. Only publish a redacted
+summary; raw transcripts and screenshots stay private unless inspected first.
