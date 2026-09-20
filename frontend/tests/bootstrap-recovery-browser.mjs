@@ -19,7 +19,7 @@ try{
  let blockedDetail;await page.route('**/api/conversation/detail?**',route=>{blockedDetail=route});
  await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();
  await page.getByText('Loading earlier messages…',{exact:true}).waitFor();
- await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Maintenance',exact:true}).click();await page.getByRole('button',{name:/Conversation history/}).waitFor();
+ await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section=history]').click();await page.getByRole('heading',{name:'History & recovery',exact:true}).waitFor();
  assert.ok(blockedDetail,'Slow history is independent of Settings/Maintenance');
  await blockedDetail.fulfill({status:503,json:{error:'Fixture history temporarily unavailable'}});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await page.getByRole('alert').filter({hasText:'Fixture history temporarily unavailable'}).waitFor();

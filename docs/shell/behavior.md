@@ -15,7 +15,7 @@ there. The skill body loads on demand.
 ## App defaults and existing configurations
 
 When no `bundle.app` list is configured, Unified shows **Unified shell** as an
-enabled app behavior in Settings → Capabilities → Bundles and composes it into
+enabled app behavior in Settings → Bundles & modules → Configured bundles and composes it into
 ordinary sessions. The default is computed without writing shared settings.
 The usual add, toggle, reorder, and remove actions are shared by the UI and
 agents. Explicit lists, including an empty list, remain authoritative. Disabled

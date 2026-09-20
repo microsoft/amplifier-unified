@@ -113,16 +113,16 @@ try{
    const painted=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(performance.now())))));
    for(let sample=0;sample<samples;sample++){
     const start=await page.getByRole('button',{name:'Settings',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
-    await page.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();settings.push((await painted())-start);
+    await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();settings.push((await painted())-start);
     // Capabilities automatically reads bundles. Exercise that real background
     // work before leaving: optimistic paint alone can conceal server stalls.
-    const catalogStart=await page.getByRole('button',{name:'Capabilities',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
-    await page.locator('button.a-settings-group-title').filter({hasText:'Add capabilities'}).waitFor();capabilities.push((await painted())-catalogStart);
-    const next=await page.getByRole('button',{name:'Maintenance',exact:true}).evaluate(button=>{const start=performance.now();button.click();return start});
-    await page.locator('button.a-settings-group-title').filter({hasText:'Conversation history'}).waitFor();maintenance.push((await painted())-next);
+    const catalogStart=await page.locator('[data-settings-section=bundles]').evaluate(button=>{const start=performance.now();button.click();return start});
+    await page.locator('[data-settings-destination=add-bundles]').waitFor();capabilities.push((await painted())-catalogStart);
+    const next=await page.locator('[data-settings-section=history]').evaluate(button=>{const start=performance.now();button.click();return start});
+    await page.locator('[data-settings-destination=history]').waitFor();maintenance.push((await painted())-next);
     await settled(); // Includes the 250ms quiet window defined above.
     maintenanceSettled.push((await page.evaluate(()=>performance.now()))-next);
-    await page.getByRole('button',{name:'Setup',exact:true}).click();
+    await page.locator('[data-settings-section=overview]').click();
     await page.getByRole('button',{name:'Close panel',exact:true}).click();
     await page.getByRole('dialog').waitFor({state:'hidden'});
    }

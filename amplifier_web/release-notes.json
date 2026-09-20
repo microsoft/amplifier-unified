@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.18.0",
+      "version": "0.19.0",
       "title": "Shared canvas awareness and reliable editing",
       "changes": [
         "Agents receive small freshness notices for interactive surfaces when they next respond, including exact counts and pending edits. Ordinary drawing and control changes do not start model work.",
@@ -10,6 +10,18 @@
         "Generated surfaces can use a shared draft helper that saves completed edits before a question, retains failed saves and protects unfinished gestures. User and agent edits continue to share one tab and compatible state.",
         "Drawing resize and tab changes preserve artwork. Older save acknowledgments cannot clear newer edits, and rendering errors remain visible until corrected.",
         "Saved conversation reconciliation avoids duplicated messages around steering, and context-limit failures preserve completed work with focused recovery guidance."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.18.0",
+      "title": "A complete, easier-to-navigate settings experience",
+      "changes": [
+        "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
+        "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
+        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Conversation diagnosis and safe recovery copies remain available from Current conversation. Unsaved private fields survive moving between settings sections while the dialog is open.",
+        "Notification refreshes and maintenance actions keep progress visible until completion. Mobile layouts, keyboard navigation, and shared or custom skins remain supported.",
+        "Sending clears the composer immediately and tracks pending delivery beside the message, with explicit retry or delivery checks. Message editing can continue in the current conversation or create a fork, preserving the original history."
       ],
       "notices": []
     },
@@ -57,8 +69,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
         }
       ]
     },
@@ -78,7 +90,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -97,7 +109,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

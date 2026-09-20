@@ -62,6 +62,11 @@ jobs:
       - name: Verify live surface awareness and draft checkpoints
         working-directory: frontend
         run: npm run test:surface-context-browser
+      - name: Verify settings navigation and retained capabilities
+        working-directory: frontend
+        run: |
+          npm run test:settings-browser
+          npm run test:settings-completeness-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
@@ -70,6 +75,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:navigation-browser
+      - name: Verify pending message delivery and editing
+        working-directory: frontend
+        run: npm run test:message-outbox-browser
       - name: Verify cached-source update reporting
         if: ${{ hashFiles('frontend/tests/cache-usage-browser.mjs') != '' }}
         working-directory: frontend

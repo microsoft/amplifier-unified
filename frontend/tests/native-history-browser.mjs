@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 // The real frontend against synthetic API state. No runtime, model, or user files.
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
@@ -50,8 +51,11 @@ try{
   return route.fulfill({json:{ok:true}});
  });
  const started=performance.now();
- await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).waitFor();
- assert.equal(await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).count(),1);
+ await page.goto(vite.resolvedUrls.local[0]);await page.locator('.a-navigation-workspace').waitFor();
+ assert.equal(await page.locator('.a-navigation-workspace').count(),1);
+ await page.locator('.a-navigation-workspace').getByRole('button',{name:/Details and actions/}).click();
+ await page.locator('.a-navigation-flyout').getByText('/fixture',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Close details',exact:true}).click();
  assert.equal(await page.locator('.a-nav-chat').count(),100);
  assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
  assert.equal(await page.locator('.a-session-select option[value="child-chat"]').count(),0);
@@ -107,9 +111,9 @@ try{
  await page.getByText('Showing a recovered history backup. Original files are unchanged.',{exact:true}).waitFor();
  await page.getByText('Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Settings',exact:true}).click();
- await page.getByRole('button',{name:'Maintenance',exact:true}).click();
+
  assert.equal(await page.getByRole('button',{name:'Same-chat CLI and web',exact:true}).count(),0);
- await page.getByRole('button',{name:'Conversation history',exact:true}).click();
+ await openSettingsPage(page,'history');
  await page.getByText(/Your CLI projects and conversations appear automatically/).waitFor();
  assert.deepEqual(errors,[]);
  console.log('Native history browser checks passed: no automatic runtime mount, stable scroll paging, refresh, loading and read-only states, automatic sharing settings.');
