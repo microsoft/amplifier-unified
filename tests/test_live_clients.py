@@ -358,6 +358,29 @@ async def test_python_terminal_adapter_uses_real_http_without_owning_runtime(aut
     assert len(runtime.sent) == 1 and runtime.stopped == []
 
 
+async def test_terminal_adapter_preserves_rejection_in_duplicate_http_receipt(authenticated_client, tmp_path):
+    from amplifier_web.session_client import SessionClient, SessionClientError
+    from amplifier_web.runtime import SessionInUseError
+    class LockedRuntime(Runtime):
+        async def send(self, *args):
+            self.sent.append(args)
+            raise SessionInUseError({'app':'fixture-cli'})
+    runtime = LockedRuntime()
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=runtime,
+                           voice=False, background_updates=False, preload_providers=False)
+    transport = await authenticated_client(app)
+    async with SessionClient(str(transport.make_url('')).rstrip('/'), app['control_token'], 'retry-tui') as client:
+        created = await client.create_session({}, command_id='create-rejected')
+        identity = created['state']['selectedSessionId']
+        for attempt in range(2):
+            with pytest.raises(SessionClientError) as rejected:
+                await client.command(identity, 'conversation.send', {'text':'Rejected input'}, command_id='rejected-once')
+            assert rejected.value.status == 409 and rejected.value.payload['code'] == 'session_busy'
+            if attempt:
+                assert rejected.value.payload['duplicate'] is True
+    assert len(runtime.sent) == 1
+
+
 async def test_shared_configuration_refresh_invalidates_all_client_views(live):
     from amplifier_web.preferences import SettingsStore
     service, first, _ = live

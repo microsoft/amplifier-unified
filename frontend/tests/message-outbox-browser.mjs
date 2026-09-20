@@ -39,6 +39,9 @@ try{
  await page.getByRole('textbox',{name:'Edit your message'}).fill('Corrected input');assert.equal(await page.getByLabel('Start a new conversation instead').count(),0);
  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const corrected=await next();assert.notEqual(corrected.body.id,failed.body.id);assert.equal(corrected.body.args.text,'Corrected input');await received(corrected);
  await page.getByText('Corrected input',{exact:true}).waitFor();assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');
+ const lostRejection=await send('Rejection reply lost');await lostRejection.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).click();
+ const rejectionCheck=await next();assert.equal(rejectionCheck.body.id,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state}});
+ await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
  const lost=await send('Delivery uncertain');await lost.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  await page.reload();await composer().waitFor();await page.getByRole('button',{name:'Check delivery',exact:true}).click();const checked=await next();assert.equal(checked.body.id,lost.body.id);assert.deepEqual(checked.body.args,lost.body.args);assert.notEqual(checked.client,lost.client,'Reload has a new client identity, same delivery identity');
  await checked.route.fulfill({json:{accepted:true,duplicate:true,delivery:'sending',state}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();

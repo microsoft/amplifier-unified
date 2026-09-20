@@ -189,13 +189,42 @@ session target and exact arguments before sending. Reuse that same tuple after
 an uncertain network response. A new user action gets a new command ID.
 
 Command IDs are stored in a host-wide receipt table; use globally unique IDs.
-The fingerprint includes the client identity and contents. Reusing an ID with
-different arguments or another client is a conflict, not a safe retry.
+The baseline fingerprint includes the client identity and contents. Hosts
+advertising `conversation.send.preserveDraft` in the action schema omit the
+presentation client identity for sends, so an exact send can be checked after
+reattaching with a new client ID. Other commands still include client identity.
+Reusing an ID with different arguments is a conflict, not a safe retry.
 
 A successful response says the command was accepted; it does not mean the model
 or a tool finished. A duplicate receipt returns `duplicate: true`. Read current
 session state to show progress. Never send another command merely because a
 socket closed or a model response has not appeared.
+
+On hosts advertising `preserveDraft`, show a local user bubble immediately and
+clear the composer, preserving the captured input in an outbox. Merge the
+server bubble by `inputId`. Receipts expose `delivery: sending | accepted |
+unknown`; message projections expose `delivery.status`. A provisional bubble
+or a `sending` receipt does not confirm delivery to the runtime. Keep uncertain
+input visible and let **Check delivery** repeat its exact ID and payload. A
+confirmed rejection permits **Retry** with a new ID. A duplicate rejection can
+arrive as HTTP 200 with `accepted: false` and its original `status`/`code`;
+the adapter raises `SessionClientError` for that result too. Never silently
+repeat unknown work after reconnect or restart.
+
+When using host draft storage, save the empty draft separately and include
+`preserveDraft: true` in the captured send arguments. This prevents a delayed
+acknowledgement from clearing newer typing, including an identical next message.
+Show activity on the pending bubble and keep input and navigation responsive.
+For option reloads, retain the current same-source content and mark that region
+busy until refresh completes; do not blank the entire interface.
+
+Discover `message.edit` and its `mode` schema before offering editing. Explicit
+`mode: current` edits within the conversation; `mode: fork` creates a new one.
+Omitted mode keeps the legacy fork behavior. Locally rejected input can be
+edited in the outbox and retried without a history operation. Current-conversation
+edits require idle execution and ownership; later active context is replaced
+while original event evidence remains. Tool effects are not undone or replayed.
+See [message delivery and editing](../MESSAGE-DELIVERY-EDIT.md) for details.
 
 Receipt deduplication does not prove exactly-once external tool effects after a
 crash. An interrupted or unknown outcome requires recovery/reconciliation; the
@@ -349,6 +378,10 @@ from a live provider. Keep credentials and raw transcripts out of commits.
       are visible without changing the other client's draft or selection.
 - [ ] A session idles/parks, then accepts another turn while UI controls refresh.
 - [ ] A slow acknowledgement does not freeze input or retarget a queued send.
+- [ ] Composer clears immediately, a pending bubble indicates delivery, and a
+      late acknowledgement cannot erase a newer identical draft.
+- [ ] A lost rejection is recovered as a rejection; explicit retry uses a new
+      ID, while an uncertain result keeps the original ID and exact payload.
 - [ ] Repeating the exact uncertain command uses its existing ID and produces
       one accepted input. Reusing the ID for changed contents fails.
 - [ ] Detaching/closing TUI leaves a bounded running task alive; reconnect catches
@@ -370,7 +403,7 @@ testing the actual TUI's event loop and rendering.
 ## Outside this handoff
 
 Event-log-only runtime recovery, replay of compaction from an authoritative
-`events.jsonl`, direct history editing, execution migration between machines,
+`events.jsonl`, direct event-file editing, execution migration between machines,
 native device capabilities and multi-device voice arbitration remain separate
 work. They are not prerequisites for the first connected TUI text client.
 The current contract preserves existing persistence and ownership; it does not
