@@ -17,6 +17,12 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    for custom controls. Capture `getEditVersion()` and pass `{commit: version}`
    only to the write that saves that unfinished input; unrelated events never
    acknowledge it. Keep failed saves locally with a visible Save/Retry control.
+   Edit versions cover the whole surface: with multiple editable fields, use
+   one serialized pending-field save path that captures all unfinished values
+   and their version together. A palette/color click cannot acknowledge a
+   pending note or failed sketch. Preserve failed local strokes when drawing
+   again, and preserve pending field values after focus changes. Sliders must
+   participate in the same save path.
 4. Inspect current state and both revisions before acting as the user or
    refining the design. Use `canvas.apps.event` for the same interaction as a
    click. Revision conflicts require reconciliation, not blind overwrite.

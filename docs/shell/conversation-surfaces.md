@@ -89,6 +89,17 @@ Existing surfaces that relied on implicit save acknowledgement must pass an
 explicit commit version. Without it the host conservatively retains unsaved
 input protection. Ordinary shared-state writes remain compatible.
 
+The edit version covers the **whole surface**, not an individual control. A
+palette click must not acknowledge a pending note or failed drawing save. For
+multiple editable controls, keep a map of pending fields and serialize saves:
+capture every pending field and the edit version together, then submit one
+`patch(fields, {commit})`. Retain fields edited after that capture and retain
+all failed writes for explicit retry. Do not flush while a pointer stroke is
+unfinished. Render pending field values even after focus moves elsewhere.
+Single-field events may omit `commit`; only the complete save acknowledges the
+surface's unfinished work. Every editable field, including sliders, needs this
+save path. Never replace a failed local drawing when starting another stroke.
+
 State and event calls resolve with an acknowledged snapshot. Display errors;
 do not silently retry a rejected edit over someone else's change. Avoid
 replacing the active text field with older acknowledged text while the user
@@ -186,6 +197,8 @@ being drawn may stay local temporarily. Keep stroke data within the state/event
 limits; bound/simplify point lists and commit completed strokes in batches.
 
 ```javascript
+// Single editable field example. With other editable controls, use the shared
+// pending-field save path above so a drawing save cannot acknowledge them.
 let local = null;
 let pendingSave = false;
 const painter = canvasApp.observeCanvas(canvas, ({context, width, height}) => {
@@ -195,10 +208,11 @@ const painter = canvasApp.observeCanvas(canvas, ({context, width, height}) => {
 });
 function beginStroke() {
   canvasApp.beginEdit();
-  local = structuredClone(canvasApp.getSnapshot().app.state.strokes);
+  local ??= structuredClone(canvasApp.getSnapshot().app.state.strokes);
   // Append normalized points to local, then painter.redraw() while drawing.
 }
 async function saveDrawing() {
+  if (pendingSave) return; // Retain new edits; expose Save/Retry until saved.
   const commit = canvasApp.getEditVersion();
   const strokes = structuredClone(local);
   pendingSave = true;
