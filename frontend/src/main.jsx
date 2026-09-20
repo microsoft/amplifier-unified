@@ -102,7 +102,7 @@ function App(){
   };
   const navigation=['session.select','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
-  const exactReview=action==='attention.read'&&args.ids?.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
+  const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
   const queue=navigation?navigationQueue:exactReview?reviewQueue:commandQueue;
   const promise=queue.current.then(execute,execute).catch(error=>{if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(settleTracking);queue.current=promise.catch(()=>{});return promise;
  },[acceptState,handleEffects]);
