@@ -9,8 +9,8 @@ const session={id:'native-chat',sessionKind:'root',title:'Native project chat',w
 const child={id:'child-chat',sessionKind:'worker',parentId:'native-chat',nativeParentId:'native-chat',title:'Saved worker',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:false,messages:[],historyReadOnlyReason:'This is a saved worker conversation. Open its parent chat to continue.'};
 let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true},sessions:[session,child],workspaces:[{id:'project',name:'Fixture project',path:'/fixture',available:true}],selectedSessionId:session.id,selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
 state.sessions.push(...Array.from({length:4998},(_,i)=>({...child,sessionKind:'root',parentId:null,nativeParentId:null,id:'summary-'+i,title:'Indexed conversation '+i,historyLoaded:false,historyReadOnlyReason:null})));
-// A previously saved Converge skin must not restore truncation of the full path.
-state.theme={name:'Converge',css:'#amp-one .a-nav-workspace-path>span{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}'};
+// A previously saved custom skin must not restore truncation of the full path.
+state.theme={name:'Saved custom skin',css:'#amp-one .a-nav-workspace-path>span{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}'};
 state.workspaceExplorer={path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:1,rows:[{path:'/fixture',name:'fixture',workspaceId:'project',chatCount:4999,canBrowse:false,unread:0}]};
 const calls=[],errors=[];
 let browser,vite;

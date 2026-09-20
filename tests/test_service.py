@@ -113,13 +113,32 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
 
 async def test_skin_roundtrip_and_external_assets_rejected(service):
     css = '#amp-one {color: #4338f4; background: #e8eeff;}'
-    await service.dispatch("theme.apply", {"name": "Converge custom", "css": css}, origin="agent")
+    await service.dispatch("theme.apply", {"name": "Custom violet", "css": css}, origin="agent")
     exported = await service.dispatch("theme.export", {})
     assert exported["effects"][0]["content"] == css
     for bad in ['@import "https://example.com/a.css";', '#amp-one {background:url("https://example.com/x")}']:
         with pytest.raises(AppError):
             validate_theme(bad)
     assert service.get_state()["theme"]["css"] == css
+
+
+async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_path, monkeypatch):
+    saved = {"name": "Saved studio skin", "css": "/* Private palette */ #amp-one {--a-accent: #765432;}"}
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    await app.dispatch("theme.apply", saved, origin="agent")
+    await app.close()
+
+    replacement = "#amp-one {--a-accent: #123456;}"
+    monkeypatch.setattr(AppService, "default_theme", lambda self: replacement)
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        assert restored.get_state()["theme"] == saved
+        exported = await restored.dispatch("theme.export", {}, origin="agent")
+        assert exported["effects"][0]["content"] == saved["css"]
+        await restored.dispatch("theme.reset", {}, origin="ui")
+        assert restored.get_state()["theme"] == {"name": "Amplifier Unified", "css": replacement}
+    finally:
+        await restored.close()
 
 
 async def test_device_observation_and_agent_effect_delivery(service):

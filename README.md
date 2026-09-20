@@ -277,7 +277,7 @@ For a reproducible large-library benchmark, see the
 HTTP actions, state size, SSE traffic and settings click latency using disposable
 history, without starting model work or reading personal conversations.
 
-Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Converge skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
+Skins are complete self-contained CSS files. The Appearance panel imports, edits and exports skins. The supplied Amplifier Unified skin includes the Amplifier logo and blue/lilac surfaces. Device permission dialogs are still handled by the browser. Tool actions that specifically request human approval remain human approvals.
 
 The server accepts only configured Hosts and exact public origins, rejects
 cross-site requests, and does not use `X-Forwarded-*` headers. Remote hosting
