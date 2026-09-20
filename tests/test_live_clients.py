@@ -293,3 +293,22 @@ async def test_python_terminal_adapter_uses_real_http_without_owning_runtime(aut
         current = await client.snapshot(identity)
         assert sum(message["text"] == "Terminal input" for message in current["session"]["messages"]) == 1
     assert len(runtime.sent) == 1 and runtime.stopped == []
+
+
+async def test_shared_configuration_refresh_invalidates_all_client_views(live):
+    from amplifier_web.preferences import SettingsStore
+    service, first, _ = live
+    for client in ("browser-a", "browser-b"):
+        await command(service, client, "session.select", {"id": first})
+        await command(service, client, "view.update", {"patch": {"draft": client + " private draft"}})
+        snapshot(service, client)  # Populate independent cached projections.
+    SettingsStore(service.data_dir).update(service.default_workspace, "global",
+        lambda settings: settings.update(bundle={"active": "changed-by-cli"}))
+    for client in ("browser-a", "browser-b"):
+        current = snapshot(service, client)
+        assert current["settings"]["bundle"] == "changed-by-cli"
+        assert current["view"]["draft"] == client + " private draft"
+    result = await command(service, "browser-a", "session.create", {})
+    created = next(row for row in result["state"]["sessions"] if row["id"] == result["state"]["selectedSessionId"])
+    assert created["bundle"] == "changed-by-cli"
+    assert snapshot(service, "browser-b")["selectedSessionId"] == first
