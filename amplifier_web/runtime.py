@@ -463,6 +463,30 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
+    async def quiesce_for_handoff(self, session, request_id):
+        """Save and release a known local writer before moving execution cwd."""
+        from amplifier_foundation.session import SharedSessionStore, SessionBusyError, request_release
+        sid = session['id']
+        store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+        async with self._admission(sid):
+            row = self.workers.get(sid)
+            try:
+                held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
+            except SessionBusyError as busy:
+                if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
+                    raise SessionInUseError(busy.owner) from None
+                result = await request_release(store, expected_owner=busy.owner, request_id=request_id, requester_app='Unified checkout handoff', timeout=30)
+                if result.status != 'released':
+                    raise RuntimeError(f'Checkout handoff could not confirm saved writer release ({result.status}). {result.message}')
+                held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
+            try:
+                # Parked workers already saved before relinquishing their lock.
+                # A released worker cannot write while this proof handle is held.
+                await self.stop(sid)
+                return {'quiesced': True, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
+            finally:
+                await asyncio.to_thread(held.release)
+
     async def approval(self, session_id, approval_id, decision):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)
 

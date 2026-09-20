@@ -394,7 +394,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, resolved_root=None, **kwargs):
+                          write_guard=None, resolved_root=None, execution_workspace=None, **kwargs):
     from amplifier_foundation import SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -409,7 +409,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
     # remain the community data root, including for mounted CI logging hooks.
-    os.chdir(config.workspace)
+    execution_workspace = Path(execution_workspace or config.workspace).expanduser().resolve(strict=True)
+    os.chdir(execution_workspace)
     from ..session_files import capture_dir
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
@@ -506,8 +507,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     session = None
     try:
         session = await prepared.create_session(session_id=runtime.session_id,
-            session_cwd=config.workspace, approval_system=approvals, is_resumed=messages is not None)
+            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        coordinator.register_capability('web.history_workspace', str(config.workspace))
         coordinator.register_capability("live.runtime", runtime)
         coordinator.register_capability("live.jobs", jobs)
         coordinator.register_capability("live.recovered_jobs", [row["job_id"] for row in recovered])
@@ -607,6 +609,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "module_load_failures": failures}
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
+        report["execution_workspace"] = str(execution_workspace)
         write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
         registry.save()
         return session, runtime, report

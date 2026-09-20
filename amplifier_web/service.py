@@ -201,6 +201,8 @@ from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
 from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
+from .worktrees import definitions as worktree_definitions
+ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -332,6 +334,8 @@ class AppService:
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
+        from .worktrees import Worktrees
+        self.worktrees = Worktrees(self)
         self._refresh_shared_preferences()
         self._save()
 
@@ -422,6 +426,7 @@ class AppService:
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
     def _save(self):
+        self.worktrees.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -590,6 +595,12 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
+        if action.startswith('worktree.'):
+            try:
+                result = await self.worktrees.dispatch(action, args, origin, command_id)
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
@@ -1677,6 +1688,10 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            if args['action'].startswith('worktree.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Worktree actions must target the calling task.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
             if args['action'].startswith('canvas.apps.'):
@@ -1786,6 +1801,7 @@ class AppService:
 
     async def close(self):
         self.closed = True
+        await self.worktrees.close()
         await self.warmup.close()
         await self.history.close()
         if self.update_manager:
