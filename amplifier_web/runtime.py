@@ -49,7 +49,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
-        allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
+        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure")
         return "execution.event", {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
     if kind == "runtime.activity":

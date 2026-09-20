@@ -161,6 +161,10 @@ ACTION_DEFINITIONS.update(operation_definitions())
 from .computation import definitions as computation_definitions
 ACTION_DEFINITIONS.update(computation_definitions())
 
+from .capacity import definitions as capacity_definitions
+ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
+
+
 class AppError(Exception):
     def __init__(self, message, status=400, *, code=None):
         super().__init__(message)
@@ -314,6 +318,8 @@ class AppService:
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
         from .session_ownership import restore
         for session in self.state["sessions"]:
+            from .capacity import restore_observation
+            restore_observation(session)
             restore(session)
             session["configurationBusy"]=False
             if session.get("bundleChange", {}).get("phase") == "working":
@@ -620,7 +626,7 @@ class AppService:
                 raise AppError('Select a conversation first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
-        if action == 'runtime.control' and args.get('operation', '').startswith('task.'):
+        if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
         if action.startswith("smartTools."):
@@ -652,6 +658,9 @@ class AppService:
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
+        if action.startswith("capacity."):
+            from .capacity import dispatch as capacity_dispatch
+            return await capacity_dispatch(self, action, args, origin, command_id, include_state)
         if action.startswith('task.'):
             from .task_continuity import dispatch as task_dispatch
             return await task_dispatch(self, action, args, origin, command_id, include_state)
@@ -1835,6 +1844,9 @@ class AppService:
                     result = self.surface_context.manifest(session_id, bindings)
                     return {**result, 'inputIds': args.get('_contextInputs', [])}
                 return self.surface_context.read(session_id, args, bindings)
+        if operation == "capacity.admit":
+            from .capacity import admission
+            return await admission(self, session_id, args)
         if operation == "history":
             from .history_query import query_history
             return await query_history(self, args, session_id)
@@ -1851,7 +1863,7 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action'].startswith(('question.', 'task.', 'schedule.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith('task.')):
+            if args['action'].startswith(('question.', 'task.', 'schedule.', 'capacity.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id

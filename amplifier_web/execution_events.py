@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 from functools import wraps
 import math
+import inspect
 import json
 import time
 import uuid
@@ -24,17 +25,21 @@ def public_usage(value):
     result = {}
     for source, target in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"),
                            ("cache_read_tokens", "cacheReadTokens"), ("cache_write_tokens", "cacheWriteTokens"),
-                           ("total_tokens", "totalTokens")):
+                           ("total_tokens", "totalTokens"), ("reasoning_tokens", "reasoningTokens")):
         number = value.get(source)
         if isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number) and number >= 0:
             result[target] = int(number)
     if "totalTokens" not in result and "inputTokens" in result and "outputTokens" in result:
         result["totalTokens"] = result["inputTokens"] + result["outputTokens"]
     try:
+        if isinstance(value["cost_usd"], bool):
+            raise ValueError()
         cost = float(value["cost_usd"])
         if not math.isfinite(cost) or cost < 0:
             raise ValueError()
-        result.update(costUsd=cost, costType="reported")
+        result.update(costUsd=cost, costType="estimated" if value.get("cost_type") == "estimated" else "reported")
+        if value.get("cost_source"):
+            result["costSource"] = str(value["cost_source"])[:300]
     except (KeyError, TypeError, ValueError):
         result["costType"] = "unavailable"
     return result
@@ -43,13 +48,17 @@ def public_usage(value):
 class ExecutionEvents:
     def __init__(self, root_id, emit):
         self.root_id, self.emit = root_id, emit
+        self.producer_id = str(uuid.uuid4())
         self.turn_id = None
         self.calls = {}
         self.children = {}
         self.requests = weakref.WeakKeyDictionary()
         self.nodes = {}
+        self.admission_guard = None
+        self.provider_wrappers = {}
 
     def publish(self, row):
+        row = {**row, "revision": self.nodes.get(row["id"], {}).get("revision", 0) + 1}
         self.nodes[row["id"]] = row
         self.emit({"type": "execution.event", "event": dict(row)})
 
@@ -91,23 +100,30 @@ class ExecutionEvents:
         arrival order. SDK hook events still supply retry status through the
         task-local call identity inherited by their dispatch tasks.
         """
+        if id(provider) in self.provider_wrappers:
+            return self.provider_wrappers[id(provider)]
         if getattr(provider,"_amplifier_web_observed",False):
-            return
+            return provider
         original = getattr(provider,"complete",None)
         if not callable(original):
-            return
+            return provider
         @wraps(original)
         async def complete(request, **kwargs):
             parent,turn = self.parent(sid)
             purpose=CALL_PURPOSE.get()
             if purpose:parent,turn=None,purpose.get('turnId',turn)
             info = provider.get_info()
-            defaults = getattr(info,"defaults",{}) or {}
+            if inspect.isawaitable(info):
+                info = await info
+            defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info,"defaults",{})) or {}
+            provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
             row = {"id":"llm:"+str(uuid.uuid4()),"parentId":parent,"turnId":turn,"sessionId":sid,
-                   "rootSessionId":self.root_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
-                   "provider":str(getattr(info,"id",type(provider).__name__))[:160],
+                   "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":purpose["label"] if purpose else "Model call",
+                   "provider":str(provider_id)[:160],
                    "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
                    "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
+            if self.admission_guard:
+                await self.admission_guard(row)
             token = CURRENT_CALL.set(row["id"])
             self.publish(row)
             try:
@@ -127,7 +143,16 @@ class ExecutionEvents:
             provider.complete = complete
             provider._amplifier_web_observed = True
         except (AttributeError,TypeError):
-            return
+            # Immutable provider instances still get the same authoritative
+            # complete boundary via the host's ordinary provider registry.
+            class ObservedProvider:
+                _amplifier_web_observed = True
+                def __getattr__(self, name): return getattr(provider, name)
+            wrapper = ObservedProvider()
+            wrapper.complete = complete
+            self.provider_wrappers[id(provider)] = wrapper
+            return wrapper
+        return provider
 
     def hook(self, sid, event, data):
         if data.get("session_id", sid) != sid:

@@ -121,6 +121,12 @@ class Worker:
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
         if coordinator.get_capability("web.activity"):
+            # Live provider edits may mount a new immutable instance after the
+            # hooks were installed. Preserve its admission wrapper as well.
+            if self.telemetry:
+                providers = coordinator.get("providers") or {}
+                for name, provider in list(providers.items()):
+                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
         async def observe_operation(event):
@@ -148,8 +154,9 @@ class Worker:
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
-            for provider in (coordinator.get("providers") or {}).values():
-                self.telemetry.instrument_provider(coordinator.session_id, provider)
+            providers = coordinator.get("providers") or {}
+            for name, provider in list(providers.items()):
+                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -256,6 +263,8 @@ class Worker:
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
+            self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {"call": row})
+            self.telemetry.admission_guard = self.controls.capacity.guard
             # Preserve app controls on native mounts. A legacy common snapshot
             # retains its previous restoration policy during one-time recovery.
             if report.get("history_source") != "legacy-checkpoint":
@@ -306,7 +315,7 @@ class Worker:
                         from amplifier_web.surface_delivery import SurfaceProvider
                         delivery = coordinator.get_capability('web.surface_delivery')
                         runtime, selected, scope = result
-                        return runtime, {name: SurfaceProvider(value, delivery) for name, value in selected.items()}, scope
+                        return runtime, {name: SurfaceProvider(host.telemetry.instrument_provider(coordinator.session_id, value), delivery) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing

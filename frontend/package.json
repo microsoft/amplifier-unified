@@ -58,7 +58,8 @@
     "test:coordination-browser": "node tests/coordination-browser.mjs",
     "test:schedules-browser": "node tests/schedules-browser.mjs",
     "test:voice-visual-browser": "node tests/voice-visual-browser.mjs",
-    "test:toolbar-browser": "node tests/app-toolbar-browser.mjs"
+    "test:toolbar-browser": "node tests/app-toolbar-browser.mjs",
+    "test:capacity-browser": "node tests/capacity-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

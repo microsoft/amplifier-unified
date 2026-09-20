@@ -124,6 +124,10 @@ def trim_execution(session, previous, message_id):
         tree['turns'] = [row for row in tree.get('turns', []) if row.get('anchorMessageId') not in removed
                          and row.get('inputId') not in discarded_inputs]
         kept = {row['id'] for row in tree['turns']}
+        # Editing visible history cannot erase already incurred model usage.
+        # Transfer receipts out of the visible tree; do not create a second ledger.
+        tree.setdefault('retiredUsageNodes', []).extend(row for row in tree.get('nodes', [])
+            if row.get('turnId') not in kept and row.get('kind') in {'llm', 'worker'} and not row.get('nativeHistory'))
         tree['nodes'] = [row for row in tree.get('nodes', []) if row.get('turnId') in kept]
         tree['currentTurnId'] = None
         tree['aggregateUsage'] = rollup([row for row in tree['nodes'] if row.get('kind') == 'llm'])

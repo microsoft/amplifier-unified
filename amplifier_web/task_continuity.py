@@ -72,6 +72,9 @@ class TaskController:
     async def continuation_allowed(self):
         self.apply()
         task = self.record()
+        capacity = getattr(self.controls, "capacity", None)
+        if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
+            return False
         return task is None or (task["status"] == "active" and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
 
     async def boundary(self, event, data):
