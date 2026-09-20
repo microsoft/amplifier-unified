@@ -408,3 +408,14 @@ native device capabilities and multi-device voice arbitration remain separate
 work. They are not prerequisites for the first connected TUI text client.
 The current contract preserves existing persistence and ownership; it does not
 claim those future recovery mechanisms are implemented.
+
+
+### Canonical names across standalone and connected clients
+
+Use `session.rename` for an attached client. The host persists the name in native
+`metadata.json`, and list/detail projections reflect later standalone CLI renames.
+Do not create a TUI naming sidecar. Standalone hosts should adopt Foundation's
+`SessionMetadataStore` and checkpoint metadata merging; common scoped settings
+I/O is available in `amplifier_foundation.settings`. An empty composer does not
+create a native execution session solely to store its title. Once native state
+exists, the provisional or generated title is visible to CLI readers as well.

@@ -123,9 +123,16 @@ class SessionStore:
     def save(self, session_id, messages, metadata, *, preserve_system=False):
         history = self.history(session_id)
         rows = [copy.deepcopy(m if isinstance(m, dict) else m.model_dump()) for m in messages]
-        from ..naming import read
+        from ..naming import adopt, initial_name
         previous = history.load_metadata()
-        saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {}), **read(history.session_dir)})
+        saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {})})
+        if not previous.get('name'):
+            title, source, legacy, view = initial_name(history.session_dir)
+            if isinstance(title, str) and title.strip():
+                saved_metadata.update(name=title.strip()[:200], name_source=source)
+                description = legacy.get('description') or view.get('description')
+                if isinstance(description, str) and description.strip():
+                    saved_metadata.setdefault('description', description)
         saved_metadata.update({"session_id": session_id, "updated_at": time.time(), "host": "amplifier-unified"})
         if saved_metadata.get('bundle_name'):
             saved_metadata['bundle'] = saved_metadata['bundle_name']
@@ -144,10 +151,12 @@ class SessionStore:
             except (TypeError, ValueError):
                 unchanged = False  # Normal save supplies Foundation validation.
             if unchanged and not any(item.source == 'transcript' or item.code == 'changed_during_read' for item in current.diagnostics):
-                history.save_metadata(saved_metadata)
+                history.save_metadata(saved_metadata, merge_metadata=True)
+                adopt(history.session_dir)
                 return
         history.save(rows, saved_metadata,
-                     preserve_system=keep_system)
+                     preserve_system=keep_system, merge_metadata=True)
+        adopt(history.session_dir)
 
     def load(self, session_id):
         """Read native history first, without migrating or writing while browsing."""

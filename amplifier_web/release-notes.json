@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.4",
+      "title": "Keep conversation names consistent across apps",
+      "changes": [
+        "Web-created conversations now store their names where the Amplifier CLI reads them. Existing web names are adopted when a shared name is missing.",
+        "Renames from either interface remain visible when switching back. Background naming and later saves preserve your explicit choice, without changing saved messages or event history.",
+        "Unified and the updated CLI use Foundation for shared metadata and settings. Native session settings are included when the CLI resumes a conversation."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.3",
       "title": "Canvas within reach",
       "changes": [
