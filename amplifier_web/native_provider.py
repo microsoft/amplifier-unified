@@ -4,6 +4,7 @@ import json
 import inspect
 import time
 import uuid
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from .host.config import app_home, write_private
@@ -96,7 +97,12 @@ class NativeProviderHost:
             await checkpoint()  # Originals are durable before deriving any state.
         canonical = await self.coordinator.get("context").get_messages()
         revision = copy.deepcopy(canonical)
-        result = await self.provider.native_compact(canonical=canonical, identity=self.identity)
+        observe = self.coordinator.get_capability("web.provider_call")
+        if not callable(observe):
+            raise ValueError("Native compaction capacity accounting is unavailable")
+        result = await observe(self.provider, SimpleNamespace(model=self.identity["model"]),
+            lambda: self.provider.native_compact(canonical=canonical, identity=self.identity),
+            label="Compact provider context")
         if await self.coordinator.get("context").get_messages() != revision or self.selected_identity() != self.identity:
             self.provider._discard_checkpoint("history_changed_during_compaction")
             raise ValueError("History changed during compaction; provider state was discarded")
@@ -135,7 +141,8 @@ async def install_native(loop, coordinator, providers):
     from amplifier_module_loop_live.scope import LIVE_OWNER
     def owned_loop():
         owner = LIVE_OWNER.get()
-        return owner if getattr(owner, "coordinator", None) is coordinator else None
+        return owner if (getattr(owner, "coordinator", None) is coordinator
+                         and host.selected_identity() == host.identity) else None
     host.identity = identity
     host.provider = NativeResponsesProvider.wrap(original, owner_getter=owned_loop, lifecycle=host.lifecycle)
     if host.state.get("outcome") in {"unknown", "pending"}:
