@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.17.2",
+      "title": "Use the shared Amplifier CLI session ID",
+      "changes": [
+        "Chat flyouts show and copy one Session ID matching Amplifier CLI, including chats first created in the CLI. Internal app keys are no longer labeled as session IDs in the flyout.",
+        "Find chats by their shared session ID or its prefix. Conversation details use the same ID, and the flyout clarifies that CLI session lists belong to the shown workspace.",
+        "Existing session files, saved history, pins and selection are preserved."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.17.1",
       "title": "Work patch editing and clearer conversation recovery",
       "changes": [

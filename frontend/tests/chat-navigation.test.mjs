@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE} from '../src/chat-navigation.js';
 const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture',available:true},{id:'other',path:'/other',available:true}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
 
+test('shared CLI IDs are searchable without replacing internal keys',()=>{
+ const state=fixture();
+ state.sessions=[{id:'internal-import',runtimeSessionId:'2c88c45f-native',workspaceId:'project'},
+  {id:'other-import',nativeIdentity:'2c88c45f-native',workspaceId:'other'},
+  {id:'ae543fd8-unified',workspaceId:'project'}];
+ state.view={navChatScope:'all',navFilter:'2c88c45f'};state.pinnedSessionIds=['internal-import'];
+ const before=structuredClone(state);
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['internal-import','other-import']);
+ assert.deepEqual(state,before);
+ state.view.navChatScope='workspace';
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['internal-import']);
+ state.view.navFilter='ae543fd8';
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['ae543fd8-unified']);
+});
+
 test('workspace navigation includes only verified folders without discarding registrations',()=>{
  const workspaces=[
   {id:'a',name:'project',path:'/Users/me/work/project',available:true},
