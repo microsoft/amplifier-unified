@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.15.3",
+      "title": "Conversation export, execution details and feedback follow-up",
+      "changes": [
+        "Copy or download a whole conversation as Markdown, including older saved messages, code, voice transcripts and artifact references. JSON export remains available.",
+        "Read complete assistant replies automatically and expand public tool inputs, results and errors. Live timers and usage distinguish pending work from unavailable measurements, including background conversation naming.",
+        "Read reports submitted through this host and append follow-up comments to reports owned by its signed-in GitHub account. Drafts and selected reports stay separate between browsers, and retrying a comment does not post it twice."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.15.2",
       "title": "Switch bundles without a required preview",
       "changes": [
