@@ -49,6 +49,12 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
+      - name: Verify first launch with empty storage
+        if: hashFiles('frontend/tests/empty-host-browser.mjs') != ''
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:empty-host-browser
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
