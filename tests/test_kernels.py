@@ -462,3 +462,23 @@ async def test_start_policy_denial_releases_capacity_without_orphan_receipts(tmp
     assert kernels.records == {}
     assert all(row["state"] == "failed" for row in journal.list("s"))
     journal.close()
+
+
+async def test_only_explicit_create_prepares_owner_never_passive_reads_or_old_cells(host):
+    ensure = AsyncMock()
+    host.management = SimpleNamespace(ensure_runtime=ensure, setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    sid = host._session()['id']
+    kernel = (await host.dispatch('kernels.create', {'sessionId': sid, 'language': 'python'}))['result']
+    ensure.assert_awaited_once()
+    assert ensure.await_args.args[0]['id'] == sid
+    await host.dispatch('kernels.list', {'sessionId': sid})
+    await host.dispatch('kernels.status', {'sessionId': sid, 'kernelId': kernel['id']})
+    cell = (await host.dispatch('kernels.execute', {'sessionId': sid, 'kernelId': kernel['id'],
+        'generation': kernel['generation'], 'code': '42'}))['result']
+    await host_done(host, sid, cell['id'])
+    ensure.assert_awaited_once()
+    host.operations.journal.recover()
+    with pytest.raises(AppError, match='original kernel is unavailable'):
+        await host.dispatch('kernels.execute', {'sessionId': sid, 'kernelId': kernel['id'],
+            'generation': kernel['generation'], 'code': '42'})
+    ensure.assert_awaited_once()

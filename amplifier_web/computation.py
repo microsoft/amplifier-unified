@@ -232,6 +232,10 @@ async def dispatch(service, action, args, origin):
                     service.questions.answer_for_dependency(sid, question_id)
             if service.runtime is None:
                 raise ValueError("A mounted conversation runtime is required")
+            if verb == "create" and service.management is not None:
+                # Explicit creation may start a fresh owner after Stop. Existing
+                # generation actions must never restart/replay a lost kernel.
+                await service.management.ensure_runtime(session)
             payload = {key: value for key, value in args.items() if key != "sessionId"}
             response = await service.runtime.control(
                 sid, action, {**payload, "actor": origin}
@@ -243,5 +247,5 @@ async def dispatch(service, action, args, origin):
                 )
             result = result["output"]
         return {"accepted": True, "result": result, "effects": []}
-    except (TypeError, ValueError, KeyError) as exc:
+    except (TypeError, ValueError, KeyError, RuntimeError) as exc:
         raise AppError(str(exc), 409) from exc
