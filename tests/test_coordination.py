@@ -202,10 +202,10 @@ async def test_attention_wakes_without_selecting_and_keeps_task_identity_separat
     pending = asyncio.create_task(wait(app, after(baseline), waitMs=1000))
     await asyncio.sleep(.01)
     app.state.setdefault("runtimeControl", {})[sid] = {"task.get": {"task": {"id": "saved-task", "status": "active", "revision": 3}}}
-    app._session(sid)["questions"] = [{"id": "question-one", "status": "pending"}]
-    app._publish()
+    response = await app.dispatch("question.create", {"sessionId": sid, "prompt": "Choose the report color", "required": True, "dependency": "report", "allowFreeText": True})
+    question_id = response["result"]["id"]
     result = (await pending)["targets"][0]
-    assert result["attention"] and result["questionIds"] == ["question-one"]
+    assert result["attention"] and result["questionIds"] == [question_id]
     assert result["taskId"] == "saved-task" and result["target"]["sessionId"] == sid
     assert app.state["selectedSessionId"] != sid
 

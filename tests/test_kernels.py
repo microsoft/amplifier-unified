@@ -196,7 +196,7 @@ async def test_restart_keeps_cells_but_cannot_replay_or_resume_variables(
 @pytest.fixture
 async def host(tmp_path):
     pytest.importorskip("amplifier_module_tool_bash")
-    from tests.fixtures.computation_runtime import Runtime
+    from fixtures.computation_runtime import Runtime
 
     app = AppService(tmp_path, workspace=tmp_path)
     await app.dispatch("session.create", {})
@@ -313,7 +313,7 @@ async def test_required_question_blocks_only_exact_dependent_cell(host):
             raise AppError("Question unanswered", 409, code="question_unanswered")
         return {"value": "yes"}
 
-    host.questions = SimpleNamespace(answer_for_dependency=guard)
+    host.questions.answer_for_dependency = guard
     args = {
         "sessionId": sid,
         "kernelId": kernel["id"],
@@ -393,7 +393,7 @@ async def test_question_dependency_rechecked_after_code_approval(host):
             raise AppError("Question was superseded", 409)
         return {"value": "yes"}
 
-    host.questions = SimpleNamespace(answer_for_dependency=guard)
+    host.questions.answer_for_dependency = guard
 
     async def approval(data):
         nonlocal answered
