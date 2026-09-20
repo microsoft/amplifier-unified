@@ -14,8 +14,9 @@ const patch=(act,value)=>act('view.update',{patch:value});
 export function reopenCanvas(state,act){
  return act('canvas.reopen',{});
 }
-export function CanvasToggle({state,act}){
- return <button type="button" className="a-icon" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><PanelRight/></button>;
+export function CanvasToggle({state,act,layout}){
+ const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight;
+ return <button type="button" className="a-soft a-canvas-toggle" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><Icon/><span>Canvas</span></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell}){
  const layout=usePanelLayout(state,act);
@@ -31,7 +32,6 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell}
    <button className="a-nav-main" type="button" onClick={add} data-action="session.create" disabled={!workspace} aria-label="New chat in workspace" title={!workspace?'Choose an existing workspace folder':'New chat in '+workspace.path}><Plus/><span className="a-nav-reveal">New chat</span></button>
    {manager&&<button className="a-nav-main" type="button" onClick={addWorkspace} data-action="view.update" aria-label="New workspace" title="New workspace"><FolderPlus/><span className="a-nav-reveal">New workspace</span></button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>
-   <div className="a-nav-bottom"><button className="a-nav-main" type="button" data-action="canvas.reopen" aria-label="Open workspace canvas" title="Canvas" onClick={()=>reopenCanvas(state,act)}><PanelRight/><span className="a-nav-reveal">Canvas</span></button></div>
   </div>
   {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
  </aside>;
@@ -79,7 +79,7 @@ export function AgentCanvas({state,act,dispatch=act}){
  },[focused]);
  if(!canvas.open)return null;
  const latestEvent=canvas.events?.at(-1);
- return <aside ref={panel} className="a-canvas-panel" data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
+ return <aside ref={panel} id="workspace-canvas" className="a-canvas-panel" data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
   onPointerOut={e=>{if(e.pointerType!=='touch'&&inControls(e.target)&&!inControls(e.relatedTarget)&&!inControls(document.activeElement))collapseControls()}}
   onBlur={e=>{if(inControls(e.target)&&!inControls(e.relatedTarget)&&!panel.current?.querySelector(controlRegions.split(',').map(selector=>selector+':hover').join(',')))collapseControls()}}>
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}

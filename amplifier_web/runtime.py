@@ -46,7 +46,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == 'runtime.ownership':
         return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:
-        return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs') if key in event}}
+        return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",

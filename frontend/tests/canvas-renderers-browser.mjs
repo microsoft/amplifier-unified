@@ -56,7 +56,7 @@ try{
  await expect.poll(async()=>(await view('primary')).activation?.status).toBe('ready');
  await page.getByRole('combobox',{name:'Reader text size'}).selectOption('22');
  await expect.poll(async()=>(await view('primary')).view.readerScale).toBe(22);
- await page.getByRole('button',{name:'Customize appearance'}).click();
+ await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
  await page.locator('#scheme').selectOption('dark');await page.locator('#layout').selectOption('work');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.equal(await side.frameLocator('iframe').getByRole('textbox',{name:'Viewer note'}).inputValue(),'Still here');

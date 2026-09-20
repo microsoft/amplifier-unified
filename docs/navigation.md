@@ -1,5 +1,20 @@
 # Workspace and chat navigation
 
+**Canvas** lives at the far right of the top toolbar. Its label and position stay
+fixed while its pressed state reflects whether the panel is open. On narrow
+screens it becomes an accessible icon button; the icon follows the selected
+canvas side. Closing the panel and using the toolbar both use `canvas.close`;
+opening uses `canvas.reopen`, retaining the existing artifact and dirty-edit
+protections. Artifact links continue to open the selected item directly.
+
+The toolbar's **More app options** disclosure holds Customize appearance, What
+the agent sees, and Send feedback. Keyboard users can tab through its controls;
+Escape restores focus to the trigger, and outside clicks or focus dismiss it.
+Feedback attention appears on the More trigger as well as the feedback entry.
+Agents can show or hide it through `view.update {patch:{toolbarMenuOpen:true}}`
+(or false), or open each destination directly through the existing `panel` field.
+Opening a dialog closes the disclosure. This is per-client presentation state.
+
 The default sidebar keeps one list in focus. **All chats** shows pinned and recent
 conversations across available workspaces. **Workspaces** opens a recent-workspace
 index or the existing folder browser. Selecting a workspace opens its chats;

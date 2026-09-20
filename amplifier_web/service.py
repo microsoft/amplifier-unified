@@ -330,12 +330,17 @@ class AppService:
         initialize(self.state)
         from .canvas_library import recover_legacy
         recover_legacy(self.state,self.db,self.data_dir)
-        from .naming import automatic,persist
+        from .naming import automatic,refresh
         for session in self.state['sessions']:
-            if session.get('historyManaged'):
-                continue
             session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
-            persist(self.data_dir,session)
+            try:
+                refresh(self.data_dir,session,migrate=True)
+            except (OSError, ValueError):
+                # A damaged session must not prevent the entire app starting.
+                # Native history diagnostics handle repair; never replace it
+                # with a stale display title during startup.
+                import logging
+                logging.getLogger(__name__).warning("Could not read a saved session name; original metadata retained.")
         from .feedback import Feedback
         self.feedback = Feedback(self)
         from .diagnostics import Diagnostics
@@ -871,6 +876,8 @@ class AppService:
                 session = self._new_session(args)
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state, session)
+                from .naming import persist
+                persist(self.data_dir,session,shared_rename=True)
                 self.state["sessions"].insert(0, session)
                 self.state["selectedSessionId"] = session["id"]
                 self.state["view"]["draft"] = ""
@@ -910,9 +917,10 @@ class AppService:
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
                 session=self._session(args['id'])
-                session.update(title=args['title'].strip(),titleSource='manual')
                 from .naming import persist
-                persist(self.data_dir,session,shared_rename=True)
+                renamed = {**session, 'title':args['title'].strip(), 'titleSource':'manual'}
+                persist(self.data_dir,renamed,shared_rename=True)
+                session.update({key:renamed[key] for key in ('title','titleSource','nativeNameSource','description') if key in renamed})
             elif action == 'session.takeover':
                 session = self._session(args['id'])
                 if not self.runtime:
@@ -1003,6 +1011,8 @@ class AppService:
                     self._activity(session,'queued','Generating from your edited message.',reset=True)
                     session['status']='working'
                     ensure_turn(session,input_id,text)
+                    from .naming import persist
+                    persist(self.data_dir,session,shared_rename=True)
                     self.state['sessions'].insert(0,session)
                     self.state['selectedSessionId']=session['id']
                     self.state['view']['messageEdit']=None
@@ -1026,6 +1036,8 @@ class AppService:
                     session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"), recovery=action == "session.recover"))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
+                from .naming import persist
+                persist(self.data_dir,session,shared_rename=True)
                 self.state["sessions"].insert(0, session)
                 self.state["selectedSessionId"] = session["id"]
                 self.state['view']['messageEdit']=None
@@ -1092,6 +1104,8 @@ class AppService:
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,delivery={'status':'sending'})
                 if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
+                from .naming import persist
+                persist(self.data_dir,session)
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
                 session["status"] = "working"
                 session.pop("error", None)
@@ -1157,7 +1171,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 allowed.update({'navArchive', 'navCollection'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
@@ -1167,7 +1181,7 @@ class AppService:
                 for key, minimum in (("canvasWidth", 300), ("navWidth", 216)):
                     if key in patch and (type(patch[key]) not in {int, float} or not minimum <= patch[key] <= 16384):
                         raise AppError(f"{key} must be between {minimum} and 16384 pixels.")
-                for key in ("navPinned", "navExpanded", "navWorkspaceAncestorsOpen", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded"):
+                for key in ("navPinned", "navExpanded", "navWorkspaceAncestorsOpen", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen"):
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
                 from .workspace_navigation import view_patch
@@ -1177,6 +1191,8 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 patch = copy.deepcopy(patch)
+                if patch.get('panel'):
+                    patch['toolbarMenuOpen'] = False
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
@@ -1608,13 +1624,13 @@ class AppService:
                 if automatic(session) and isinstance(name,str) and name.strip():
                     session.update(title=name.strip()[:200],titleSource='generated')
                 if isinstance(description,str) and description.strip():session['description']=description.strip()[:1000]
-                persist(self.data_dir,session)
+                persist(self.data_dir,session,expected_revision=payload.get('nameRevision'))
             elif kind == 'session.naming.progress':
-                from .naming import read
+                from .naming import legacy
                 from .host.storage import SessionStore
                 directory=SessionStore.for_app(self.data_dir,session['workspace']).directory(session.get('runtimeSessionId') or session['id'])
                 directory.mkdir(parents=True,exist_ok=True,mode=0o700)
-                data=read(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
+                data=legacy(directory);data['naming_completed_inputs']=payload.get('completedInputs',[])
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
