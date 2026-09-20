@@ -1,0 +1,45 @@
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/voice_visual_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+let browser;
+try {
+ const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timed out')),20000);fixture.once('exit',()=>reject(Error('Fixture exited')));fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const data=JSON.parse(line);if(data.url){clearTimeout(timer);resolve(data.url)}}catch{}}})});
+ browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.addInitScript(()=>{
+  class Peer extends EventTarget {constructor(){super();this.connectionState='new'} createDataChannel(){const channel=new EventTarget();channel.readyState='open';channel.close=()=>{};return channel}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(value){this.localDescription=value}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
+  window.RTCPeerConnection=Peer;
+  navigator.mediaDevices.getUserMedia=async()=>new MediaStream();
+  navigator.mediaDevices.getDisplayMedia=async()=>{
+   if(window.denyCapture)throw new DOMException('Synthetic denied permission','NotAllowedError');
+   const canvas=document.createElement('canvas');canvas.width=640;canvas.height=360;const c=canvas.getContext('2d');let n=0;
+   const draw=()=>{c.fillStyle='#eef2ff';c.fillRect(0,0,640,360);c.fillStyle='#172554';c.font='30px sans-serif';c.fillText('Synthetic screen acceptance',30,70);c.fillText('Frame '+n++,30,120)};draw();const timer=setInterval(draw,100),stream=canvas.captureStream(10),track=stream.getVideoTracks()[0];
+   Object.defineProperty(track,'label',{value:'Synthetic test window'});track.getSettings=()=>({displaySurface:'window'});track.addEventListener('ended',()=>clearInterval(timer));window.captureTrack=track;return stream;
+  };
+ });
+ await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+ await action('session.create',{});await page.getByRole('button',{name:'Start voice call',exact:true}).click();
+ await page.getByRole('button',{name:'Choose screen source',exact:true}).waitFor();
+ const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId),target={sessionId:sid,callId:'fixture-call'};
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
+ await page.evaluate(()=>window.denyCapture=true);await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeDisabled();
+ await page.evaluate(()=>window.denyCapture=false);await page.getByRole('button',{name:'Choose screen source',exact:true}).click();
+ await expect(page.getByText('Selected window: Synthetic test window',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Capture screen',exact:true}).click();
+ const inspect=()=>page.request.get(url+'/fixture').then(r=>r.json());await expect.poll(async()=>(await inspect()).receipts.length).toBe(1);
+ const capture=(await inspect()).receipts[0];assert.equal(capture.width,640);assert.equal(capture.height,360);assert.equal(capture.nativeForeground,false);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);assert.equal((await inspect()).sent.length,0);
+ await page.screenshot({path:'/tmp/amplifier-voice-visual.png',fullPage:true});
+ await new Promise(r=>setTimeout(r,2100));
+ const agent=await page.request.post(url+'/fixture/agent',{data:{action:'voice.visual.capture',args:target,id:'agent-capture-one'}});assert.equal(agent.status(),200);assert.equal((await agent.json()).result.source.label,'Synthetic test window');
+ await page.getByRole('button',{name:'Stop screen sharing',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
+ assert.equal((await action('voice.visual.status',target)).result.available,false);
+ await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
+ await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
+ await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');assert.deepEqual(errors,[]);
+ console.log('Visual voice acceptance passed: synthetic real frames, permission denial, UI and agent action, private saved pixels, preserved draft/selection, no automatic model turn, revoke/end cleanup. No native OS or provider audio claim.');
+} finally {await browser?.close();fixture.kill('SIGTERM')}

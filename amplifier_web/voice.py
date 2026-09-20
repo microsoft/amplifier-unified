@@ -525,7 +525,9 @@ def setup_routes(app: web.Application) -> VoiceService:
     async def connect(request: web.Request) -> web.Response:
         try:
             data = await request.json()
-            return web.json_response(await manager.connect(data.get("sdp"), data.get("provider", "auto"), data.get("sessionId")))
+            result = await manager.connect(data.get("sdp"), data.get("provider", "auto"), data.get("sessionId"))
+            manager.call.client_id = manager.service.clients.current.get()
+            return web.json_response(result)
         except VoiceError as exc:
             return web.json_response({"error": str(exc), "code": exc.code}, status=exc.status if 400 <= exc.status <= 599 else 502)
         except (aiohttp.ClientError, asyncio.TimeoutError):
