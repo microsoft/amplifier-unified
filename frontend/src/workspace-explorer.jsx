@@ -1,3 +1,4 @@
+import {useRegionActivity} from './activity-region';
 import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight,Folder,FolderDot,MoreHorizontal,Search} from 'lucide-react';
 import {AttentionBadge} from './attention';
@@ -9,7 +10,8 @@ export function WorkspaceExplorer({state,act}){
  const [query,setQuery]=useState(explorer.filter||''),pendingQuery=useRef(null);
  useEffect(()=>{pendingQuery.current=null;setQuery(explorer.filter||'')},[state.selectedWorkspaceId]);
  useEffect(()=>{if(pendingQuery.current===null||pendingQuery.current===explorer.filter){pendingQuery.current=null;setQuery(explorer.filter||'')}},[explorer.filter]);
- const patch=value=>act('view.update',{patch:value});
+ const [requests,setRequests]=useState(0),region=useRef(null);useRegionActivity(region,requests>0||!!state.sharedHistory?.loading);
+ const patch=async value=>{setRequests(count=>count+1);try{return await act('view.update',{patch:value})}finally{setRequests(count=>count-1)}};
  const browse=path=>{pendingQuery.current=null;setQuery('');return patch({navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1,navWorkspaceAncestorsOpen:false})};
  const search=value=>{
   pendingQuery.current=value;setQuery(value);
@@ -22,7 +24,7 @@ export function WorkspaceExplorer({state,act}){
  const previous=crumbs.length>3?crumbs.slice(0,-2):[],visible=previous.length?crumbs.slice(-2):crumbs;
  const page=explorer.page||1,pages=explorer.pages||1;
  const crumbLabel=crumb=>crumb.name===crumb.path?(crumb.path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)||crumb.name):crumb.name;
- return <section className="a-workspace-explorer" data-part="workspace-explorer" aria-label="Workspace folders">
+ return <section ref={region} data-activity-region="workspace-folders" className="a-workspace-explorer" data-part="workspace-explorer" aria-label="Workspace folders">
   <div className="a-workspace-explorer-heading"><strong>Workspaces</strong><span>{explorer.totalWorkspaces||0}</span></div>
   <div className="a-nav-search a-workspace-search"><Search/><input type="search" aria-label="Filter workspaces" placeholder="Find workspace · * ? patterns" value={query} data-action="view.update" onChange={e=>search(e.target.value)}/></div>
   <div className="a-workspace-location">
