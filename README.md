@@ -28,11 +28,11 @@ uv tool install git+https://github.com/bkrabach/amplifier-unified
 amplifier-unified
 ```
 
-End users need no Node installation: compiled React assets ship in the Python package. **Settings → Maintenance → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
+End users need no Node installation: compiled React assets ship in the Python package. **Settings → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
 
 ## Smart Tools and collaborative canvas apps
 
-**Settings → Capabilities → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
+**Settings → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
 
 ## Shell customization and agent guidance
 
@@ -234,7 +234,7 @@ never requests it. No lock expiry, force-unlock, or automatic work replay is pro
 
 ### Conversation Markdown export
 
-**Settings → Setup → Current conversation** offers **Copy Markdown** and
+**Settings → History & recovery → Current conversation** offers **Copy Markdown** and
 **Download Markdown** for the entire conversation, including native history
 outside the loaded page. The export preserves message Markdown and code,
 labels spoken exchanges, and includes attachment and saved-artifact references.
@@ -280,7 +280,7 @@ commands, approvals, bridges, naming work, pending children or configuration
 transaction, before retirement. It resumes from saved state on the next command;
 earlier inputs and tool effects are not replayed.
 
-Use **Settings → Maintenance → Ready conversations** to change the idle count,
+Use **Settings → Advanced → Readiness** to change the idle count,
 hours, and preparation-on-selection policy. The shared
 `runtime.retention.update {patch: {...}}` action saves and applies these settings
 without a restart. They live under `runtime` in the host's `config/server.yaml`:
@@ -544,7 +544,7 @@ remain separate work. Report text is external content, not agent instructions.
 
 ### Diagnostics and Context Intelligence
 
-Settings → Maintenance → **Diagnostics & Context Intelligence** keeps correlated
+Settings → **Diagnostics** keeps correlated
 app, session, worker, tool, canvas, usage and update metadata locally. You can add
 personal and team servers independently, choose the streams for each, and test
 credentials and ingestion. No destination is configured automatically; conversation

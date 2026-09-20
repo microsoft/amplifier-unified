@@ -2,6 +2,28 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.0",
+      "title": "See the actual work behind each action",
+      "changes": [
+        "Expand work to see commands and their output, exit codes, file contents and highlighted changes, task checklists, app actions, and delegated work.",
+        "Collapsed actions identify the command or file involved. Detailed timing, usage, call IDs, and original inputs and results remain available under Details, without repeated completion messages.",
+        "Streaming tool results are now retained correctly, including failures and empty output. Long saved content loads on expansion with retry and copy controls. Older steps whose content was never saved say so explicitly."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.18.0",
+      "title": "A complete, easier-to-navigate settings experience",
+      "changes": [
+        "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
+        "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
+        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Conversation diagnosis and safe recovery copies remain available from Current conversation. Unsaved private fields survive moving between settings sections while the dialog is open.",
+        "Notification refreshes and maintenance actions keep progress visible until completion. Mobile layouts, keyboard navigation, and shared or custom skins remain supported.",
+        "Sending clears the composer immediately and tracks pending delivery beside the message, with explicit retry or delivery checks. Message editing can continue in the current conversation or create a fork, preserving the original history."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.17.2",
       "title": "Use the shared Amplifier CLI session ID",
       "changes": [

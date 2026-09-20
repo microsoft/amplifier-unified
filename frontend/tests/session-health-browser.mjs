@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -12,6 +13,12 @@ try{
  await page.getByRole('button',{name:'Copy session ID',exact:true}).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
  await page.getByRole('button',{name:'Conversation details',exact:true}).click();await expect(page.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Copy diagnostics',exact:true}).click();assert.equal(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())).failure.category,'invalid_image');
+ await openSettingsPage(page,'conversation');
+ const dialog=page.getByRole('dialog');
+ await dialog.getByRole('button',{name:'Conversation details',exact:true}).click();
+ await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
+ await dialog.getByRole('button',{name:'Copy session ID',exact:true}).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Create recovery copy',exact:true}).scrollIntoViewIfNeeded();
  assert.ok(await page.locator('.a-conversation-details').evaluate(element=>element.scrollWidth<=element.clientWidth));
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-session-health-mobile.png'});
