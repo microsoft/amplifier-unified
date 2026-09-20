@@ -40,6 +40,8 @@ async def computation(tmp_path):
     paths = {"python": sys.executable}
     if shutil.which("node"):
         paths["node"] = shutil.which("node")
+    (tmp_path / "local_value.py").write_text("value = 40\n")
+    (tmp_path / "local_value.cjs").write_text("exports.value = 40;\n")
     kernels = Kernels(transport, observe, paths)
     yield kernels, journal, tool
     await kernels.shutdown()
@@ -68,7 +70,9 @@ async def test_real_state_cells_error_reset_and_runtime_identity(computation, la
     first = await kernels.execute(
         identity,
         generation,
-        "counter = 40" if language == "python" else "var counter = 40",
+        "from local_value import value; counter = value"
+        if language == "python"
+        else "var counter = require('./local_value.cjs').value",
     )
     assert (await done(journal, first["id"]))["state"] == "completed"
     second = await kernels.execute(
