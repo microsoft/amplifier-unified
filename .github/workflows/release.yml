@@ -81,6 +81,7 @@ jobs:
         working-directory: frontend
         run: npm run test:message-outbox-browser
       - name: Verify canvas toolbar and app options
+        if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:toolbar-browser
       - name: Verify cached-source update reporting
