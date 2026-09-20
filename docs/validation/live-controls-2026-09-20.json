@@ -82,7 +82,7 @@
     "costType": "reported"
   },
   "usage_provenance": "Provider-adapter normalized counters; raw API payload was not collected. Installed provider f0c94b001f70e11c0a668eb9886639b63cc0bbbf normalizes input by subtracting cache-write and computes total as normalized input plus output.",
-  "usage_limitation": "Normalized totalTokens excludes cacheWriteTokens in this receipt. This run does not prove inclusive token-budget consumption; Core/provider accounting is under separate review.",
+  "usage_limitation": "The original run reports adapter-normalized counters, not raw API totals. The later Core-contract audit and passive saved-receipt check resolve inclusive budget consumption; account quota remains outside this evidence.",
   "limits": [
     "Synthetic unrestricted Bash stdin override only; production policy unchanged.",
     "No spreadsheet formula engine was available; spreadsheet recalculation is untested.",
@@ -98,5 +98,13 @@
   "fixes": [
     "2ad4083c: wait for explicit worker stop completion at admission",
     "ffb60ba2: explicit kernels.create prepares a fresh owner; old generation operations never resume it"
-  ]
+  ],
+  "accounting_followup": {
+    "report": "saved-budget-2026-09-20.json",
+    "checks_passed": 11,
+    "grossInputTokens": 12638,
+    "grossTotalTokens": 12645,
+    "new_provider_calls": 0,
+    "original_evidence_files_unchanged": 10
+  }
 }
