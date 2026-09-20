@@ -10,10 +10,10 @@ export const settingsSections=[
  {id:'smart-tools',title:'Smart Tools',group:'Configuration',scope:'This host',pages:[['smart-tools','Smart Tools']]},
  {id:'updates',title:'Updates',group:'Application',scope:'This host',pages:[['updates','Updates']]},
  {id:'diagnostics',title:'Diagnostics',group:'Application',scope:'Unified app capture',pages:[['diagnostics','Diagnostics']]},
- {id:'history',title:'History & recovery',group:'Application',scope:'This host',pages:[['history','Import & export'],['conversation','Current conversation'],['repair','Backup & repair'],['reset','Advanced recovery']]},
+ {id:'history',title:'History & recovery',group:'Application',scope:'This host',pages:[['history','Import & export'],['recall','Recall & memory'],['conversation','Current conversation'],['repair','Backup & repair'],['reset','Advanced recovery']]},
  {id:'advanced',title:'Advanced',group:'Application',scope:'Scope selected below',pages:[['ready-conversations','Readiness'],['registries','Module & source registries'],['permissions','File access'],['automation','Terminal & automation'],['install-app','Install app'],['runtime','Session controls']]},
 ];
-const legacySections={setup:['overview','appearance','voice','providers','routing','defaults','conversation','install-app','runtime'],capabilities:['smart-tools','app-bundles','add-bundles','loaded-modules','registries','share-bundle'],maintenance:['ready-conversations','updates','diagnostics','history','permissions','notifications','automation','repair','reset']};
+const legacySections={setup:['overview','appearance','voice','providers','routing','defaults','conversation','install-app','runtime'],capabilities:['smart-tools','app-bundles','add-bundles','loaded-modules','registries','share-bundle'],maintenance:['ready-conversations','updates','diagnostics','history','recall','permissions','notifications','automation','repair','reset']};
 const knownPages=new Set(settingsSections.flatMap(section=>section.pages.map(([page])=>page)));
 export function settingsLocation(view={}){
  const page=view.panel==='appearance'?'appearance':view.settingsExpanded?.find?.(page=>knownPages.has(page))||({capabilities:'app-bundles',maintenance:'updates'})[view.settingsSection]||'overview';

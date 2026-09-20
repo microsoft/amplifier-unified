@@ -201,6 +201,8 @@ ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
 from .conversation_library import definitions as library_definitions
 LIBRARY_ACTIONS = library_definitions(schema, string)
 ACTION_DEFINITIONS.update(LIBRARY_ACTIONS)
+from .recall import definitions as recall_definitions
+ACTION_DEFINITIONS.update(recall_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
@@ -301,6 +303,8 @@ class AppService:
         initialize_chat_navigation(self.state)
         from .conversation_library import ConversationLibrary
         self.conversation_library = ConversationLibrary(self)
+        from .recall import Recall
+        self.recall = Recall(self)
         self.state["voice"] = {"status": "disconnected"}
         self.state["runtime"] = {"available": runtime is not None, "description": "Isolated Amplifier sessions; runtime is prepared on first use."}
         from .session_ownership import restore
@@ -650,6 +654,8 @@ class AppService:
                 return await self.coordination.dispatch(action, args, origin, command_id, include_state, caller_session_id)
             except ValueError as exc:
                 raise AppError(str(exc)) from None
+        if action.startswith(('recall.', 'memory.')):
+            return await self.recall.dispatch(action,args,origin,command_id)
         if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -1825,6 +1831,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Operation actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'].startswith(('recall.','memory.')):
+                if action_args.get('sessionId',session_id) != session_id:
+                    raise AppError('Recall actions must identify the calling conversation.',409)
+                action_args['sessionId'] = session_id
             if args['action'].startswith('canvas.apps.'):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
@@ -1955,4 +1965,5 @@ class AppService:
             self._save()
         await self.operations.close()
         self.schedules.store.close()
+        await self.recall.close()
         self.db.close()
