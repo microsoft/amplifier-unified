@@ -25,6 +25,7 @@ try{
  const app=await open('app');assert.match(await app.innerText(),/session.rename/);assert.match(await app.innerText(),/Retry operation ID check/);
  const empty=await open('empty');assert.match(await empty.innerText(),/No output/);
  const failed=await open('failed');assert.match(await failed.innerText(),/AssertionError: expected committed/);assert.match(await failed.innerText(),/Exit 1/);assert.equal(await failed.locator('.a-execution-warning').count(),1);
+ const malformed=await open('malformed');assert.match(await malformed.innerText(),/unknown/);assert.match(await malformed.innerText(),/Invalid task input/);
  const delegated=await open('delegate');assert.match(await delegated.innerText(),/Review the retry test/);
  await delegated.locator('[data-kind="worker"] > .a-execution-line').click();
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);

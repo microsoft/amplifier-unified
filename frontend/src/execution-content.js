@@ -33,7 +33,7 @@ export function actionContent(node,inputText=node.input,outputText=node.output){
  if(tasks)return {...base,kind:'tasks',title:verb('Updated task list','Updating task list','Task list update'),tasks,preview:`${tasks.filter(task=>task?.status==='completed').length} of ${tasks.length} complete`};
  if(/read(_file)?$/.test(name)&&path)return {...base,kind:'read',title:verb('Read','Reading','Read'),target:path,content:typeof output==='string'?output:first(out,['content','text']),preview:args.offset!=null?`From line ${args.offset}${args.limit!=null?` · up to ${args.limit} lines`:''}`:concise(fallback)};
  if(/write(_file)?$/.test(name)&&path)return {...base,kind:'write',title:verb('Wrote','Writing','Write'),target:path,content:first(args,['content','text'])};
- if(typeof args.action==='string'||typeof args.operation==='string')return {...base,kind:'app',title:'App action',target:args.action||args.operation,preview:concise(output)};
+ if(typeof args.action==='string'||typeof args.operation==='string')return {...base,kind:'app',title:'App action',target:typeof args.action==='string'?args.action:args.operation,preview:concise(output)};
  if(/delegate|task|agent/.test(name)&&first(args,['instruction','instructions','prompt','task']))return {...base,kind:'delegate',title:verb('Delegated','Delegating','Delegate'),target:first(args,['agent','name','description']),task:first(args,['instruction','instructions','prompt','task'])};
  return {...base,kind:'generic',title:tool,preview:concise(fallback)};
 }

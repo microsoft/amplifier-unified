@@ -13,6 +13,7 @@ test('read, app and todo preserve actual content instead of boilerplate',()=>{
  assert.equal(todo.kind,'tasks');assert.equal(todo.preview,'1 of 2 complete');assert.equal(todo.tasks[1].content,'Review');
  const app=actionContent(node('app_control',{action:'session.rename',title:'Review'},{success:true,output:{title:'Review'}}));
  assert.equal(app.kind,'app');assert.equal(app.target,'session.rename');assert.equal(app.args.title,'Review');
+ assert.equal(actionContent(node('custom',{action:{wrong:'type'},operation:'inspect'},null)).target,'inspect');
 });
 test('patches have accurate counts and only report line numbers actually present',()=>{
  const a=actionContent(node('apply_patch',{patch:'*** Begin Patch\n*** Update File: code.py\n@@\n old\n-before\n+after\n+more\n*** End Patch'},{success:true}));

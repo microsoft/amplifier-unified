@@ -117,6 +117,8 @@ async def main():
                      {'success':True,'output':{'stdout':'','stderr':'','returncode':0}}),
                     ('failed','bash',{'command':'python failing_test.py'},
                      {'success':False,'output':{'stdout':'','stderr':'AssertionError: expected committed','returncode':1},'error':{'message':'Exit code 1'}}),
+                    ('malformed','todo',{'todos':[{'content':{'unexpected':'shape'},'status':42}]},
+                     {'success':False,'output':'Invalid task input'}),
                     ('delegate','delegate',{'agent':'code-reviewer','instruction':'Review the retry test'},
                      {'success':True,'output':'No findings.'}),
                 ]
