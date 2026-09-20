@@ -24,7 +24,7 @@ try{
  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId!==id,original);await idle();
  s=await state();const edited=s.sessions.find(x=>x.id===s.selectedSessionId);assert.equal(edited.messages.length,2);assert.equal(edited.messages[0].text,'Edited first question');assert.equal(edited.editOrigin.sessionId,original);
- assert.equal(s.sessions.find(x=>x.id===original).messages.length,4);assert.equal(await page.getByText('Second question',{exact:true}).count(),0);
+ const retained=await page.evaluate(async id=>(await (await fetch('/api/state?sessionId='+encodeURIComponent(id))).json()).sessions.find(row=>row.id===id),original);assert.equal(retained.messages.length,4);assert.equal(await page.getByText('Second question',{exact:true}).count(),0);
  await page.getByRole('button',{name:'Edit message',exact:true}).click();await page.getByRole('textbox',{name:'Edit your message',exact:true}).fill('');assert.ok(await page.getByRole('button',{name:'Save & regenerate',exact:true}).isDisabled());await page.getByRole('button',{name:'Cancel',exact:true}).click();
  await page.screenshot({path:'/tmp/amplifier-message-actions.png'});
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Edit message',exact:true}).click();await page.getByRole('textbox',{name:'Edit your message',exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight));await page.screenshot({path:'/tmp/amplifier-message-edit-mobile.png'});

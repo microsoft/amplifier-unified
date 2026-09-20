@@ -55,6 +55,7 @@ try{
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
  await page.locator('.a-workspace-explorer').waitFor();
  await page.getByRole('searchbox',{name:'Filter conversations'}).fill('Settings*');
+ await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===1);
  assert.equal(await page.locator('.a-nav-chat').count(),1);
  await page.getByRole('searchbox',{name:'Filter conversations'}).fill('no-match*');
  await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===0);
@@ -65,7 +66,7 @@ try{
  await page.locator('.a-nav-chat-select').filter({hasText:'Settings test'}).hover();
  await page.getByRole('button',{name:'Rename Settings test',exact:true}).click();
  await page.getByRole('textbox',{name:'New name for Settings test'}).fill('Renamed chat');
- await page.waitForFunction(async()=>Object.values((await (await fetch('/api/state')).json()).devices||{}).some(d=>d.controls?.some(c=>c.label==='New name for Settings test'&&c.value==='Renamed chat')));
+ await page.waitForFunction(async()=>{const view=window.amplifier.getState().renderedView,index=view.controls.findIndex(c=>c.label==='New name for Settings test');if(index<0)return false;const result=await fetch('/api/state/detail?'+new URLSearchParams({path:`/devices/${view.clientId}/controls/${index}/value`}));return result.ok&&(await result.json()).value==='Renamed chat'});
  await page.getByRole('button',{name:'Save conversation name',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.title==='Renamed chat'));
  await page.waitForFunction(()=>document.querySelectorAll('button[aria-label]:has(svg):not([title]),a[aria-label]:has(svg):not([title])').length===0);

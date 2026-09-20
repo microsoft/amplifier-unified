@@ -71,7 +71,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"id": string(100), "text": string(100000)})),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}})),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Optional sessionId binds draft updates to that conversation without changing selection. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "sessionId": string(100)}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
@@ -210,7 +210,7 @@ class AppService:
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
             "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "anchors", "workspace": self.default_workspace},
             "theme": {"name": "Converge", "css": self.default_theme()},
-            "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "light", "layout": "balanced"},
+            "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
         self._view_cache = {}
@@ -483,6 +483,7 @@ class AppService:
             from .canvas_library import remember, restore, fork_artifacts
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
+            previous_draft=self.state['view'].get('draft','')
             previous_open=self.state.get('canvas',{}).get('open',False)
             effects = []
             diagnostic_result = None
@@ -584,8 +585,11 @@ class AppService:
                 session = self._session(args["id"])
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state, session)
+                previous = next((row for row in self.state['sessions'] if row['id'] == self.state.get('selectedSessionId')), None)
+                if previous is not None and (self.state['view'].get('draft') or 'draft' in previous):
+                    previous['draft'] = self.state['view'].get('draft', '')
                 self.state["selectedSessionId"] = session["id"]
-                self.state["view"]["draft"] = ""
+                self.state["view"]["draft"] = session.get('draft', '')
                 if session.get('nativeProject'):
                     pending.append((self.history.load, (session['id'],)))
             elif action == "session.rename":
@@ -794,6 +798,14 @@ class AppService:
                     patch = view_patch(self.state, chat_view_patch(patch))
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
+                if 'draft' in patch:
+                    if not isinstance(patch['draft'], str):
+                        raise AppError('Draft must be text.')
+                    target = args.get('sessionId') or self.state.get('selectedSessionId')
+                    if target:
+                        self._session(target)['draft'] = patch['draft']
+                        if target != self.state.get('selectedSessionId'):
+                            patch = {key: value for key, value in patch.items() if key != 'draft'}
                 self.state["view"].update(copy.deepcopy(patch))
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
                 self.feedback.attachment_command(action,args)
@@ -868,6 +880,11 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
+            if previous_scope[0] != self.state.get('selectedSessionId'):
+                previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
+                if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
+                selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
+                self.state['view']['draft']=selected.get('draft','') if selected else ''
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
             if previous_scope[1] != self.state.get('selectedWorkspaceId') or action in {'workspace.select', 'workspace.add', 'workspace.create', 'session.select'}:
@@ -995,6 +1012,8 @@ class AppService:
             if (self.state["selectedSessionId"] == current["id"]
                     and self.state["view"].get("draft", "").strip() == text.strip()):
                 self.state["view"]["draft"] = ""
+            if current.get('draft', '').strip() == text.strip():
+                current['draft'] = ''
             current.pop("lockOwner", None)
             self._publish()
 
@@ -1124,6 +1143,7 @@ class AppService:
             elif kind == "runtime.error":
                 session["status"] = "error"
                 finish_execution(session,"error")
+                session["errorAt"] = time.time()
                 session["error"] = str(payload.get("error") or payload.get("message") or "Runtime failed")
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
