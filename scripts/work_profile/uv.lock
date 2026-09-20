@@ -144,7 +144,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=695f875c0908f45f8dc78b1fcde80ecddebffd7c#695f875c0908f45f8dc78b1fcde80ecddebffd7c" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e#3796a32351d32a93ccbb5e230c9ffe02964db42e" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "pyyaml" },
@@ -200,7 +200,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.14.0"
+version = "0.15.0"
 source = { directory = "../../" }
 dependencies = [
     { name = "aiohttp" },
@@ -223,7 +223,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/bkrabach/amplifier-bundle-context-intelligence?rev=79a6162253c7f8c66e5d2af7e9c8ffcdf38865dd" },
     { name = "amplifier-core", specifier = "==1.6.1" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=695f875c0908f45f8dc78b1fcde80ecddebffd7c" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e" },
     { name = "cryptography", specifier = ">=44,<46" },
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },
@@ -269,7 +269,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "amplifier-core", specifier = "==1.6.1" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=695f875c0908f45f8dc78b1fcde80ecddebffd7c" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=3796a32351d32a93ccbb5e230c9ffe02964db42e" },
     { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=5b0816edb8761dc0ad38719ae59b4ee40808b36a" },
     { name = "amplifier-module-loop-live", git = "https://github.com/bkrabach/amplifier-module-loop-live?rev=de307c398facea5d4d656e14f84938a74b934ff2" },
     { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=12fffb6ad2bafb1bb7999ab02245a35e42ca8672" },

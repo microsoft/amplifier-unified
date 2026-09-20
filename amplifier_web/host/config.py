@@ -16,8 +16,8 @@ from ..deployment import write_private
 from ..shared_settings import read_yaml, read_settings
 from ..session_files import amplifier_home
 
-FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@b3bdab2adcc2a8fe477aca64c20b77528a95e1df"
-WORK_SOURCE = "git+https://github.com/bkrabach/amplifier-bundle-work@d09fa8ae95c1da5ff6a5c96f87be0f8aab62b581#subdirectory=bundle.md"
+FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@3796a32351d32a93ccbb5e230c9ffe02964db42e"
+WORK_SOURCE = "git+https://github.com/bkrabach/amplifier-bundle-work@ce0e297d9cb4fffc9f677cf81481d0ec3e623a18#subdirectory=bundle.md"
 _KEY_FILE_VALUES = {}
 
 
@@ -141,7 +141,7 @@ class HostConfig:
 
     @property
     def active_bundle(self):
-        return self.settings.get("bundle", {}).get("active") or "anchors"
+        return self.settings.get("bundle", {}).get("active") or "work"
 
     @property
     def app_bundles(self):

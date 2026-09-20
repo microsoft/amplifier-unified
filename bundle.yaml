@@ -1,4 +1,5 @@
 bundle:
   name: unified
+  display_name: Unified
   version: 1.0.0
   description: Resource namespace for Amplifier Unified behaviors and skills; compose a behavior into your existing host.

@@ -10,7 +10,12 @@ import uuid
 
 from .host.config import write_private
 
+# Bootstrap labels for known profiles before their manifests have been cached.
+# A bundle's own display metadata always takes precedence.
 BUNDLE_LABELS = {
+    'foundation': ('Foundation', 'Standard Amplifier tools and agent orchestration.'),
+    'amplifier-dev': ('Amplifier development', 'Tools and expertise for developing the Amplifier ecosystem.'),
+    'exp-delegation': ('Experimental · Delegation only', 'Delegate work to specialized agents.'),
     'anchors': ('Anchors', 'General-purpose tools, instructions, and agents.'),
     'anchors-amp-dev': ('Anchors · Amplifier development', 'Anchors with Amplifier ecosystem knowledge and tooling.'),
     'work': ('Work', 'A small tool set with live delegation and managed context.'),
@@ -18,8 +23,14 @@ BUNDLE_LABELS = {
 }
 
 
-def catalog_entry(name):
+def catalog_entry(name, metadata=None):
     label, description = BUNDLE_LABELS.get(name, (name, 'Registered root bundle.'))
+    metadata = metadata or {}
+    display_name = metadata.get('display_name')
+    if isinstance(display_name, str) and display_name.strip():
+        label = display_name.strip()
+    if isinstance(metadata.get('description'), str) and metadata['description'].strip():
+        description = metadata['description'].strip()
     return {'name': name, 'value': name, 'label': label, 'description': description}
 
 
@@ -28,7 +39,7 @@ def defaults(home, workspace, app_bundle=None):
     paths = settings_paths(workspace)
     values = {key: read_yaml(path).get('bundle', {}).get('active') for key, path in paths.items()}
     workspace_bundle = values['local'] or values['project']
-    effective = workspace_bundle or app_bundle or values['global'] or 'anchors'
+    effective = workspace_bundle or app_bundle or values['global'] or 'work'
     source = 'workspace' if workspace_bundle else 'app' if app_bundle else 'shared'
     return {'app': app_bundle or None, 'workspace': workspace_bundle or None,
             'shared': values['global'] or None, 'effective': effective, 'source': source,

@@ -109,3 +109,9 @@ bundle repository. It retains Anchors capabilities while composing Work behavior
 last. Register that source as a standalone alias too. See
 [scoped bundle defaults and switching](SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified)
 for app, workspace, and shared defaults and history-preserving root transitions.
+
+## Default and display names
+
+Work is Unified’s default for new installations and when no bundle choice is saved. Existing app, workspace, and shared choices remain in effect; existing conversations retain their own bundle. Use the app or workspace bundle default control to change that choice.
+
+Bundle pickers use optional `bundle.display_name` metadata from the selected local or cached manifest (or Foundation registry), then fall back to the existing built-in label or bundle ID. Labels are sorted alphabetically; stored aliases, namespaces, and source URIs stay unchanged. Labels from a different registered source are ignored. Opening a picker does not fetch or load remote bundles.

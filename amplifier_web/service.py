@@ -253,7 +253,7 @@ class AppService:
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
         self.state = json.loads(row[0]) if row else {
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
-            "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "anchors", "workspace": self.default_workspace},
+            "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "work", "workspace": self.default_workspace},
             "theme": {"name": "Converge", "css": self.default_theme()},
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],

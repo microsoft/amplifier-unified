@@ -149,7 +149,7 @@ async def settled(app):
 async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
-        await app.dispatch('session.create',{})
+        await app.dispatch('session.create',{'bundle':'anchors'})
         sid=app._session()['id'];app._session()['messages']=[{'role':'user','text':'keep'}]
         await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
         await settled(app)
@@ -176,7 +176,7 @@ async def test_agent_preview_switch_failure_and_duplicate_actions(tmp_path):
 async def test_agent_fork_is_independent_and_duplicate_does_not_repeat(tmp_path):
     runtime=Runtime();app=AppService(tmp_path,runtime=runtime,workspace=tmp_path);app.management=Management(app)
     try:
-        await app.dispatch('session.create',{})
+        await app.dispatch('session.create',{'bundle':'anchors'})
         source=app._session();sid=source['id']
         source['messages']=[{'id':'user','role':'user','text':'keep'}]
         await app.app_bridge('dispatch',{'action':'bundle.preview','args':{'sessionId':sid,'bundle':'work'}},sid)
