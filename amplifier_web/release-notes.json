@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.17.1",
+      "title": "Work patch editing and clearer conversation recovery",
+      "changes": [
+        "Work includes contextual patch editing alongside existing file tools. Shared file-access choices apply to both, including older settings and delegated workers.",
+        "Agents receive clearer guidance for finding and reading other conversations and using the existing shared app, workspace, voice and permission controls.",
+        "Inspect a stopped conversation, copy its session ID or diagnostics, and create a recovery copy that preserves readable history without repeating work. The original conversation is kept.",
+        "Updates identify unresolved sources and workspaces. Unregistered bundles in older conversations are shown separately from current configuration problems.",
+        "Activity appears beside the action that is running. Dialogs support outside dismissal while preserving in-progress drafts and reporting failures."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.17.0",
       "title": "Stable workspace and chat navigation",
       "changes": [
