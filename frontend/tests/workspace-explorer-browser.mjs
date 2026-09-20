@@ -30,11 +30,11 @@ try{
   if(!response.ok)throw Error(await response.text());return response.json();
  },[path,body]);
  const info=()=>api('/api/fixture/info');
- const agent=(action,args)=>api('/api/fixture/agent',{args:{action,args}});
+ const agent=async(action,args)=>api('/api/fixture/agent',{args:action==='view.update'?{action:'shell.view.update',args:{...args,clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'workspaces'}}:{action,args}});
  const row=path=>page.locator('.a-workspace-row').filter({has:page.getByRole('button',{name:'Open chats in '+path,exact:true})});
  const browse=path=>page.getByRole('button',{name:'Browse '+path,exact:true});
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
- const waitPath=path=>page.waitForFunction(path=>window.amplifier.getState().workspaceExplorer?.path===path,path);
+ const waitPath=path=>page.waitForFunction(path=>window.amplifier.getShellState()?.snapshots?.workspaces?.workspaceExplorer?.path===path,path);
  const showPath=async path=>{await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await waitPath(path)};
 
  await page.goto(vite.resolvedUrls.local[0]);
@@ -75,21 +75,22 @@ try{
  assert.equal(await ancestorToggle.getAttribute('aria-expanded'),'true');
  assert.equal(await browse(paths.root).isVisible(),true);
  await ancestorToggle.click();
- await page.waitForFunction(()=>window.amplifier.getState().view.navWorkspaceAncestorsOpen===false);
+ await page.waitForFunction(()=>window.amplifier.getShellState()?.snapshots?.workspaces?.view.navWorkspaceAncestorsOpen===false);
  assert.equal(await browse(paths.root).count(),0);
  await page.getByRole('button',{name:'Go to parent workspace folder',exact:true}).click();await waitPath(paths.mixed);
  assert.equal(await selected(),first);
  await page.screenshot({path:'/tmp/amplifier-workspace-explorer-desktop.png'});
 
  // The exact UI state is persisted and available through the agent bridge.
- const agentPath=await api('/api/fixture/agent',{operation:'get_state',args:{path:'/workspaceExplorer/path'}});
- assert.equal(agentPath.value,paths.mixed);
- assert.equal((await info()).savedView.navWorkspacePath,paths.mixed);
+ const agentPath=await agent('shell.query',{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'workspaces'});
+ assert.equal(agentPath.result.workspaceExplorer.path,paths.mixed);
+ assert.equal(agentPath.result.view.navWorkspacePath,paths.mixed);
  await page.reload();await page.locator('.a-workspace-explorer').waitFor();await waitPath(paths.mixed);
  assert.equal(await selected(),first);
  const nestedWorkspace=(await info()).state.workspaces.find(workspace=>workspace.path===paths.nested);
  await agent('workspace.select',{id:nestedWorkspace.id});
  await page.waitForFunction(id=>window.amplifier.getState().selectedWorkspaceId===id,nestedWorkspace.id);
+ await page.waitForFunction(()=>document.querySelector('.a-nav-chat')?.textContent.includes('nested-chat'));
  assert.match(await page.locator('.a-nav-chat').innerText(),/nested-chat/);
 
  // Search matches full paths across branches, including duplicate leaf names.

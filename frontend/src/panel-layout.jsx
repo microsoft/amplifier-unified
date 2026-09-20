@@ -17,21 +17,21 @@ export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasO
  return {overlay,docked,nav,canvas,navMax,canvasMax,expandedNav:docked?nav:Math.min(Math.max(NAV_MIN,navWidth),Math.max(NAV_MIN,available-rail))};
 }
 const Layout=createContext(null);
-export function WorkspaceLayout({state,act,children}){
+export function WorkspaceLayout({state,act,children,presentation={}}){
  const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:52}),[draft,setDraft]=useState(null);
  useEffect(()=>{
   const el=host.current;if(!el)return;
   const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:innerWidth<=700?44:52});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[]);
- const view=state.view||{},sizes=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth:view.canvasWidth,...draft});
+ const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
  const persist=(key,value)=>{
-  const fitted=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth:view.canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
+  const fitted=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
   const patch={[key]:Math.round(value)};
   if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch.canvasWidth=Math.round(fitted.canvas)}
   setDraft(null);act('view.update',{patch});
  };
- return <Layout.Provider value={{...sizes,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
+ return <Layout.Provider value={{...sizes,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
   <main ref={host} className="a-layout" data-part="workspace" data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
  </Layout.Provider>;
 }
@@ -42,11 +42,12 @@ export function usePanelLayout(state,act){
 export function PaneResizer({layout,pane}){
  const drag=useRef(null),nav=pane==='nav',key=nav?'navWidth':'canvasWidth',width=nav?layout.nav:layout.canvas,min=nav?NAV_MIN:CANVAS_MIN,max=nav?layout.navMax:layout.canvasMax;
  const clamp=value=>Math.round(Math.max(min,Math.min(max,value)));
- const value=e=>clamp(drag.current.width+(e.clientX-drag.current.x)*(nav?1:-1));
+ const direction=nav||layout.canvasOnLeft?1:-1;
+ const value=e=>clamp(drag.current.width+(e.clientX-drag.current.x)*direction);
  return <div className={nav?'a-nav-resize':'a-canvas-resize'} role="separator" aria-label={nav?'Resize navigation':'Resize canvas'} aria-orientation="vertical" aria-valuemin={min} aria-valuemax={Math.floor(max)} aria-valuenow={Math.round(width)} tabIndex={0} data-action="view.update"
   onPointerDown={e=>{e.preventDefault();drag.current={x:e.clientX,width};e.currentTarget.setPointerCapture(e.pointerId)}}
   onPointerMove={e=>{if(drag.current)layout.preview(key,value(e))}}
   onPointerUp={e=>{if(drag.current){const next=value(e);drag.current=null;layout.persist(key,next)}}}
   onPointerCancel={()=>{drag.current=null;layout.cancel()}}
-  onKeyDown={e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();layout.persist(key,e.key==='Home'?min:e.key==='End'?Math.floor(max):clamp(width+(e.key==='ArrowLeft'?-20:20)*(nav?1:-1)))}}}/>;
+  onKeyDown={e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();layout.persist(key,e.key==='Home'?min:e.key==='End'?Math.floor(max):clamp(width+(e.key==='ArrowLeft'?-20:20)*direction))}}}/>;
 }

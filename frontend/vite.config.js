@@ -19,6 +19,6 @@ export default defineConfig({
   for(const [name,file] of [['@modelcontextprotocol/ext-apps','mcp-apps'],['@modelcontextprotocol/client','mcp-client'],['@modelcontextprotocol/core','mcp-core'],['zod','zod']])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${file}.txt`);
   for(const name of ['mermaid','dompurify','highlight.js'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
  }}],
- build:{outDir:'../amplifier_web/static',emptyOutDir:true},
+ build:{outDir:'../amplifier_web/static',emptyOutDir:true,rollupOptions:{input:{app:fileURLToPath(new URL('./index.html',import.meta.url)),shellValidation:fileURLToPath(new URL('./shell-validation.html',import.meta.url))}}},
  server:{proxy:{'/api':'http://127.0.0.1:8765'}},
 });

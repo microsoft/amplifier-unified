@@ -181,6 +181,10 @@ from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
 
+from .shell_modules import ShellModules, definitions as shell_definitions
+ACTION_DEFINITIONS.update(shell_definitions(schema, string))
+
+
 class AppService:
     def __init__(self, data_dir: Path, runtime=None, workspace=None):
         self.data_dir = Path(data_dir).expanduser()
@@ -192,6 +196,7 @@ class AppService:
         self.db.execute("CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS state_resources (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.commit()
+        self.shell = ShellModules(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
         self.voice_service = None
@@ -435,6 +440,8 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action.startswith("shell."):
+            return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
         implicit_session = False
         if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export'}:
