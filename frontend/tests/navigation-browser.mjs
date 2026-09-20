@@ -1,0 +1,63 @@
+// Real navigation projections/actions; disposable history and synthetic runtime.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {mkdir} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {createServer} from 'vite';
+import {chromium} from '@playwright/test';
+const root=fileURLToPath(new URL('../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/chat_library_server.py',import.meta.url))],{env:{...process.env,AMPLIFIER_NAVIGATION_PROOF:'1'},stdio:['ignore','pipe','pipe']});
+let logs='',vite,browser,page;
+fixture.stderr.on('data',s=>logs+=s);
+const ready=new Promise((resolve,reject)=>{let output='';fixture.stdout.on('data',s=>{output+=s;const line=output.split('\n').find(s=>s.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('error',reject);fixture.once('exit',code=>reject(Error(`Fixture exited ${code}: ${logs}`)))});
+const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/amplifier-navigation';
+try{
+ await mkdir(out,{recursive:true});const port=await ready,target=`http://127.0.0.1:${port}`;
+ vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',r=>r.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
+ browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const api=(path,body)=>page.evaluate(async([path,body])=>{const headers={'X-Amplifier-Client':window.amplifier.getState().client.id};const r=await fetch(path,body===undefined?{headers}:{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error(await r.text());return r.json()},[path,body]);
+ const info=()=>api('/api/fixture/info');
+ const patch=async(instanceId,values)=>api('/api/fixture/agent',{args:{action:'shell.view.update',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId,patch:values}}});
+ const chatrow=id=>page.locator(`.a-nav-chat[data-session-id="${id}"]`),details=page.locator('.a-navigation-flyout');
+ await page.goto(vite.resolvedUrls.local[0]);await page.locator('.a-nav-chat').first().waitFor();
+ const initial=await info(),selected=initial.initialSession;
+ assert.equal(await page.locator('.a-workspace-explorer').count(),0,'selected workspace gets the full chat list');
+ const geometry=()=>page.locator('.a-nav-chat').evaluateAll(rows=>rows.slice(0,8).map(el=>{const r=el.getBoundingClientRect();return {top:r.top,height:r.height,width:r.width}}));
+ const before=await geometry();await chatrow(selected).hover();await details.waitFor();
+ assert.deepEqual(await geometry(),before,'hover must not move, wrap or resize rows');assert.equal(before[0].height,54);
+ assert.ok((await details.innerText()).includes(initial.paths.one));assert.ok((await details.innerText()).includes(selected));
+ assert.equal((await info()).state.selectedSessionId,selected);await page.screenshot({path:out+'/chat-flyout.png'});
+ await details.getByRole('button',{name:'Close details',exact:true}).click();
+ const more=chatrow(selected).getByRole('button',{name:/Details and actions/});await more.focus();await page.keyboard.press('Enter');await details.waitFor();await page.keyboard.press('Escape');await details.waitFor({state:'detached'});
+ assert.equal(await more.evaluate(el=>el===document.activeElement),true,'Escape returns focus to the trigger');
+ await page.getByRole('button',{name:'All chats',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.chatNavigation.scope.mode==='all');
+ await page.getByRole('button',{name:'2 need attention',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===2);
+ assert.equal((await info()).state.selectedSessionId,selected,'filtering does not select or resume work');
+ const snapshot=await api('/api/fixture/agent',{args:{action:'shell.query',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'chats'}}});
+ assert.equal(snapshot.result.chatNavigation.total,2);assert.equal(snapshot.result.chatNavigation.activityCounts.working,1);
+ await patch('chats',{navStatusFilter:'unread'});await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===1);
+ const unreadId=await page.locator('.a-nav-chat').getAttribute('data-session-id');await page.locator('.a-nav-chat').hover();await details.waitFor();assert.ok((await info()).state.attention.sessions[unreadId],'a hover never acknowledges a response');
+ await details.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();
+ assert.equal(await page.locator('.a-nav-chat').count(),0);assert.equal(await page.getByRole('button',{name:'Recent',exact:true}).getAttribute('aria-pressed'),'true');
+ const search=page.getByRole('searchbox',{name:'Filter workspaces',exact:true});await search.fill('*/playground');await page.waitForFunction(()=>document.querySelectorAll('.a-workspace-row').length===2);
+ const paths=await page.locator('.a-workspace-result-path').allTextContents();assert.equal(new Set(paths).size,2,'duplicate names have distinct parent labels');
+ await page.locator('.a-workspace-row').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();await page.screenshot({path:out+'/workspace-flyout.png'});
+ await details.getByRole('button',{name:'Close details',exact:true}).click();await page.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
+ await page.locator('.a-workspace-explorer').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===3);
+ await page.getByRole('button',{name:'All workspaces',exact:true}).click();await search.waitFor();await search.fill('');await page.getByRole('button',{name:'Browse folders',exact:true}).click();await page.locator('.a-workspace-location').waitFor();
+ const browsed=(await info()).state.selectedSessionId;await page.getByRole('button',{name:'Go to parent workspace folder',exact:true}).click();await page.screenshot({path:out+'/workspace-folders.png'});assert.equal((await info()).state.selectedSessionId,browsed);
+ await page.reload();await page.locator('.a-workspace-explorer').waitFor();assert.equal(await page.getByRole('button',{name:'Browse folders',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'All chats',exact:true}).click();await page.locator('.a-nav-chat').first().waitFor();await patch('chats',{navStatusFilter:'all',navFilter:''});
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:844});await page.locator('.a-nav-chat').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+  const rect=await details.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1&&rect.y+rect.height<=844+1,'flyout fits viewport');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:out+`/navigation-${width}.png`});await page.keyboard.press('Escape');
+ }
+ await page.setViewportSize({width:1280,height:900});await page.locator('.a-nav-chat').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();await page.getByRole('searchbox',{name:'Filter conversations',exact:true}).click();await details.waitFor({state:'detached'});
+ assert.deepEqual((await info()).runtimeStarts,[]);assert.deepEqual((await info()).runtimeSends,[]);assert.deepEqual(errors,[]);
+ console.log('Navigation browser checks passed: stable geometry, real recency/status, hover acknowledgement isolation, keyboard details, full paths, agent filters, scoped drill-in, durable browsing, narrow viewports, no model work.');
+}catch(error){await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});if(logs)console.error(logs);throw error}
+finally{await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}}

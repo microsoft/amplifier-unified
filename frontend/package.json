@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
+    "test:feedback-followup-browser": "node tests/feedback-followup-browser.mjs",
     "test:settings-browser": "node tests/settings-browser.mjs",
     "test:chat-browser": "node tests/chat-browser.mjs",
     "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
@@ -16,12 +17,14 @@
     "test:message-browser": "node tests/message-browser.mjs",
     "test:artifact-browser": "node tests/artifact-browser.mjs",
     "test:timeline-browser": "node tests/timeline-browser.mjs",
+    "test:execution-browser": "node tests/execution-inspection-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
     "test:panel-browser": "node tests/panel-layout-browser.mjs",
     "prebuild": "node scripts/sync-branding.mjs",
     "predev": "node scripts/sync-branding.mjs",
     "test:pwa-browser": "node tests/pwa-browser.mjs",
+    "test:navigation-browser": "node tests/navigation-browser.mjs",
     "test:chat-library-browser": "node tests/chat-library-browser.mjs",
     "test:library-performance": "node tests/library-performance-browser.mjs",
     "test:pending-view-browser": "node tests/pending-view-browser.mjs",
@@ -42,7 +45,9 @@
     "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
     "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
     "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
-    "test:canvas-drawing-browser": "node tests/canvas-drawing-browser.mjs"
+    "test:canvas-drawing-browser": "node tests/canvas-drawing-browser.mjs",
+    "test:activity-feedback-browser": "node tests/activity-feedback-browser.mjs",
+    "test:export-browser": "node tests/conversation-export-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

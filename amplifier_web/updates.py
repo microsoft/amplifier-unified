@@ -88,6 +88,31 @@ def configured_sources(service):
     from .host.config import read_config
     import yaml
     sources, incomplete = {}, False
+    issues = getattr(service, 'source_issues', None)
+    def issue(reason, *, workspace=None, session_id=None, reference=None, historical=False):
+        nonlocal incomplete
+        incomplete = True
+        if issues is None:
+            return
+        # Report identities and locations, never arbitrary settings or exception
+        # contents (which may include credentials).
+        if isinstance(reference, str) and reference.startswith(('git+', 'https:', 'http:', 'ssh:')):
+            reference = safe_label(reference.removeprefix('git+'))
+        owner = next((session for session in state['sessions'] if session_id and
+                      (session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']) == session_id
+                      and session.get('workspace') == workspace), None)
+        row = {'reason': reason, 'historical': bool(historical and owner and owner.get('historyManaged') and owner['id'] != state.get('selectedSessionId')), **({'appSessionId': owner['id']} if owner else {}), **({'workspace': str(workspace)} if workspace else {}),
+               **({'sessionId': session_id} if session_id else {}),
+               **({'reference': str(reference)[:300]} if reference else {})}
+        if row not in issues:
+            if len(issues) < 50:
+                issues.append(row)
+            elif not row['historical']:
+                # Old selections cannot crowd an active configuration error
+                # out of the bounded report.
+                replace = next((index for index, item in enumerate(issues) if item.get('historical')), None)
+                if replace is not None:
+                    issues[replace] = row
     state, home = service.state, service.data_dir
     selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
     # Native child/legacy history can be viewable without a resumable identity.
@@ -102,7 +127,8 @@ def configured_sources(service):
         registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
         if not isinstance(registry, dict):raise ValueError('Invalid registry')
     except (OSError, ValueError, AttributeError):
-        registry, incomplete = {}, True
+        registry = {}
+        issue('The bundle registry could not be read. Open Bundles to refresh its catalog.')
 
     for workspace, selected, session_id in selections:
         try:
@@ -120,7 +146,7 @@ def configured_sources(service):
             def resolve(reference, evidence, seen=frozenset()):
                 nonlocal incomplete
                 if not isinstance(reference, str) or not reference or reference in seen:
-                    incomplete = True
+                    issue('A source alias is empty or circular.', workspace=workspace, session_id=session_id, reference=reference)
                     return
                 if reference.startswith('git+'):
                     parsed = urlsplit(reference[4:])
@@ -138,7 +164,7 @@ def configured_sources(service):
                 if replacement:
                     resolve(replacement, evidence, seen | {reference})
                 else:
-                    incomplete = True
+                    issue('This bundle name is not registered. Choose an available bundle in this conversation, or restore its source in workspace settings.', workspace=workspace, session_id=session_id, reference=reference, historical=evidence == 'Selected bundle')
 
             # Do not walk added/registered bundle lists: those are catalogs.
             resolve(selected or config.active_bundle, 'Selected bundle')
@@ -158,7 +184,7 @@ def configured_sources(service):
                     resolve(value, 'Git input in module configuration')
             configured_git_values(config.settings.get('config', {}))
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, yaml.YAMLError):
-            incomplete = True
+            issue('Workspace or conversation settings could not be read. Review the settings files for this workspace.', workspace=workspace, session_id=session_id, reference=selected)
     return sources, incomplete
 
 
@@ -400,6 +426,7 @@ class UpdateManager:
         if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
         if any(op.get('status') in {'queued','running'} for op in state.get('smartTools',{}).get('operations',[])):return True
         if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('requests',[])):return True
+        if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('followups',[])):return True
         if state.get('voice',{}).get('status') not in {None,'disconnected','idle','ended','error'}:
             return True
         for session in state['sessions']:
@@ -417,6 +444,7 @@ class UpdateManager:
         # can change while filesystem/settings reads run outside the event loop.
         state = self.service.state
         snapshot = SimpleNamespace(data_dir=self.home, state={
+            'selectedSessionId': state.get('selectedSessionId'),
             'settings': {key: state['settings'][key] for key in ('workspace', 'bundle')},
             'sessions': [{key: row[key] for key in (
                 'id', 'workspace', 'bundle', 'runtimeSessionId', 'nativeIdentity',
@@ -424,6 +452,7 @@ class UpdateManager:
                 for row in state['sessions']],
             'workspaces': [{'path': row.get('path')} for row in state.get('workspaces', [])],
         })
+        snapshot.source_issues = []
         configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
         rows = []
         for meta in sorted((base/'cache').rglob('.amplifier_cache_meta.json')):
@@ -450,10 +479,17 @@ class UpdateManager:
                 rows.append({'id':hashlib.sha256(str(root).encode()).hexdigest()[:20],
                     'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source',
                     'usage':'unknown','usageEvidence':[]})
-        if incomplete:
+        active_issues = [issue for issue in snapshot.source_issues if not issue.get('historical')]
+        historical_issues = [issue for issue in snapshot.source_issues if issue.get('historical')]
+        if incomplete and (active_issues or not snapshot.source_issues):
             rows.append({'id':'source-configuration','label':'Source configuration','status':'check_failed',
                 'eligible':False,'kind':'configuration',
-                'detail':'Some selected sources or workspace settings could not be resolved read-only. Usage classification is incomplete; cached-source checks and update eligibility are unchanged. Review source configuration.'})
+                'detail':'Some saved bundle selections or settings could not be resolved. This affects usage labels, not cached-source update checks. Review the affected sources below.',
+                'sourceIssues': active_issues})
+        if historical_issues:
+            rows.append({'id': 'historical-source-configuration', 'label': 'Older conversation settings', 'status': 'historical',
+                'eligible': False, 'kind': 'history', 'sourceIssues': historical_issues,
+                'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
         return rows
 
     def protected_items(self):

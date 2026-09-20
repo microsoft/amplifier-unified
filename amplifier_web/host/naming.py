@@ -84,7 +84,7 @@ class LiveSessionNaming:
         turn_id=self.turn_id
         async def generate():
             from ..execution_events import CALL_PURPOSE
-            token=CALL_PURPOSE.set({'label':'Session naming','turnId':turn_id})
+            token=CALL_PURPOSE.set({'label':'Session naming','turnId':turn_id,'lifecycle':'background'})
             try:
                 await self.hook._generate_name(self.coordinator.session_id,self.directory,is_update=named)
             except Exception:

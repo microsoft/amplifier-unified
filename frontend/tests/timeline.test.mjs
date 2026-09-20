@@ -41,3 +41,31 @@ test('older voice records use start time, and unknown records never collect at t
  const result=turnPlacements(messages,data);
  assert.deepEqual(result.after.get('ack'),['voice:old','node-only']);assert.deepEqual(result.before,['unknown']);assert.equal(result.after.has('response'),false);
 });
+
+test('pending startup and partial usage differ from unavailable completed metrics',()=>{
+ const missing={calls:1,totalTokens:0,costUsd:0,costType:'unavailable',pricedCalls:0,unknownCalls:1,tokenUnknownCalls:1};
+ assert.equal(usageLabel({...missing,tokenPendingCalls:1,costPendingCalls:1}).text,'tokens pending · cost pending');
+ assert.match(usageLabel({...missing,tokenPendingCalls:0,costPendingCalls:0},{pending:true}).text,/tokens unavailable · cost unavailable/);
+ assert.equal(usageLabel({calls:0,totalTokens:0,costUsd:0},{pending:true}).text,'usage pending');
+ const partial=usageLabel({calls:2,totalTokens:120,costUsd:.01,costType:'partial',pricedCalls:1,estimatedCalls:1,unknownCalls:1,tokenUnknownCalls:1,tokenPendingCalls:1,costPendingCalls:1});
+ assert.match(partial.text,/120 tokens \+ pending/);assert.match(partial.text,/≈\$0.010 \+ pending/);assert.match(partial.title,/Includes estimated cost/);
+ assert.ok(!usageLabel(missing).text.includes('$0'));
+});
+
+test('elapsed time uses host timestamps and stops on durable terminal events',async()=>{
+ const {elapsedLabel,isRunning}=await import('../src/timeline-data.js');
+ assert.equal(elapsedLabel({phase:'running',startedAt:100},112.8),'12s');
+ assert.equal(elapsedLabel({phase:'queued',startedAt:100},131),'31s');
+ assert.equal(elapsedLabel({phase:'completed',startedAt:100,endedAt:101.4},900),'1.4s');
+ assert.equal(elapsedLabel({phase:'error',startedAt:100,endedAt:162},1000),'1m 2s');
+ assert.equal(elapsedLabel({phase:'interrupted',startedAt:100},1000),null);
+ assert.equal(elapsedLabel({phase:'running',startedAt:200},100),'0s');
+ assert.equal(isRunning({phase:'running',endedAt:120}),false);
+ const data=executionData({execution:{nodes:[],turns:[{id:'new',startedAt:100,phase:'running'}]}});assert.equal(data.turns[0].id,'new');
+});
+
+test('public result links accept only explicit web URLs without credentials',async()=>{
+ const {detailLinks}=await import('../src/timeline-data.js');
+ assert.deepEqual(detailLinks(JSON.stringify({url:'https://example.com/report',nested:{uri:'file:///private/key',artifact_url:'javascript:alert(1)'},items:[{html_url:'https://user:pass@example.com'},{web_url:'https://example.com/report'}]})),['https://example.com/report']);
+ assert.deepEqual(detailLinks('unstructured result'),[]);
+});

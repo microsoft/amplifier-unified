@@ -61,3 +61,23 @@ def test_active_native_chat_is_bounded_after_runtime_materializes_history():
     view=project(session)
     assert len(view['messages'])==100 and 'messageWindow' not in view
     assert view['sharedHistoryOffset']==420
+
+
+def test_tool_fields_remain_bounded_and_independently_readable():
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn'}],'nodes':[{'id':'tool','kind':'tool','turnId':'turn','input':'i'*18000,'output':'o'*50000,'error':'e'*6000}]}}
+    view=project(session);node=view['execution']['nodes'][0]
+    assert len(json.dumps(view))<3000
+    for field in ('input','output','error'):
+        assert len(node[field])==512
+        ref=node[field+'Detail'];text='';offset=0
+        while True:
+            result=read_text(session,{**ref,'offset':offset});text+=result['value'];offset=result['nextOffset']
+            if offset is None:break
+        assert text==session['execution']['nodes'][0][field]
+
+
+def test_new_running_turn_is_visible_before_the_first_execution_node():
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'empty','phase':'running','startedAt':10}],'nodes':[]}}
+    view=project(session)
+    assert view['execution']['turns'][0]['id']=='empty'
+    assert view['execution']['turns'][0]['nodeCounts']=={'tools':0,'workers':0}

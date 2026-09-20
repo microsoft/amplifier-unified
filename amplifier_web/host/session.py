@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import inspect
 import json
@@ -9,7 +10,7 @@ import os
 from pathlib import Path
 import stat
 
-from .config import expand_environment, load_config, merge, write_private
+from .config import HostConfig, expand_environment, load_config, merge, write_private
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/bkrabach/amplifier-module-loop-live@de307c398facea5d4d656e14f84938a74b934ff2"
@@ -242,20 +243,78 @@ def _expand_module_configuration(node, in_provider=False):
 
 
 def _apply_host_policy(bundle, config):
-    """Host filesystem boundaries also apply to a portable snapshot's tools."""
+    """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
+    def paths(values):
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError('File-access paths must be lists of strings.')
+        result = []
+        for value in values:
+            path = Path(value).expanduser()
+            result.append((path if path.is_absolute() else Path(config.workspace) / path).resolve())
+        return result
+
+    # Settings support both legacy module lists and current config/overrides.
+    # Resolve their precedence before sharing any writer's effective boundary.
+    configured = merge(settings.get("modules", {}).get("tools", []), settings.get("config", {}).get("tools", []))
+    policies = {"tool-filesystem": {}}
+    overrides = settings.get("overrides", {})
+    def discover(rows, children):
+        for row in rows:
+            if isinstance(row, dict) and row.get('module') == 'tool-filesystem':
+                policies.setdefault(row.get('id') or row.get('instance_id') or 'tool-filesystem', {})
+        for child in children.values():
+            if isinstance(child, dict):
+                discover(child.get('tools', []), child.get('agents', {}))
+    discover(bundle.tools, bundle.agents)
+    for row in configured:
+        if isinstance(row, dict) and row.get("module") == "tool-filesystem":
+            policies[row.get("id") or row.get("instance_id") or "tool-filesystem"] = row.get("config", {})
+    for identity, values in policies.items():
+        values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
+        if identity != "tool-filesystem":
+            values = merge(values, overrides.get(identity, {}).get("config", {}))
+        policies[identity] = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+
+    def restrict(current, policy):
+        policy = copy.deepcopy(policy)
+        if "allowed_write_paths" in policy and "allowed_write_paths" in current:
+            shared, patch = paths(policy['allowed_write_paths']), paths(current['allowed_write_paths'])
+            policy['allowed_write_paths'] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
+                for a in shared for b in patch if a.is_relative_to(b) or b.is_relative_to(a)))
+        elif "allowed_write_paths" in policy:
+            policy['allowed_write_paths'] = [str(path) for path in paths(policy['allowed_write_paths'])]
+        if "denied_write_paths" in policy:
+            policy['denied_write_paths'] = list(dict.fromkeys(str(path) for path in
+                paths(current.get('denied_write_paths', [])) + paths(policy['denied_write_paths'])))
+        return merge(current, policy)
+
     def apply(rows):
         if not isinstance(rows, list):
             return
         for row in rows:
-            if not isinstance(row, dict) or row.get("module") != "tool-filesystem":
+            if not isinstance(row, dict) or row.get("module") not in {"tool-filesystem", "tool-apply-patch"}:
                 continue
-            generic = settings.get("overrides", {}).get("tool-filesystem", {}).get("config", {})
-            specific = settings.get("overrides", {}).get(row.get("id") or row.get("instance_id"), {}).get("config", {})
-            policy = {key:value for key,value in {**generic, **specific}.items() if key in policy_keys}
-            if policy:
-                row["config"] = merge(row.get("config", {}), expand_environment(policy))
+            current = copy.deepcopy(row.get("config", {}))
+            # Snapshot and child module settings have not been expanded yet.
+            # Normalize paths only after resolving their environment references.
+            for key in policy_keys & current.keys():
+                current[key] = expand_environment(current[key])
+            if row["module"] == "tool-filesystem":
+                identity = row.get("id") or row.get("instance_id") or "tool-filesystem"
+                policy = policies.get(identity, policies["tool-filesystem"])
+                # Keep the existing instance-override semantics for snapshots.
+                specific = overrides.get(identity, {}).get("config", {})
+                policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
+                row["config"] = merge(current, policy)
+            else:
+                # Intersect each effective filesystem policy with any explicitly
+                # narrower patch policy, retaining every denied subtree.
+                for policy in policies.values():
+                    if policy:
+                        current = restrict(current, policy)
+                row["config"] = current
     def agents(values):
         for agent in values.values():
             if isinstance(agent, dict):
@@ -317,11 +376,25 @@ async def load_root_bundle(config, chosen):
     return registry, loaded, chosen
 
 
+@dataclass
+class ResolvedRoot:
+    """A single apply's validated composition, never a cross-request cache."""
+    config: HostConfig
+    bundle: str
+    root: tuple | None
+
+    def take(self, config, bundle):
+        if self.root is None or config != self.config or bundle != self.bundle:
+            raise ValueError("The bundle configuration changed while switching. Try again.")
+        root, self.root = self.root, None
+        return root
+
+
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, **kwargs):
+                          write_guard=None, resolved_root=None, **kwargs):
     from amplifier_foundation import SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -377,7 +450,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry, loaded, chosen = await load_root_bundle(config, chosen)
+    registry, loaded, chosen = (resolved_root.take(config, chosen) if resolved_root is not None
+                               else await load_root_bundle(config, chosen))
     snapshot = is_snapshot(loaded)
     from ..runtime_controls import override_path, validate_plan
     edited_path = override_path(runtime.session_id)

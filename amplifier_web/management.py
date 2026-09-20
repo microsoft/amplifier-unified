@@ -122,7 +122,7 @@ class Management:
             statuses=self.service.state.setdefault('actionStatus',{})
             previous=statuses.get(action,{})
             if phase in {'queued','working'} or previous.get('commandId')==command_id:
-                statuses[action]={'phase':phase,'error':error,'commandId':command_id,'updatedAt':time.time(),'target':{key:args[key] for key in ('id','section','name','controlId') if key in args}}
+                statuses[action]={'phase':phase,'error':error,'commandId':command_id,'updatedAt':time.time(),'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
                 self.service._publish()
         if not action.startswith('providers.'):return
         key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')

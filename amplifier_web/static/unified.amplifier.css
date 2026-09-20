@@ -455,7 +455,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 /* Shell surfaces inherit every color from the active single-file skin. */
 #amp-one.a-chat-shell .a-layout{position:relative}
-#amp-one .a-nav-slot{--nav-width:260px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
+#amp-one .a-nav-slot{--nav-width:320px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
 #amp-one .a-nav-slot.is-pinned{flex-basis:var(--nav-width);width:var(--nav-width)}
 #amp-one .a-nav-rail{position:absolute;inset:0 auto 12px 0;width:52px;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:7px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:16px;transition:width .16s ease,box-shadow .16s ease}
 #amp-one .a-nav-slot.is-expanded .a-nav-rail{width:var(--nav-width);box-shadow:8px 10px 30px #18244118}
@@ -760,4 +760,19 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one.a-chat-shell .a-bundle-changes{margin-top:16px;font-size:12px}
 #amp-one.a-chat-shell .a-bundle-changes p{overflow-wrap:anywhere;margin:4px 0 12px}
 #amp-one.a-chat-shell .a-bundle-changes input[type=checkbox]{width:auto;margin-right:8px}
-@media(max-width:600px){#amp-one.a-chat-shell .a-bundle-trigger>span{max-width:64px}#amp-one.a-chat-shell .a-bundle-trigger>svg:last-child{display:none}#amp-one.a-chat-shell .a-model-trigger>span{max-width:78px}#amp-one.a-chat-shell .a-bundle-popover{position:fixed;left:16px;right:16px;bottom:112px;width:auto;max-width:none}}
+@media(max-width:600px){#amp-one.a-chat-shell .a-bundle-trigger>span{max-width:64px}#amp-one.a-chat-shell .a-bundle-trigger>svg:last-child{display:none}#amp-one.a-chat-shell .a-model-trigger>span{max-width:78px}#amp-one.a-chat-shell .a-bundle-popover{position:fixed;left:max(16px,calc(100vw - 100cqw + 12px));right:16px;bottom:112px;width:auto;max-width:none}}
+
+/* Public execution inspection stays compact until a field is opened. */
+#amp-one .a-execution-label>span,#amp-one .a-execution-label>small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-execution-label>small{font-size:10px;color:var(--a-muted);font-weight:400;margin-top:3px}
+#amp-one .a-execution-phase{font-variant-numeric:tabular-nums;flex-shrink:0}
+#amp-one .a-execution-timing{display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;font-size:11px;margin:8px 0;color:var(--a-muted)}
+#amp-one .a-execution-timing dd{margin:0;overflow-wrap:anywhere}#amp-one .a-execution-id{display:block;overflow-wrap:anywhere}
+#amp-one .a-execution-field{margin:8px 0;border:1px solid var(--a-line);border-radius:6px;padding:8px;min-width:0}
+#amp-one .a-execution-field summary{cursor:pointer;font-size:12px;color:var(--a-ink)}
+#amp-one .a-execution-field pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:11px;line-height:1.5;color:var(--a-ink)}
+#amp-one .a-execution-field .a-link{font-size:11px;display:inline-flex;gap:5px;align-items:center}#amp-one .a-execution-field .a-link svg{width:12px;height:12px}
+@media(max-width:600px){#amp-one .a-execution-node>.a-execution-line{flex-wrap:wrap}#amp-one .a-execution-node .a-execution-label{flex-basis:calc(100% - 66px)}#amp-one .a-execution-phase{display:inline;font-size:10px;margin-left:36px}#amp-one .a-execution-usage{white-space:normal}#amp-one .a-execution-timing{padding:0 8px}}
+
+#amp-one .a-execution-result-link{display:block;font-size:11px;overflow-wrap:anywhere;margin:6px 0;color:var(--a-accent)}
+.a-conversation-details{padding:.5rem 0;min-width:0}.a-conversation-details p{margin:.55rem 0}.a-conversation-details code{user-select:text}.a-conversation-details .a-dialog-actions{flex-wrap:wrap;justify-content:flex-start}

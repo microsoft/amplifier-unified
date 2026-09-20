@@ -2,6 +2,45 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.17.0",
+      "title": "Stable workspace and chat navigation",
+      "changes": [
+        "Workspace and chat rows keep a fixed height when hovered. Details and actions open in a flyout with full names, copyable paths, session IDs and last activity.",
+        "See working, attention and unread indicators directly in the list, and filter working conversations or those needing attention across the complete matching library.",
+        "Find workspaces through recent activity or browse nested folders, then open a workspace to give its chats the full sidebar. Duplicate folder names retain distinguishing parent paths.",
+        "Keyboard and touch controls, narrow screens and saved themes retain accessible details and actions. Browsing and opening details leave conversation selection, unread state and activity order unchanged.",
+        "Failed conversations can also be diagnosed and continued in a safe recovery copy, preserving the original history without replaying work."
+      ],
+      "notices": [
+        {
+          "id": "navigation-details-and-drill-in",
+          "title": "Navigation details and actions moved",
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+        }
+      ]
+    },
+    {
+      "version": "0.15.3",
+      "title": "Conversation export, execution details and feedback follow-up",
+      "changes": [
+        "Copy or download a whole conversation as Markdown, including older saved messages, code, voice transcripts and artifact references. JSON export remains available.",
+        "Read complete assistant replies automatically and expand public tool inputs, results and errors. Live timers and usage distinguish pending work from unavailable measurements, including background conversation naming.",
+        "Read reports submitted through this host and append follow-up comments to reports owned by its signed-in GitHub account. Drafts and selected reports stay separate between browsers, and retrying a comment does not post it twice."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.15.2",
+      "title": "Switch bundles without a required preview",
+      "changes": [
+        "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
+        "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.15.1",
       "title": "Continue here from the message box",
       "changes": [

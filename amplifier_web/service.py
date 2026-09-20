@@ -13,7 +13,7 @@ import uuid
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
 from .updates import work_paused
 
 
@@ -63,7 +63,10 @@ ACTION_DEFINITIONS = {
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
-    "session.export": ("Export a conversation", schema({"id": string(100)})),
+    "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
+    "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
+    "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
@@ -95,8 +98,8 @@ ACTION_DEFINITIONS = {
     "routing.use": ("Use a model routing preset",schema({"name":string(200),"scope":{"enum":["global","project","local"]}},["name"])),
     "routing.save": ("Save a custom routing preset",schema({"activate":{"type":"boolean"},"name":string(200),"matrix":{"type":"object"},"scope":{"enum":["global","project","local"]}},["name","matrix"])),
     "bundle.preview": ("Preview a replacement root bundle for an idle conversation", schema({"sessionId":string(200),"bundle":string(2000)},["sessionId","bundle"])),
-    "bundle.switch": ("Switch an idle conversation after preview; preserve history and compatible model selection", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle","previewId"])),
-    "bundle.fork": ("Fork history into a different root bundle after preview", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle","previewId"])),
+    "bundle.switch": ("Switch an idle conversation; optional previewId checks a reviewed preview; preserve history and compatible model selection", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
+    "bundle.fork": ("Fork history into a different root bundle; optional previewId checks a reviewed preview", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
     "bundle.default": ("Set or clear the default root for this app, workspace, or shared Amplifier settings", schema({"scope":{"enum":["app","workspace","shared"]},"bundle":{"type":["string","null"],"minLength":1,"maxLength":2000},"workspace":string(4000)},["scope","bundle"])),
     "bundle.discover": ("Browse bundles and behaviors in a Git repository", schema({"url":string(4000)})),
     "bundles.list": ("List app behaviors and standalone bundles",schema()),
@@ -572,16 +575,43 @@ class AppService:
             return await self.shell.dispatch(action, args, origin, command_id)
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
-            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
-                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
+                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        prepared_health = None
+        if action == 'session.inspect':
+            from .session_health import inspect_session
+            async with self.lock:
+                snapshot = copy.deepcopy(self._session(args['id']))
+            prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+        prepared_export = None
+        if action == 'session.export' and args.get('format') == 'markdown':
+            from .conversation_export import markdown
+            async with self.lock:
+                # Retried receipts refer to the original bytes even if their
+                # source is now missing. Do not read native history again.
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._publish()
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                source = copy.deepcopy(self._session(args['id']))
+                artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
+            # Native storage may be slow. Freeze the host-owned portion first,
+            # then let navigation and runtime events continue during the read.
+            try:
+                prepared_export = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+            except (ValueError, OSError) as exc:
+                raise AppError(str(exc), 409) from exc
         pending = []
         async with self.lock:
             # Flush and compare under the same lock: a queued runtime event
@@ -600,9 +630,9 @@ class AppService:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
                 checked = self._session(checked_session)
-                if action not in {'session.takeover', 'session.fork', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
+                if action not in {'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
                     raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
-                if checked.get('nativeProject'):
+                if checked.get('nativeProject') and action != 'session.inspect':
                     reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
                     if reason:
                         raise AppError(reason, 409)
@@ -610,7 +640,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -770,6 +800,8 @@ class AppService:
                     raise AppError('An ownership change is already in progress.', 409)
                 session['ownership'] = {'status': 'taking-over'}
                 session.pop('error', None)
+                session.pop('failure', None)
+                session.pop('health', None)
                 pending.append((self._takeover, (copy.deepcopy(session),)))
             elif action == "session.pin":
                 from .session_navigation import is_top_level
@@ -841,25 +873,54 @@ class AppService:
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
                 pending.append((self._send,(copy.deepcopy(session),text,input_id)))
-            elif action == "session.fork":
+            elif action == 'session.inspect':
+                diagnostic_result = prepared_health
+                if self._session(args['id']).get('errorAt') == snapshot.get('errorAt'):
+                    self._session(args['id'])['health'] = diagnostic_result
+            elif action in {"session.fork", "session.recover"}:
                 source = self._session(args["id"])
                 if source.get("configurationBusy"):
                     raise AppError("Wait for configuration changes to finish before forking.",409)
-                session = self._new_session({"title": source["title"] + " · fork", "workspace": source["workspace"], "bundle": source["bundle"]})
+                session = self._new_session({"title": source["title"] + (" · recovery" if action == "session.recover" else " · fork"), "workspace": source["workspace"], "bundle": source["bundle"]})
                 # loop-live checkpoints before publishing idle. Fork that full
                 # context (including tool receipts), never reconstruct a running
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn")))
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"), recovery=action == "session.recover"))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
                 self.state["sessions"].insert(0, session)
                 self.state["selectedSessionId"] = session["id"]
                 self.state['view']['messageEdit']=None
+                if action == 'session.recover':
+                    diagnostic_result = {'sessionId': session['id'], 'sourceSessionId': source['id'], 'workReplayed': False, 'status': 'idle'}
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
+            elif action == 'session.export' and args.get('format') == 'markdown':
+                from .resource_files import put
+                source, content = prepared_export
+                reference = put(self.db, content)
+                identity = reference['$resource']
+                filename = 'amplifier-conversation-' + identity[:12] + '.md'
+                diagnostic_result = {'snapshotId': identity, 'sessionId': source['id'], 'filename': filename,
+                    'mimeType': 'text/markdown', 'content': reference,
+                    'statePath': '/conversationExports/' + identity + '/content',
+                    'url': '/api/conversation/exports/' + identity}
+                self.state.setdefault('conversationExports', {})[identity] = copy.deepcopy(diagnostic_result)
+                destination = args.get('destination', 'download')
+                if destination != 'none':
+                    request_id = str(uuid.uuid4())
+                    self.state['view']['conversationExport'] = {'sessionId': source['id'], 'requestId': request_id, 'status': 'pending'}
+                    effects.append({'type': 'conversation.export', 'requestId': request_id,
+                                    'destination': destination, 'url': diagnostic_result['url']})
+            elif action == 'session.exportResult':
+                result = self.state['view'].get('conversationExport', {})
+                if result.get('requestId') == args['requestId']:
+                    result.update(status=args['status'], message=args.get('message', ''))
             elif action in {"state.export", "session.export", "theme.export"}:
+                if action == 'session.export' and args.get('destination', 'download') != 'download':
+                    raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else self.state["theme"]["css"]
                 mime = "text/css" if action == "theme.export" else "application/json"
                 effects.append({"type": "download", "filename": "amplifier-skin.css" if action == "theme.export" else "amplifier-export.json", "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
@@ -946,7 +1007,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -989,6 +1050,9 @@ class AppService:
                 view=self.state['view']
                 if view.get('panel')=='feedback' and view.get('feedbackDraft',{}).get('pending',{}).get('requestId')==args['requestId']:
                     view['panel']=None
+            elif action in {"feedback.get", "feedback.comment"}:
+                if self.feedback.followups.accept(action, args, origin):
+                    pending.append((self.feedback.followups.run, (args['requestId'],)))
             elif action.startswith("smartTools."):
                 if not self.smart_tools: raise AppError("Smart Tools service is unavailable.")
                 if action == 'smartTools.context':
@@ -1074,10 +1138,10 @@ class AppService:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
-            if action in {'session.create','session.fork','message.edit'}:
+            if action in {'session.create','session.fork','session.recover','message.edit'}:
                 from .naming import persist
                 persist(self.data_dir,session)
-            if action in {'session.fork','message.edit'}:
+            if action in {'session.fork','session.recover','message.edit'}:
                 fork_artifacts(self.state,source['id'],session)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
@@ -1120,7 +1184,7 @@ class AppService:
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
-            if action == "feedback.submit":
+            if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
@@ -1318,6 +1382,13 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
+                if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background':
+                    session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
+                    session.pop('health', None)
+            elif kind == "runtime.ended":
+                # A turn may finish before naming does; only the runtime host
+                # can confirm that no independent call can still be running.
+                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked
@@ -1373,6 +1444,7 @@ class AppService:
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if error_type == 'ContextLengthError' else detail)
+                session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
                 event = {**payload, "at": time.time()}
@@ -1496,6 +1568,8 @@ class AppService:
                 action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
+            if args['action'] == 'session.export':
+                action_args.setdefault('id', session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             await self._flush_pending_progress()
             if args['action'].startswith('canvas.apps.'):
