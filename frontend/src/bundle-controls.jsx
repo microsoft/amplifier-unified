@@ -8,7 +8,7 @@ export function BundleControl({state,session,act,working}){
  const shared=state.view?.composerBundle||EMPTY,[draft,setDraft]=useState(shared),submitting=useRef(false);
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
- const current=session?.bundle||state.settings?.bundle||'anchors',open=draft.open&&draft.sessionId===(session?.id||null);
+ const current=session?.bundle||state.settings?.bundle||'work',open=draft.open&&draft.sessionId===(session?.id||null);
  const operation=session?.bundleChange,preview=session?.bundlePreview;
  const pending=!!session?.configurationBusy||operation?.phase==='working';
  const ready=preview?.bundle===draft.bundle&&preview?.previewId;

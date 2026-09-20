@@ -1,5 +1,6 @@
 bundle:
   name: unified-shell
+  display_name: Unified shell
   version: 1.0.0
   description: Discover and use Amplifier Unified shell customization and extension authoring skills.
   namespace_root: ..

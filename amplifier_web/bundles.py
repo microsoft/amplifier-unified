@@ -112,8 +112,36 @@ def document_metadata(raw: str, path: str) -> dict | None:
         return None
     name = str(info.get("name") or PurePosixPath(path).stem)[:100]
     description = str(info.get("description") or "")[:500]
+    display_name = info.get("display_name")
+    label = {"display_name": display_name.strip()[:200]} if isinstance(display_name, str) and display_name.strip() else {}
     behavior = "behaviors" in PurePosixPath(path).parts or (PurePosixPath(path).name not in {"bundle.md", "bundle.yaml", "bundle.yml"} and "session" not in value)
-    return {"name": name, "description": description, "kind": "behavior" if behavior else "standalone"}
+    return {"name": name, **label, "description": description, "kind": "behavior" if behavior else "standalone"}
+
+
+def catalog_metadata(config, registry, name):
+    """Read only the selected source's cached/local manifest, never its includes."""
+    from .host.bundle_paths import local_bundle_path
+    state = registry.get(name) or {}
+    reference = config.registrations.get(name) or state.get('uri') or name
+    reference = config.resolve_source(reference) or reference
+    path = local_bundle_path(config, reference)
+    matching = state.get('uri') == reference
+    if path is None and matching and state.get('local_path'):
+        path = Path(state['local_path'])
+    metadata = {'display_name': state.get('display_name')} if matching else {}
+    if path is None:
+        return metadata
+    try:
+        if path.is_dir():
+            path = next((path / filename for filename in ('bundle.md', 'bundle.yaml', 'bundle.yml')
+                         if (path / filename).is_file()), path)
+        if path.is_file() and path.stat().st_size <= MAX_DOCUMENT:
+            loaded = document_metadata(path.read_text(encoding='utf-8'), str(path))
+            if loaded is not None:
+                return loaded
+    except (OSError, UnicodeError):
+        pass
+    return metadata
 
 
 def sanitize_export(value, path=(), secrets=None):
@@ -279,7 +307,7 @@ class BundleManager:
 
                 disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
                 from .bundle_selection import catalog_entry
-                catalog = sorted((catalog_entry(name) for name in names-disabled),
+                catalog = sorted((catalog_entry(name, catalog_metadata(config, registry, name)) for name in names-disabled),
                                  key=lambda row: (row['label'].casefold(), row['name'].casefold(), row['name']))
                 return {"bundles": self.public_entries(settings), "registeredBundles": catalog}
             def mutate(current):

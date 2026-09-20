@@ -45,7 +45,7 @@ export function BundlePicker({id,value,onChange,state,act,action='view.update'})
  const advanced=state.view?.bundleSources?.includes(id)||false;
  const setAdvanced=value=>act('view.update',{patch:{bundleSources:value?[...new Set([...(state.view?.bundleSources||[]),id])]:(state.view?.bundleSources||[]).filter(key=>key!==id)}});
  useEffect(()=>{act('bundles.list',{})},[]);
- const bundles=state.registeredBundles||[{name:'anchors',label:'Anchors',value:'anchors'}];
+ const bundles=state.registeredBundles||[{name:'work',label:'Work',value:'work'}];
  const selected=bundles.find(row=>row.value===value);
  return <div className="a-bundle-picker"><select id={id} aria-label="Registered root bundles" value={selected?value:':custom:'} data-action={action} onChange={e=>{if(e.target.value===':custom:')setAdvanced(true);else onChange(e.target.value)}}><option value=":custom:">{value&&!selected?value:'Choose a bundle'}</option>{bundles.map(row=><option value={row.value} key={row.value}>{row.label||row.name}</option>)}</select>{selected?.description&&<p className="a-caption">{selected.description}</p>}<button type="button" className="a-link" aria-expanded={advanced} data-action="view.update" onClick={()=>setAdvanced(!advanced)}>{advanced?'Hide source':'Use a bundle source or file'}</button>{advanced&&<PathField action={action} id={id+'-source'} value={value} onChange={onChange} state={state} act={act} placeholder="Bundle name, git URL or file path"/>}</div>;
 }
