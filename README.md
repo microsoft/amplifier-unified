@@ -179,9 +179,11 @@ subagent histories are available through **Session details → Subagent history*
 on their parent conversation. Select a resumable root chat to continue it; there
 is no import or sharing option to configure. The list refreshes every 15 seconds in the background,
 and the refresh button beside the chat list checks immediately. Opening a
-chat creates only a browser view of the same root ID. It does not duplicate the
-runtime transcript. The view starts with the latest 100 visible messages;
-**Load earlier messages** reveals older history. Execution restores the complete
+chat creates a browser view of the same root ID and, by default, prepares its
+runtime in the background. It does not duplicate the transcript or submit input.
+The view starts with the latest 100 visible messages; scrolling toward the top
+loads older history, and **Load earlier messages** remains available.
+Execution restores the complete
 native transcript, including tool results and provider replay fields. Removing a workspace or chat from the
 list keeps its shared files on disk and leaves it hidden from later discovery.
 Worker sessions and legacy chats with missing folders, unsupported IDs, or unknown
@@ -227,7 +229,51 @@ work, delegated jobs, approvals, and saving settle, even if the page stays open.
 On the next action it acquires the lock and compares native transcript, metadata,
 backup and configuration file stamps. Unchanged valid state reuses the mounted session; changed state
 reloads. A busy owner rejects execution with diagnostics and retains the draft.
-No takeover, lock expiry, force-unlock, or automatic work replay is provided.
+Takeover remains an explicit request to the current owner; background preparation
+never requests it. No lock expiry, force-unlock, or automatic work replay is provided.
+
+### Warm conversations and fast navigation
+
+The browser displays a recently visited conversation from a bounded local cache
+while its selection request completes. Uncached chats show their own loading
+state. Drafts remain attached to their conversation, and dirty canvas edits still
+complete their navigation guard first. Unchanged native history is not reread
+when returning to a chat. The initial native-history read still scans its saved
+transcript; this is not an indexed disk-paging implementation.
+
+Selecting a resumable chat immediately schedules background preparation, with no
+debounce. Preparation runs separately from display, does not submit a model turn,
+and does not take over another app's lock. Already warm chats stay loaded without
+reacquiring their writer lock just for navigation. On real input, the worker
+reacquires ownership and validates saved history and configuration as usual.
+
+By default, the host keeps up to **32 settled workers** for **12 idle hours**.
+These are idle-retention limits, not a cap on running work. The oldest settled
+workers retire first. A worker must confirm it is still parked, with no admitted
+commands, approvals, bridges, naming work, pending children or configuration
+transaction, before retirement. It resumes from saved state on the next command;
+earlier inputs and tool effects are not replayed.
+
+Use **Settings → Maintenance → Ready conversations** to change the idle count,
+hours, and preparation-on-selection policy. The shared
+`runtime.retention.update {patch: {...}}` action saves and applies these settings
+without a restart. They live under `runtime` in the host's `config/server.yaml`:
+
+```yaml
+runtime:
+  max_warm_workers: 32
+  idle_timeout_hours: 12
+  prewarm_on_select: true
+  max_background_starts: 2
+```
+
+Setting either idle limit to zero disables background preparation and retires
+settled workers promptly. Active work stays protected. The idle clock starts
+when a worker parks; merely browsing an already warm chat does not reset it.
+`max_background_starts` bounds concurrent preparations and requires a host
+restart to change. Edits through `amplifier-unified config set runtime.<name>`
+are read on startup; use the shared action or settings page for live changes.
+See [validation and memory findings](docs/validation/warm-conversations.md).
 
 Both applications must run as the same user on the same POSIX host, use the
 same canonical workspace, and share `AMPLIFIER_SESSION_STATE_HOME` (default:

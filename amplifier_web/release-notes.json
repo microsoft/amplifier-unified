@@ -2,6 +2,34 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.14.1",
+      "title": "Read earlier messages in live conversations",
+      "changes": [
+        "Load earlier messages and automatic scroll-back now work while a conversation runtime is ready or busy.",
+        "Earlier pages preserve incoming responses, drafts, and current work, including when new messages have been saved since the last history refresh.",
+        "Overlapping page requests keep message identities and reading position; incompatible saved-history changes remain visible as a retryable error."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.14.0",
+      "title": "Ready conversations and responsive source checks",
+      "changes": [
+        "Switch between cached conversations immediately while runtime preparation continues in the background, retaining drafts, scroll position, and unsaved artifact edits.",
+        "Retain settled conversation workers for reuse, with bounded background preparation and safe retirement that preserves saved history and waits for uncertain replies.",
+        "Source checks no longer treat read-only native child sessions or unsupported legacy session IDs as broken resumable configuration.",
+        "Large source-usage checks run outside the request thread so the app remains responsive while workspace settings are read."
+      ],
+      "notices": [
+        {
+          "id": "warm-worker-retention",
+          "title": "Conversation preparation and retention",
+          "detail": "Unified now prepares selected conversations in the background and retains up to 32 settled workers for up to 12 hours. This can use additional memory; active work is protected from idle retirement.",
+          "action": "Review the worker retention controls in Settings if you want different limits or to turn off background preparation."
+        }
+      ]
+    },
+    {
       "version": "0.13.1",
       "title": "Built-in Work, alphabetical bundles, and accurate source checks",
       "changes": [

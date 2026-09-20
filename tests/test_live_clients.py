@@ -204,6 +204,38 @@ async def test_client_state_is_not_an_authentication_bypass(authenticated_client
     assert "not-authenticated" not in app["service"].clients.records
 
 
+async def test_tui_can_prepare_explicit_chat_without_changing_selection_or_submitting(authenticated_client, tmp_path):
+    runtime = Runtime()
+    warmed = []
+    arrived = asyncio.Event()
+    async def prewarm(session, emit):
+        warmed.append(session['id'])
+        await emit('runtime.warmth', {'sessionId': session['id'], 'status': 'warm'})
+        arrived.set()
+    runtime.prewarm = prewarm
+    app = await create_app(tmp_path/'app', workspace=tmp_path, runtime=runtime,
+                           voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {})
+    target = service.state['selectedSessionId']
+    await service.dispatch('session.create', {})
+    selected = service.state['selectedSessionId']
+    await client.post('/api/clients/attach', json={'clientId': 'terminal', 'kind': 'tui'})
+    headers = {'X-Amplifier-Client': 'terminal'}
+    endpoint = f'/api/sessions/{target}/commands'
+    payload = {'id': 'prepare-once', 'action': 'session.warm', 'args': {}}
+    response = await client.post(endpoint, json=payload, headers=headers)
+    assert response.status == 200 and (await response.json())['accepted']
+    await asyncio.wait_for(arrived.wait(), 2)
+    response = await client.post(endpoint, json=payload, headers=headers)
+    assert (await response.json())['duplicate']
+    response = await client.get('/api/state', headers=headers)
+    assert (await response.json())['selectedSessionId'] == selected
+    assert warmed == [target] and not runtime.sent
+    assert service._session(target)['preparation']['status'] == 'warm'
+
+
 async def test_delayed_send_survives_navigation_disconnect_and_late_drafts(live):
     service, first, second = live
     entered, release = asyncio.Event(), asyncio.Event()

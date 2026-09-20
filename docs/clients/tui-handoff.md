@@ -133,6 +133,11 @@ An imported conversation can have earlier history outside its loaded window.
 When `sharedHistoryOffset` is positive, use `session.history` with that value as
 `before` and a `limit` of up to 100; reconcile subsequent snapshots and inspect
 `historyLoading`/`historyError`. `sharedHistoryTotal` describes the saved history.
+Earlier-page requests with `before` work while the runtime is ready or busy.
+They prepend saved messages without changing current work, live responses, or
+drafts. They also tolerate saved appends when the already loaded history still
+matches; incompatible rewrites report `historyError`. A page does not refresh
+the latest messages or acquire execution ownership.
 Do not interpret the latest loaded message window as the entire event log.
 
 Examples of session command arguments:
@@ -148,7 +153,20 @@ Examples of session command arguments:
 | `session.rename` | `{"title":"Release review"}` |
 | `session.takeover` | `{}`; only following explicit user intent. |
 | `session.history` | Optional `before` and `limit`; discover schema before use. |
+| `session.warm` | `{}`; optional background preparation on selection, when advertised by the host. |
 | `runtime.control` | `operation` and optional `args`; discover schema before use. |
+
+On hosts advertising `session.warm`, the TUI may display the selected
+conversation immediately and request preparation in parallel. Do not wait for
+preparation before rendering history or accepting a draft. A normal send is
+valid whether preparation is pending, warm, cold, or unavailable. Command
+acceptance only schedules preparation; it is not a readiness guarantee.
+`session.preparation.status` is advisory host state. Preparation never performs
+takeover. Older hosts without this action remain usable through ordinary send.
+See [optional preparation](live-sessions.md#optional-preparation-on-navigation)
+for retention and lifecycle details. This optional addition is newer than the
+released live-client baseline described above; discover it rather than assuming
+that every supported host provides it.
 
 The command body is:
 

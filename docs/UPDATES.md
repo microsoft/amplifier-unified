@@ -54,6 +54,12 @@ usage: checks do not execute them or guess their transitive includes. Historical
 workspace entries without a resolved directory are retained but skipped during
 source classification, just like directories that are no longer available.
 
+Native history explicitly marked read-only (including worker and legacy session
+identifiers) is not treated as resumable session configuration. Its history is
+preserved, and its workspace settings are still checked. Classification reads a
+detached selection snapshot outside the request thread, so large history catalogs
+do not block chat or the update page while settings are inspected.
+
 
 ## Update diagnostics
 

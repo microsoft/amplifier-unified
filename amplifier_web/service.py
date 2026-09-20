@@ -53,6 +53,12 @@ ACTION_DEFINITIONS = {
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.create": ("Start a conversation with a community bundle", schema({"title": string(200), "bundle": string(2000), "workspace": string(4000)}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
+    "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
+    "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
+        "type": "object", "properties": {
+            "max_warm_workers": {"type": "integer", "minimum": 0},
+            "idle_timeout_hours": {"type": "number", "minimum": 0},
+            "prewarm_on_select": {"type": "boolean"}}, "additionalProperties": False}}, ["patch"])),
     "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
@@ -242,6 +248,8 @@ class AppService:
         self.smart_tool_requests = {}
         self.lock = asyncio.Lock()
         self.closed = False
+        from .session_warmup import SessionWarmup
+        self.warmup = SessionWarmup(self)
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
         self.state = json.loads(row[0]) if row else {
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
@@ -728,7 +736,25 @@ class AppService:
                 self.state["selectedSessionId"] = session["id"]
                 self.state["view"]["draft"] = session.get('draft', '')
                 if session.get('nativeProject'):
-                    pending.append((self.history.load, (session['id'],)))
+                    pending.append((self.history.refresh_session, (session['id'],)))
+                pending.append((self.warmup.schedule, (session['id'],)))
+            elif action == "session.warm":
+                session = self._session(args['id'])
+                pending.append((self.warmup.schedule, (session['id'],)))
+            elif action == 'runtime.retention.update':
+                if not callable(getattr(self.runtime, 'configure_retention', None)):
+                    raise AppError('This host does not support worker retention settings.')
+                from .deployment import load_server_config, save_server_config
+                config = load_server_config(self.data_dir)
+                config['runtime'].update(args['patch'])
+                # Validate and durably save before applying the running policy.
+                from .runtime_retention import validate_retention
+                policy = validate_retention(config['runtime'])
+                policy['max_background_starts'] = self.runtime.retention.settings['max_background_starts']
+                saved = save_server_config(self.data_dir, {**config, 'runtime': policy})
+                self.runtime.configure_retention(policy)
+                self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
+                self.state['runtime']['retention'] = dict(policy)
             elif action == "session.rename":
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
@@ -1300,6 +1326,10 @@ class AppService:
                     session.pop('lockOwner', None)
                 if payload.get('status') == 'yielded':
                     finish_execution(session, 'interrupted')
+            elif kind == "runtime.warmth":
+                session['preparation'] = {'status': payload['status']}
+                if payload['status'] == 'warm' and session['status'] == 'ready':
+                    session['status'] = 'idle'
             elif kind == "runtime.status":
                 # Provider requests/retries describe current work; only lifecycle
                 # events or accepted input can start work. Late/background notices
@@ -1312,6 +1342,7 @@ class AppService:
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
                     session.pop("error", None)
+                    session['preparation'] = {'status': 'ready'}
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
                 if session["status"] in {"idle", "stopped"}:
@@ -1544,6 +1575,7 @@ class AppService:
 
     async def close(self):
         self.closed = True
+        await self.warmup.close()
         await self.history.close()
         if self.update_manager:
             await self.update_manager.close()

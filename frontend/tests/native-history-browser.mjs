@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {shellFor} from './shell-host.mjs';
 
 const message=i=>({id:`native-${i}`,role:i%2?'assistant':'user',text:`History ${i}\n\n${'A useful saved paragraph. '.repeat(30)}`,createdAt:i+1});
 const session={id:'native-chat',sessionKind:'root',title:'Native project chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,sharedHistoryOffset:20,sharedHistoryUserTurnOffset:10,messages:Array.from({length:20},(_,i)=>message(i+20))};
@@ -27,9 +28,15 @@ try{
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/state')return route.fulfill({json:state});
+  if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){
-   const {action,args}=route.request().postDataJSON();calls.push({action,args});
+   let {action,args}=route.request().postDataJSON();
+   if(action==='shell.command')({action,args}=args);
+   if(action==='shell.view.update')action='view.update';
+   // Render receipts do not mutate the fixture, matching the production host.
+   if(action==='shell.report')return route.fulfill({json:{accepted:true}});
+   calls.push({action,args});
    if(action==='view.update')state.view={...state.view,...args.patch};
    if(action==='workspace.select')state.selectedWorkspaceId=args.id;
    if(action==='session.history'){
@@ -43,7 +50,7 @@ try{
   return route.fulfill({json:{ok:true}});
  });
  const started=performance.now();
- await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Open chats in /fixture',exact:true}).count(),1);
  assert.equal(await page.locator('.a-nav-chat').count(),100);
  assert.equal(await page.locator('.a-nav-chat-select').filter({hasText:'Saved worker'}).count(),0);
@@ -69,14 +76,12 @@ try{
  const pane=page.locator('.a-messages');
  await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
  assert.equal(calls.some(call=>['runtime.control','providers.list'].includes(call.action)),false,'reading native history must not mount a runtime or inspect providers');
- await pane.evaluate(element=>{element.scrollTop=0});
- await page.waitForTimeout(100);
- const before=await page.locator('[data-message-id="native-20"]').boundingBox();
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();
+ const before=await pane.evaluate(element=>{element.scrollTop=0;return element.querySelector('[data-message-id="native-20"]').getBoundingClientRect().y});
  await page.locator('[data-message-id="native-0"]').waitFor();
  await page.waitForTimeout(100);
  const after=await page.locator('[data-message-id="native-20"]').boundingBox();
- assert.ok(Math.abs(after.y-before.y)<3,`loading older messages moved reading position by ${after.y-before.y}px`);
+ assert.ok(Math.abs(after.y-before)<3,`loading older messages moved reading position by ${after.y-before}px`);
+ assert.equal(calls.filter(call=>call.action==='session.history').length,1,'scrolling upward requests one page without clicking');
  assert.equal(await page.getByRole('button',{name:'Load earlier messages',exact:true}).count(),0);
  await page.getByRole('button',{name:'Refresh workspaces and chats',exact:true}).click();
  assert.ok(calls.some(call=>call.action==='history.refresh'));

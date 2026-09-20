@@ -9,6 +9,7 @@ import tempfile
 from urllib.parse import urlsplit
 
 import yaml
+from .runtime_retention import DEFAULT_RETENTION, validate_retention
 
 DEFAULT_SERVER = {
     "schema_version": 1,
@@ -17,6 +18,7 @@ DEFAULT_SERVER = {
     "public_origins": [],
     "session_ttl_seconds": 604800,
     "tls": {"method": "none", "cert": "", "key": ""},
+    "runtime": DEFAULT_RETENTION,
 }
 
 
@@ -109,6 +111,7 @@ def validate_server(value: dict) -> dict:
         raise ValueError("Unknown server configuration setting: " + ", ".join(sorted(unknown)))
     config = copy.deepcopy(DEFAULT_SERVER)
     config.update(value)
+    config["runtime"] = validate_retention(config["runtime"])
     if config["schema_version"] != 1:
         raise ValueError("Unsupported server configuration schema.")
     binds = config["bind"]

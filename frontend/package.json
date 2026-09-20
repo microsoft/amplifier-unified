@@ -11,6 +11,7 @@
     "test:chat-browser": "node tests/chat-browser.mjs",
     "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
     "test:history-browser": "node tests/native-history-browser.mjs",
+    "test:live-history-browser": "node tests/live-history-browser.mjs",
     "test:canvas-browser": "node tests/canvas-browser.mjs",
     "test:message-browser": "node tests/message-browser.mjs",
     "test:artifact-browser": "node tests/artifact-browser.mjs",
@@ -38,7 +39,9 @@
     "test:canvas-dirty-browser": "node tests/canvas-dirty-browser.mjs",
     "test:cache-usage-browser": "node tests/cache-usage-browser.mjs",
     "test:bundle-browser": "node tests/bundle-browser.mjs",
-    "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs"
+    "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
+    "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
+    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
