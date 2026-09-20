@@ -1,0 +1,17 @@
+#amp-one .a-questions{flex-shrink:0;max-height:45vh;overflow:auto;padding:0 18px 10px;display:grid;gap:10px}
+#amp-one .a-question{padding:14px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);min-width:0;overflow-wrap:anywhere}
+#amp-one .a-question-kind{font-size:12px;font-weight:600;opacity:.72}
+#amp-one .a-question-prompt{font-weight:600;margin:6px 0}
+#amp-one .a-question fieldset{border:0;padding:0;margin:10px 0;min-width:0;display:grid;gap:7px}
+#amp-one .a-question-option{display:flex;align-items:flex-start;gap:10px;padding:9px;border:1px solid var(--a-line);border-radius:8px;cursor:pointer}
+#amp-one .a-question-option input{width:auto;flex:none;margin:3px 0 0}
+#amp-one .a-question-option small{display:block;font-size:12px;opacity:.75;margin-top:3px}
+#amp-one .a-question-text{display:grid;gap:6px;font-size:13px}
+#amp-one .a-question-text textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:60px;border:1px solid var(--a-line);border-radius:8px;padding:8px;background:var(--a-surface);color:var(--a-ink)}
+#amp-one .a-question .a-dialog-actions{margin-top:8px;flex-wrap:wrap}
+#amp-one .a-question-result p{margin:8px 0}
+#amp-one .a-question-history summary{font-size:12px;cursor:pointer;padding:6px 0}
+#amp-one .a-question-history .a-question{margin-top:8px}
+@media(max-width:600px){#amp-one .a-questions{padding:0 10px 8px;max-height:45vh}#amp-one .a-question{padding:10px}}
+
+#amp-one .a-question .a-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

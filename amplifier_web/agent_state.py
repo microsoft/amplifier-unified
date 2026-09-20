@@ -47,6 +47,7 @@ def overview(state, session_id):
         core['session']['pinned'] = selected in state.get('pinnedSessionIds', [])
         core['session'].update({'$statePath':base,'activity':_preview(session.get('activity',{}),base+'/activity',1500),
             'workers':_preview(session.get('workers',[]),base+'/workers',1500),
+            'questions':_preview(session.get('questions',[]),base+'/questions',2500),
             'recentMessages':[_preview(message,_pointer(base+'/messages',i),1000) for i,message in list(enumerate(session.get('messages',[])))[-6:]],
             'messageCount':len(session.get('messages',[])),
             'model':_preview(state.get('runtimeControl',{}).get(selected,{}).get('configuration.providers',{}).get('effective'),_pointer('/runtimeControl',selected)+'/configuration.providers/effective',1000)})
