@@ -270,8 +270,9 @@ async def compose_configured_bundle(registry, loaded, config):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     snapshot = is_snapshot(loaded)
     if not snapshot:
+        from ..builtin_behaviors import resolve_builtin_behavior
         for behavior in config.app_bundles:
-            loaded = loaded.compose(await registry.load(behavior))
+            loaded = loaded.compose(await registry.load(resolve_builtin_behavior(behavior)))
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
             from ..session_files import capture_dir, project_slug
             # The community hook owns kernel capture, discovery and metadata.

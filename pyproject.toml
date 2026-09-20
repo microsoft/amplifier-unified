@@ -34,6 +34,16 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
+"behaviors" = "amplifier_web/bundle_data/behaviors"
+"context" = "amplifier_web/bundle_data/context"
+"skills" = "amplifier_web/bundle_data/skills"
+"docs/shell" = "amplifier_web/bundle_data/docs/shell"
+"packages/shell-sdk" = "amplifier_web/bundle_data/packages/shell-sdk"
+"examples/shell-navigator" = "amplifier_web/bundle_data/examples/shell-navigator"
+"examples/shell-reader" = "amplifier_web/bundle_data/examples/shell-reader"
+
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
 default = true

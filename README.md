@@ -34,6 +34,14 @@ End users need no Node installation: compiled React assets ship in the Python pa
 
 **Settings → Capabilities → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
 
+## Shell customization and agent guidance
+
+The [Unified shell behavior](behaviors/unified-shell.yaml) provides the
+[amplifier-shell skill](skills/amplifier-shell/SKILL.md) through Microsoft's
+skills tool. It covers layouts, themes, navigation modules, and artifact viewers.
+See [installation and behavior composition](docs/shell/behavior.md) and the
+[shell SDK guide](docs/shell/README.md).
+
 ## Development
 
 ```sh
