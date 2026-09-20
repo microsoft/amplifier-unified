@@ -1,15 +1,17 @@
 # Optional shared model configuration adapter
 
 This host extension supplies shared Amplifier model configuration to an explicit
-native runtime. It implements the companion Converge runtime proposal's optional
-adapter interface. It ships in Unified v0.11.8 and is not enabled by installing or updating Unified.
+native runtime through an optional adapter interface. It ships in Unified
+v0.11.8 and is not enabled by installing or updating Unified. The consuming
+runtime owns adapter selection and adoption; Unified does not identify or
+configure downstream applications.
 
 ## Scope and adoption
 
 Install the reviewed Unified and compatible native runtime packages in the
-manager's Python environment. The companion runtime proposal aligns its
-Foundation requirement with Unified's tested immutable revision
-`695f875c0908f45f8dc78b1fcde80ecddebffd7c`, allowing normal dependency resolution.
+manager's Python environment. Their Foundation requirements must agree with
+Unified's tested immutable revision in `pyproject.toml` so the packages can be
+installed together through ordinary dependency resolution.
 Do not bypass dependency checks to combine incompatible versions. This adapter
 currently ships inside Unified; extracting a smaller shared package is separate
 work, and portable domain libraries acquire no Unified dependency.
@@ -55,29 +57,15 @@ reference is not a content lock.
 ## Verification
 
 - Unified v0.11.8 release candidate on the published v0.11.7 base: **1,028 passed, 11 skipped**. Frontend: **154 passed**. Empty-host and pending-review browser checks, distribution verification and a fresh installed-wheel readiness check passed.
-- Companion Converge runtime suite on the published v0.2.2 base:
-  **122 passed**, including real Foundation history compatibility.
-- A clean environment resolved and installed both built packages with ordinary
-  dependencies, without `--no-deps` or source-path injection.
 - Shared scope, instance merge/disable, source precedence, schema-aware
   credentials, unchanged resume, changed routing/environment refusal, child
   preference preservation and visible startup-failure regressions passed.
 
-A separate live qualification used a temporary shared root/workspace and
-temporary native histories. A workspace override selected the `fast` role's
-OpenAI instance; a native-session override selected the `general` role's
-Anthropic instance. The normal `hooks-routing` capability resolved both, and
-the native runtime launched the workers directly:
-
-| Role | Resolved provider/model | Observed provider request | Result |
-| --- | --- | --- | --- |
-| `general` | Anthropic / `claude-haiku-4-5` | `haiku` instance | `READY` |
-| `fast` | OpenAI / `gpt-5.6-luna` | `luna` instance | `READY` |
-
-These are qualification choices, not adapter defaults. The checks prove shared
-scope resolution and real execution through two provider families. They do not
-prove every provider, TUI implementation, visual workflow, or migration of the
-existing Converge manager. Its active configuration and processes were untouched.
+These host checks do not qualify a downstream application's execution, visual
+workflow, provider accounts or existing-session migration. Each integration
+owns those checks and their evidence. Validate co-installation with ordinary
+dependencies, without `--no-deps` or source-path injection, and distinguish
+offline adapter compatibility from live-provider execution.
 
 The [TUI handoff](TUI-SHARED-CONFIGURATION.md) gives the interoperable settings
 contract and adoption checks. When releasing an integration that changes

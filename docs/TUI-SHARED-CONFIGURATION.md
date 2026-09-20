@@ -70,7 +70,7 @@ replacement for standard bundle registrations or behavior lists.
 ## 3. Routing and credentials
 
 Use the existing routing module and its `model_role_resolver` capability.
-Do not build a second provider/model matcher into the TUI, Converge or a Smart
+Do not build a second provider/model matcher into the TUI or a Smart
 Tool launcher. Normal session defaults use provider priorities and default
 models; agents with `model_role` use routing roles. Selecting a routing matrix
 does not by itself assign a role to the root conversation.
@@ -162,7 +162,7 @@ locking. Reuse Foundation's native history and shared execution lock. If a host
 that ignores that lock modifies history, detect the conflict and preserve both
 histories instead of blindly overwriting the transcript.
 
-## 6. Portable Smart Tools and the Converge bridge
+## 6. Portable Smart Tools and optional runtime adapters
 
 The [Smart Tools specification](https://github.com/microsoft/amplifier-smart-tools)
 places domain behavior in the library, with a thin required CLI and optional
@@ -170,11 +170,11 @@ MCP/UI adapters. Its invocation contract does not prescribe a universal model
 injection protocol. Keep deterministic capabilities usable without provider
 credentials, and keep model-backed domain expertise inside the tool's library.
 
-Converge's Create and Direction capabilities are currently deterministic. Its
-separate native execution runtime already accepts explicit provider-independent
-configuration. The optional bridge added alongside this handoff resolves shared
-model settings at that host boundary; it does not make those domain libraries
-discover `~/.amplifier` or add an Amplifier requirement to unrelated Smart Tools.
+A native execution runtime can accept explicit provider-independent configuration
+and optionally resolve shared model settings at its host boundary. This does not
+require its domain library to discover `~/.amplifier` or add an Amplifier
+dependency to unrelated Smart Tools. The integration belongs to the consuming
+runtime; Unified supplies the generic adapter without naming its consumers.
 
 The proposed runtime adapter interface has two functions:
 
@@ -196,13 +196,13 @@ overrides. It retains the tool's own bundle, instructions, actions, limits and
 agent declarations. Child sessions retain the normal runtime's already-resolved
 provider preferences. No OpenAI provider or GPT model is required by the bridge.
 
-For a saved Converge native session, changed resolved configuration or changed
+For a saved native session, changed resolved configuration or changed
 custom routing-file contents must still fail the runtime's configuration digest
 check. This patch introduces no blanket permission to change saved sessions.
 Adoption for an existing manager requires a separately reviewed exact migration
 or a new native session. New settings are resolved for new managers; active
-managers are not restarted. The Converge integration remains an isolated draft
-pending coordination with its runtime owner and idle adoption.
+managers are not restarted. Coordinate adoption and verification with the
+runtime owner.
 
 If a different portable tool uses its own model client, adapt its existing public
 library interface. Do not impose this Amplifier runtime interface on that tool.
@@ -242,14 +242,14 @@ In the Unified repository:
 - `tests/test_shared_settings.py`, `tests/test_shared_runtime_config.py`: compatibility fixtures
 - `docs/SHARED-CONFIGURATION.md`: migration and app-owned state
 
-In the Converge Agents proposal, `packages/project-runtime` owns the optional
-adapter seam. Its default explicit-configuration path remains available without
-installing Unified. For a standalone TUI, adopt the file contract and shared
+The consuming runtime owns its optional adapter interface and should retain an
+explicit-configuration path that works without installing Unified. For a
+standalone TUI, adopt the file contract and shared
 Foundation/routing primitives. If several hosts want a common reader/writer
 package, extract the small settings layer with these fixtures rather than
 copying an entire application's runtime.
 
-See `docs/SHARED-MODEL-ADAPTER.md` for installation boundaries and verification
-evidence, including real calls through two provider families. Compatible package
+See `docs/SHARED-MODEL-ADAPTER.md` for installation boundaries and host validation.
+Downstream integrations own their live-provider qualification. Compatible package
 pins matter when co-installing the optional host adapter and native runtime;
 their dependency resolver must agree on the Foundation revision.

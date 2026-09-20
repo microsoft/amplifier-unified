@@ -91,16 +91,16 @@ diagnostic destinations, runtime caches, and conversation UI/operation state.
 Resetting app settings does not reset the shared settings. Private backups now
 include shared configuration and relevant workspace settings.
 
-## Smart Tools and Converge
+## Smart Tools and optional native runtimes
 
 This cutover is a host configuration change. It does not inject Amplifier
 settings discovery into portable Smart Tools. The opt-in
 `amplifier_web.host.shared_runtime_config` adapter supplies shared provider
 instances and the ordinary routing hook to a compatible native runtime, while
 retaining its domain bundle and agent declarations. It has no required provider
-or model. Converge's companion runtime proposal supports this optional seam;
-its adoption remains separate from this migration and never restarts an active
-manager or bypasses the saved-session configuration guard.
+or model. A runtime owner can explicitly adopt this optional interface;
+adoption remains separate from this migration and must not restart an active
+manager or bypass its saved-session configuration guard.
 
 The adapter is an Amplifier host extension, not a universal Smart Tools
 invocation contract. Deterministic domain operations remain independent of

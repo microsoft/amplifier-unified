@@ -141,7 +141,7 @@ ACTION_DEFINITIONS = {
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice or workspace defaults", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
-    "theme.reset": ("Restore the Converge skin", schema()),
+    "theme.reset": ("Restore the default skin", schema()),
     "theme.export": ("Export the applied skin", schema()),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
@@ -254,7 +254,7 @@ class AppService:
         self.state = json.loads(row[0]) if row else {
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
             "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "work", "workspace": self.default_workspace},
-            "theme": {"name": "Converge", "css": self.default_theme()},
+            "theme": {"name": "Amplifier Unified", "css": self.default_theme()},
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
@@ -320,11 +320,11 @@ class AppService:
         self._save()
 
     def default_theme(self):
-        for name in ("converge.amplifier.css", "default-theme.css"):
+        for name in ("unified.amplifier.css", "default-theme.css"):
             path = Path(__file__).parent / "static" / name
             if path.exists():
                 return path.read_text()
-        return "/* Converge uses the app's bundled default styling. */"
+        return "/* Amplifier Unified uses the app's bundled default styling. */"
 
     def _refresh_shared_preferences(self):
         from .shared_settings import read_settings, settings_paths
@@ -1056,7 +1056,7 @@ class AppService:
                 from .canvas_apps import theme_command
                 theme_command(self, action, args)
             elif action == "theme.reset":
-                self.state["theme"] = {"name": "Converge", "css": self.default_theme()}
+                self.state["theme"] = {"name": "Amplifier Unified", "css": self.default_theme()}
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
             elif action in {"call.start", "call.mute", "call.end"}:
