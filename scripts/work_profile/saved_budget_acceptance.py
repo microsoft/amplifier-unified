@@ -35,7 +35,8 @@ async def run(args):
         checks['failure_publicly_observed'] = any(e['kind'] == 'runtime.error' and e.get('event') == 'provider.error' for e in events)
         checks['no_fabricated_model_reply'] = not any(e['kind'] == 'assistant.message' and 'BUDGET_SHOULD_NOT_RUN' in e.get('text','') for e in events)
         report['provider_reported_usage'] = baseline['usage']['receipts'][0]['usage']
-        report['usage_limitation'] = 'Provider totalTokens excludes a separately reported cacheWriteTokens value in this receipt; host preserves both and does not invent inclusive total semantics.'
+        report['usage_provenance'] = 'Provider-adapter normalized counters; raw API payload was not collected.'
+        report['usage_limitation'] = 'Normalized totalTokens excludes cacheWriteTokens in this receipt. This run does not prove inclusive token-budget consumption; Core/provider accounting requires separate validation.'
         report['passed'] = all(checks.values())
     finally:
         await service.close()

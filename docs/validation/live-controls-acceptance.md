@@ -10,7 +10,7 @@ Run **k** reopened g's saved artifact with runtime execution disabled. It verifi
 
 Run **i** admitted one real model call, saved the provider usage receipt, set a revision-bound one-token limit and observed `generation.failed` / `provider.error` when attempting another turn. The runtime correctly ended `stopped`; the harness initially waited for `idle`. The corrected predicate accepts the observed terminal states. Run **l**, with execution disabled, inspected the same saved records: exactly one model call, the persisted limit and rejection, blocked admission and no fabricated model reply. It submitted no new provider request.
 
-The provider reported input 3, output 7, total 10, cache-write 12,635 and cost USD 0.0316775. The host preserves these reported fields. The cached count is not represented in this provider's total; this acceptance does not invent an inclusive total or claim account quota accuracy. Provider accounting semantics remain a follow-up for the provider/metrics owner.
+The provider adapter reported normalized input 3, output 7, total 10, cache-write 12,635 and cost USD 0.0316775. These are adapter counters, not raw wire totals; the harness did not collect the raw API payload. The installed provider source (`f0c94b001f70e11c0a668eb9886639b63cc0bbbf`, `amplifier_module_provider_openai/__init__.py:5233–5295`) subtracts cache-write from vendor input and computes normalized total as input plus output. The host preserves those fields. The cache-write count is excluded from that normalized total, so this run does not prove an inclusive token budget or account quota. Core/provider accounting semantics and the resulting budget consumption are under separate review.
 
 Two product fixes resulted from the live run:
 

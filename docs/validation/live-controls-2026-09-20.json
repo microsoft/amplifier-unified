@@ -81,7 +81,8 @@
     "costUsd": 0.0316775,
     "costType": "reported"
   },
-  "usage_limitation": "Provider totalTokens excludes a separately reported cacheWriteTokens value in this receipt; host preserves both and does not invent inclusive total semantics.",
+  "usage_provenance": "Provider-adapter normalized counters; raw API payload was not collected. Installed provider f0c94b001f70e11c0a668eb9886639b63cc0bbbf normalizes input by subtracting cache-write and computes total as normalized input plus output.",
+  "usage_limitation": "Normalized totalTokens excludes cacheWriteTokens in this receipt. This run does not prove inclusive token-budget consumption; Core/provider accounting is under separate review.",
   "limits": [
     "Synthetic unrestricted Bash stdin override only; production policy unchanged.",
     "No spreadsheet formula engine was available; spreadsheet recalculation is untested.",
