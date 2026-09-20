@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from amplifier_web.service import AppError, AppService
-from amplifier_web.session_navigation import is_top_level
 
 
 @pytest.fixture
@@ -15,29 +14,27 @@ async def service(tmp_path):
     await app.close()
 
 
-async def test_create_workspace_makes_parents_and_an_idle_root_chat(service, tmp_path):
+async def test_create_workspace_makes_parents_and_an_uncommitted_draft(service, tmp_path):
     folder = tmp_path / 'new' / 'nested' / 'project'
     result = await service.dispatch('workspace.create', {'path': str(folder), 'name': 'My project'}, origin='agent')
     state = result['state']
     workspace = next(w for w in state['workspaces'] if w['id'] == state['selectedWorkspaceId'])
-    chat = service._session()
 
     assert folder.is_dir()
     assert workspace['path'] == str(folder)
     assert workspace['name'] == 'My project'
     assert workspace['available'] is True
-    assert chat['workspace'] == str(folder)
-    assert is_top_level(chat)
-    assert chat['messages'] == [] and chat['status'] == 'idle'
-    assert not chat.get('runtimeSessionId')
+    assert state['selectedSessionId'] is None
+    assert state['sessions'] == []
+    assert state['view']['newSessionDraft']['workspace'] == str(folder)
     assert not service.tasks  # Creating a workspace cannot start a model turn.
-    explorer_row = next(row for row in state['workspaceExplorer']['rows'] if row['workspaceId'] == workspace['id'])
-    assert explorer_row['chatCount'] == 1 and explorer_row['canBrowse'] is False
+    assert state['workspaceExplorer']['totalWorkspaces'] == 0  # Drafts are not saved chats.
 
     restored = AppService(service.data_dir)
     try:
         assert restored.state['selectedWorkspaceId'] == workspace['id']
-        assert restored._session()['id'] == chat['id']
+        assert restored.state['selectedSessionId'] is None
+        assert restored.state['view']['newSessionDraft']['workspace'] == str(folder)
     finally:
         await restored.close()
 
@@ -47,6 +44,7 @@ async def test_create_existing_workspace_reuses_root_chat_and_preserves_contents
     folder.mkdir()
     (folder / 'important.txt').write_text('Keep me')
     await service.dispatch('workspace.create', {'path': str(folder)}, command_id='first-create')
+    await service.dispatch('session.create', {})
     first_chat = service._session()
     service._message(first_chat, 'user', 'Saved conversation')
     worker = {**first_chat, 'id': 'worker', 'sessionKind': 'worker', 'nativeParentId': first_chat['id'], 'messages': []}
@@ -64,7 +62,7 @@ async def test_create_existing_workspace_reuses_root_chat_and_preserves_contents
     assert (folder / 'important.txt').read_text() == 'Keep me'
 
 
-async def test_workspace_with_only_a_worker_gets_its_first_root_chat(service, tmp_path):
+async def test_workspace_with_only_a_worker_opens_an_uncommitted_draft(service, tmp_path):
     folder = tmp_path / 'workers-only'
     folder.mkdir()
     await service.dispatch('workspace.add', {'path': str(folder)})
@@ -74,9 +72,9 @@ async def test_workspace_with_only_a_worker_gets_its_first_root_chat(service, tm
 
     await service.dispatch('workspace.create', {'path': str(folder)}, origin='agent')
 
-    assert service._session()['id'] != worker['id']
-    assert is_top_level(service._session())
-    assert len(service.state['sessions']) == 2
+    assert service.state['selectedSessionId'] is None
+    assert service.state['view']['newSessionDraft']['workspace'] == str(folder)
+    assert len(service.state['sessions']) == 1
     assert worker in service.state['sessions']
 
 
@@ -92,7 +90,7 @@ async def test_create_restores_a_missing_registered_folder(service, tmp_path):
     workspace = next(w for w in service.state['workspaces'] if w['id'] == identity)
     assert workspace['available'] is True
     assert workspace['name'] == 'Remembered'
-    assert service._session()['workspace'] == str(folder)
+    assert service.state['view']['newSessionDraft']['workspace'] == str(folder)
 
 
 @pytest.mark.parametrize('invalid', ['blank', 'file', 'parent-file', 'null-byte'])

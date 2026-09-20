@@ -1,6 +1,6 @@
 /* Layout stays stable when the canvas or its controls change. Colors follow the skin. */
 #amp-one.a-chat-shell .a-top-end{flex-shrink:0}
-#amp-one.a-chat-shell .a-canvas-toggle{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex:none;min-width:92px;height:36px;padding:7px 10px;border-radius:9px;color:var(--a-muted);white-space:nowrap}
+#amp-one.a-chat-shell .a-canvas-toggle{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;min-width:36px;height:36px;padding:8px;border-radius:9px;color:var(--a-muted);white-space:nowrap}
 #amp-one.a-chat-shell .a-canvas-toggle svg{width:18px;height:18px;flex:none}
 #amp-one.a-chat-shell .a-canvas-toggle:hover{background:var(--a-soft);color:var(--a-ink)}
 #amp-one.a-chat-shell .a-canvas-toggle[aria-pressed="true"]{background:var(--a-tint);color:var(--a-accent)}

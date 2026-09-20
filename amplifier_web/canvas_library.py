@@ -48,6 +48,8 @@ def remember(state, db):
     canvas = state.get('canvas', {})
     if not canvas.get('kind') or canvas.get('placeholder') or canvas.get('app'):
         return
+    if canvas.get('renderReports', {}).get('stored-source', {}).get('status') == 'error' and not any(key in canvas for key in ('content', 'surface')):
+        return
     if 'sessionId' not in canvas:  # Migrate the one legacy preview.
         canvas['sessionId'] = state.get('selectedSessionId')
     session = next((s for s in state.get('sessions', []) if s['id'] == canvas['sessionId']), {})
@@ -94,12 +96,28 @@ def load(state, db, identity, *, open_panel=True):
     if not row:
         raise AppError('This artifact belongs to another chat or is no longer available.')
     local = presentation(state, row)
-    canvas = {**copy.deepcopy(row), **copy.deepcopy(local), **({} if row.get('contentResource') else resource(db,row['body']['$resource'])), 'open':open_panel, 'renderReports':{}}
+    canvas = {**copy.deepcopy(row), **copy.deepcopy(local), 'open':open_panel, 'renderReports':{}}
+    if not row.get('contentResource'):
+        try:
+            body = resource(db, row['body']['$resource'])
+            if not isinstance(body, dict):
+                raise ValueError('Invalid saved canvas body.')
+            canvas.update(copy.deepcopy(body))
+        except (KeyError, ValueError, OSError, TypeError):
+            # Keep the original immutable reference. Opening the drawer must
+            # not fail or overwrite a historical artifact with an empty body.
+            canvas['contentResource'] = copy.deepcopy(row.get('body'))
+            canvas['renderReports']['stored-source'] = {
+                'status': 'error', 'message': 'The saved artifact source is unavailable. Other saved artifacts are still accessible.'}
     canvas.pop('body',None)
     canvas.pop('tabOpen',None)
     mcp_state = canvas.pop('mcpState', None)
     if mcp_state:
-        canvas['mcp'] = resource(db,mcp_state['$resource'])
+        try:
+            canvas['mcp'] = resource(db,mcp_state['$resource'])
+        except (KeyError, ValueError, OSError, TypeError):
+            canvas['renderReports']['stored-tool-state'] = {
+                'status': 'error', 'message': 'The saved tool state is unavailable. No tool work was replayed.'}
     restore_body(canvas, db)
     local['tabOpen'] = True
     local['lastViewedAt'] = time.time()

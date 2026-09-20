@@ -107,3 +107,63 @@ async def test_unavailable_old_source_does_not_break_client_attachment(tmp_path)
             assert canvas['renderReports']['stored-source']['status'] == 'error'
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('missing', ['index', 'blob'])
+async def test_reopen_and_select_unavailable_artifact_preserve_reference(tmp_path, missing):
+    from amplifier_web.resource_files import root
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    app.clients.attach('reader')
+    try:
+        with app.clients.bind('reader'):
+            await app.dispatch('session.create', {})
+            sid = app.state['selectedSessionId']
+            await app.dispatch('canvas.show', {'kind': 'markdown', 'content': '# Retained source'})
+            original = app.state['canvasArtifacts'][0].copy()
+            reference = original['body']['$resource']
+            saved = app.db.execute('SELECT value FROM state_resources WHERE id=?', (reference,)).fetchone()[0]
+            path = root(app.db) / (reference + '.json')
+            content = path.read_bytes()
+            if missing == 'index':
+                app.db.execute('DELETE FROM state_resources WHERE id=?', (reference,))
+            else:
+                path.unlink()
+            # A stale client selection must not block the drawer or chat switch.
+            app.state['canvas'] = {'id': 'old-client', 'sessionId': 'other', 'open': False}
+            await app.dispatch('canvas.reopen', {})
+            assert app.state['canvas']['open']
+            assert app.state['canvas']['id'] == original['id']
+            assert app.state['canvas']['contentResource'] == original['body']
+            assert app.browser_state()['canvas']['renderReports']['stored-source']['status'] == 'error'
+            await app.dispatch('canvas.select', {'id': original['id']})
+            assert app.state['canvasArtifacts'][0]['body'] == original['body']
+            assert app.state['selectedSessionId'] == sid
+            # Exact original source recovery remains possible; no blank snapshot replaces it.
+            path.write_bytes(content)
+            app.db.execute('INSERT OR REPLACE INTO state_resources VALUES (?,?)', (reference, saved))
+            await app.dispatch('canvas.select', {'id': original['id']})
+            assert app.state['canvas']['content'] == '# Retained source'
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('missing', ['index', 'blob'])
+async def test_unavailable_retained_source_suspends_pruning_unknown_nested_references(tmp_path, missing):
+    from amplifier_web.resource_files import collect, put, root
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        nested = put(app.db, {'content': 'Nested source retained by the missing parent'})
+        parent = put(app.db, {'surface': nested})
+        app.state['canvasArtifacts'] = [{'id': 'retained', 'body': parent}]
+        if missing == 'index':
+            app.db.execute('DELETE FROM state_resources WHERE id=?', (parent['$resource'],))
+        else:
+            (root(app.db) / (parent['$resource'] + '.json')).unlink()
+        assert collect(app.db, app.state) == []
+        assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (nested['$resource'],)).fetchone()
+        assert (root(app.db) / (nested['$resource'] + '.json')).exists()
+        app._last_storage_sweep = 0
+        await app.dispatch('canvas.reopen', {})
+        assert app.state['canvas']['open']
+    finally:
+        await app.close()

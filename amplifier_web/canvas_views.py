@@ -86,7 +86,7 @@ class CanvasViews:
             return
         if action == 'canvas.close':
             check(client, ('primary', 'secondary'))
-        elif (action in {'session.create', 'session.fork', 'message.edit',
+        elif (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
                          'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
               or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
