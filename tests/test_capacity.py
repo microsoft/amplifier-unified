@@ -252,3 +252,20 @@ async def test_receipt_pages_keep_full_totals_and_restart_observation_unknown(tm
         await restarted.close()
     finally:
         await worker.close(); await app.close()
+
+
+async def test_runtime_control_alias_cannot_escape_capacity_target_or_forge_actor(tmp_path, monkeypatch):
+    app, worker, sid = await setup(tmp_path, monkeypatch)
+    try:
+        with pytest.raises(AppError, match='calling conversation'):
+            await app.app_bridge('dispatch', {'action': 'runtime.control', 'args': {'sessionId': 'wrong', 'operation': 'capacity.set', 'args': {'expectedRevision': 0, 'enabled': True, 'maxTotalTokens': 10}}}, sid)
+        with pytest.raises(AppError, match='Additional properties'):
+            await app.app_bridge('dispatch', {'action': 'runtime.control', 'args': {'sessionId': sid, 'operation': 'capacity.set', 'args': {'expectedRevision': 0, 'actor': 'ui', 'origin': 'ui', 'enabled': True, 'maxTotalTokens': 10}}}, sid)
+        reply = await app.app_bridge('dispatch', {'id': 'alias', 'action': 'runtime.control', 'args': {'sessionId': sid, 'operation': 'capacity.set', 'args': {'expectedRevision': 0, 'enabled': True, 'maxTotalTokens': 10}}}, sid)
+        assert reply['result']['budget']['origin'] == 'agent'
+        with pytest.raises(AppError, match='revision changed'):
+            await app.app_bridge('dispatch', {'id': 'alias-stale', 'action': 'runtime.control', 'args': {'sessionId': sid, 'operation': 'capacity.set', 'args': {'expectedRevision': 0, 'maxTotalTokens': 100}}}, sid)
+        with pytest.raises(AppError, match='Unknown action'):
+            await app.app_bridge('dispatch', {'action': 'runtime.control', 'args': {'sessionId': sid, 'operation': 'capacity.admit', 'args': {}}}, sid)
+    finally:
+        await worker.close(); await app.close()
