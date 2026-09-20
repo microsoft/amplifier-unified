@@ -9,6 +9,16 @@ test('an empty-composer draft stays scoped when a conversation is selected',()=>
  assert.equal(pending.apply({selectedSessionId:'chat',view:{draft:'This chat'}}).view.draft,'This chat');
 });
 
+test('first-conversation binding keeps draft ordering without reviving old edits',()=>{
+ const pending=createPendingView(),blank=pending.add({draft:''},null),typed=pending.add({draft:'Next draft'},null);
+ pending.bindDraft(blank,'first');pending.bindDraft(typed,'first');
+ assert.equal(pending.apply({selectedSessionId:'first',view:{draft:'Old draft'}}).view.draft,'Next draft');
+ pending.settle(blank);
+ assert.equal(pending.apply({selectedSessionId:'other',view:{draft:'Other draft'}}).view.draft,'Other draft');
+ pending.settle(typed);pending.bindDraft(typed,'first');
+ assert.equal(pending.apply({selectedSessionId:'first',view:{draft:'Saved draft'}}).view.draft,'Saved draft');
+});
+
 test('navigation paints without changing the authoritative snapshot or session data',()=>{
  const pending=createPendingView(),state={revision:1,view:{panel:null},sessions:[{id:'chat',messages:[]}]};
  const token=pending.add({panel:'settings'}),shown=pending.apply(state);
