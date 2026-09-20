@@ -181,8 +181,13 @@ class SurfaceProvider:
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
                 request = await self._prepare(request, commit=True)
-                async for event in method(request, **kwargs):
-                    yield event
+                iterator = method(request, **kwargs)
+                try:
+                    async for event in iterator:
+                        yield event
+                finally:
+                    if callable(getattr(iterator, "aclose", None)):
+                        await iterator.aclose()
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):

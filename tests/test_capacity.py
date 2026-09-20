@@ -269,3 +269,60 @@ async def test_runtime_control_alias_cannot_escape_capacity_target_or_forge_acto
             await app.app_bridge('dispatch', {'action': 'runtime.control', 'args': {'sessionId': sid, 'operation': 'capacity.admit', 'args': {}}}, sid)
     finally:
         await worker.close(); await app.close()
+
+
+async def test_stream_admission_cumulative_usage_optional_methods_and_close():
+    from amplifier_web.surface_delivery import SurfaceProvider
+    emitted, admissions, closed = [], [], []
+    telemetry = ExecutionEvents('root', emitted.append)
+    async def admit(row): admissions.append(row['id'])
+    telemetry.admission_guard = admit
+    class Immutable:
+        __slots__ = ()
+        def get_info(self): return {'id': 'immutable-native', 'defaults': {'model': 'test'}}
+        async def native_status(self): return {'supported': True}
+        async def native_steer(self, text): return {'accepted': text}
+        async def complete(self, request): return SimpleNamespace(usage={'input_tokens': 2, 'output_tokens': 1})
+        async def stream(self, request, **kwargs):
+            try:
+                yield {'content': 'hello', 'usage': {'input_tokens': 2, 'output_tokens': 1}}
+                yield {'content': ' world', 'usage': {'input_tokens': 2, 'output_tokens': 3}}
+            finally: closed.append(True)
+    native = Immutable(); observed = telemetry.instrument_provider('root', native)
+    delivery = SimpleNamespace(prepare=AsyncMock(side_effect=lambda request, provider: request), commit=lambda request: None)
+    surface = SurfaceProvider(telemetry.instrument_provider('root', observed), delivery)
+    assert await surface.native_status() == {'supported': True}
+    assert await surface.native_steer('pause') == {'accepted': 'pause'}
+    assert len([chunk async for chunk in surface.stream(SimpleNamespace())]) == 2
+    assert len(admissions) == 1 and len(telemetry.nodes) == 1
+    receipt = next(iter(telemetry.nodes.values()))
+    assert receipt['usage']['totalTokens'] == 5 and receipt['phase'] == 'completed'
+    assert closed == [True]
+    iterator = surface.stream(SimpleNamespace()); await anext(iterator)
+    from amplifier_web.execution_events import CURRENT_CALL, CURRENT_PROVIDER
+    assert CURRENT_CALL.get() is None and CURRENT_PROVIDER.get() is None
+    await asyncio.create_task(iterator.aclose())
+    assert closed == [True, True] and len(admissions) == 2
+    assert list(telemetry.nodes.values())[-1]['phase'] == 'interrupted'
+    async def deny(row): raise ValueError('budget reached')
+    telemetry.admission_guard = deny
+    with pytest.raises(ValueError, match='budget reached'):
+        await anext(surface.stream(SimpleNamespace()))
+    assert closed == [True, True]  # No third underlying provider iterator started.
+
+
+async def test_complete_using_stream_has_one_admission_and_one_receipt():
+    telemetry = ExecutionEvents('root', lambda event: None)
+    admitted = []
+    async def admit(row): admitted.append(row['id'])
+    telemetry.admission_guard = admit
+    class Provider:
+        def get_info(self): return SimpleNamespace(id='nested-protocol', defaults={})
+        async def stream(self, request): yield {'content': 'done'}
+        async def complete(self, request):
+            async for chunk in self.stream(request): pass
+            return SimpleNamespace(usage={'input_tokens': 1, 'output_tokens': 1})
+    provider = Provider(); telemetry.instrument_provider('root', provider)
+    await provider.complete(SimpleNamespace(model='test'))
+    assert len(admitted) == len(telemetry.nodes) == 1
+    assert next(iter(telemetry.nodes.values()))['usage']['totalTokens'] == 2
