@@ -445,3 +445,33 @@ async def test_cancellation_never_reactivates_retired_runtime():
         manager._start_locked.assert_not_awaited()
     finally:
         await manager.close()
+
+
+async def test_registered_receipt_adapter_keeps_original_store_authoritative(app):
+    sid = app._session()["id"]
+    original = {
+        "id": "schedule:run1",
+        "sessionId": sid,
+        "state": "running",
+        "revision": "1",
+        "source": "schedule",
+        "controlAvailable": False,
+    }
+    app.operations.register_source(
+        "schedule", lambda owner: [original], lambda owner, identity: original
+    )
+    result = await app.dispatch(
+        "operations.read", {"sessionId": sid, "id": original["id"]}
+    )
+    assert result["result"]["state"] == "running"
+    assert app.operations.journal.list(sid) == []
+    original.update(state="completed", revision="2")
+    app.operations.notify()
+    result = await app.dispatch(
+        "operations.wait",
+        {"sessionId": sid, "id": original["id"], "afterRevision": "1"},
+    )
+    assert result["result"]["state"] == "completed"
+    original["sessionId"] = "another-owner"
+    with pytest.raises(AppError, match="different owner"):
+        await app.dispatch("operations.read", {"sessionId": sid, "id": original["id"]})
