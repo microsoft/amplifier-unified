@@ -1,0 +1,27 @@
+name: Work profile integration contract
+on:
+  pull_request:
+    paths:
+      - 'scripts/work_profile/**'
+      - '.github/workflows/work-profile.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/work_profile/**'
+      - '.github/workflows/work-profile.yml'
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      # This contract test uses a synthetic external bundle and public packages.
+      # It does not need access to private repositories or provider credentials.
+      - run: uv venv /tmp/work-profile-tests
+      - run: uv pip install --python /tmp/work-profile-tests/bin/python pytest pytest-asyncio 'amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@695f875c0908f45f8dc78b1fcde80ecddebffd7c'
+      - run: /tmp/work-profile-tests/bin/python -m pytest -q scripts/work_profile/tests
