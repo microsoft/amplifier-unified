@@ -232,3 +232,27 @@ async def test_monitor_delegated_followup_can_report_before_idle_and_stays_quiet
         assert not app.management.notifications.send.await_args_list
         assert not any(row.get('text') == 'No change from delegated report.' for row in app.browser_state()['notificationMessages'])
     finally: await app.close()
+
+
+async def test_execution_folder_revision_binds_preview_activation_and_due_admission(tmp_path, monkeypatch):
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        args = {'sessionId': sid, **config(now[0])}
+        preview = (await app.dispatch('schedule.preview', args))['result']
+        app._session(sid)['executionRevision'] = 1
+        with pytest.raises(AppError, match='preview changed'):
+            await app.dispatch('schedule.create', {**args, 'expectedRevision': 0, 'previewHash': preview['previewHash']})
+        record = await schedule(app, sid, now[0])
+        assert record['executionRevision'] == 1
+        now[0] += 61
+        app._session(sid)['configurationBusy'] = True
+        await app.schedules.tick()
+        assert not runtime.inputs
+        app._session(sid)['configurationBusy'] = False
+        runtime.before_admission = lambda: app._session(sid).update(executionRevision=2)
+        await app.schedules.tick()
+        assert not runtime.inputs
+        run = app.schedules.store.runs(sid)[0]
+        assert run['phase'] == 'skipped' and run['executionRevision'] == 1
+        assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
+    finally: await app.close()

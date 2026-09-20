@@ -2,18 +2,18 @@
 
 Scheduled work appears beside the saved task under Goals & modes. It records a
 concrete prompt, timezone recurrence, missed-run behavior, notification intent,
-current task identity/revision, and the user stop revision. UI and app_control
+current task identity/revision, execution-folder revision, and the user stop revision. UI and app_control
 share schedule.preview/create/list/read/update/pause/resume/cancel, plus report
 and reconcile. An active saved task is required; schedules never create a second
 task lifecycle or independently complete the original objective.
 
 Preview shows future local/UTC occurrences and the exact saved instructions. Its
-hash binds timing, prompt, policies, task revision and stop revision. UI activation
+hash binds timing, prompt, policies, task revision, execution-folder revision and stop revision. UI activation
 is an explicit user action. Agent activation must cite the actual user message or
 voice transcript requesting scheduling; agent-authored user-role bubbles and
 question-answer receipts are rejected. The authorization snapshot and source
 hash survive history paging/restart. New task corrections, an edited source, or
-user stop intent require visible review with fresh user provenance. No pending
+user stop intent or a changed execution folder require visible review with fresh user provenance. No pending
 question counts as schedule authorization or tool permission. Required linked
 questions gate dependent scheduled work; optional questions do not globally pause
 independent work.
