@@ -57,13 +57,22 @@ async def main():
                     row['execution']={'turns':[{'id':'turn','phase':'completed','startedAt':1700000000,'anchorMessageId':row['messages'][0]['id']}],
                         'nodes':[{'id':f'node-{i}','turnId':'turn','kind':'tool','phase':'completed','label':'Synthetic tool result',
                         'summary':'x'*args.get('nodeBytes',10000)} for i in range(args.get('nodes',0))]}
+                for index, count in enumerate(args.get('extraMessageCounts', [])):
+                    row=copy.deepcopy(service._session(aid))
+                    identity=f'extra-{index}'
+                    row.update(id=identity,title=f'Additional conversation {index}',status='idle',nativeIdentity=None,runtimeSessionId=None,
+                        messages=[{'id':f'{identity}-m-{i}','role':'assistant','text':'Retained text. '*350,'createdAt':1700000000+i} for i in range(count)],execution={'turns':[],'nodes':[]})
+                    service.state['sessions'].append(row)
             elif op=='many':
                 template=copy.deepcopy(service._session(aid)); now=time.time()
                 service.state['sessions'].extend([{**copy.deepcopy(template),'id':f'library-{i}','title':f'Library conversation {i:03}',
                     'createdAt':now-i,'recentActivityAt':now-i,'messages':[],'nativeIdentity':None,'runtimeSessionId':None}
                     for i in range(args.get('count',205))])
             service._publish()
-            return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state()})
+            return web.json_response({'alpha':aid,'beta':bid,'revision':service.state['revision'], 'state':service.get_state(),
+                'retainedSessions':len(service.state['sessions']),
+                'retainedMessages':sum(len(row.get('messages',[])) for row in service.state['sessions']),
+                'canonicalBytes':len(json.dumps(service.state['sessions']).encode())})
         app.router.add_post('/api/fixture/control',control)
         runner=web.AppRunner(app);await runner.setup()
         site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
