@@ -232,6 +232,32 @@ reloads. A busy owner rejects execution with diagnostics and retains the draft.
 Takeover remains an explicit request to the current owner; background preparation
 never requests it. No lock expiry, force-unlock, or automatic work replay is provided.
 
+### Conversation Markdown export
+
+**Settings → Setup → Current conversation** offers **Copy Markdown** and
+**Download Markdown** for the entire conversation, including native history
+outside the loaded page. The export preserves message Markdown and code,
+labels spoken exchanges, and includes attachment and saved-artifact references.
+It omits system/developer instructions, hidden reasoning, and tool payloads.
+References identify host-owned files and artifacts; their contents are not
+embedded. Existing **Export JSON** remains available.
+
+Both controls use `session.export {id, format:"markdown", destination:"clipboard"|"download"}`.
+Agents can use `destination:"none"` to create the same immutable snapshot and
+read its returned `statePath` through `get_state`, following `nextOffset` for
+long exports. Reusing a command ID returns the original snapshot. Browser
+delivery is reported separately in `view.conversationExport`; a download-started
+report does not prove the user saved the file. Export never resumes conversation
+work or changes the native transcript.
+
+Active work is labelled as in progress. Missing, rewritten, changing, or damaged
+native history causes an error rather than a silently incomplete export. Older
+native-only voice references without original message positions are labelled
+as recovered and retained at their saved reference position; the export does
+not invent their original chronology. Text intentionally included in a user's
+visible messages is exported unchanged; this is not a public-feedback redaction
+or sharing feature.
+
 ### Warm conversations and fast navigation
 
 The browser displays a recently visited conversation from a bounded local cache
