@@ -133,6 +133,11 @@ An imported conversation can have earlier history outside its loaded window.
 When `sharedHistoryOffset` is positive, use `session.history` with that value as
 `before` and a `limit` of up to 100; reconcile subsequent snapshots and inspect
 `historyLoading`/`historyError`. `sharedHistoryTotal` describes the saved history.
+Earlier-page requests with `before` work while the runtime is ready or busy.
+They prepend saved messages without changing current work, live responses, or
+drafts. They also tolerate saved appends when the already loaded history still
+matches; incompatible rewrites report `historyError`. A page does not refresh
+the latest messages or acquire execution ownership.
 Do not interpret the latest loaded message window as the entire event log.
 
 Examples of session command arguments:

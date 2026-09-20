@@ -195,6 +195,138 @@ async def test_selected_history_loads_a_page_and_earlier_pages_keep_message_ids(
     assert len({row['id'] for row in complete['messages']}) == 205
 
 
+@pytest.mark.parametrize('status', ['ready', 'starting', 'working', 'running', 'stopping'])
+@pytest.mark.parametrize('promoted', [False, True])
+async def test_earlier_pages_are_readable_with_a_live_runtime(tmp_path, app_factory, status, promoted):
+    directory = native_session(tmp_path / 'cli', 'live-history', [
+        {'role': 'user' if number % 2 == 0 else 'assistant', 'content': f'Message {number}'}
+        for number in range(205)])
+    app = app_factory()
+    await app.history.refresh()
+    session = app._session(native_rows(app)[0]['id'])
+    await select(app, session['id'])
+    session.update(status=status, historyManaged=not promoted, streaming='Live response',
+                   draft='Keep my draft', approvals=[{'id': 'approval', 'status': 'pending'}])
+    session['messages'][0]['id'] = 'retained-web-id'
+    tail = copy.deepcopy(session['messages'])
+    original_files = files_snapshot(directory)
+
+    await app.dispatch('session.history', {'id': session['id'], 'before': 105, 'limit': 10})
+    await finish_actions(app)
+    assert session['historyError'] is None
+    assert session['historyLoading'] is False
+    assert session['sharedHistoryOffset'] == 95
+    assert [message['text'] for message in session['messages'][:10]] == [f'Message {n}' for n in range(95, 105)]
+    assert session['messages'][10:] == tail
+    assert session['status'] == status
+    assert session['streaming'] == 'Live response'
+    assert session['draft'] == 'Keep my draft'
+    assert session['approvals'] == [{'id': 'approval', 'status': 'pending'}]
+    # Another client can request the same/overlapping page without duplicates
+    # or moving the already loaded cursor forward.
+    await app.history.load(session['id'], before=107, limit=10)
+    assert session['sharedHistoryOffset'] == 95
+    assert len(session['messages']) == 110
+    after = files_snapshot(directory)
+    assert {key: after[key] for key in original_files} == original_files
+    if not promoted:
+        assert after == original_files
+    assert not app.runtime.started and not app.runtime.sent and not app.runtime.stopped
+
+
+@pytest.mark.parametrize('promoted', [False, True])
+async def test_earlier_page_accepts_saved_appends_without_marking_tail_refreshed(tmp_path, app_factory, promoted):
+    directory = native_session(tmp_path / 'cli', 'appending-history', [
+        {'role': 'user' if number % 2 == 0 else 'assistant', 'content': f'Message {number}'}
+        for number in range(205)])
+    app = app_factory()
+    await app.history.refresh()
+    session = app._session(native_rows(app)[0]['id'])
+    await select(app, session['id'])
+    session.update(status='ready', historyManaged=not promoted)
+    stamp = copy.deepcopy(session['nativeRevision'])
+    with (directory / 'transcript.jsonl').open('a') as stream:
+        stream.write(json.dumps({'role': 'assistant', 'content': 'New saved response'}) + '\n')
+    await app.history.load(session['id'], before=105, limit=10)
+    assert session['historyError'] is None
+    assert session['sharedHistoryOffset'] == 95
+    assert session['nativeRevision'] == stamp
+    assert session['messages'][-1]['text'] == 'Message 204'
+    session['status'] = 'idle'
+    await app.history.refresh_session(session['id'])
+    assert session['messages'][-1]['text'] == 'New saved response'
+    assert session['nativeRevision'] != stamp
+
+
+async def test_live_updates_during_earlier_page_read_are_preserved(tmp_path, app_factory, monkeypatch):
+    import threading
+    from amplifier_web import automatic_history
+
+    native_session(tmp_path / 'cli', 'racing-history', [
+        {'role': 'user' if number % 2 == 0 else 'assistant', 'content': f'Message {number}'}
+        for number in range(205)])
+    app = app_factory()
+    await app.history.refresh()
+    session = app._session(native_rows(app)[0]['id'])
+    await select(app, session['id'])
+    entered, release = asyncio.Event(), threading.Event()
+    loop, read = asyncio.get_running_loop(), automatic_history.read_transcript
+
+    def paused_read(*args, **kwargs):
+        result = read(*args, **kwargs)
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(automatic_history, 'read_transcript', paused_read)
+    task = asyncio.create_task(app.history.load(session['id'], before=105, limit=10))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        session['historyManaged'] = False
+        await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'working'})
+        await app.on_runtime_event('assistant.message', {'sessionId': session['id'], 'text': 'New live response'})
+        await app.on_runtime_event('assistant.delta', {'sessionId': session['id'], 'text': 'Next live fragment'})
+        tail = copy.deepcopy(session['messages'])
+        execution = copy.deepcopy(session['execution'])
+    finally:
+        release.set()
+        await task
+    assert session['messages'][10:] == tail
+    assert session['messages'][-1]['text'] == 'New live response'
+    assert session['streaming'] == 'Next live fragment'
+    assert session['status'] == 'working'
+    assert session['sharedHistoryOffset'] == 95
+    assert session['execution'] == execution
+    assert session['historyLoading'] is False
+
+
+@pytest.mark.parametrize('change', ['replace-anchor', 'remove-tail', 'hide-prefix'])
+async def test_earlier_page_rejects_rewritten_history_without_changing_live_view(tmp_path, app_factory, change):
+    rows = [{'role': 'user' if number % 2 == 0 else 'assistant', 'content': f'Message {number}'}
+            for number in range(205)]
+    directory = native_session(tmp_path / 'cli', 'rewritten-history', rows)
+    app = app_factory()
+    await app.history.refresh()
+    session = app._session(native_rows(app)[0]['id'])
+    await select(app, session['id'])
+    session.update(status='ready', streaming='Still running')
+    original = copy.deepcopy(session['messages'])
+    if change == 'replace-anchor':
+        rows[105]['content'] = 'Changed saved anchor'
+    elif change == 'remove-tail':
+        rows.pop()
+    else:
+        rows[0]['metadata'] = {'ephemeral': True}
+    (directory / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    await app.history.load(session['id'], before=105, limit=10)
+    assert session['historyError']
+    assert session['historyLoading'] is False
+    assert session['messages'] == original
+    assert session['sharedHistoryOffset'] == 105
+    assert session['streaming'] == 'Still running'
+    assert session['status'] == 'ready'
+
+
 async def test_external_cli_append_refreshes_the_selected_chat_without_replay(tmp_path, app_factory):
     directory = native_session(tmp_path / 'cli', 'updated-chat')
     app = app_factory()

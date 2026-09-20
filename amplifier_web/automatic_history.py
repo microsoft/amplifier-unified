@@ -96,11 +96,26 @@ def read_transcript(session, *, before=None, limit=100):
     reader = SessionHistoryStore(root, events_path=events, session_id=native_id)
     start = revision(session)
     history = reader.load(include_events=False)
+    # A live runtime can append while someone is reading older pages. Verify
+    # the loaded native anchors instead of requiring the whole file's stamp to
+    # remain the same since the last tail refresh. A rewrite that moves or
+    # replaces those anchors still requires a refresh before paging.
+    check_anchors = before is not None and 'nativeRevision' in session and session['nativeRevision'] != start
+    anchors = {message['nativeIndex']: display_identity(session, message['nativeIndex'],
+                message['role'], message.get('text', ''))
+               for message in session.get('messages', []) if type(message.get('nativeIndex')) is int} if check_anchors else {}
+    first_anchor = min(anchors) if anchors else None
+    matched = set()
     rows = deque(maxlen=limit)
     total = users = 0
     hidden = {}
     for index, value in enumerate(history.messages):
         row = display_message(value, index, session)
+        if check_anchors and index in anchors:
+            if (row is None or row['id'] != anchors[index]
+                    or (index == first_anchor and total != session.get('sharedHistoryOffset', 0))):
+                raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')
+            matched.add(index)
         if row is None:
             internal = display_message(value, index, session, include_internal=True)
             if internal is not None:
@@ -110,6 +125,8 @@ def read_transcript(session, *, before=None, limit=100):
             rows.append((total, users, row))
         total += 1
         users += row['role'] == 'user'
+    if check_anchors and (not anchors or matched != anchors.keys()):
+        raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')
     if revision(session) != start or any(d.code == 'changed_during_read' for d in history.diagnostics):
         raise ValueError('The CLI is saving this chat. Its history will refresh shortly.')
     visible = [row[2] for row in rows]
@@ -401,6 +418,7 @@ class AutomaticHistory:
         await self.load(session_id, only_if_changed=True)
 
     async def load(self, session_id, *, before=None, limit=100, only_if_changed=False):
+        paging = before is not None
         async with self.loads.setdefault(session_id, asyncio.Lock()):
             if only_if_changed:
                 candidate = self.service._session(session_id)
@@ -410,7 +428,7 @@ class AutomaticHistory:
                         return
             async with self.service.lock:
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
-                if not session or not session.get('nativeProject') or session.get('status') in BUSY or session.get('configurationBusy'):
+                if not session or not session.get('nativeProject') or (not paging and session.get('status') in BUSY) or session.get('configurationBusy'):
                     return
                 session.update(historyLoading=True, historyError=None)
                 source = copy.deepcopy(session)
@@ -422,29 +440,33 @@ class AutomaticHistory:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session is None:
                         return
-                    if session.get('status') not in BUSY and not session.get('configurationBusy'):
-                        remove_internal_copies(session, result['hiddenMessages'])
-                        if before is not None:
-                            if source.get('nativeRevision') != result['revision']:
-                                raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')
+                    if (paging or session.get('status') not in BUSY) and not session.get('configurationBusy'):
+                        if paging:
+                            # Only prepend. Current live messages, streaming
+                            # text, execution ownership and draft stay intact.
                             known = {m['id'] for m in session['messages']}
                             known_indexes = {m['nativeIndex'] for m in session['messages'] if 'nativeIndex' in m}
                             session['messages'] = [m for m in result['messages']
                                                    if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
-                        elif session.get('historyManaged'):
-                            # Keep the loaded window when another host appends.
-                            session['messages'] = result['messages']
                         else:
-                            # Preserve web-owned message IDs, execution anchors,
-                            # voice-only bubbles, attachments and draft state.
-                            merge_web_history(session, result['messages'])
+                            remove_internal_copies(session, result['hiddenMessages'])
+                            if session.get('historyManaged'):
+                                # Keep the loaded window when another host appends.
+                                session['messages'] = result['messages']
+                            else:
+                                # Preserve web-owned message IDs, execution anchors,
+                                # voice-only bubbles, attachments and draft state.
+                                merge_web_history(session, result['messages'])
+                            session['nativeRevision'] = result['revision']
                         from .native_activity import apply_activity
                         apply_activity(session, result['activity'], append=before is not None)
                         offset = source.get('sharedHistoryOffset', 0)
                         user_offset = source.get('sharedHistoryUserTurnOffset', 0)
-                        if session.get('historyManaged') or (before is not None and result['offset'] <= offset):
+                        if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
                             offset, user_offset = result['offset'], result['userOffset']
-                        session.update(historyLoaded=True, nativeRevision=result['revision'],
+                        # A page does not refresh the tail. Keep its old stamp
+                        # so a later refresh still discovers any new appends.
+                        session.update(historyLoaded=True,
                             sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
                             sharedHistoryTotal=result['total'])
                     session['historyLoading'] = False
