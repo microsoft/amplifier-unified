@@ -20,6 +20,15 @@ test('ordinary idle parking stays available',()=>{
   assert.equal(ownershipState({status:'idle'}).blocked,false);
 });
 
+test('a failed takeover remains blocked and offers an explicit retry',()=>{
+  const state=ownershipState({ownership:{status:'blocked',reason:'takeover-failed',detail:'Owner unavailable'}});
+  assert.equal(state.blocked,true);
+  assert.equal(state.canTakeover,true);
+  assert.equal(state.retry,true);
+  assert.equal(state.label,'Could not continue here');
+  assert.equal(state.detail,'Owner unavailable');
+});
+
 test('ownership rejections do not also create a global error banner',async()=>{
   const {actionErrorMessage}=await import('../src/ownership.js');
   const {request}=await import('../src/api.js');

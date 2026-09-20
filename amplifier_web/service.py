@@ -1287,7 +1287,7 @@ class AppService:
                     from .session_ownership import blocked
                     blocked(current, exc.owner, detail=str(exc))
                 else:
-                    current['ownership'] = {'status': 'available'}
+                    current['ownership'] = {'status': 'blocked', 'reason': 'takeover-failed', 'detail': str(exc)}
                     current.update(status='error', error=str(exc))
                 self._publish()
 
