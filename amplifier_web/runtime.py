@@ -66,11 +66,12 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == "assistant.message":
         return "assistant.message", {**base, "text": event.get("text", ""),
             "inputId": (event.get("input_ids") or [input_id])[-1],
-            "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", [])}
+            "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", []),
+            **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
         return "runtime.generation", {**base, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids") if key in event}}
+                "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -466,6 +467,19 @@ class RuntimeManager:
 
     async def approval(self, session_id, approval_id, decision):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)
+
+    async def scheduled_input(self, session_id, arguments, guard):
+        """Internal authorized schedule handoff using ordinary worker admission."""
+        async with self._admission(session_id):
+            if session_id not in self.workers and session_id in self._retired:
+                session, emit = self._retired[session_id]
+                await self._start_locked(session, emit)
+            reason = guard()
+            if reason:
+                return {"accepted": False, "reason": reason}
+            args = {"operation": "schedule.submit", "arguments": arguments}
+            pending = await self._admit(session_id, "control", args)
+        return await self._reply(*pending, op="control", args=args)
 
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
