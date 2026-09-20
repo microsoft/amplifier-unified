@@ -35,7 +35,10 @@ try{
  chat().messages[0].delivery.status='accepted';state.revision++;await first.route.fulfill({json:{accepted:true,delivery:'accepted',state}});
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await composer().inputValue(),'Same text twice intentionally','Late acknowledgement cannot clear the next identical draft');
  const failed=await send('Rejected input');await failed.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection',code:'invalid_input'}});
- const rejected=page.locator('.a-user').filter({hasText:'Rejected input'});await rejected.getByRole('button',{name:'Retry',exact:true}).waitFor();await rejected.getByRole('button',{name:'Edit message',exact:true}).click();
+ const rejected=page.locator('.a-user').filter({hasText:'Rejected input'});await rejected.getByRole('button',{name:'Retry',exact:true}).waitFor();
+ await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)}}));
+ await rejected.getByRole('button',{name:'Copy message as Markdown',exact:true}).click();assert.equal(await rejected.getByRole('button',{name:'Copy message as Markdown',exact:true}).getAttribute('aria-busy'),'true');await page.evaluate(()=>window.finishCopy());
+ await rejected.getByRole('button',{name:'Edit message',exact:true}).click();
  await page.getByRole('textbox',{name:'Edit your message'}).fill('Corrected input');assert.equal(await page.getByLabel('Start a new conversation instead').count(),0);
  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const corrected=await next();assert.notEqual(corrected.body.id,failed.body.id);assert.equal(corrected.body.args.text,'Corrected input');await received(corrected);
  await page.getByText('Corrected input',{exact:true}).waitFor();assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');
