@@ -1,6 +1,7 @@
 """Usage evidence follows shared runtime settings without treating history as errors."""
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -56,6 +57,11 @@ async def test_retained_missing_workspaces_and_sessions_do_not_raise_usage_warni
     root = cached(service, repository, 'historical')
     missing = tmp_path/'unavailable'
     service.state['workspaces'].append({'id': 'missing', 'path': str(missing), 'available': False})
+    service.state['workspaces'].extend([
+        {'id': 'unknown-native-project', 'path': None, 'available': False},
+        {'id': 'unresolved-native-project', 'available': False},
+        {'id': 'empty-native-project', 'path': '', 'available': False},
+    ])
     service.state['sessions'].append({'id': 'old-session', 'workspace': str(missing), 'bundle': 'old-alias'})
     before = copy.deepcopy(service.state)
     _, incomplete = configured_sources(service)
@@ -92,3 +98,38 @@ def test_read_only_config_has_runtime_merge_rules(tmp_path, monkeypatch):
     assert read.providers[0]['config'] == {'global': True, 'project': True, 'local': True, 'session': True, 'model': 'session'}
     assert before == {p: p.read_bytes() for p in paths.values()}
     assert not (tmp_path/'app').exists()
+
+
+@pytest.mark.parametrize('scope', ['project', 'user'])
+@pytest.mark.parametrize('entry', ['lane/bundle.md', 'lane.md', 'lane.yaml', 'lane.yml'])
+async def test_cli_local_bundles_resolve_for_inventory_and_preparation(
+    service, tmp_path, scope, entry,
+):
+    from amplifier_web.host.session import load_root_bundle
+    workspace = tmp_path/'workspace'
+    workspace.mkdir()
+    shared = settings_paths(workspace)['global'].parent
+    base = workspace/'.amplifier' if scope == 'project' else shared
+    path = base/'bundles'/entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = 'bundle:\n  name: lane\n'
+    path.write_text('---\n'+document+'---\nLocal instructions.\n' if path.suffix == '.md' else document)
+    service.state['settings'].update(workspace=str(workspace), bundle='lane')
+    service.state['workspaces'] = []
+    before = path.read_bytes()
+    sources, incomplete = configured_sources(service)
+    assert not incomplete
+    assert all('Selected bundle' not in evidence for evidence in sources.values())
+    read = config.read_config(workspace, home=service.data_dir)
+    registry, _, chosen = await load_root_bundle(read, 'lane')
+    assert 'lane' in registry.list_registered()
+    assert Path(chosen) == (path.parent if path.name == 'bundle.md' else path)
+    assert path.read_bytes() == before
+
+
+def test_unresolved_local_name_still_reports_incomplete_configuration(service, tmp_path):
+    workspace = tmp_path/'workspace'
+    workspace.mkdir()
+    service.state['settings'].update(workspace=str(workspace), bundle='missing-lane')
+    _, incomplete = configured_sources(service)
+    assert incomplete

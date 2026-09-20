@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.12.2",
+      "title": "Recognize local CLI bundles during update checks",
+      "changes": [
+        "Standard project and user bundle folders now resolve consistently during conversation preparation and read-only source-usage checks, including directory, Markdown, and YAML bundles.",
+        "Historical workspaces with an unresolved directory no longer trigger a misleading source-configuration warning. Their saved history remains available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.12.1",
       "title": "Show standalone bundles in conversation pickers",
       "changes": [
