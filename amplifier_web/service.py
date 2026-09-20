@@ -855,7 +855,7 @@ class AppService:
                     raise AppError('An update is activating. Please retry in a moment.',409)
                 if args.get('mode', 'fork') == 'current':
                     if source['status'] in {'working','running','starting','stopping','busy'} or any(
-                            row.get('status') in {'working','running','starting','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
+                            row.get('status') in {'working','running','starting','stopping','queued','pending'} or row.get('persistent') and row.get('status')=='idle'
                             for row in source.get('workers', [])) or any(row.get('status', 'pending')=='pending' for row in source.get('approvals', [])):
                         raise AppError('Finish active work and pending interactions before editing history.',409)
                     if source.get('ownership', {}).get('status') in {'blocked','yielding','yielded','yield-failed','taking-over'}:

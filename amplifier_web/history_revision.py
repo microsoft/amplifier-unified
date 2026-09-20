@@ -1,6 +1,7 @@
 """Owned context revisions. Original events and revision evidence remain intact."""
 from __future__ import annotations
 import copy
+import hashlib
 import json
 from pathlib import Path
 from .host.config import app_home, write_private
@@ -11,8 +12,9 @@ from .session_files import validate_id
 
 def receipt_path(home, identity, operation_id):
     validate_id(identity)
-    validate_id(operation_id)
-    return Path(home) / 'sessions' / identity / 'history-revisions' / (operation_id + '.json')
+    # Command IDs are protocol identities, not filesystem path components.
+    filename = hashlib.sha256(operation_id.encode()).hexdigest() + '.json'
+    return Path(home) / 'sessions' / identity / 'history-revisions' / filename
 
 
 def same(left, right):

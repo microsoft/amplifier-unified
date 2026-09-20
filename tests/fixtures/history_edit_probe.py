@@ -116,7 +116,8 @@ Reply with the fixture response.
     assert worker.parked and worker.shared_store.read() is None
     edited = SessionHistoryStore(sessions_dir(workspace) / config['id']).load_messages()
     assert [row['content'] for row in edited if row['role']=='user' and not (row.get('metadata') or {}).get('ephemeral')] == ['one', 'revised two']
-    receipt = json.loads((root/'home'/'sessions'/config['id']/'history-revisions'/'edited-two.json').read_text())
+    from amplifier_web.history_revision import receipt_path
+    receipt = json.loads(receipt_path(root/'home',config['id'],'edited-two').read_text())
     assert receipt['phase']=='committed' and [row['content'] for row in receipt['contextBefore'] if row['role']=='user' and not (row.get('metadata') or {}).get('ephemeral')] == ['one','two']
     boundary = next(i for i, event in enumerate(events) if event.get('type')=='history.revised')
     admission = next(i for i, event in enumerate(events) if event.get('type')=='input.delivered' and event.get('input_id')=='edited-two')
