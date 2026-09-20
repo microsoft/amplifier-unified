@@ -122,6 +122,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             return web.json_response(read_text(session, request.query))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before')))
 
+    async def conversation_export(request):
+        snapshot = service.state.get('conversationExports', {}).get(request.match_info['identity'])
+        if snapshot is None:
+            raise AppError('This conversation export is unavailable.', 404)
+        return web.json_response({'content': service.state_resource(snapshot['content']['$resource']),
+                                  'filename': snapshot['filename'], 'mimeType': snapshot['mimeType']},
+                                 headers={'Cache-Control': 'no-store'})
+
     async def actions(request):
         if request.method == "GET":
             return web.json_response(service.get_actions())
@@ -330,6 +338,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/conversation/detail", conversation_detail)
+    app.router.add_get('/api/conversation/exports/{identity}', conversation_export)
     app.router.add_get("/api/actions", actions)
     app.router.add_post("/api/actions", actions)
     app.router.add_post("/api/view", view)

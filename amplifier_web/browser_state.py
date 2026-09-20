@@ -103,6 +103,6 @@ def snapshot(state, derived, *, session_id=None):
     result['library'] = {'sessionCount': len(state.get('sessions', [])), 'workspaceCount': len(state.get('workspaces', [])),
                          'continueSessionId': continuation['id'] if continuation else None,
                          'bounded': True, 'detailPath': '/api/state/detail'}
-    for key in ('attentionRead', 'nativePresentation'):
+    for key in ('attentionRead', 'nativePresentation', 'conversationExports'):
         result.pop(key, None)
     return deepcopy(result)

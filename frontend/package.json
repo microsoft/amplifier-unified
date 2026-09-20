@@ -41,7 +41,8 @@
     "test:bundle-browser": "node tests/bundle-browser.mjs",
     "test:canvas-apps-browser": "node tests/canvas-apps-browser.mjs",
     "test:conversation-switch-browser": "node tests/conversation-switch-browser.mjs",
-    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs"
+    "test:worker-retention-browser": "node tests/worker-retention-browser.mjs",
+    "test:export-browser": "node tests/conversation-export-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

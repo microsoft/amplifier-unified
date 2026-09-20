@@ -63,7 +63,8 @@ ACTION_DEFINITIONS = {
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
-    "session.export": ("Export a conversation", schema({"id": string(100)})),
+    "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
@@ -859,7 +860,35 @@ class AppService:
                 self.state['view']['messageEdit']=None
                 from .workspace_canvas import select_session_workspace
                 select_session_workspace(self.state,session)
+            elif action == 'session.export' and args.get('format') == 'markdown':
+                from .conversation_export import markdown
+                from .resource_files import put
+                source = copy.deepcopy(self._session(args.get('id')))
+                try:
+                    content = await asyncio.to_thread(markdown, self.data_dir, source, copy.deepcopy(self.state.get('canvasArtifacts', [])))
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from exc
+                reference = put(self.db, content)
+                identity = reference['$resource']
+                filename = 'amplifier-conversation-' + identity[:12] + '.md'
+                diagnostic_result = {'snapshotId': identity, 'sessionId': source['id'], 'filename': filename,
+                    'mimeType': 'text/markdown', 'content': reference,
+                    'statePath': '/conversationExports/' + identity + '/content',
+                    'url': '/api/conversation/exports/' + identity}
+                self.state.setdefault('conversationExports', {})[identity] = copy.deepcopy(diagnostic_result)
+                destination = args.get('destination', 'download')
+                if destination != 'none':
+                    request_id = str(uuid.uuid4())
+                    self.state['view']['conversationExport'] = {'sessionId': source['id'], 'requestId': request_id, 'status': 'pending'}
+                    effects.append({'type': 'conversation.export', 'requestId': request_id,
+                                    'destination': destination, 'url': diagnostic_result['url']})
+            elif action == 'session.exportResult':
+                result = self.state['view'].get('conversationExport', {})
+                if result.get('requestId') == args['requestId']:
+                    result.update(status=args['status'], message=args.get('message', ''))
             elif action in {"state.export", "session.export", "theme.export"}:
+                if action == 'session.export' and args.get('destination', 'download') != 'download':
+                    raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 content = self.state if action == "state.export" else self._session(args["id"]) if action == "session.export" else self.state["theme"]["css"]
                 mime = "text/css" if action == "theme.export" else "application/json"
                 effects.append({"type": "download", "filename": "amplifier-skin.css" if action == "theme.export" else "amplifier-export.json", "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
@@ -1486,6 +1515,8 @@ class AppService:
                 action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open'}:
                 action_args.setdefault('sessionId',session_id)
+            if args['action'] == 'session.export':
+                action_args.setdefault('id', session_id)
             result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"))
             await self._flush_pending_progress()
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)}
