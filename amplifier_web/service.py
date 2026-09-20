@@ -203,6 +203,8 @@ from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
+from .task_continuity import definitions as task_definitions
+ACTION_DEFINITIONS.update(task_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -569,6 +571,8 @@ class AppService:
             args.setdefault('sessionId', self.state.get('selectedSessionId'))
             if not args['sessionId']:
                 raise AppError('Select a conversation first.', 404)
+        if action == 'runtime.control' and args.get('operation', '').startswith('task.'):
+            action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
         if action.startswith("smartTools."):
             command_id = command_id or str(uuid.uuid4())
@@ -578,6 +582,9 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action.startswith('task.'):
+            from .task_continuity import dispatch as task_dispatch
+            return await task_dispatch(self, action, args, origin, command_id, include_state)
         if action in {'question.list', 'question.read'}:
             async with self.lock:
                 return {'accepted': True, 'result': self.questions.read(action, args),
@@ -1676,9 +1683,9 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
-            if args['action'].startswith('question.'):
+            if args['action'].startswith(('question.', 'task.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith('task.')):
                 if action_args.get('sessionId', session_id) != session_id:
-                    raise AppError('Question actions must target the calling conversation.', 409)
+                    raise AppError('Task and question actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
