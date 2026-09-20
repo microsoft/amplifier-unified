@@ -63,6 +63,8 @@ send(
         },
     }
 )
+# Workspace imports have the same meaning as an interactive interpreter.
+sys.path.insert(0, os.getcwd())
 for line in sys.stdin:
     request = json.loads(line)
     _cell.set(request["cellId"])
