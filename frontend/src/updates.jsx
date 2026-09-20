@@ -4,6 +4,7 @@ import React from 'react';
 import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3} from 'lucide-react';
 import './updates.css';
 import {UpdateDiagnostics} from './update-diagnostics.jsx';
+import {ReleaseHistory,ReleaseNotices} from './release-notes.jsx';
 const labels={update:'Update available',current:'Current',pinned:'Pinned',check_failed:'Check failed',local_changes:'Local changes',not_checked:'Not checked',release_channel_needed:'Release channel not configured'};
 function SourceList({items,state,act,id}){
  const [shown,filter,query]=useListFilter(state,act,id,items,row=>[row.label,row.id,row.kind,row.status,row.ref,row.detail],'Filter update sources');
@@ -37,11 +38,13 @@ export function UpdateSettings({state,act}){
    <p className="a-caption a-app-update-channel">Published GitHub releases · app updates restart the local server.</p>
    {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-app-update-detail">{appDetail}</p>)}
   </div>
+  <ReleaseNotices application={application} state={state} act={act}/>
   <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4><p className="a-caption">Bundles, modules, and libraries load on the next resumed turn after activation.</p>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?'No updates available from the last check.':'Check for updates to see what’s new.'}</p>}</div>
   {!!issues.length&&<div><h4>Needs attention</h4><SourceList items={issues} state={state} act={act} id="update-issues"/></div>}
   <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!!updates.pendingRestart||(!available.length&&!appAvailable&&!pending)} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>{installLabel}</button>{updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}</div>
   {(appAvailable||updates.pendingApp)&&available.length>0&&<p className="a-caption">The app updates first and restarts the server. Ecosystem updates can be installed afterward.</p>}
   <ResultNotice phase={resultPhase} message={resultMessage}/>
+  <ReleaseHistory application={application} state={state}/>
   <UpdateDiagnostics state={state} act={act}/>
   {updates.lastCheck&&<p className="a-caption a-check-inline"><Check/>Last checked {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
   <div className="a-update-options">

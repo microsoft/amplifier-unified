@@ -56,7 +56,8 @@ async def test_http_conflict_has_one_inline_state_and_preserves_draft(authentica
     assert session['ownership']['source'] == 'Amplifier CLI'
     assert session['ownership']['supportsTakeover']
     assert not session.get('error')
-    assert not result['state']['attention']['items']
+    # Release notices can coexist; a session ownership conflict stays inline.
+    assert not [item for item in result['state']['attention']['items'] if item.get('sessionId') == sid]
     replay = await (await client.post('/api/actions', json=request)).json()
     assert replay['code'] == 'session_busy' and not replay['accepted']
 

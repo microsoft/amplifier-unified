@@ -188,6 +188,8 @@ class UpdateManager:
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
         application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
+        from .release_notes import history
+        application['releaseNotes']=history(application.get('releaseNotes',[]),application.get('latest') if version_tuple(application.get('latest')) else None)
         application['runningRevision'] = self.running_identity['revision']
         state['application']=application
         latest=version_tuple(application.get('latest'))
@@ -316,6 +318,16 @@ class UpdateManager:
                 public = group_sources(rows)
                 from .app_updates import check as check_application
                 application=await check_application()
+                previous=self.service.state['updates'].get('application',{})
+                if application.get('status')=='check_failed':
+                    from .release_notes import history
+                    from .app_updates import version_tuple
+                    application['releaseNotes']=history(previous.get('releaseNotes',[]),previous.get('latest') if version_tuple(previous.get('latest')) else None)
+                    application['releaseNotesWarning']='The update check failed. Showing saved release notes; check again to confirm the latest release.'
+                elif application.get('releaseNotesWarning') and application.get('revision')==previous.get('revision'):
+                    from .release_notes import history
+                    application['releaseNotes']=history(previous.get('releaseNotes',[]),application.get('latest'))
+                    application['releaseNotesWarning']='Release notes could not be refreshed. Showing saved release history.'
                 application['runningRevision'] = self.running_identity['revision']
                 app_available=application.get('status')=='update'
                 await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',

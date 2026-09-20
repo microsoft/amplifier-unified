@@ -16,6 +16,37 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+const release={version:'0.6.4',title:'Shared settings',changes:['Workspace settings now apply.'],notices:[{id:'shared',title:'Review shared settings',detail:'A setting affects other apps.',action:'Check your workspace.'}]};
+const noticeId='release-notice:0.6.4:shared';
+test('changelog separates installed, upcoming and earlier versions and escapes authored text',()=>{
+ const html=render({application:{...application,releaseNotes:[release,{...release,version:'0.6.3',notices:[]},{...release,version:'0.6.2',title:'<script>bad()</script>',notices:[]}]}});
+ assert.match(html,/Changelog/);assert.match(html,/Upcoming/);assert.match(html,/Earlier release/);
+ assert.match(html,/Check your workspace/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<script>/);
+ assert.match(html,/available offline/);
+});
+
+test('reviewing a high-impact notice uses its fingerprint and retains the changelog',async()=>{
+ const calls=[];let root;
+ const initial={...state({application:{...application,releaseNotes:[release],status:'update'}}),attention:{items:[{id:noticeId,read:false,fingerprint:'notice-v1'}]}};
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(name,args)=>calls.push({name,args})}))});
+ const button=root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='attention.read')[0];
+ await renderAct(async()=>button.props.onClick());
+ assert.deepEqual(calls,[{name:'attention.read',args:{ids:[noticeId],fingerprints:{[noticeId]:'notice-v1'}}}]);
+ const reviewed={...initial,attention:{items:[{...initial.attention.items[0],read:true}]}};
+ await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:reviewed,act:()=>{}})));
+ assert.equal(root.root.findAllByProps({'aria-label':'High-impact changes'}).length,0);
+ assert.match(JSON.stringify(root.toJSON()),/Check your workspace/);
+ assert.match(JSON.stringify(root.toJSON()),/Reviewed/);
+ assert.equal(root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='updates.install')[0].props.disabled,false);
+ await renderAct(async()=>root.unmount());
+});
+
+test('missing remote notes are honest without hiding installed history or disabling installation',()=>{
+ const html=render({application:{...application,status:'update',latest:'v0.6.4',releaseNotes:[release],releaseNotesWarning:'Release notes for the available update could not be loaded.'}});
+ assert.match(html,/could not be loaded/);assert.match(html,/View published release/);
+ assert.match(html,/<button class="a-primary" data-action="updates.install"/);
+});
+
 test('installed app and published release remain visible with source inventory closed',()=>{
  const html=render({items:Array.from({length:87},(_,id)=>({id:String(id),label:'Hidden source '+id,status:'current'}))});
  assert.match(html,/Application release status/);

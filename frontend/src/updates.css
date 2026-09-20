@@ -31,3 +31,18 @@
 .a-update-phase-list .historical svg{color:var(--a-muted,#5c6475)}
 .a-update-phase-list .a-caption{margin:3px 0 0 21px}.a-update-phase-status{margin-left:auto;color:var(--a-muted,#5c6475);font-size:11px}
 .a-update-receipt{width:100%;box-sizing:border-box;min-height:100px;max-height:260px;resize:vertical;font:11px/1.5 ui-monospace,monospace}
+
+.a-release-notices,.a-release-history{margin:18px 0;min-width:0;overflow-wrap:anywhere}
+.a-release-notices h4{display:flex;align-items:center;gap:6px}
+.a-release-notices h4 svg,.a-release-reviewed svg{width:15px;height:15px;flex-shrink:0}
+.a-release-notice{display:grid;gap:7px;margin:12px 0;padding:12px 14px;border:1px solid var(--a-line,#dce3ef);border-left:3px solid var(--a-accent,#6556bd);border-radius:8px;font-size:13px;line-height:1.55}
+#amp-one .a-release-notice p{margin:0}
+.a-release-notice button{justify-self:start}
+.a-release-entry{padding:12px 0;border-bottom:1px solid var(--a-line,#dce3ef);font-size:13px;line-height:1.55}
+.a-release-entry summary{cursor:pointer}
+.a-release-entry summary>.a-caption{margin-left:8px;white-space:nowrap}
+.a-release-impact{display:inline-block;margin-left:8px;color:var(--a-accent,#6556bd);font-size:11px}
+.a-release-entry ul{padding-left:22px}.a-release-entry li+li{margin-top:6px}
+.a-release-notice.archived{border-left-width:1px;background:transparent}
+.a-release-reviewed{display:inline-flex;align-items:center;gap:5px;color:var(--a-muted,#5c6475);font-size:12px}
+.a-release-notes-warning{font-size:13px;line-height:1.55}

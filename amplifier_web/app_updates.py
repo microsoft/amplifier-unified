@@ -70,8 +70,10 @@ def git_environment():
     return env
 
 def application_state():
+    from .release_notes import history
     return {'id':'application','label':'Amplifier Unified','kind':'app','current':__version__,'repository':SOURCE,
-            'channel':'github-releases','status':'not_checked','detail':'Check for a published application release.'}
+            'channel':'github-releases','status':'not_checked','detail':'Check for a published application release.',
+            'releaseNotes':history()}
 
 async def check():
     base=application_state()
@@ -86,8 +88,18 @@ async def check():
         if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Release revision not found')
         current=version_tuple(__version__)
         ahead=version<current
+        if version>current:
+            # Read only this published, resolved commit; notes on main may describe
+            # changes that are not yet installable. Older releases lack this file.
+            from .release_notes import parse,history
+            try:
+                raw=await process('gh','api','-H','Accept: application/vnd.github.raw+json',
+                                  f'repos/{REPOSITORY}/contents/amplifier_web/release-notes.json?ref={revision}',timeout=15)
+                base['releaseNotes']=history(parse(raw,tag.removeprefix('v')),tag)
+            except (ValueError,RuntimeError,TimeoutError):
+                base['releaseNotesWarning']='Release notes for the available update could not be loaded. Installed release history is still available.'
         return {**base,'status':'update' if version>current else 'current','latest':tag,'revision':revision,
-            'url':data.get('html_url',SOURCE+'/releases'),'publishedAt':data.get('published_at'),'releaseBehind':ahead,
+            'url':SOURCE+'/releases/tag/'+tag,'publishedAt':data.get('published_at'),'releaseBehind':ahead,
             'detail':('This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if ahead
                       else 'A newer application release is available; installation restarts the host when idle.' if version>current
                       else 'The latest published application release is installed.')}
