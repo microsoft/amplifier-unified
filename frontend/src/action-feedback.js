@@ -33,6 +33,7 @@ export function createActionFeedback(){
    if(--record.count)return;
    pending.delete(button);
    for(const [name,value] of [['aria-busy',record.busy]]){
+    if(name==='aria-busy'&&button.getAttribute('data-operation-pending')==='true')continue;
     if(value===null)button.removeAttribute(name);else button.setAttribute(name,value);
    }
    button.removeAttribute('data-action-pending');

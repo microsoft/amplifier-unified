@@ -33,6 +33,7 @@ try{
  await refresh.route.fulfill({json:{accepted:true,state}});
  await page.waitForFunction(()=>!document.querySelector('[data-action="providers.models"][data-action-pending]'));
  assert.equal(await page.locator('[data-activity-region="provider-models"]').getAttribute('aria-busy'),'true');
+ assert.equal(await page.locator('[data-action="providers.models"]').getAttribute('aria-busy'),'true');
  assert.equal(await page.locator('#provider-model option[value="model-b"]').count(),1);
  await page.locator('#provider-source').count();
  // User edits survive independent completions and dismissal.
