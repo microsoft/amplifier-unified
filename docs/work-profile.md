@@ -25,8 +25,8 @@ The new-conversation options also accept a bundle source:
 git+https://github.com/bkrabach/amplifier-bundle-work@main#subdirectory=bundle.md
 ```
 
-Replace `main` with a reviewed commit for a reproducible selection. You can also
-register the source as a **standalone bundle** named `work` in Settings →
+Keep `@main` for branch-tracking updates; record the resolved commit in validation
+evidence. You can also register the source as a **standalone bundle** named `work` in Settings →
 Capabilities → Add capabilities. Registration adds a choice; it does not change
 the default bundle or existing conversations. The bundle keeps configured
 providers and model choices. See its README for composition with an existing

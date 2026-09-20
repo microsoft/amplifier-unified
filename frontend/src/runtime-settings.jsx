@@ -1,3 +1,4 @@
+import {NativeProviderSettings} from './native-provider-settings';
 import {CapacityControls} from './capacity';
 import {ScheduleControls} from './schedules';
 import {TaskContinuity} from './task-continuity';

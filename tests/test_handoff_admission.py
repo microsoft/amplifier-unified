@@ -65,7 +65,12 @@ async def fixture(tmp_path):
 
 async def pending(app,runtime,sid,target):
     receipt=(await app.dispatch('worktree.handoff',{'sessionId':sid,'id':target['id'],'expectedExecutionRevision':0}))['result']
-    await asyncio.wait_for(runtime.releasing.wait(),2)
+    # Real Git preflight runs before the controlled release barrier. Allow it
+    # time on a busy host; the race assertions start only after this event.
+    try:
+        await asyncio.wait_for(runtime.releasing.wait(),10)
+    except TimeoutError:
+        pytest.fail(f"Handoff did not reach release: {app.worktrees.read(sid, receipt['id'])}")
     return receipt
 
 

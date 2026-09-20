@@ -46,6 +46,8 @@ Preserve these external instructions.
         loaded = await foundation.load_bundle(str(path), strict=True)
         assert loaded.instruction == "Preserve these external instructions."
         assert loaded.providers[0]["config"]["default_model"] == "selected-model"
+        assert "external-test" in loaded.source_base_paths
+        assert Path(loaded.source_base_paths["external-test"]).resolve() == source.parent.resolve()
         plan = yaml.safe_load(path.read_text().split("---", 2)[1])
         assert plan["session"]["context"]["config"]["max_tokens"] == 24000
         assert plan["session"]["context"]["module"] == ("context-managed" if profile == "work" else "context-simple")
@@ -53,3 +55,17 @@ Preserve these external instructions.
         plan["session"].pop("context")
         plans.append(plan)
     assert plans[0] == plans[1]
+
+
+@pytest.mark.asyncio
+async def test_finished_uses_session_scoped_public_events_after_native_adoption():
+    spec = importlib.util.spec_from_file_location("work_acceptance_finished", Path(__file__).resolve().parents[1] / "acceptance.py")
+    acceptance = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(acceptance)
+    observed = acceptance.Observation()
+    service = SimpleNamespace(_session=lambda sid: {"messages": [], "status": "idle"})
+    observed.add("assistant.message", {"sessionId": "other", "text": "DONE"})
+    with pytest.raises(TimeoutError):
+        await acceptance.finished(observed, service, "own", "DONE", timeout=.01)
+    observed.add("assistant.message", {"sessionId": "own", "text": "DONE"})
+    await acceptance.finished(observed, service, "own", "DONE", timeout=.1)

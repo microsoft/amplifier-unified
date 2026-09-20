@@ -85,10 +85,12 @@ async def make_bundle(folder, args):
     from amplifier_foundation import load_bundle
 
     bundle = await load_bundle(args.bundle, strict=True)
-    plan = bundle.to_mount_plan()
-    plan["bundle"] = {"name": "acceptance-" + args.profile, "version": "0.2.0"}
-    # Flatten the small root so baseline and Work have identical instructions,
-    # tools and model selection. This comparison isolates context policy.
+    mounted = bundle.to_mount_plan()
+    # Preserve the actual include graph and namespaces while changing only the
+    # bounded test policy. A flattened mount plan loses relative skill sources.
+    plan = {"bundle": {"name": "acceptance-" + args.profile, "version": "0.2.0"},
+            "includes": [{"bundle": args.bundle}],
+            "session": copy.deepcopy(mounted["session"])}
     plan["session"]["orchestrator"]["config"].update(max_iterations=20)
     if args.profile == "baseline":
         plan["session"]["context"] = {"module": "context-simple", "source": SIMPLE_SOURCE,
@@ -100,7 +102,7 @@ async def make_bundle(folder, args):
         if args.profile == "work":
             plan["session"]["context"]["config"].update(summarize_trigger=0.12)
     path = folder / "profile.md"
-    path.write_text("---\n" + yaml.safe_dump(plan, sort_keys=False) + "---\n\n" + bundle.instruction)
+    path.write_text("---\n" + yaml.safe_dump(plan, sort_keys=False) + "---\n")
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -287,8 +289,12 @@ def assistant_text(service, sid):
 
 
 async def finished(observation, service, sid, token, timeout=180):
-    await observation.wait(lambda: token in assistant_text(service, sid)
-                           and service._session(sid)["status"] == "idle", timeout)
+    # Native history adoption may remove the in-memory web projection. Public
+    # assistant events retain the actual completed response for this session.
+    await observation.wait(lambda: (token in assistant_text(service, sid) or any(
+        event.get("kind") == "assistant.message" and event.get("sessionId") == sid
+        and token in event.get("text", "") for event in observation.events))
+        and service._session(sid)["status"] == "idle", timeout)
 
 
 async def interaction(client, service, sid, folder, observation, report, args):
