@@ -158,10 +158,19 @@ async def test_stream_publications_coalesce_but_final_response_flushes(app_facto
     await asyncio.sleep(.3)
     assert queue.get_nowait()['sessions'][0]['streaming'] == 'last chunk'
     await app.on_runtime_event('assistant.delta', {'sessionId':sid,'text':' before close'})
+    stream_id = app._session(sid)['streamingId']
     await app.close()
     saved = AppService(app.data_dir, workspace=app.default_workspace)
-    assert saved._session(sid)['streaming'] == 'last chunk before close'
+    session = saved._session(sid)
+    assert 'streaming' not in session and 'streamingId' not in session
+    partial = session['messages'][-1]
+    assert partial['text'] == '[Interrupted response]\n\nlast chunk before close'
+    assert partial['streamId'] == stream_id and partial['partial']
+    assert 'inputId' not in partial
     await saved.close()
+    restored = AppService(app.data_dir, workspace=app.default_workspace)
+    assert sum(message.get('streamId') == stream_id for message in restored._session(sid)['messages']) == 1
+    await restored.close()
 
 
 async def test_offpage_text_notifications_keep_compact_final_messages(app_factory):

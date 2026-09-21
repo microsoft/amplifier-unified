@@ -11,7 +11,7 @@ import uuid
 PROBE_PREFIX = 'AMPLIFIER_UPDATE_PROBE='
 ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','ImportError','ModuleNotFoundError','FileNotFoundError','PermissionError',
                'OSError','RuntimeError','ValueError','TimeoutError','CancelledError'}
-PROBE_STAGES = {'imports','package','assets','login','complete','prepare','capabilities','cleanup'}
+PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','capabilities','cleanup'}
 
 
 def exception_type(error):

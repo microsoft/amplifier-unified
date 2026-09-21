@@ -9,6 +9,11 @@ from amplifier_web.updates import UpdateManager,work_paused
 from test_service import Runtime
 
 
+@pytest.fixture(autouse=True)
+def base_installation(monkeypatch):
+    monkeypatch.setattr(app_updates, 'installed_extras', lambda: [])
+
+
 def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
     import os
     import subprocess

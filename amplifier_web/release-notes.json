@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.12",
+      "title": "An optional terminal client for shared conversations",
+      "changes": [
+        "Install the optional terminal client and use amplifier-unified tui to join the same conversations as the web app. Each terminal keeps its own selection and draft while messages, results and pending decisions stay shared.",
+        "The terminal supports reconnecting, history browsing, rename, approvals, Stop and cooperative takeover. Closing it leaves work running on the service.",
+        "Automatic naming uses the shared session naming hook and preserves custom names, including against late generated results.",
+        "Application updates retain the optional terminal client. If the installed selection changes after validation, retrying the update validates it again without interrupting active work.",
+        "The terminal client is early access. Voice, uploads, rich canvas, full settings editing and queue/steer remain available through the web app."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.11",
       "title": "Keep reconnected chats ready to send",
       "changes": [
@@ -181,8 +193,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
         }
       ]
     },
@@ -202,7 +214,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -221,7 +233,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [
