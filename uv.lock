@@ -111,7 +111,7 @@ wheels = [
 [[package]]
 name = "amplifier-app-tui"
 version = "0.4.0rc1"
-source = { git = "https://github.com/bkrabach/amplifier-app-tui?rev=2b31b415a5bde1bac669e2f28e97569b8c061753#2b31b415a5bde1bac669e2f28e97569b8c061753" }
+source = { git = "https://github.com/bkrabach/amplifier-app-tui?rev=main#a02f18cc51d60eb77445b673b63a30f903e63610" }
 dependencies = [
     { name = "aiohttp" },
 ]
@@ -194,7 +194,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
-    { name = "amplifier-app-tui", marker = "extra == 'tui'", git = "https://github.com/bkrabach/amplifier-app-tui?rev=2b31b415a5bde1bac669e2f28e97569b8c061753" },
+    { name = "amplifier-app-tui", marker = "extra == 'tui'", git = "https://github.com/bkrabach/amplifier-app-tui?rev=main" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "amplifier-core", specifier = ">=1.6.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
