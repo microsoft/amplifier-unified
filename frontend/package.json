@@ -58,7 +58,8 @@
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
     "test:registry-browser": "node tests/registry-validation-browser.mjs",
-    "test:mobile-navigation-browser": "node tests/mobile-navigation-browser.mjs"
+    "test:mobile-navigation-browser": "node tests/mobile-navigation-browser.mjs",
+    "test:settings-mobile-browser": "node tests/settings-mobile-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

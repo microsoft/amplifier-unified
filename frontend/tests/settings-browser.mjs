@@ -1,7 +1,7 @@
 import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/settings_ui_server.py',import.meta.url))],{stdio:'ignore'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8957/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
@@ -74,7 +74,8 @@ try{
  await page.locator('.a-release-entry summary').filter({hasText:'0.11.0'}).click();
  await page.locator('.a-release-entry').filter({hasText:'0.11.0'}).getByText('Settings now apply across Amplifier apps',{exact:true}).waitFor();
  await page.setViewportSize({width:680,height:844});
- const floating=await page.locator('.a-dialog').boundingBox();assert.ok(floating.x>0&&floating.y>0);assert.ok(floating.width<680);
+ await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-compact','true');
+ const floating=await page.locator('.a-dialog').boundingBox();assert.equal(floating.x,0);assert.equal(floating.y,0);assert.equal(floating.width,680);
 
  const aligned=await page.locator('.a-update-options label').first().evaluate(label=>{const input=label.querySelector('input'),a=input.getBoundingClientRect(),b=label.getBoundingClientRect();return {direction:getComputedStyle(label).flexDirection,width:a.width,delta:Math.abs(a.top+a.height/2-b.top-b.height/2)}});
  assert.equal(aligned.direction,'row');assert.equal(aligned.width,18);assert.ok(aligned.delta<3);
@@ -92,18 +93,18 @@ try{
 
  await openSettingsPage(page,'updates');
  await openSettingsPage(page,'permissions');
- const spacing=await page.locator('#denied-folders').evaluate(el=>{const picker=el.closest('.a-path-field'),button=[...picker.parentElement.querySelectorAll('button')].find(b=>b.textContent==='Save permissions');return button.getBoundingClientRect().top-picker.getBoundingClientRect().bottom});
- assert.ok(spacing>=12);
+ await expect(page.locator('.a-settings-mobile-actions').getByRole('button',{name:'Save permissions',exact:true})).toBeVisible();
  assert.equal(await page.getByText(/Provider keys live in the app/).count(),0);
  await openSettingsPage(page,'app-bundles');
  await openSettingsPage(page,'loaded-modules');
  await page.locator('#filter-loaded-modules').fill('tool-*');
- assert.equal(await page.locator('.a-module-row').count(),1);
+ assert.equal(await page.locator('.a-module-settings .a-collection-row').count(),1);
  await page.getByRole('button',{name:'tool-filesystem tools',exact:true}).click();
  await page.locator('#module-field-max_bytes').fill('4096');
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
  await page.getByText('Changes are applied to the loaded session.',{exact:true}).waitFor();
  assert.equal((await state()).sessions[0].configuration.plan.tools[0].config.max_bytes,4096);
+ await page.getByRole('button',{name:'Back to Bundles & modules',exact:true}).click();
  await page.getByRole('checkbox',{name:'Enable tool-filesystem',exact:true}).uncheck();
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().sessions[0].configuration.plan.tools[0].enabled===false);
@@ -129,7 +130,7 @@ try{
  assert.ok(await page.locator('.a-candidate input').isChecked());
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-focused.png'});
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
- await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('session.draft',{}));
  await page.getByText('Chat settings',{exact:true}).click();
  await page.getByLabel('Use the workspace’s default bundle').uncheck();
