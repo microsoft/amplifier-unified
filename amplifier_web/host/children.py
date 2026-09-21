@@ -211,12 +211,6 @@ class Children:
                        provider_preferences=None, self_delegation_depth=0, session_metadata=None, resumed=False):
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
         from amplifier_core import HookResult
-        self.store.directory(identity)
-        while len(self.rows) >= 256 and identity not in self.rows:
-            oldest = next((key for key, value in self.rows.items() if value["status"] in {"completed", "cancelled", "error", "interrupted"}), None)
-            if oldest is None:
-                raise RuntimeError("The active worker limit has been reached")
-            del self.rows[oldest]
         if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
             raise ValueError("A child with this identity is already active")
         prepared = self.prepared.get(parent.session_id)
@@ -226,6 +220,12 @@ class Children:
         # Never silently run an agent requesting process isolation in-process.
         if plan.get("spawn_mode") == "subprocess":
             raise ValueError(_SUBPROCESS_UNSUPPORTED)
+        self.store.directory(identity)
+        while len(self.rows) >= 256 and identity not in self.rows:
+            oldest = next((key for key, value in self.rows.items() if value["status"] in {"completed", "cancelled", "error", "interrupted"}), None)
+            if oldest is None:
+                raise RuntimeError("The active worker limit has been reached")
+            del self.rows[oldest]
         if orchestrator_config:
             session_config = plan.setdefault("session", {})
             orchestrator = session_config.setdefault("orchestrator", {})
