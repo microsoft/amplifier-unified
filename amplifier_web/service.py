@@ -2217,7 +2217,8 @@ class AppService:
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
             progress = kind == 'assistant.delta' or (
-                kind == 'runtime.status' and payload.get('activityOnly')) or (
+                kind == 'runtime.status' and (payload.get('activityOnly') or
+                    payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             if progress:
                 self._publish_progress()
