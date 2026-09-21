@@ -152,7 +152,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#1125b4f95a7a9e9047a82e34744adbd43047371c" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#c6b33a3b144643de891379669c5be4fc03b129f1" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
