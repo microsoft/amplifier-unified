@@ -7,8 +7,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
-import tempfile
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -17,23 +15,20 @@ from aiohttp import web
 
 from .deployment import is_loopback, validate_origin, write_private
 from .terminal_devices import TerminalDevices
+from .terminal_release import latest_release
 from .tls import ca_bytes
 
-REPOSITORY = 'microsoft/amplifier-app-tui'
-VERSION = '0.4.0rc1'
 UV_VERSION = '0.12.17'
 PLATFORMS = {
     'macos-arm64': {
         'label': 'Mac with Apple silicon · macOS 26 or later', 'system': 'Darwin',
-        'wheel': 'amplifier_app_tui-0.4.0rc1-py3-none-macosx_26_0_arm64.whl',
-        'sha256': 'b1d0e7b730878f62a625a52578191df82933e28f225924e6f31bbb6e5734c363',
+        'tag': 'macosx_26_0_arm64', 'architectures': ('arm64',),
         'uv': 'uv-aarch64-apple-darwin',
         'uvSha256': '85f00cbdc6dd3e97eba4c31b4d014375a9fdfe8f570023b84e5102fc3456896b',
     },
     'linux-arm64': {
         'label': 'Linux ARM64 · glibc (including Spark)', 'system': 'Linux',
-        'wheel': 'amplifier_app_tui-0.4.0rc1-py3-none-linux_aarch64.whl',
-        'sha256': 'fc90c8017c4de76b3de0d6a2badc993ff7374beaf66f1ae556fd396ac2941fec',
+        'tag': 'linux_aarch64', 'architectures': ('aarch64', 'arm64'),
         'uv': 'uv-aarch64-unknown-linux-gnu',
         'uvSha256': 'd636d1b678e9e7f367ecb22b46bd1cabbed234d6bc3b4d96365d2b507f72f86c',
     },
@@ -55,35 +50,8 @@ class TerminalSetup:
         self.tls_method = tls_method
         self.lock = asyncio.Lock()
 
-    async def wheel(self, platform):
-        spec = PLATFORMS[platform]
-        directory = self.data_dir / 'cache/terminal-releases' / VERSION
-        path = directory / spec['wheel']
-        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == spec['sha256']:
-            return path.read_bytes()
-        if not shutil.which('gh'):
-            raise ValueError('The server needs access to the private terminal release. Ask its owner to configure GitHub release access, then retry.')
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with tempfile.TemporaryDirectory(dir=directory) as temporary:
-            process = await asyncio.create_subprocess_exec(
-                'gh', 'release', 'download', 'v' + VERSION, '--repo', REPOSITORY,
-                '--pattern', spec['wheel'], '--dir', temporary,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            try:
-                await asyncio.wait_for(process.wait(), 180)
-            except BaseException:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
-                raise
-            candidate = Path(temporary) / spec['wheel']
-            if process.returncode or not candidate.is_file() or candidate.stat().st_size > 16_000_000:
-                raise ValueError('The server could not download the terminal release. Check its GitHub access and retry.')
-            value = candidate.read_bytes()
-            if hashlib.sha256(value).hexdigest() != spec['sha256']:
-                raise ValueError('The terminal download failed verification. No installer was created.')
-            write_private(path, value)
-        return value
+    async def release(self, platform):
+        return await latest_release(PLATFORMS[platform], self.data_dir / 'cache/terminal-releases/artifacts')
 
     def clean(self):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -122,32 +90,33 @@ class TerminalSetup:
                 if row['fingerprint'] != fingerprint:
                     raise ValueError('This setup request was already used with different settings.')
                 return row['receipt']
-            wheel = await self.wheel(platform)
+            release = await self.release(platform)
             certificate = ca_bytes(self.data_dir) if self.tls_method == 'ca' else None
             if self.tls_method == 'ca' and certificate is None:
                 raise ValueError('The service local CA is unavailable. Restore its certificate before preparing terminal setup.')
             grant, expires = self.devices.grant(name, identity)
             profile = {'server': server, 'grant': grant, 'name': name,
-                       'ca': (certificate or b'').decode(), 'expiresAt': expires}
-            script = self.render(platform, profile, wheel)
+                       'ca': (certificate or b'').decode(), 'expiresAt': expires,
+                       'clientVersion': release.version}
+            script = self.render(platform, profile, release)
             filename = 'Amplifier-Terminal-' + identity[:8] + '.sh'
             receipt = {'accepted': True, 'installer': {'id': identity, 'filename': filename,
                 'downloadUrl': '/api/terminal/installers/' + identity, 'platform': platform,
-                'server': server, 'expiresAt': expires, 'version': VERSION}}
+                'server': server, 'expiresAt': expires, 'version': release.version}}
             write_private(self.directory / (identity + '.sh'), script)
             write_private(receipt_path, json.dumps({'expiresAt': expires, 'fingerprint': fingerprint, 'receipt': receipt}))
             return receipt
 
-    def render(self, platform, profile, wheel):
+    def render(self, platform, profile, release):
         template = (Path(__file__).parent / 'terminal_install.sh').read_text()
-        fields = {'PROFILE': json.dumps(profile).encode(), 'WHEEL': wheel,
+        fields = {'PROFILE': json.dumps(profile).encode(), 'WHEEL': release.wheel,
                   'INSTALLER': (Path(__file__).parent / 'terminal_install_client.py').read_bytes()}
         for key, value in fields.items():
             template = template.replace('__' + key + '_BASE64__', base64.b64encode(value).decode())
         spec = PLATFORMS[platform]
-        for key, value in {'SYSTEM': spec['system'], 'WHEEL_NAME': spec['wheel'],
-                           'WHEEL_SHA256': spec['sha256'], 'UV_NAME': spec['uv'],
-                           'UV_SHA256': spec['uvSha256'], 'UV_VERSION': UV_VERSION, 'VERSION': VERSION}.items():
+        for key, value in {'SYSTEM': spec['system'], 'WHEEL_NAME': release.filename,
+                           'WHEEL_SHA256': release.sha256, 'UV_NAME': spec['uv'],
+                           'UV_SHA256': spec['uvSha256'], 'UV_VERSION': UV_VERSION, 'VERSION': release.version}.items():
             template = template.replace('__' + key + '__', value)
         return template
 

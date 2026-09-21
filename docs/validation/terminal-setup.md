@@ -136,3 +136,29 @@ authenticated to Spark successfully; output was captured and only exit status
 and byte counts were reported. A server override was refused with exit code 2.
 Shell configuration was unchanged. No new physical WezTerm inspection is claimed;
 the command executes in its caller's terminal and does not launch an emulator.
+
+## Latest compatible client selection
+
+New setup requests resolve the canonical release catalog; prepared retries retain
+identical installer bytes and do not require another catalog request. Version
+ordering includes prereleases and pagination; selection excludes unsupported
+platforms/protocols and refuses incomplete or corrupt candidate artifacts.
+GitHub asset digests and the qualification receipt must agree before enrollment.
+
+- 53 focused selector/setup tests pass, including changed releases, verified cache
+  reuse/repair, bad digests, incomplete publication, incompatible protocols,
+  pagination bounds, offline retries, version validation before redemption, and
+  preservation of the prior installation after TLS/enrollment failures.
+- Headless Chromium against the isolated real app passes preparation, exact
+  registration, refresh failure preservation, reload, focus retention, revocation
+  and narrow layout. The browser fixture supplies synthetic artifact bytes and
+  does not install a client or contact production.
+- Read-only canonical GitHub lookup confirms current receipts lack an explicit
+  `connected_protocol_version`; preparation correctly refuses them. A newly
+  qualified TUI release declaring that field must be published before deploying
+  the dynamic selector. This is a publication dependency, not evidence that a
+  successor is already available.
+
+No existing client installation, pending update generation, service process or
+saved conversation was changed by these checks. Native-platform qualification
+and host rollout remain owned by the coordinated release process.

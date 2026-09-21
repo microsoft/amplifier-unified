@@ -9,6 +9,7 @@ dependencies = [
     "amplifier-core>=1.6.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
+    "packaging>=24",
     "cryptography>=44,<51",
     "python-pam>=2.0.2,<3",
     "six>=1.16,<2",

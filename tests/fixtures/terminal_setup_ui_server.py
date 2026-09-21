@@ -17,10 +17,14 @@ async def main(home):
     app = await create_app(home / 'app', workspace=home, runtime=Runtime(), voice=False,
                            preload_providers=False, background_updates=False)
     app['control_token'] = 'fixture-browser-control-token'
-    async def wheel(platform):
+    from amplifier_web.terminal_release import TerminalRelease
+    import hashlib
+    async def release(platform):
         await asyncio.sleep(.2)
-        return b'synthetic wheel - do not install'
-    app['terminal_setup'].wheel = wheel
+        value = b'synthetic wheel - do not install'
+        return TerminalRelease('0.9.0rc1', 'amplifier_app_tui-0.9.0rc1-py3-none-macosx_26_0_arm64.whl',
+                               hashlib.sha256(value).hexdigest(), value)
+    app['terminal_setup'].release = release
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
