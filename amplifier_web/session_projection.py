@@ -1,5 +1,6 @@
 """Persist Unified's presentation beside, never instead of, shared transcripts."""
 import json
+import copy
 import uuid
 from pathlib import Path
 
@@ -55,22 +56,39 @@ def migrate(home, state):
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
     'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
     'model', 'startedAt', 'endedAt', 'usage', 'lifecycle'}
+ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
+    'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',
+    'grossTotalTokens', 'costUsd', 'costType', 'costSource'}
 
 
 def accounting_projection(tree):
-    rows = list(tree.get('retiredUsageNodes', []))
-    rows.extend(row for row in tree.get('nodes', [])
+    rows = [(row, False) for row in tree.get('retiredUsageNodes', [])]
+    rows.extend((row, True) for row in tree.get('nodes', [])
                 if row.get('liveObservation') and row.get('kind') in {'llm', 'worker'}
-                and not row.get('nativeHistory') and not row.get('canonicalHistory'))
+                and not row.get('nativeHistory'))
     saved = {}
-    for row in rows:
+    for row, display in rows:
         if row.get('kind') not in {'llm', 'worker'} or not row.get('id'):
             continue
         key = (row.get('sessionId'), row['id'])
         prior = saved.get(key)
+        if display and row.get('canonicalHistory') and (
+            prior is None or row.get('rootSessionId') != prior.get('rootSessionId')
+            or row.get('producerId') != prior.get('producerId')
+            or row.get('revision', 0) <= prior.get('revision', 0)
+        ):
+            # A display row may acquire a later live observation, but a lazy
+            # canonical read cannot mint admission or replace saved accounting.
+            continue
         if prior and (row.get('revision', 0), bool(row.get('endedAt'))) < (prior.get('revision', 0), bool(prior.get('endedAt'))):
             continue
-        saved[key] = {key: value for key, value in row.items() if key in ACCOUNTING_FIELDS}
+        record = {key: copy.deepcopy(value) for key, value in row.items() if key in ACCOUNTING_FIELDS}
+        if isinstance(record.get('usage'), dict):
+            record['usage'] = {key: value for key, value in record['usage'].items()
+                              if key in ACCOUNTING_USAGE_FIELDS and type(value) in (str, int, float)}
+        else:
+            record.pop('usage', None)
+        saved[key] = record
     return list(saved.values())
 
 

@@ -126,8 +126,10 @@ def trim_execution(session, previous, message_id):
         kept = {row['id'] for row in tree['turns']}
         # Editing visible history cannot erase already incurred model usage.
         # Transfer receipts out of the visible tree; do not create a second ledger.
-        tree.setdefault('retiredUsageNodes', []).extend(row for row in tree.get('nodes', [])
-            if row.get('turnId') not in kept and row.get('kind') in {'llm', 'worker'} and not row.get('nativeHistory'))
+        from .session_projection import accounting_projection
+        retired = [*tree.get('retiredUsageNodes', []), *(row for row in tree.get('nodes', [])
+            if row.get('turnId') not in kept and row.get('kind') in {'llm', 'worker'} and not row.get('nativeHistory'))]
+        tree['retiredUsageNodes'] = accounting_projection({'retiredUsageNodes': retired})
         tree['nodes'] = [row for row in tree.get('nodes', []) if row.get('turnId') in kept]
         tree['currentTurnId'] = None
         tree['aggregateUsage'] = rollup([row for row in tree['nodes'] if row.get('kind') == 'llm'])
