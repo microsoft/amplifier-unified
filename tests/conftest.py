@@ -4,6 +4,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolated_shared_session_files(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'amplifier-home'))
+    monkeypatch.setenv('AMPLIFIER_TERMINAL_HOME', str(tmp_path / 'terminal-home'))
     monkeypatch.delenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', raising=False)
 
 

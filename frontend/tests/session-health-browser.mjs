@@ -4,7 +4,8 @@ import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+const moduleFailure=process.argv.includes('--module-failure');
+const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{})}});
 let browser;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
@@ -19,10 +20,15 @@ try{
  await page.getByRole('button',{name:'Chat details',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Chat details',exact:true});
  await expect(dialog.getByRole('button',{name:'Hide details',exact:true})).toHaveCount(0);
- await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
+ if(moduleFailure){
+  await expect(dialog.getByText('Configured modules could not load',{exact:true})).toBeVisible();
+  await expect(dialog.getByText('hook-fixture',{exact:true})).toBeVisible();
+  await expect(dialog.getByText(/Check the declared module type and metadata/)).toBeVisible();
+  await expect(dialog.locator('summary').filter({hasText:'Runtime message'})).toHaveCount(0);
+ }else await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
  const copy=dialog.getByRole('button',{name:'Copy session ID',exact:true});
  assert.equal(await copy.textContent(),'');await copy.click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
- await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();assert.equal(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())).failure.category,'invalid_image');
+ await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();const diagnostics=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));if(moduleFailure)assert.equal(diagnostics.moduleFailures[0].reason_code,'invalid_module_metadata');else assert.equal(diagnostics.failure.category,'invalid_image');
  const automatic=dialog.getByRole('checkbox',{name:'Automatic chat naming'});
  const refresh=dialog.getByRole('button',{name:'Regenerate chat name'});
  await automatic.check();await expect(automatic).toBeChecked();

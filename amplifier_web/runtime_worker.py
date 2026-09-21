@@ -354,6 +354,9 @@ class Worker:
             if raise_errors:
                 raise
             error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
+            from amplifier_web.module_failures import ConfiguredModuleError
+            if isinstance(exc, ConfiguredModuleError):
+                error.update(code="module_load_failed", moduleFailures=exc.failures)
             if type(exc).__name__ == "SessionBusyError":
                 error.update(code="session_busy", owner=getattr(exc, "owner", None))
             publish(error)

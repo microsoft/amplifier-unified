@@ -6,6 +6,7 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const [{ProviderSettings,RoutingSettings},{RuntimeSettings},{TurnTimeline},{RegistrySettings},{MaintenanceSettings}]=await Promise.all(['setup.jsx','runtime-settings.jsx','timeline.jsx','registry.jsx','maintenance.jsx'].map(file=>server.ssrLoadModule('/src/'+file)));
 const {UpdateSettings}=await server.ssrLoadModule('/src/updates.jsx');
+const {ConversationDetails}=await server.ssrLoadModule('/src/conversation-controls.jsx');
 const act=()=>{};
 test.after(()=>server.close());
 test('setup panels render redacted provider configuration and valid required routing roles',()=>{
@@ -93,4 +94,12 @@ test('native CLI history is automatic and stale sharing settings fall back to ma
  assert.match(history,/data-action="history.export"/);
  assert.match(history,/data-action="history.importFile"/);
  assert.doesNotMatch(history,/data-action="history.import"|Browse saved conversations/);
+});
+
+test('module mount failures expose remediation without another disclosure',()=>{
+ const session={id:'fixture',status:'error',error:'Configured modules failed to mount',moduleFailures:[{module:'tool-fixture',reason_code:'invalid_entry_point',guidance:'Check the module entry point and async mount function.'}]};
+ const html=renderToStaticMarkup(React.createElement(ConversationDetails,{session,act}));
+ assert.match(html,/Configured modules could not load/);
+ assert.match(html,/tool-fixture/);assert.match(html,/Check the module entry point and async mount function/);
+ assert.doesNotMatch(html,/<summary>Runtime message/);
 });

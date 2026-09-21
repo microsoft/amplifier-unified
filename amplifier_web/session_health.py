@@ -1,5 +1,6 @@
 """On-demand conversation diagnosis and portable, non-executing recovery history."""
 import json
+from pathlib import Path
 import re
 
 
@@ -55,6 +56,12 @@ def inspect_session(home, session):
               'title': session.get('title', ''), 'workspace': session.get('workspace', ''),
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
               'selection': session.get('selection', {}), 'workReplayed': False}
+    from .module_failures import read_failures
+    directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
+    current = Path(home) / 'runtime-reports' / identity
+    # Workers write here; retain compatibility with older native-side reports.
+    # An explicit cleared report must win over an older native diagnostic.
+    report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
     if session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
         # Older versions discarded the cause at the manager boundary. Read a

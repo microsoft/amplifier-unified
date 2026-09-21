@@ -1882,6 +1882,9 @@ class AppService:
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
                     session.pop("error", None)
+                    session.pop("moduleFailures", None)
+                    if isinstance(session.get("health"), dict):
+                        session["health"].pop("moduleFailures", None)
                     session['preparation'] = {'status': 'ready'}
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
@@ -1908,6 +1911,11 @@ class AppService:
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
                 detail = str(payload.get("error") or payload.get("message") or "Runtime failed")
+                if payload.get('moduleFailures'):
+                    from .module_failures import ConfiguredModuleError
+                    failure=ConfiguredModuleError(payload['moduleFailures'])
+                    session['moduleFailures']=failure.failures
+                    detail=str(failure)
                 error_type = payload.get('errorType') or session.get('turnErrorType')
                 session['errorType'] = error_type
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
