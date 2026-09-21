@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -181,6 +183,7 @@ class BundleManager:
             store = SettingsStore(home)
         self.home, self.store = Path(home), store
         self.lock = asyncio.Lock()
+        self.discovery_reviews = {}
 
     @staticmethod
     def entries(settings: dict) -> list[dict]:
@@ -227,12 +230,14 @@ class BundleManager:
 
     async def discover(self, value: str) -> dict:
         url, ref, subdirectory = remote_source(value)
+        ref = ref or "main"
+        inspected_at = datetime.now(timezone.utc).isoformat()
         with tempfile.TemporaryDirectory(prefix="amplifier-bundles-") as directory:
             root = Path(directory) / "repo"
             await git("clone", "--depth=1", "--filter=blob:none", "--no-checkout", "--", url, str(root), timeout=90)
             if ref:
                 await git("fetch", "--depth=1", "origin", ref, cwd=root, timeout=60)
-                commit = (await git("rev-parse", "FETCH_HEAD", cwd=root)).decode().strip()
+                commit = (await git("rev-parse", "FETCH_HEAD^{commit}", cwd=root)).decode().strip()
             else:
                 commit = (await git("rev-parse", "HEAD", cwd=root)).decode().strip()
             records = (await git("ls-tree", "-r", "-z", commit, cwd=root)).split(b"\0")
@@ -254,12 +259,47 @@ class BundleManager:
                 size = int((await git("cat-file", "-s", object_id, cwd=root)).strip())
                 if size > MAX_DOCUMENT:
                     continue
-                content = (await git("cat-file", "blob", object_id, cwd=root)).decode("utf-8", errors="replace")
+                blob = await git("cat-file", "blob", object_id, cwd=root)
+                content = blob.decode("utf-8", errors="replace")
                 meta = document_metadata(content, path)
                 if meta:
-                    candidates.append({**meta, "path": path, "uri": "git+" + url + "@" + commit + "#subdirectory=" + path, "revision": commit})
+                    uri = "git+" + url + "@" + ref + "#subdirectory=" + path
+                    review = {"uri": uri, "url": url, "ref": ref, "revision": commit,
+                              "path": path, "blob": object_id, "sha256": hashlib.sha256(blob).hexdigest(),
+                              "inspectedAt": inspected_at}
+                    review_id = uuid.uuid4().hex
+                    self.discovery_reviews[review_id] = review
+                    candidates.append({**meta, **review, "reviewId": review_id})
+            # Bound review memory without invalidating the current discovery.
+            while len(self.discovery_reviews) > 1000:
+                self.discovery_reviews.pop(next(iter(self.discovery_reviews)))
             candidates.sort(key=lambda row: (row["path"].count("/"), row["path"]))
-            return {"url": url, "revision": commit, "candidates": candidates, "classification": "advisory"}
+            return {"url": url, "ref": ref, "revision": commit, "candidates": candidates, "classification": "advisory"}
+
+    async def verify_discovery_review(self, args):
+        review_id = args.get("reviewId")
+        if review_id is None:
+            # Agent callers can add the selected URI directly; retain the same
+            # review guard as the UI when this host discovered that candidate.
+            review_id = next((key for key in reversed(self.discovery_reviews)
+                              if self.discovery_reviews[key]["uri"] == args.get("uri")), None)
+            if review_id is None:
+                return None  # Existing direct registrations remain an explicit choice.
+        review = self.discovery_reviews.get(review_id)
+        if review is None or review["uri"] != validate_uri(args["uri"]):
+            raise ValueError("Browse this repository again before adding the selected bundle.")
+        ref = review["ref"]
+        # A caller's explicit immutable commit remains immutable; discovered
+        # branch sources retain their branch and record inspection separately.
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", ref):
+            refs = [ref, ref + "^{}"] if ref.startswith("refs/") else ["refs/heads/" + ref, "refs/tags/" + ref, "refs/tags/" + ref + "^{}"]
+            output = await git("ls-remote", "--", review["url"], *refs)
+            resolved = dict(line.split("\t", 1)[::-1] for line in output.decode().splitlines() if "\t" in line)
+            current = (resolved.get("refs/heads/" + ref) or resolved.get("refs/tags/" + ref + "^{}")
+                       or resolved.get("refs/tags/" + ref) or resolved.get(ref + "^{}") or resolved.get(ref))
+            if current != review["revision"]:
+                raise ValueError("The bundle source changed after browsing. Browse again before adding it.")
+        return copy.deepcopy(review)
 
     async def perform(self, action: str, args: dict, *, effective_config=None, root_bundle=None, provenance=None, resources=None) -> dict:
         workspace = args.get("workspace") or str(Path.cwd())
@@ -290,6 +330,7 @@ class BundleManager:
             updated = self.store.update(workspace, scope, register)
             return {"bundles": self.public_entries(updated), "saved": {"name": name, "uri": str(target), "filename": filename}, "export": exported}
         async with self.lock:
+            review = await self.verify_discovery_review(args) if action == "bundles.add" else None
             settings = self.store.read(workspace, scope)
             if action == "bundles.list":
                 from .host.config import load_config
@@ -327,6 +368,9 @@ class BundleManager:
                         if role == "standalone" and any(row["role"] == role and row["name"] == name for row in entries):
                             raise ValueError("That standalone bundle name is already registered; choose another name.")
                         entries.append({"id": uuid.uuid4().hex, "uri": uri, "name": name, "role": role, "enabled": True})
+                    if review is not None:
+                        saved = next(row for row in entries if row["uri"] == uri and row["role"] == role)
+                        saved["sourceReview"] = review
                     excluded.discard(uri)
                 elif action == "bundles.reorder":
                     current_ids=[row['id'] for row in entries if row.get('role')!='standalone' and row.get('enabled',True)]
