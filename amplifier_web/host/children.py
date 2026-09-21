@@ -10,6 +10,7 @@ from pathlib import Path
 import uuid
 
 from .model_selection import inherited_selection
+from .components import merge_modules, compose_bundles
 from amplifier_module_loop_live.host import HostAdapter
 from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
@@ -27,7 +28,7 @@ def _module_id(row):
 
 def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None):
     """Compose immutable agent settings and honor explicit inheritance policies."""
-    from amplifier_foundation import deep_merge, merge_module_lists
+    from amplifier_foundation import deep_merge
     parent, overlay = copy.deepcopy(parent), copy.deepcopy(overlay)
     agents = parent.get("agents", {})
     agent_filter = overlay.pop("agents", None)
@@ -52,7 +53,7 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None)
             if section == "hooks":
                 # Approval/security gate modules are not optional child UI hooks.
                 gates = [item for item in parent.get("hooks", []) if any(word in str(_module_id(item)).lower() for word in ("approval", "permission", "security"))]
-                inherited = merge_module_lists(inherited, gates)
+                inherited = merge_modules(inherited, gates)
         if section == "providers":
             # Foundation merges by legacy id; Rust Core mounts by instance_id.
             # Preserve both aliases so distinct provider instances never collapse.
@@ -61,7 +62,7 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None)
                     item["id"] = item["instance_id"]
                 if item.get("id") and not item.get("instance_id"):
                     item["instance_id"] = item["id"]
-        result[section] = merge_module_lists(inherited, declared)
+        result[section] = merge_modules(inherited, declared)
     if agent_filter == "none":
         result["agents"] = {}
     elif isinstance(agent_filter, list):
@@ -217,6 +218,15 @@ class Children:
         if prepared is None:
             raise RuntimeError("Parent bundle is not attached to the standalone host")
         plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance, hook_inheritance=hook_inheritance)
+        components = getattr(getattr(prepared, "bundle", None), "_host_components", None)
+        if components is not None:
+            # Late and resumed overlays follow the same supported-loop policy
+            # as declared agents; custom child orchestrators remain untouched.
+            if ('loop-live' in components.installed and plan.get('session', {}).get('orchestrator', {}).get('module')
+                    in {'loop-live', 'loop-streaming'}):
+                from .session import live_plan
+                plan, _ = live_plan(plan)
+            plan = components.normalize(plan)
         # Never silently run an agent requesting process isolation in-process.
         if plan.get("spawn_mode") == "subprocess":
             raise ValueError(_SUBPROCESS_UNSUPPORTED)
@@ -238,8 +248,10 @@ class Children:
             plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")
-        effective = prepared.bundle.compose(overlay_bundle)
+        effective = compose_bundles(prepared.bundle, overlay_bundle)
         effective.agents = copy.deepcopy(plan.get("agents", {}))
+        if components is not None:
+            components.apply(effective)
         child_prepared = replace(prepared, mount_plan=plan, bundle=effective)
         cwd = Path(parent.coordinator.get_capability("session.working_dir") or Path.cwd())
         persistent = _PERSISTENT.get()

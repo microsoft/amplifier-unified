@@ -11,10 +11,10 @@ import uuid
 PROBE_PREFIX = 'AMPLIFIER_UPDATE_PROBE='
 ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','ImportError','ModuleNotFoundError','FileNotFoundError','PermissionError',
                'OSError','RuntimeError','ValueError','TimeoutError','CancelledError','ModuleActivationError',
-               'BundleNotFoundError','BundleLoadError','BundleValidationError','BundleDependencyError'}
+               'BundleNotFoundError','BundleLoadError','BundleValidationError','BundleDependencyError','HostComponentConflict'}
 PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNotFoundError':'bundle-not-found',
                        'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
-                       'BundleDependencyError':'bundle-dependency-failed'}
+                       'BundleDependencyError':'bundle-dependency-failed', 'HostComponentConflict':'host-component-conflict'}
 RECOVERY_REASONS = {'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup'}
 
