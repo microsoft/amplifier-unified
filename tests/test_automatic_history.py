@@ -37,6 +37,8 @@ async def app_factory(tmp_path, monkeypatch):
         workspace = workspace or tmp_path / 'web-workspace'
         workspace.mkdir(parents=True, exist_ok=True)
         app = AppService(home or tmp_path / 'web-app', ObservedRuntime(), workspace=workspace)
+        # These browsing scenarios represent an open legacy browser stream.
+        app.subscribe()
         app.observed_diagnostics = []
 
         def record(stream, event, **kwargs):

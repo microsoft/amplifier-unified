@@ -144,7 +144,8 @@ async def test_background_reader_observes_external_append_without_runtime_captur
     import asyncio
     session,path=source
     state={'sessions':[session],'selectedSessionId':session['id']};publications=[]
-    service=SimpleNamespace(state=state,clients=SimpleNamespace(records={}),closed=False,
+    service=SimpleNamespace(state=state,_state=state,clients=SimpleNamespace(records={}),closed=False,
+                            queue_clients={'browser':None},queue_sessions={},
                             lock=asyncio.Lock(),_session=lambda identity:session,_publish=lambda:publications.append(1))
     view=EventLogView(service);view.start()
     try:

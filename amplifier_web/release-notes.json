@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.2",
+      "title": "Refresh history only for connected views",
+      "changes": [
+        "Closed browser tabs and finished terminal or API clients no longer keep old conversation logs refreshing in the background.",
+        "Browser and terminal history follow their live subscriptions, while saved drafts and reconnect state remain intact. Active work continues to be observed after clients disconnect."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.1",
       "title": "Reliable component updates and shared module loading",
       "changes": [

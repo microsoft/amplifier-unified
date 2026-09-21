@@ -427,9 +427,8 @@ class AutomaticHistory:
                         self.service._publish()
                 # Browsers have independent selections. Refresh only connected
                 # views, not every historical client record retained on disk.
-                selected_ids = {self.service.state.get('selectedSessionId')}
-                selected_ids.update(self.service.clients.records.get(client, {}).get('selectedSessionId')
-                                    for client in self.service.queue_clients.values())
+                from .history_demand import subscribed_sessions
+                selected_ids = subscribed_sessions(self.service)
                 for selected in [row for row in self.service.state['sessions'] if row['id'] in selected_ids]:
                     if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
                         continue
