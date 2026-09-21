@@ -1,6 +1,6 @@
 # Release 0.3.0
 
-Amplifier Unified is a standalone Python host and packaged React SPA. Installable source and release channel: private `bkrabach/amplifier-unified`.
+Amplifier Unified is a standalone Python host and packaged React SPA. Installable source and release channel: private `microsoft/amplifier-unified`.
 
 This release adds provider and routing setup; bundle discovery/composition and portable custom bundles; scoped module/source management and Core validation; modes, goals, limits and tool/skill controls; full transcript history/forks/import/export; notification preferences; staged ecosystem/app updates; full private backups and reversible reset; and headless terminal workflows.
 

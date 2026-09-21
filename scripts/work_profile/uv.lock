@@ -166,7 +166,7 @@ source = { git = "https://github.com/microsoft/amplifier-module-context-simple?r
 [[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
-source = { git = "https://github.com/bkrabach/amplifier-module-loop-live?rev=main#d2217dabb6a79fe63e3f001ac512e6fa8451008e" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main#d2217dabb6a79fe63e3f001ac512e6fa8451008e" }
 dependencies = [
     { name = "amplifier-module-loop-streaming" },
     { name = "jsonschema" },
@@ -200,7 +200,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.19.2"
+version = "0.19.10"
 source = { directory = "../../" }
 dependencies = [
     { name = "aiohttp" },
@@ -271,7 +271,7 @@ requires-dist = [
     { name = "amplifier-core", specifier = ">=1.6.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
     { name = "amplifier-module-context-managed", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Fcontext-managed&rev=main" },
-    { name = "amplifier-module-loop-live", git = "https://github.com/bkrabach/amplifier-module-loop-live?rev=main" },
+    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main" },
     { name = "amplifier-module-provider-anthropic", git = "https://github.com/microsoft/amplifier-module-provider-anthropic?rev=main" },
     { name = "amplifier-module-provider-openai", git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-transcript", git = "https://github.com/microsoft/amplifier-bundle-context-managed?subdirectory=modules%2Ftool-transcript&rev=main" },

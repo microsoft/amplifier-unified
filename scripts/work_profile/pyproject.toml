@@ -6,7 +6,7 @@ dependencies = [
   "amplifier-core>=1.6.1",
   "amplifier-unified",
   "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
-  "amplifier-module-loop-live @ git+https://github.com/bkrabach/amplifier-module-loop-live@main",
+  "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@main",
   "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/context-managed",
   "amplifier-module-tool-transcript @ git+https://github.com/microsoft/amplifier-bundle-context-managed@main#subdirectory=modules/tool-transcript",
   "amplifier-module-provider-openai @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",

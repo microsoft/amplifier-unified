@@ -23,7 +23,7 @@ import uuid
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-WORK_BUNDLE = "git+https://github.com/bkrabach/amplifier-bundle-work@main#subdirectory=bundle.md"
+WORK_BUNDLE = "git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md"
 PROVIDER_SOURCES = {
     "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
     "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",

@@ -1,7 +1,8 @@
 # Upstream loop-live
 
-Unified uses `bkrabach/amplifier-module-loop-live` version 0.2.0, pinned to
-`3ceb44ee6fb0476461c9b03c4a3e76e866f2f9b1` in both the isolated runtime and bundle overlay.
+Unified follows `microsoft/amplifier-module-loop-live@main` in both the isolated
+runtime and bundle overlay. Validation records the exact resolved revision; it
+does not replace the source declaration with a commit pin.
 The implementation is no longer copied into this repository.
 
 [Upstream PR](https://github.com/bkrabach/amplifier-module-loop-live/pull/1)
@@ -14,5 +15,6 @@ tests. Unified retains real Core/Foundation integration probes for shared
 history, warm workers, attachments, canvas, and delegation. The host still
 chooses storage, locking, approvals, and when a parked session must reload.
 
-To update the dependency, change both immutable pins together and run those
-probes; do not reintroduce a private copy of the orchestrator.
+When validating an updated dependency, resolve the configured source and run
+those probes; do not reintroduce a private copy of the orchestrator. The PR link
+above records the original contribution before the Microsoft repository migration.

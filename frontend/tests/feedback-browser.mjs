@@ -92,7 +92,7 @@ try{
  await page.getByText('Feedback received — sending in the background.',{exact:true}).waitFor();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
  assert.equal(await page.locator('.a-feedback-notice .a-check-result.success').count(),1);
- assert.equal(await page.getByRole('link',{name:'View issue'}).getAttribute('href'),'https://github.com/bkrabach/amplifier-unified/issues/42');
+ assert.equal(await page.getByRole('link',{name:'View issue'}).getAttribute('href'),'https://github.com/microsoft/amplifier-unified/issues/42');
  await page.screenshot({path:'/tmp/amplifier-feedback-desktop.png'});
  const saved=await page.evaluate(()=>window.amplifier.getState().view.feedbackDraft.pending);
  const calls=await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()));

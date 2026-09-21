@@ -56,7 +56,7 @@ jobs:
       - name: Check out loop-live with its dedicated read-only key
         uses: actions/checkout@v4
         with:
-          repository: bkrabach/amplifier-module-loop-live
+          repository: microsoft/amplifier-module-loop-live
           ref: ${{ steps.runtime-dependency.outputs.revision }}
           path: .ci/loop-live
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}

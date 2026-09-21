@@ -80,7 +80,11 @@ class Followups:
         row = self.service.db.execute("SELECT receipt FROM feedback_requests WHERE id=?", (identity,)).fetchone()
         receipt = json.loads(row[0]) if row else {}
         url = receipt.get("url", "")
-        if receipt.get("status") != "submitted" or not isinstance(url, str) or not re.fullmatch(re.escape(feedback.ISSUES_URL) + r"/[1-9][0-9]*", url):
+        valid_url = isinstance(url, str) and any(
+            re.fullmatch(re.escape("https://github.com/" + repository + "/issues") + r"/[1-9][0-9]*", url)
+            for repository in feedback.RECEIPT_REPOSITORIES
+        )
+        if receipt.get("status") != "submitted" or not valid_url:
             raise AppError("Choose a successfully submitted feedback report from this host.", 404)
         return url, int(url.rsplit("/", 1)[1])
 
@@ -132,7 +136,9 @@ class Followups:
         await self.update(identity, status="sending")
         try:
             url, number = self.target(args["feedbackId"])
-            endpoint = f"repos/{feedback.REPOSITORY}/issues/{number}"
+            # target() accepts only locally receipted issues from our two known
+            # repositories. Never retarget a historical issue by number.
+            endpoint = "repos/" + url.removeprefix("https://github.com/")
             user = await feedback.github_api("user", None)
             issue = await feedback.github_api(endpoint, None)
             author = issue.get("user", {})

@@ -2,7 +2,7 @@
 
 This integration adds persistent work controls to the shared conversation interface. The user and the agent use the same actions; opening a view or changing a draft does not send a message. Existing conversation, voice and output records remain the originals.
 
-These changes are under integration review. The0.20.0 candidate is unpublished and undeployed. The [delivery issue](https://github.com/bkrabach/amplifier-unified/issues/128) tracks review, acceptance and release separately.
+These changes are under integration review. The0.20.0 candidate is unpublished and undeployed. The [delivery issue](https://github.com/microsoft/amplifier-unified/issues/31) tracks review, acceptance and release separately.
 
 | Capability | What it supports | Guide |
 |---|---|---|
