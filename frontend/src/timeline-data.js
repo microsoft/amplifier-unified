@@ -94,9 +94,6 @@ export function detailLinks(text){
  visit(value);return [...urls];
 }
 
-// Actions initially occupy one line. Do not hide a small list behind a second
-// disclosure just because one of its unloaded payloads is large.
-export function workSize(nodes){return nodes.length}
 export function segmentUsage(nodes){
  const calls=nodes.filter(node=>node.kind==='llm'),value={calls:calls.length,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0,costUsd:0};
  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])value[key]=0;

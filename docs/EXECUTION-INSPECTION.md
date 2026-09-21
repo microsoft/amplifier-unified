@@ -23,7 +23,9 @@ or those details plus tool/model counts (`detailed`). Skins can also control the
 call-count display with `--a-work-counts`.
 
 Each action starts as a collapsed one-line summary, including model calls.
-Short work groups stay visible; groups exceeding 15 action rows can be collapsed.
+Every work group has a collapse control, regardless of action count. Groups start
+collapsed unless explicitly expanded; their saved state survives reloads and
+collapsing a group preserves the individual action expansion choices inside it.
 Group size is measured from the skimmed rows, not the size of unopened payloads.
 Code fences show all content through 15 lines, then preview the
 first 10 lines with a single expand control. Exceptionally long unbroken text is

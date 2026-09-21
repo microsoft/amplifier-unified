@@ -19,10 +19,15 @@ try{
  await expect(groups).toHaveCount(2);
  const order=()=>page.locator('.a-messages').evaluate(el=>[...el.children].map(n=>n.dataset.messageId||n.dataset.groupId?.split('@').at(-1)).filter(Boolean));
  assert.deepEqual(await order(),['before','before','interim','interim','final']);
- assert.equal(await before.locator('button.a-execution-turn-line').count(),0);
+ const beforeToggle=before.locator('button.a-execution-turn-line'),interimToggle=interim.locator('button.a-execution-turn-line');
+ assert.equal(await beforeToggle.count(),1,'Every work section must have a collapse control, even with only two actions');
+ await expect(beforeToggle).toHaveAttribute('aria-expanded','false');
+ await expect(before.locator('.a-execution-roots')).toHaveCount(0);
+ await beforeToggle.focus();await page.keyboard.press('Enter');
+ await expect(beforeToggle).toHaveAttribute('aria-expanded','true');
  assert.match(await before.innerText(),/git diff --check/);
  assert.match(await before.locator('.a-execution-turn-line').innerText(),/Worked for 3s[\s\S]*12 tokens.*\$0.001/);
- assert.equal(await interim.locator('button.a-execution-turn-line').count(),0);
+ await expect(interimToggle).toHaveAttribute('aria-expanded','false');await interimToggle.click();
  const action=id=>page.locator(`[data-node-id$=":${id}"]`),read15=action('read15'),read16=action('read16');
  assert.equal(await page.locator('.a-execution-body').count(),0);
  assert.match(await action('brief').innerText(),/Ran git diff --check/);
@@ -52,7 +57,13 @@ try{
  const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No recorded raw request is available/);
  await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
- assert.equal(await page.locator('[data-group-id$="@final"] button.a-execution-turn-line').count(),0);
+ const finalGroup=page.locator('[data-group-id$="@final"]'),finalToggle=finalGroup.locator('button.a-execution-turn-line');
+ await expect(finalToggle).toHaveAttribute('aria-expanded','false');await finalToggle.click();
+ await expect(finalToggle).toHaveAttribute('aria-expanded','true');
+ await finalToggle.focus();await page.keyboard.press('Space');
+ await expect(finalToggle).toHaveAttribute('aria-expanded','false');
+ await expect(finalGroup.locator('.a-execution-roots')).toHaveCount(0);
+ await finalToggle.click();
  const small=page.locator('[data-group-id$="@final"] [data-kind="llm"]');await small.locator('button.a-execution-action-line').click();
  await expect(small.locator('pre')).toContainText('Small recorded request');assert.equal(await small.getByRole('button',{name:/Load raw request|Show all/}).count(),0);assert.equal(requestReads.length,3);
  await openSettingsPage(page,'appearance');
@@ -64,6 +75,14 @@ try{
  assert.match(await interim.locator('.a-execution-call-counts').innerText(),/3 tool calls · 1 model call/);
  assert.equal(await interim.locator('.a-execution-call-counts').isVisible(),true);
  await page.getByRole('button',{name:'Close panel'}).click();
+ // Collapsing a section preserves its child expansion and doesn't move interim replies.
+ await interimToggle.click();await expect(interimToggle).toHaveAttribute('aria-expanded','false');
+ await expect(read15).toHaveCount(0);
+ await page.reload();await expect(interimToggle).toHaveAttribute('aria-expanded','false');
+ await expect(read15).toHaveCount(0);
+ const interimId=await interim.getAttribute('data-group-id');
+ await page.evaluate(id=>{const expanded=window.amplifier.getState().view.executionExpanded;return window.amplifier.dispatch('view.update',{patch:{executionExpanded:[...expanded,`turn:${id}`]}})},interimId);
+ await expect(interimToggle).toHaveAttribute('aria-expanded','true');
  await page.reload();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  await read15.locator('pre').waitFor();
