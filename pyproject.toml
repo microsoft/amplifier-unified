@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tui = ["amplifier-app-tui @ git+https://github.com/bkrabach/amplifier-app-tui@main"]
+tui = ["amplifier-app-tui @ git+https://github.com/microsoft/amplifier-app-tui@main"]
 
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"

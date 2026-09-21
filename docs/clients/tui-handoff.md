@@ -1,8 +1,8 @@
 # Amplifier TUI: Unified-backed live sessions
 
-Status: Connected implementation is available in amplifier-app-tui's
-`feat/unified-client` candidate. This paired service change adds the optional
-`tui` install and launcher. It is not a claim that either candidate is released.
+Status: Connected implementation is available in the TUI's `0.4.0rc1` prerelease.
+Unified 0.19.12 introduced the optional `tui` install and launcher. The canonical
+TUI repository is `microsoft/amplifier-app-tui`.
 Use Unified 0.19.5 or later; this change supplies stable streamed-response identity.
 
 ## Outcome and scope
@@ -18,10 +18,14 @@ history, or move execution to the terminal's machine. Existing standalone CLI
 ownership and explicit takeover remain separate operations.
 
 This document describes the service integration; it does not prescribe a TUI
-framework or require replacing an existing standalone backend. The connected implementation lives in `bkrabach/amplifier-app-tui`; its explicit
+framework or require replacing an existing standalone backend. The connected implementation lives in `microsoft/amplifier-app-tui`; its explicit
 standalone extra retains the previous local execution host.
 
 ## Install and launch
+
+The [Terminal app distribution proposal](terminal-installation.md) describes
+planned managed installation, desktop packages and device pairing. Those new
+controls are not part of the existing optional-package launcher below.
 
 Install Unified with its `[tui]` extra, then run `amplifier-unified tui`.
 `--session ID` opens a known conversation; `--list-sessions` reads the host catalog;
