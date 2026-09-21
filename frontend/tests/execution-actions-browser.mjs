@@ -13,8 +13,8 @@ try{
  const page=await browser.newPage({viewport:{width:1300,height:1050},extraHTTPHeaders:headers}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
- const turn=page.locator('[data-turn-id="inspect"]').filter({has:page.locator('button.a-execution-turn-line')});await turn.locator('.a-execution-turn-line').click();
- const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();return row};
+ const turn=page.locator('[data-group-id="inspect@long-answer"]');
+ const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();const button=row.locator(':scope > button.a-execution-action-line');if(await button.getAttribute('aria-expanded')==='false')await button.click();return row};
  const patch=await open('patch');await patch.locator('.a-execution-diff').waitFor();
  assert.equal(await patch.locator('.a-execution-diff-row.add').count(),2);assert.equal(await patch.locator('.a-execution-diff-row.remove').count(),1);
  assert.match(await patch.innerText(),/result = retry\(operation\)/);
@@ -29,11 +29,12 @@ try{
  const delegated=await open('delegate');assert.match(await delegated.innerText(),/Review the retry test/);
  assert.equal(await delegated.locator('[data-kind="worker"] > button').count(),0);
  const nested=await open('nested');assert.match(await nested.innerText(),/git diff --check/);assert.match(await nested.innerText(),/No output/);
+ await page.locator('[data-node-id="legacy"] > button').click();
  assert.match(await page.locator('[data-node-id="legacy"]').innerText(),/No action content is available in the event log/);assert.ok(!(await turn.innerText()).includes('Tool completed'));
  // Agent-facing view update uses exactly the same expansion path as buttons.
  const expanded=await page.evaluate(()=>window.amplifier.getState().view.executionExpanded);
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:[]}}));
- await page.waitForFunction(()=>!document.querySelector('[data-group-id="inspect@long-answer"] [data-kind="tool"]'));
+ await page.waitForFunction(()=>!document.querySelector('[data-group-id="inspect@long-answer"] .a-execution-body'));
  await page.evaluate(expanded=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:expanded}}),expanded);
  await patch.locator('.a-execution-diff').waitFor();
  await page.reload();await patch.locator('.a-execution-diff').waitFor();assert.match(await command.innerText(),/12 passed/);

@@ -54,8 +54,21 @@
 #amp-one .a-execution-call-counts{display:var(--a-work-counts,none);color:var(--a-muted);font-size:11px;white-space:nowrap}
 #amp-one[data-execution-detail="detailed"]{--a-work-counts:inline}
 #amp-one[data-execution-detail="minimal"] .a-execution-usage,#amp-one[data-execution-detail="minimal"] .a-execution-turn-line>.a-execution-complete{display:none}
-#amp-one .a-execution-node>.a-execution-line{cursor:default}
-#amp-one .a-execution-node>.a-execution-line:hover{background:transparent}
+#amp-one .a-execution-node>button.a-execution-line{cursor:pointer}
+#amp-one .a-execution-node>button.a-execution-line:hover{background:var(--a-soft)}
+#amp-one .a-execution-content .a-execution-action-line{align-items:center;flex-wrap:nowrap}
+#amp-one .a-execution-content .a-execution-action-line .a-execution-label{flex:1;min-width:0;overflow:hidden;white-space:nowrap}
+#amp-one .a-execution-content .a-execution-action-line .a-execution-label>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-execution-content .a-execution-action-line .a-execution-label code{white-space:nowrap}
+#amp-one .a-execution-content .a-execution-model-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 16px;margin:0 0 12px;font-size:12px}
+#amp-one .a-execution-content .a-execution-model-facts dt{color:var(--a-muted)}
+#amp-one .a-execution-content .a-execution-model-facts dd{margin:0;overflow-wrap:anywhere}
+#amp-one .a-execution-content .a-execution-model-usage{font-size:12px;line-height:1.6;color:var(--a-muted)}
+#amp-one .a-execution-content .a-execution-request-toggle{margin:0 0 10px;font-size:12px}
+@media(max-width:600px){
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-phase{margin-left:0}
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-usage{display:none}
+}
 #amp-one .a-execution-turn-line{flex-wrap:wrap}
 #amp-one .a-execution-body:empty{display:none}
 @media(max-width:600px){#amp-one .a-execution-call-counts{font-size:10px;white-space:normal}}

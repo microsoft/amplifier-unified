@@ -51,10 +51,8 @@ restore this format through context-managed summaries. An incompatible prefix,
 request fitter result, or configuration discards only the derived state. Normal
 history remains intact; compaction does not select a chat or alter drafts.
 
-Validation includes provider protocol fixtures and a real production-build app /
-Chromium fixture using the actual shared controls and private checkpoint adapter
-with a synthetic SDK response. Desktop/mobile, agent status, reload, private
-payload exclusion, selection and unsent draft retention are covered. The existing
-live acceptance selection is Terra/high, which has no native steering support.
-No live Astra request or model switch is claimed. Native safety-call conversation
-recovery and remote cancellation confirmation remain separate limitations.
+Validation includes provider protocol fixtures and a production-build app/Chromium fixture using shared controls and a synthetic SDK response. Desktop/mobile, agent status, reload, private payload exclusion, selection and draft retention are covered. Separate bounded live Astra checks observed accepted/applied steering and the completed successor. An additional continuation restored the original opaque checkpoint in a fresh provider and consumed it with only the new user input; no historical tool result was resent, no tool executed and no new compaction or retry occurred. Saved model defaults remained unchanged.
+
+The first retained-checkpoint acceptance failed because turn-scoped serialization removed old reasoning when a new user arrived, changing the wire prefix. That failure is retained. The provider fix verifies the unchanged canonical/config binding and exact former wire prefix, permits only removal of old reasoning, and slices the actual current prefix. Changed text, tool results, policy or request fitting still reject checkpoint reuse. The corrected single live continuation returned the expected result with217 total reported tokens; this bounded result does not establish recovery of an interrupted remote generation.
+
+A failed native computer result still fails closed in the current turn. Only a later explicit user message permits the provider's bounded textual history projection of that failed pair, without changing canonical history, replaying the action or clearing a safety halt. Remote cancellation confirmation remains a separate limitation.

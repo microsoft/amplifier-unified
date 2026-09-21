@@ -85,6 +85,7 @@ jobs:
         run: |
           npm run test:settings-browser
           npm run test:settings-completeness-browser
+          npm run test:settings-collections-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend

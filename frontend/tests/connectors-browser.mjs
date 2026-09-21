@@ -110,14 +110,14 @@ try {
   assert.equal((await info()).exchanges,1);
   await fetch(origin+'/fixture/package',{method:'POST',headers});
   await page.getByRole('button',{name:'Back to Smart Tools',exact:true}).click();
-  await page.getByRole('button',{name:/Fixture package.*installed/}).click();
+  await page.getByRole('button',{name:/Fixture package.*installed/i}).click();
   await page.getByRole('button',{name:'Uninstall package',exact:true}).click();
   await page.getByText(/Remove these connection registrations before uninstalling:/,{exact:false}).first().waitFor();
   assert.equal((await info()).packageExists,true);
   await page.getByRole('button',{name:'Back to Smart Tools',exact:true}).click();
   await page.getByRole('button',{name:/Package dependency.*disconnected/}).click();
   await page.getByRole('button',{name:'Remove connection',exact:true}).click();
-  await page.getByRole('button',{name:/Fixture package.*installed/}).click();
+  await page.getByRole('button',{name:/Fixture package.*installed/i}).click();
   await page.getByRole('button',{name:'Uninstall package',exact:true}).click();
   await page.waitForFunction(()=>window.amplifier.getState().smartTools.installations.length===0);
   assert.equal((await info()).packageExists,false);
