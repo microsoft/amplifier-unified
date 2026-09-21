@@ -139,6 +139,93 @@ def test_undated_native_transcript_uses_exact_call_associations(source):
     assert page({**session,'execution':tree},'nodes')['items'][1]['anchorMessageId']=='4'
 
 
+@pytest.mark.parametrize('already_reconciled', [False, True])
+@pytest.mark.parametrize('link', ['inputId', 'messageId', 'userMessageId'])
+def test_native_association_keeps_live_input_turn_and_one_work_group(source, already_reconciled, link):
+    session, path = source
+    session.update(status='working', messages=[{'id':'user', 'role':'user', 'text':'Inspect it',
+                                               'createdAt':1, 'nativeIndex':0, 'inputId':'input'}])
+    transcript = [{'role':'user', 'content':'Inspect it'}]
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    append(path, 'prompt:submit', {'prompt':'Inspect it'}, 2)
+    call = {'id':'model', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'turnId':'input', 'phase':'running', 'startedAt':10, 'liveObservation':True,
+            'revision':1, 'producerId':'worker', 'model':'fixture', 'provider':'test'}
+    append(path, 'provider:request', call, 10)
+    host = {'id':'input', 'inputId':'input', 'anchorMessageId':'user', 'startedAt':2, 'phase':'running'}
+    if link != 'inputId':
+        session['messages'][0].pop('inputId')
+        host[link] = 'user'
+    session['execution'] = {'currentTurnId':'input', 'turns':[host], 'nodes':[dict(call)]}
+    if already_reconciled:
+        session['execution']['nodes'][0]['turnId'] = 'native-turn:user'
+        session['execution']['turns'].append({'id':'native-turn:user', 'anchorMessageId':'user',
+                                              'canonicalHistory':True, 'phase':'completed'})
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        node, = session['execution']['nodes']
+        assert node['turnId'] == 'input'
+        projected = page(session, 'nodes')
+        assert [turn['id'] for turn in projected['turns']] == ['input']
+        assert [segment['id'] for segment in projected['segments']] == ['input@user']
+        assert projected['segments'][0]['phase'] == 'running'
+    from amplifier_web.execution import ingest
+    completed = {**call, 'phase':'completed', 'endedAt':12, 'revision':2,
+                 'usage':{'totalTokens':42, 'costUsd':.01, 'costType':'reported'}}
+    ingest(session, completed)
+    append(path, 'llm:response', completed, 12)
+    session['execution'] = view.read(session)
+    assert page(session, 'nodes')['segments'][0]['phase'] == 'completed'
+    assert page(session, 'nodes')['segments'][0]['aggregateUsage']['totalTokens'] == 42
+
+
+def test_exact_inputs_keep_repeated_prompts_and_interim_work_separate(source):
+    session, path = source
+    transcript = [{'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':'First update'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'one', 'content':'done'},
+                  {'role':'assistant', 'content':'Second update'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'two', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'two', 'content':'done'},
+                  {'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'three', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'three', 'content':'done'}]
+    session['messages'] = [{'id':str(i), 'role':row['role'], 'text':row['content'], 'nativeIndex':i,
+                            'timestampKnown':False, **({'inputId':f'input-{i}'} if row['role']=='user' else {})}
+                           for i, row in enumerate(transcript) if isinstance(row['content'], str) and row['role']!='tool']
+    session['execution'] = {'turns':[{'id':f'input-{i}', 'inputId':f'input-{i}', 'anchorMessageId':str(i),
+                                      'startedAt':1, 'phase':'running'} for i in (0, 7)], 'nodes':[]}
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    for at, call in enumerate(('one', 'two', 'three'), 10):
+        append(path, 'tool:pre', {'tool_call_id':call, 'tool_input':{}}, at)
+        append(path, 'tool:post', {'tool_call_id':call, 'result':'done'}, at+.5)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        assert [node['turnId'] for node in session['execution']['nodes']] == ['input-0', 'input-0', 'input-7']
+        projected = page(session, 'nodes')
+        assert [segment['id'] for segment in projected['segments']] == ['input-0@1', 'input-0@4', 'input-7@7']
+        assert len(projected['turns']) == 2
+
+
+def test_shared_anchor_does_not_infer_an_input_turn(source):
+    session, path = source
+    session['messages'][0].update(nativeIndex=0)
+    session['execution'] = {'turns':[{'id':f'voice:{i}', 'anchorMessageId':'user', 'phase':'completed'}
+                                      for i in (1, 2)], 'nodes':[]}
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(json.dumps({'role':'user', 'content':'Inspect it'})+'\n'+
+        json.dumps({'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]})+'\n')
+    append(path, 'tool:pre', {'tool_call_id':'one', 'tool_input':{}}, 10)
+    append(path, 'tool:post', {'tool_call_id':'one', 'result':'done'}, 11)
+    node, = EventLogView(None).read(session)['nodes']
+    assert node['turnId'] == 'native-turn:user'
+
+
 @pytest.mark.asyncio
 async def test_background_reader_observes_external_append_without_runtime_capture(source):
     import asyncio
