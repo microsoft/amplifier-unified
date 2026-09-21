@@ -77,6 +77,9 @@ jobs:
       - name: Verify draft-first chat setup and composer controls
         working-directory: frontend
         run: npm run test:new-chat-browser
+      - name: Restored composer readiness
+        working-directory: frontend
+        run: npm run test:composer-readiness-browser
       - name: Verify live surface awareness and draft checkpoints
         working-directory: frontend
         run: npm run test:surface-context-browser

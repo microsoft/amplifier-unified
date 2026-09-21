@@ -183,6 +183,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             await service._flush_pending_progress()
             queue = service.subscribe()
             snapshot = service.browser_state()
+            selected = next((row for row in snapshot['sessions'] if row['id'] == snapshot.get('selectedSessionId')), None)
+            if selected and selected.get('nativeProject'):
+                # Reconnecting restores a client's selection without dispatching
+                # session.select. Load its display history without warming or
+                # starting a runtime, while the initial snapshot paints promptly.
+                service._task(service.history.refresh_session(selected['id']))
             while True:
                 if "shellClientId" in snapshot:
                     await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())
