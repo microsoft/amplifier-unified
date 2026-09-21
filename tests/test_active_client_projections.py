@@ -47,6 +47,101 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
     assert builds.count('workspace') == builds.count('chat') == 2
 
 
+async def test_clients_share_navigation_despite_layout_and_private_draft_differences(app_factory, monkeypatch):
+    from amplifier_web import browser_state
+    app, rows = fixture(app_factory)
+    builds, queues = [], []
+    for module, name, label in ((workspace_navigation, 'snapshot', 'workspace'),
+                                (chat_navigation, 'snapshot', 'chat'),
+                                (browser_state, 'navigation', 'browser')):
+        original = getattr(module, name)
+        def observed(*args, _original=original, _label=label, **kwargs):
+            builds.append(_label)
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(module, name, observed)
+    for index in range(4):
+        selected = rows[index // 2]
+        record = app.clients.records[f'client-{index}']
+        record.update(selectedSessionId=selected['id'], selectedWorkspaceId=selected['workspaceId'])
+        record['drafts'][selected['id']] = f'Only client {index}'
+        record['view'].update(navExpanded=index % 2 == 0, navPinned=index % 2 == 1,
+                              navWidth=250 + index * 40, panel='settings' if index % 2 else None)
+        with app.clients.bind(f'client-{index}'):
+            queues.append(app.subscribe())
+    app._publish()
+    assert builds.count('workspace') == builds.count('browser') == 2
+    assert builds.count('chat') == 4  # Two sidebar pages and two header pages.
+    for index, queue in enumerate(queues):
+        state = queue.get_nowait()
+        selected = rows[index // 2]
+        assert state['selectedSessionId'] == selected['id']
+        assert state['view']['navWidth'] == 250 + index * 40
+        assert state['view']['draft'] == f'Only client {index}'
+        assert next(row for row in state['sessions'] if row['id'] == selected['id'])['draft'] == f'Only client {index}'
+        with app.clients.bind(f'client-{index}'):
+            live = app.state_context()
+            for key in ('chatNavigation', 'headerChatNavigation', 'subagentNavigation', 'workspaceExplorer'):
+                assert state[key] == live[key]
+
+
+async def test_projection_queries_share_only_unaffected_navigation(app_factory):
+    from amplifier_web.state_projections import StateProjections
+    app, rows = fixture(app_factory)
+    projections = StateProjections()
+    state = dict(app.state)
+    first = projections.browser(state)
+    # Selecting another chat in the same workspace cannot change the explorer.
+    selected = {**state, 'selectedSessionId': rows[4]['id']}
+    selection = projections.browser(selected)
+    assert selection['workspaceExplorer'] is first['workspaceExplorer']
+    assert selection['chatNavigation']['scope']['selectedSessionId'] == rows[4]['id']
+    assert selection['subagentNavigation']['scope']['sessionId'] == rows[4]['id']
+    # Each query family retains its own controls, without evicting the others.
+    workspace = {**state, 'view': {**state['view'], 'navWorkspaceMode': 'recent'}}
+    explorer = projections.browser(workspace)
+    assert explorer['chatNavigation'] is first['chatNavigation']
+    assert explorer['subagentNavigation'] is first['subagentNavigation']
+    assert explorer['workspaceExplorer']['mode'] == 'recent'
+    chats = {**state, 'view': {**state['view'], 'navFilter': 'Conversation 999'}}
+    filtered = projections.browser(chats)
+    assert filtered['workspaceExplorer'] is first['workspaceExplorer']
+    assert [row['id'] for row in filtered['chatNavigation']['items']] == [rows[999]['id']]
+    workers = {**state, 'view': {**state['view'], 'subagentHistory': {'sessionId': rows[4]['id']}}}
+    history = projections.browser(workers)
+    assert history['chatNavigation'] is first['chatNavigation']
+    assert history['workspaceExplorer'] is first['workspaceExplorer']
+    assert history['subagentNavigation']['scope']['sessionId'] == rows[4]['id']
+
+
+async def test_cached_client_filter_page_and_selection_scopes_match_uncached_reads(app_factory):
+    from amplifier_web import browser_state
+    from amplifier_web.state_projections import StateProjections
+    app, rows = fixture(app_factory)
+    rows[8]['completion'] = {'id': 'ready', 'at': 10}
+    app.state['conversationOrganization'] = {'archived': {rows[12]['id']: {}},
+        'collections': [{'id': 'selected', 'name': 'Selected', 'sessionIds': [rows[4]['id'], rows[8]['id']]}]}
+    projections = StateProjections()
+    for index in range(4):
+        with app.clients.bind(f'client-{index}'):
+            selected = app.state['selectedSessionId']
+            workspace = app.state['selectedWorkspaceId']
+            patches = [{}, {'navExpanded': False, 'navWidth': 360, 'draft': 'Private'},
+                {'navChatScope': 'workspace'}, {'navFilter': 'Conversation 99'},
+                {'navStatusFilter': 'unread'}, {'navStatusFilter': 'working'},
+                {'navArchive': 'archived'}, {'navCollection': 'selected'},
+                {'navChatPage': {'mode': 'all', 'workspaceId': None, 'filter': '', 'selectedSessionId': selected, 'index': 2}},
+                {'navWorkspaceMode': 'recent'},
+                {'navWorkspaceBrowseFor': workspace, 'navWorkspaceFilter': 'project-1', 'navWorkspacePage': 2},
+                {'navWorkspaceBrowseFor': workspace, 'navWorkspacePath': rows[index]['workspace']},
+                {'subagentHistory': {'sessionId': rows[0]['id'], 'filter': '1001', 'index': 1}}]
+            for patch in patches:
+                state = {**app.state, 'view': {**app.state['view'], **patch}}
+                scoped = {**state, 'attention': projections.attention(state)}
+                expected = {**browser_state.navigation(scoped), 'attention': scoped['attention'],
+                            'workspaceExplorer': workspace_navigation.snapshot(scoped)}
+                assert projections.browser(state) == expected
+
+
 async def test_device_observations_keep_agent_visibility_without_saves_or_cache_churn(app_factory, monkeypatch):
     app, _ = fixture(app_factory, count=20)
     with app.clients.bind('client-0'):
