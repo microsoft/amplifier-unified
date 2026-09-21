@@ -527,7 +527,12 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data["operation"] == "bundle.preview":
+                if data["operation"] == "session.naming":
+                    self.controls.require_idle()
+                    if not self.naming:
+                        raise ValueError('Automatic naming is unavailable for this conversation.')
+                    result = await self.naming.suggest()
+                elif data["operation"] == "bundle.preview":
                     from amplifier_web.bundle_selection import preview
                     self.controls.require_idle()
                     self.bundle_preview = {**await asyncio.wait_for(preview(self.controls, self.workspace, arguments['bundle']), 150),

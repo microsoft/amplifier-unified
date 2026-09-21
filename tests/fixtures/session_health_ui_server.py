@@ -6,6 +6,7 @@ import tempfile
 from aiohttp import web
 import settings_ui_server as fixture
 from amplifier_web.host.storage import SessionStore
+from amplifier_web.naming import directory_for, read
 
 async def main(home):
     app = await fixture.main(home)
@@ -20,8 +21,18 @@ async def main(home):
     folder=store.directory(source['id'])/'context-intelligence';folder.mkdir(exist_ok=True)
     (folder/'events.jsonl').write_text(json.dumps({'event':'provider:error','data':{'session_id':source['id'],'error':{'type':'InvalidRequestError','msg':'Invalid image_url: invalid base64-encoded value'}}})+'\n')
     original=(store.directory(source['id'])/'transcript.jsonl').read_bytes()
+    naming_calls = []
+    original_control = service.runtime.control
+    async def control(sid, operation, args):
+        if operation != 'session.naming':
+            return await original_control(sid, operation, args)
+        naming_calls.append(sid)
+        before = read(directory_for(home, service._session(sid)))
+        await asyncio.sleep(.5)
+        return {**before, 'name': 'Browser investigation', 'description': 'A fixture naming suggestion'}
+    service.runtime.control = control
     async def check(request):
-        return web.json_response({'originalUnchanged':original==(store.directory(source['id'])/'transcript.jsonl').read_bytes(),'sessions':len(service.state['sessions']),'selected':service.state['selectedSessionId']})
+        return web.json_response({'originalUnchanged':original==(store.directory(source['id'])/'transcript.jsonl').read_bytes(),'namingCalls':len(naming_calls),'sessions':len(service.state['sessions']),'selected':service.state['selectedSessionId']})
     app.router.add_get('/fixture/check',check)
     service._publish()
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
