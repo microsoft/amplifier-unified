@@ -14,6 +14,8 @@ async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, mo
     service.state['updates']['application'] = service.state['updates']['pendingApp']
     calls = []
     monkeypatch.setattr(app_updates, 'installed_extras', lambda: extras)
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=[
+        {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
     monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/fixture/uv')
     monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
 
@@ -24,7 +26,9 @@ async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, mo
     monkeypatch.setattr(app_updates, 'process', process)
     try:
         await app_updates.stage(manager)
-        marker = manager.directory / 'applications' / ('a' * 40) / 'validated.json'
+        marker = manager.directory / 'applications' / ('a' * 40) / service.state['updates']['pendingApp']['generation'] / 'validated.json'
+        candidate = marker.parent / 'tools/amplifier-unified/bin/python'
+        candidate.parent.mkdir(parents=True);candidate.touch()
         assert json.loads(marker.read_text())['extras'] == extras
         await app_updates.activate(manager)
         installs = [args for args in calls if 'install' in args]
@@ -75,7 +79,11 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
         monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
         monkeypatch.setattr(manager, 'busy', lambda: True)
         await manager.app()
+        assert json.loads(marker.read_text())['extras'] == previous  # Retained legacy receipt.
+        marker = marker.parent / service.state['updates']['pendingApp']['generation'] / 'validated.json'
         assert json.loads(marker.read_text())['extras'] == current
+        candidate = marker.parent / 'tools/amplifier-unified/bin/python'
+        candidate.parent.mkdir(parents=True);candidate.touch()
         assert service.state['updates']['pendingApp']
         assert len(calls) == 2  # Candidate install and probe only; work stays open.
         close.assert_not_awaited()
@@ -132,6 +140,8 @@ async def test_old_empty_receipts_and_equivalent_extra_order_activate(tmp_path, 
     marker.write_text(json.dumps({**json.loads(marker.read_text()), **receipt}))
     extras = sorted(receipt.get('extras', []))
     monkeypatch.setattr(app_updates, 'installed_extras', lambda: extras)
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=[
+        {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
     monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
     calls = []
 

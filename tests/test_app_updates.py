@@ -12,6 +12,10 @@ from test_service import Runtime
 @pytest.fixture(autouse=True)
 def base_installation(monkeypatch):
     monkeypatch.setattr(app_updates, 'installed_extras', lambda: [])
+    monkeypatch.setattr(app_updates.components, 'installed_graph', lambda: [{'name':'amplifier-core','version':'1.6.1'}])
+    monkeypatch.setattr(app_updates.components, 'updates', AsyncMock(return_value=[]))
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=[
+        {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
 
 
 def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
@@ -119,6 +123,10 @@ async def test_development_host_cannot_overwrite_global_uv_tool(tmp_path,monkeyp
         await app_updates.installed_target()
 
 async def prepared_activation(tmp_path,monkeypatch):
+    monkeypatch.setattr(app_updates, 'installed_extras', lambda: [])
+    monkeypatch.setattr(app_updates.components, 'installed_graph', lambda: [{'name':'amplifier-core','version':'1.6.1'}])
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=[
+        {'name':'amplifier-unified','version':'99.0.0','url':app_updates.SOURCE,'revision':'a'*40}]))
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     service.port=8941
     manager=UpdateManager(service);service.update_manager=manager

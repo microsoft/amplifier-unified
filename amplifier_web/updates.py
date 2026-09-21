@@ -397,7 +397,7 @@ class UpdateManager:
         state['application']=application
         latest=version_tuple(application.get('latest'))
         current=version_tuple(__import__('amplifier_web').__version__)
-        if latest and current and latest<=current:
+        if latest and current and latest<=current and not (latest==current and application.get('componentUpdates')):
             application={**application,'current':__import__('amplifier_web').__version__,'status':'current','releaseBehind':latest<current,
                          'detail':'This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if latest<current else 'The latest published application release is installed.'}
             state.update(application=application,appAvailable=False)
