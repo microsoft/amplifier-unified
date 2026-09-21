@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {shellFor} from './shell-host.mjs';
 
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{scheme:'system',navPinned:true},sessions:['a','b'].map(id=>({id,title:'Conversation '+id,sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[],draft:''})),workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'a',selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false},attention:{items:[],sessions:{}}};
 const calls=[],errors=[];let browser,vite,heldSend,heldReview,delayReview=false;
@@ -17,9 +18,11 @@ try{
  await page.route('**/api/**',async route=>{
   const url=new URL(route.request().url());
   if(url.pathname==='/api/state')return route.fulfill({json:state});
+  if(url.pathname==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(url.pathname==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(url.pathname!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);const {action,args}=body;
+  if(action==='shell.report')return route.fulfill({json:{accepted:true}});
   if(action==='conversation.send'){heldSend={route,body};return}
   if(action==='view.update')state.view={...state.view,...args.patch};
   if(action==='attention.read'){
