@@ -83,6 +83,11 @@ class LiveSessionNaming:
         count=len(self.completed)
         if count<=self.last_attempt:return
         metadata=self.hook._load_metadata(self.directory)
+        # A custom name is a user choice, including legacy names without an
+        # explicit source. Do not spend a model call proposing its replacement.
+        if metadata.get('name') and metadata.get('name_source') not in {'fallback', 'generated'}:
+            self.last_attempt=count
+            return
         named=has_generated_or_manual_name(metadata)
         config=self.hook.config
         initial=not named and count>=config.initial_trigger_turn and self.hook._defer_counts.get(self.coordinator.session_id,0)<config.max_retries

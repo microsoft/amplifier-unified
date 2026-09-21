@@ -106,7 +106,13 @@ async def test_installed_cli_round_trip(tmp_path, monkeypatch):
         try:
             resumed, metadata = root.read(cli)
             assert resumed == messages and metadata["bundle"] == "anchors"
-            processor = SimpleNamespace(session=SimpleNamespace(coordinator=SimpleNamespace(session_id=sid)))
+            async def current_messages():
+                return resumed
+            context = SimpleNamespace(get_messages=current_messages)
+            coordinator = SimpleNamespace(session_id=sid,
+                get_capability=lambda name: root if name == 'cli.shared_root_state' else None,
+                get=lambda name: context if name == 'context' else None)
+            processor = SimpleNamespace(session=SimpleNamespace(coordinator=coordinator), bundle_name='anchors')
             result = await CommandProcessor._rename_session(processor, "Renamed in the actual CLI")
             assert "Renamed in the actual CLI" in result
             root.checkpoint(cli, resumed, bundle="anchors", metadata=metadata)

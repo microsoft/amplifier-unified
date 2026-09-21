@@ -17,6 +17,18 @@ from .execution import ensure_turn, ingest as ingest_execution, finish as finish
 from .updates import work_paused
 
 
+def settle_stream(session):
+    """Preserve interrupted display text without claiming a completed response."""
+    text = session.pop('streaming', None)
+    identity = session.pop('streamingId', None)
+    if text:
+        session.setdefault('messages', []).append({
+            'id': str(uuid.uuid4()), 'role': 'assistant', 'text': '[Interrupted response]\n\n' + text, 'via': 'chat',
+            'source': 'interrupted-stream', 'partial': True, 'createdAt': time.time(),
+            **({'streamId': identity} if identity else {}),
+        })
+
+
 def string(limit=16000):
     return {"type": "string", "maxLength": limit}
 
@@ -326,6 +338,7 @@ class AppService:
             from .capacity import restore_observation
             restore_observation(session)
             restore(session)
+            settle_stream(session)
             session["configurationBusy"]=False
             if session.get("bundleChange", {}).get("phase") == "working":
                 session["bundleChange"] = {"phase":"error", "error":"The app restarted during a bundle change. Load the conversation and preview again; work was not replayed."}
@@ -1732,6 +1745,8 @@ class AppService:
                 self.schedules.runtime_ended(session)
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
+                if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
+                    settle_stream(session)
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
@@ -1742,6 +1757,7 @@ class AppService:
                     session['status'] = 'read-only'
                     session.pop('lockOwner', None)
                 if payload.get('status') == 'yielded':
+                    settle_stream(session)
                     finish_execution(session, 'interrupted')
             elif kind == "runtime.warmth":
                 session['preparation'] = {'status': payload['status']}
@@ -1766,6 +1782,7 @@ class AppService:
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
                 if session["status"] in {"idle", "stopped"}:
+                    settle_stream(session)
                     activity["activeTools"] = []
                     finish_execution(session,"completed" if session["status"]=="idle" else "stopped")
                     if session.get("configurationPending") and session["status"]=="idle":self._task(self.refresh_configuration(session["id"]))
@@ -1782,6 +1799,7 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                settle_stream(session)
                 session["status"] = "error"
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
@@ -1817,9 +1835,11 @@ class AppService:
                 generation_id = payload.get("generationId")
                 repeated = generation_id and any(message.get("generationId") == generation_id for message in session["messages"] if message["role"] == "assistant")
                 if not repeated:
-                    self._message(session, "assistant", payload.get("text", ""), "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier")
+                    self._message(session, "assistant", payload.get("text", ""), "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}))
                 session.pop("streaming", None)
+                session.pop("streamingId", None)
             elif kind == "assistant.delta":
+                session.setdefault("streamingId", str(uuid.uuid4()))
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
             elif kind == "worker.updated":
                 self.schedules.worker(session, payload)
