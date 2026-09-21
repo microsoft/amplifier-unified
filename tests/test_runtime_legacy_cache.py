@@ -164,3 +164,13 @@ async def test_classification_race_rejects_mixed_source_evidence(legacy_worker, 
     with pytest.raises(environments.ProtectedRuntimeSource) as caught:
         await environments.update_inventory(manager.home)
     assert caught.value.diagnostic_facts['reason'] == 'runtime-source-changed'
+
+
+async def test_symlinked_cache_parent_cannot_adopt_external_source(legacy_worker):
+    manager, current, receipt, cache, bytecode = legacy_worker
+    shared = receipt / 'shared-config'
+    external = manager.home.parent / 'external-shared-config'
+    shared.rename(external)
+    shared.symlink_to(external, target_is_directory=True)
+    row = package(await environments.update_inventory(manager.home))
+    assert row['override'] and not row['eligible']

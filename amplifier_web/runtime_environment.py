@@ -178,12 +178,12 @@ async def update_inventory(home):
     policy = installed_sources(project, graph=graph)
     # Frozen generations retain their exact graph rules, including bytecode.
     if not (receipt / 'runtime-installed.json').exists():
-        roots = [foundation_home(home) / 'cache']
+        roots = [(foundation_home(home) / 'cache', Path(home).resolve())]
         if generation:
-            roots.append(receipt / 'shared-config/cache')
+            roots.append((receipt / 'shared-config/cache', Path(home).resolve()))
         else:
             from .session_files import amplifier_home
-            roots.append(amplifier_home() / 'cache')
+            roots.append((amplifier_home() / 'cache', amplifier_home().resolve()))
         checked = {}
         for record in graph:
             cached = record.get('cacheSource')
@@ -194,9 +194,9 @@ async def update_inventory(home):
                 root = root.parent
             # A metadata file alone must not make an external local override
             # disposable. Only check managed caches, never symlink escapes.
-            managed = any(root.is_relative_to(base.resolve()) and not base.is_symlink()
+            managed = any(base.resolve().is_relative_to(owner) and root.is_relative_to(base.resolve()) and not base.is_symlink()
                           and not any(path.is_symlink() for path in (root, *root.parents)
-                                      if path.is_relative_to(base.resolve())) for base in roots)
+                                      if path.is_relative_to(base.resolve())) for base, owner in roots)
             if not managed:
                 continue
             if root not in checked:
@@ -208,6 +208,8 @@ async def update_inventory(home):
         # stage() calls this again, so edits after Check now are also protected.
         if checked and await asyncio.to_thread(installed_graph, project) != graph:
             raise ProtectedRuntimeSource('', 'runtime-source-changed')
+    if active_release(home).get('current') != generation:
+        raise ProtectedRuntimeSource('', 'runtime-source-changed')
     return inventory(home, installed=policy)
 
 
