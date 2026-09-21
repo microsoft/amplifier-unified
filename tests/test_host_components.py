@@ -110,6 +110,7 @@ def test_source_ownership_ambiguity_and_invalid_instances_fail_without_source_se
 
 @pytest.mark.parametrize('resumed', [False, True])
 async def test_dynamic_and_resumed_child_plan_reuses_host_sources_and_instances(tmp_path, resumed):
+    pytest.importorskip('amplifier_module_loop_live')
     from amplifier_foundation import Bundle
     from amplifier_web.host.children import Children
     from amplifier_web.host.storage import SessionStore
