@@ -41,17 +41,6 @@
 #amp-one .a-settings-current{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:25px;border-top:1px solid var(--a-line);padding-top:20px}
 #amp-one .a-settings-current>div{display:flex;gap:9px;align-items:center;font-size:13px}
 #amp-one .a-settings-current svg{width:18px;height:18px;flex-shrink:0;color:var(--a-muted)}
-@media(min-width:960px){
- #amp-one .a-settings-experience [data-part=provider-settings]{display:grid;grid-template-columns:210px minmax(0,1fr);gap:0 22px}
- #amp-one .a-settings-experience [data-part=provider-settings]>.a-settings-row,#amp-one .a-settings-experience [data-part=provider-settings]>.a-caption{grid-column:1/-1}
- #amp-one .a-settings-experience [data-part=provider-settings]>.a-list-filter{grid-column:1;grid-row:3}
- #amp-one .a-settings-experience [data-activity-region=provider-list]{grid-column:1;grid-row:4;align-self:start}
- #amp-one .a-settings-provider-detail{grid-column:2;grid-row:3/6;border-left:1px solid var(--a-line);padding-left:22px}
- #amp-one .a-settings-provider-detail .a-form-grid{grid-template-columns:1fr;gap:0}
- #amp-one .a-settings-experience .a-provider-order .a-reorder-row{flex-wrap:wrap;gap:4px}
- #amp-one .a-settings-experience .a-provider-order .a-reorder-content{flex-basis:calc(100% - 40px)}
- #amp-one .a-settings-experience .a-provider-order .a-reorder-buttons{margin-left:34px}
-}
 @media(max-width:760px){
  #amp-one .a-settings-experience{grid-template-columns:165px minmax(0,1fr)}
  #amp-one .a-settings-sidebar{padding-inline:7px}
