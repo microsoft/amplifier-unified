@@ -38,7 +38,7 @@ export function BundleSettings({state,session,act}){
  const [shownEntries,entryFilter,entryQuery]=useListFilter(state,act,'app-bundles',entries,row=>[row.name,row.uri,row.role],'Filter app bundles');
  const selected=candidates.find(candidate=>candidate.uri===draft.selectedUri);
  const management=state.management||{};
- const pending=['queued','running','pending','working','discovering','applying'].includes(management.phase);
+ const pending=Object.entries(state.actionStatus||{}).some(([action,op])=>action.startsWith('bundle')&&['queued','running','pending','working','discovering','applying'].includes(op.phase));
  useEffect(()=>{act('bundles.list',{})},[]);
  return <div className="a-bundle-pane">
   <SettingsGroup id="add-bundles" title="Add capabilities" summary="Browse community bundle repositories" state={state} act={act}><section className="a-settings-section"><div className="a-settings-heading"><Layers/><div><h3>Build your Amplifier</h3><p>Add capabilities from community repositories, then shape the modules they compose into.</p></div></div>

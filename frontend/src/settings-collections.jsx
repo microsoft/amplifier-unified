@@ -10,7 +10,7 @@ export function CollectionRow({id,label,description,selected,onSelect,checked,on
 }
 export function Collection({list,children,detailOpen=true,onBack,label='items'}){
  const listRef=useRef(null),detailRef=useRef(null);
- useEffect(()=>{if(detailOpen&&typeof window!=='undefined'&&window.matchMedia('(max-width:959px)').matches)detailRef.current?.focus({preventScroll:true});},[detailOpen]);
+ useEffect(()=>{if(detailOpen&&typeof window!=='undefined'&&window.matchMedia('(max-width:959px)').matches){detailRef.current?.focus({preventScroll:true});detailRef.current?.scrollIntoView({block:'start'});}},[detailOpen]);
  const back=()=>{onBack?.();requestAnimationFrame(()=>listRef.current?.querySelector('button[aria-current=true],button')?.focus({preventScroll:true}));};
  return <div className={'a-collection'+(detailOpen?' detail-open':'')}><div className="a-collection-list" ref={listRef}>{list}</div><div className="a-collection-detail" ref={detailRef} tabIndex={-1}>
  {onBack&&<button type="button" className="a-link a-collection-back" data-action="view.update" onClick={back}><ArrowLeft/>Back to {label}</button>}{children}</div></div>;

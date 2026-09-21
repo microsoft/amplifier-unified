@@ -5,8 +5,8 @@ import {ModelSelect} from './model-select';
 import {useListFilter} from './list-filter.jsx';
 import {ResultNotice,PathField} from './settings-ui';
 import React,{useState,useEffect,useRef} from 'react';
-import {Plus,RefreshCw,Check,Trash2,ChevronUp,ChevronDown,LogIn,Network} from 'lucide-react';
-import {providerConfig,modelOptions,providerFields,updateRole,updateCandidate,blankRouting,safeLoginUrl} from './setup-data';
+import {Plus,RefreshCw,Check,Trash2,LogIn} from 'lucide-react';
+import {providerConfig,modelOptions,providerFields,safeLoginUrl} from './setup-data';
 const pretty=value=>JSON.stringify(value,null,2);
 function useDraft(state,key,defaults,act){
  const shared=state.view?.[key];const[draft,setDraft]=useState({...defaults,...shared});
@@ -43,8 +43,7 @@ export function ProviderSettings({state,session,act}){
  const metadata=setup.providerCatalogs?.[draft.id]?.metadata||setup.metadata?.[draft.module]||(setup.providerMetadata?.module===draft.module?setup.providerMetadata:null);
  useEffect(()=>{if(!/^provider-[A-Za-z0-9_.-]+$/.test(draft.module)||metadata)return;const timer=setTimeout(()=>run('providers.schema',{module:draft.module,...(draft.id?{id:draft.id}:{})}),250);return()=>clearTimeout(timer)},[draft.module,session?.workspace]);
  const models=modelOptions(setup.modelCatalogs?.[draft.id]||(((setup.modelsProviderId||setup.providerId)===draft.id)?setup.models:[]));const login=setup.login?.providerId===draft.id?setup.login:null,loginPhase=login?.status||login?.phase,loginUrl=safeLoginUrl(login?.url);let config,error='';try{config=providerConfig(configText)}catch(caught){error=caught.message}
- const [shownProviders,providerFilter,providerQuery]=useListFilter(state,act,'providers',providers,row=>[row.id,row.module,row.config?.default_model,row.config?.model],'Filter providers');
- const [shownModels,modelFilter]=useListFilter(state,act,'models-'+draft.id,models,row=>[row.id,row.name],'Filter models');
+ const [shownProviders,providerFilter]=useListFilter(state,act,'providers',providers,row=>[row.id,row.module,row.config?.default_model,row.config?.model],'Filter providers');
  const active=session&&['working','starting','running','stopping','busy'].includes(session.status);
  const choose=provider=>{
   choosing.current=true;

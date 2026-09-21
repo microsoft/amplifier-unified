@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.8",
+      "title": "Settings collections that keep the details within reach",
+      "changes": [
+        "Models, bundles and Smart Tools use compact lists with focused details. The whole row responds to hover and selection, while checkboxes stay independent.",
+        "Reorder provider preferences, routing choices and bundle composition in dedicated views. Neighboring rows move as you drag, a line shows where the item will land, and Save commits the draft. Buttons and keyboard controls provide the same choices.",
+        "Routing opens without waiting for provider discovery and shows one role and choice at a time. Model names and patterns remain editable; private model and schema caches last 24 hours and retain the last successful results during refresh.",
+        "Select multiple catalog tools across filters and pages, choose package extras, and install them together. Catalogs show all results through 50 items, then use pages of 40. Each installation records its outcome, and retry handles only unfinished items.",
+        "Existing settings, advanced configuration and shared agent actions remain available. Queued installation selections survive interruption without automatically replaying work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.7",
       "title": "Set up your chat before it starts",
       "changes": [

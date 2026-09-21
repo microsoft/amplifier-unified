@@ -360,6 +360,8 @@ class SmartToolsManager:
             await self._change(lambda _: finish(status="failed" if is_error else "completed", result=result, error=error), defer_publish=defer_publish)
             return result
         except asyncio.CancelledError:
+            for item in operation.get("items",[]):
+                if item.get("status") in {"running","queued"}:item.update(status="interrupted",error="The request was interrupted. Work was not replayed.")
             await self._change(lambda _: finish(status="interrupted", error="The request was interrupted. Work was not replayed."), defer_publish=defer_publish)
             raise
         except Exception as exc:
@@ -368,27 +370,31 @@ class SmartToolsManager:
             return None
 
     async def install_batch(self, args, operation):
-        # The batch is a shared, durable action. It continues when the browser closes.
+        # Snapshot before waiting for the install lane, so even a queued batch
+        # has durable per-item intent and can be inspected after restart.
+        if self.closed:
+            raise ValueError('Smart Tools are shutting down.')
+        if args.get('retryOperationId'):
+            previous=self.operation(args['retryOperationId'])
+            if not previous or previous.get('action')!='smartTools.installBatch' or previous.get('status') in {'running','queued'}:
+                raise ValueError('Choose a finished or interrupted installation batch.')
+            items=[{**row,'status':'queued','error':None} for row in previous.get('items',[]) if row.get('status')!='completed']
+            if not items:raise ValueError('This batch has no unfinished installations.')
+        else:
+            ids=args.get('ids',[])
+            if not ids or len(ids)!=len(set(ids)):
+                raise ValueError('Select one or more different catalog items.')
+            catalog={row['id']:row for row in self.state['catalog']}
+            if any(identity not in catalog for identity in ids):
+                raise ValueError('The catalog changed. Refresh it before installing.')
+            items=[{'id':identity,'name':catalog[identity]['name'],'source':{key:catalog[identity][key] for key in ('repository','ref','path') if key in catalog[identity]},'status':'queued'} for identity in ids]
+            for item in items:
+                if args.get('extrasById',{}).get(item['id']):item['source']['extras']=args['extrasById'][item['id']]
+        def progress():
+            operation.update(items=copy.deepcopy(items),updatedAt=time.time())
+            self.persist_operation(operation)
+        await self._change(lambda _:progress())
         async with self.batch_lock:
-            if args.get('retryOperationId'):
-                previous=self.operation(args['retryOperationId'])
-                if not previous or previous.get('action')!='smartTools.installBatch' or previous.get('status') in {'running','queued'}:
-                    raise ValueError('Choose a finished or interrupted installation batch.')
-                items=[{**row,'status':'queued','error':None} for row in previous.get('items',[]) if row.get('status')!='completed']
-            else:
-                ids=args.get('ids',[])
-                if not ids or len(ids)!=len(set(ids)):
-                    raise ValueError('Select one or more different catalog items.')
-                catalog={row['id']:row for row in self.state['catalog']}
-                if any(identity not in catalog for identity in ids):
-                    raise ValueError('The catalog changed. Refresh it before installing.')
-                items=[{'id':identity,'name':catalog[identity]['name'],'source':{key:catalog[identity][key] for key in ('repository','ref','path') if key in catalog[identity]},'status':'queued'} for identity in ids]
-                for item in items:
-                    if args.get('extrasById',{}).get(item['id']):item['source']['extras']=args['extrasById'][item['id']]
-            def progress():
-                operation.update(items=copy.deepcopy(items),updatedAt=time.time())
-                self.persist_operation(operation)
-            await self._change(lambda _:progress())
             for item in items:
                 item['status']='running'
                 await self._change(lambda _:progress())

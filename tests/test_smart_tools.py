@@ -373,3 +373,18 @@ async def test_batch_interruption_retains_progress_and_never_replays(manager,mon
     assert restarted.operation('interrupted')['items']==receipt['items']
     assert len(calls)==2
     await restarted.close()
+
+
+async def test_waiting_batch_retains_source_and_extras_before_install_lane(manager,monkeypatch):
+    manager.state['catalog']=[{'id':'tool','name':'Tool','repository':'https://example.com/tool','ref':'pinned'}]
+    await manager.batch_lock.acquire()
+    task=asyncio.create_task(manager.command('smartTools.installBatch',{'ids':['tool'],'extrasById':{'tool':['mcp']}},'waiting'))
+    for _ in range(100):
+        receipt=manager.operation('waiting')
+        if receipt and receipt.get('items'):break
+        await asyncio.sleep(.001)
+    assert receipt['items'][0]['source']=={'repository':'https://example.com/tool','ref':'pinned','extras':['mcp']}
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    manager.batch_lock.release()
+    assert manager.operation('waiting')['items'][0]['status']=='interrupted'

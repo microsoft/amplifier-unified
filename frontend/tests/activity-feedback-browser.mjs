@@ -28,17 +28,17 @@ try{
  assert.equal(await page.locator('[data-action="providers.models"][data-action-pending]').count(),1);
  assert.equal(await page.locator('[data-activity-region="provider-models"]').getAttribute('aria-busy'),'true');
  assert.equal(await page.locator('#provider-model').inputValue(),'model-a');
- assert.equal(await page.locator('#provider-model option[value="model-b"]').count(),1);
+ assert.equal(await page.locator('#provider-model-catalog option[value="model-b"]').count(),1);
  assert.equal(await page.locator('[data-activity-region="provider-options"]').getAttribute('aria-busy'),null);
- state.setup.operations={'providers.models:one':{phase:'working',commandId:refresh.body.id}};state.setup.providerCatalogs.one={phase:'working',models:[]};state.revision++;
+ state.setup.operations={'providers.models:one':{phase:'working',commandId:refresh.body.id}};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'working'};state.revision++;
  await refresh.route.fulfill({json:{accepted:true,state}});
  await page.waitForFunction(()=>!document.querySelector('[data-action="providers.models"][data-action-pending]'));
  assert.equal(await page.locator('[data-activity-region="provider-models"]').getAttribute('aria-busy'),'true');
  assert.equal(await page.locator('[data-action="providers.models"]').getAttribute('aria-busy'),'true');
- assert.equal(await page.locator('#provider-model option[value="model-b"]').count(),1);
+ assert.equal(await page.locator('#provider-model-catalog option[value="model-b"]').count(),1);
  await page.locator('#provider-source').count();
  // User edits survive independent completions and dismissal.
- state.setup.operations['providers.models:one']={phase:'error',commandId:refresh.body.id,error:'Fixture unavailable'};state.setup.providerCatalogs.one={phase:'error',models:[]};state.revision++;
+ state.setup.operations['providers.models:one']={phase:'error',commandId:refresh.body.id,error:'Fixture unavailable'};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'error'};state.revision++;
  await page.evaluate(value=>window.emitState(value),state);
  await page.waitForFunction(()=>!document.querySelector('[data-activity-region="provider-models"][data-region-pending]'));
  assert.equal(await page.locator('#provider-model').evaluate(el=>el.tagName),'INPUT');
