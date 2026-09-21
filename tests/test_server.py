@@ -54,6 +54,14 @@ async def test_canvas_call_returns_original_result_and_preserves_fences(authenti
     service = app['service']
     await service.smart_tools.close()
     service.smart_tools = Tools(service)
+    tool_calls = []
+    original_command = service.smart_tools.command
+
+    async def counted_command(*args, **kwargs):
+        tool_calls.append(args)
+        return await original_command(*args, **kwargs)
+
+    service.smart_tools.command = counted_command
     client = await authenticated_client(app)
     await service.dispatch('session.create', {'title': 'Interactive tool'})
     await service.smart_canvas.open({'id': 'one', 'tool': 'read'})
@@ -73,8 +81,25 @@ async def test_canvas_call_returns_original_result_and_preserves_fences(authenti
     assert len(service.state['smartTools']['operations']) == 1
     mismatch = await client.post(url, json={**payload, 'arguments': {'different': True}})
     assert mismatch.status == 409
-    denied = await (await client.post(url, json={'id': 'not-granted', 'name': 'ungranted'})).json()
+    denied_payload = {'id': 'not-granted', 'name': 'ungranted'}
+    denied_response = await client.post(url, json=denied_payload)
+    assert denied_response.status == 200
+    denied = await denied_response.json()
     assert denied['status'] == 'failed'
+    assert 'not granted' in denied['error']
+    assert len(tool_calls) == 1
+    # Re-reading prior receipts while disconnected must not execute any tool.
+    service.state['smartTools']['servers'][0]['status'] = 'disconnected'
+    for prior_payload, receipt in ((payload, operation), (denied_payload, denied)):
+        repeated = await client.post(url, json=prior_payload)
+        assert repeated.status == 200
+        assert await repeated.json() == receipt
+    blocked = await client.post(url, json={**payload, 'id': 'disconnected-new'})
+    assert blocked.status == 409
+    assert 'disconnected' in (await blocked.json())['error'].lower()
+    assert len(tool_calls) == 1
+    assert len(service.state['smartTools']['operations']) == 2
+    assert 'disconnected-new' not in service.smart_tool_requests
     await service.dispatch('canvas.close')
     closed = await client.post(url, json={**payload, 'id': 'closed-view'})
     assert closed.status == 409
