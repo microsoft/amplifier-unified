@@ -60,5 +60,6 @@ unrelated settings. Closing A's three viewers removes their subscriptions, while
 A keeps working and saving. Returning obtains a current snapshot before following
 new updates. A slow viewer can receive coalesced snapshots without slowing A.
 
-This is a target for scoped publication. Current source still performs broad
-publication; [CS3's assessment](assessment.md) records that gap explicitly.
+This is a target for scoped publication. The pinned baseline performed broad
+publication; [CS3's assessment](assessment.md) records that observation. A current
+implementation and performance check is required before claiming this target.

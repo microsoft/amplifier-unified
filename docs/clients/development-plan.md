@@ -1,18 +1,35 @@
 # Shared-client development plan
 
 **Proposed work derived from DRAFT contracts.** This is a coordination note,
-not a new source of behavioral promises or a claim that implementation started.
+not a new source of behavioral promises. Implementation progress is recorded
+separately below; this roadmap does not certify contract conformance.
 Sources: [vision/contracts](direction.md), [baseline](assessment.md) and the user's
 request to develop multiple concurrent clients with a consistent experience.
+
+## Progress as of 2026-09-21
+
+D3 has an implemented connected TUI, and D4 has a documented first set of supported
+operations, through [TUI PR 17](https://github.com/bkrabach/amplifier-app-tui/pull/17)
+and [Unified PR 27](https://github.com/microsoft/amplifier-unified/pull/27).
+The [current TUI guide](tui-handoff.md) records scope and evidence. D7 now also
+includes guided installation in [PR 57](https://github.com/microsoft/amplifier-unified/pull/57),
+whose review and isolated Mac/Linux qualification are complete; actual publication
+and host rollout are tracked separately.
+
+D1 remains a draft adoption decision. D2's broad publication performance, D5's
+cross-client settings experience and D6's full capability/fallback model are not
+established by those merges. The sequence and journeys below describe the target
+and evidence requirements; they are not a claim that every item is still unstarted
+or that any entire draft contract has passed.
 
 ## Existing ownership to preserve
 
 | Area | Current owner/boundary | Coordination required before overlap |
 | --- | --- | --- |
-| Shared client direction, live protocol and connected TUI integration | Live Multi-Device work | Own this packet and integrate the first adapter; inspect current TUI direction before edits |
-| Runtime lifecycle, update generation, worker admission | Harness | Agree stop/exit fence, preparation and update behavior; do not mix its urgent release with these docs |
+| Shared client direction, live protocol and connected TUI integration | Live Multi-Device work | Own this packet and the connected adapter; preserve current TUI direction and compatibility |
+| Runtime lifecycle, update generation, worker admission | Harness | Agree stop/exit fence, preparation and update behavior; coordinate changes through the release owner |
 | Durable questions/tasks and related public operations | Codex Parity | Reference its operation contracts and supported capability versions; do not duplicate that implementation |
-| Settings experience | Settings Design, currently mockup/research | Agree visible scope/provenance/apply state and editor conflicts before implementing settings controls |
+| Settings experience | Settings Design | Agree visible scope/provenance/apply state and editor conflicts before implementing settings controls |
 | Composer/new-chat interactions | Chat UI | Coordinate optimistic delivery and controls instead of editing its active surface in parallel |
 | Canonical execution reader/timeline | Execution-view owner | Coordinate state/artifact presentation and large-history rendering |
 | Shared metadata/settings/ownership mechanisms | Foundation maintainers | Propose only demonstrated missing reusable mechanisms; leave UI policy in apps |

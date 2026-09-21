@@ -2,7 +2,10 @@
 
 **Status: proposal for review.** This packet establishes an Amplifier-specific
 destination, draft promises, a source assessment and an implementation sequence.
-It does not ratify the contracts, implement a connected TUI, or change a release.
+Publishing it does not ratify the contracts or change a release. A connected TUI
+has since been implemented; see the [progress note](assessment.md#progress-since-the-assessment)
+and current [TUI guide](tui-handoff.md). The original source assessment stays
+explicitly historical instead of being presented as today's missing-work list.
 
 ## Read the packet
 
@@ -13,7 +16,7 @@ It does not ratify the contracts, implement a connected TUI, or change a release
 | [CS: client state](../../contracts/client-state.v1.md) | Ownership, scoped synchronization, configuration and recovery boundaries. |
 | [CD: client development](../../contracts/client-development.v1.md) | How parallel implementations change together without sharing internals. |
 | [State scope map](state-scopes.md) | Concrete examples of shared, host-local and client-local state. |
-| [Baseline assessment](assessment.md) | What the reviewed web and TUI sources support, and what remains unproven. |
+| [Baseline assessment](assessment.md) | Pinned historical observations and separately recorded implementation progress. |
 | [Development plan](development-plan.md) | Ordered work, existing owners, acceptance journeys and change template. |
 
 The [existing wire contract](live-sessions.md) remains the reference for current

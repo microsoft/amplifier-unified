@@ -65,7 +65,7 @@ These draft documents alone add no CI enforcement or formal verdict ledger.
 ## Open questions
 
 When should the shared contract set move into an independent repository?
-Which compatibility checks should become required CI once the first TUI adapter exists?
+Which compatibility checks should become required CI as connected clients advance?
 
 ## Changelog
 
