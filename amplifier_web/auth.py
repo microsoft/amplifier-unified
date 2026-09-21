@@ -179,6 +179,10 @@ async def auth_required(request: web.Request, handler):
     # and revocation on every request and serves escaped inert snapshot content.
     if request.method in {'GET', 'HEAD'} and re.fullmatch(r'/share/[A-Za-z0-9_-]{43}', request.path):
         return await handler(request)
+    if request.path == '/api/terminal/redeem' and request.method == 'POST':
+        # This narrowly scoped endpoint verifies a short-lived, single-use setup
+        # grant in its handler. It is never an alternate general API credential.
+        return await handler(request)
     if request.path == "/login" and request.method == "POST":
         csrf = request.cookies.get(CSRF_COOKIE)
         submitted = (await request.post()).get("csrf", "")
@@ -189,6 +193,12 @@ async def auth_required(request: web.Request, handler):
     authorization = request.headers.get("Authorization", "")
     if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], request.app["control_token"]):
         return await handler(request)
+    if authorization.lower().startswith('bearer amt_'):
+        devices = request.app['terminal_setup'].devices
+        identity = devices.identify(authorization[7:])
+        if identity:
+            with devices.connection(identity):
+                return await handler(request)
     if _verified(request.app["session_secret"], request.cookies.get(SESSION_COOKIE), request.app["server_config"]["session_ttl_seconds"], "session"):
         return await handler(request)
     if is_api_request(request):

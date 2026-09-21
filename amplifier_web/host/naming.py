@@ -8,7 +8,7 @@ import importlib
 import logging
 from pathlib import Path
 
-from ..naming import read
+from ..naming import read, automatic_metadata, accept_generated
 from amplifier_foundation.session.metadata import has_generated_or_manual_name
 
 log=logging.getLogger(__name__)
@@ -50,6 +50,8 @@ class LiveSessionNaming:
                     from amplifier_foundation.session.metadata import SessionMetadataStore
                     store=SessionMetadataStore(session_dir)
                     if metadata.get('name'):
+                        if 'name_auto' in store.read():
+                            return accept_generated(session_dir, metadata)[0]
                         return store.set_name(metadata['name'],source='generated',
                             description=metadata.get('description'),
                             expected_revision=metadata.get('name_revision',0))
@@ -85,7 +87,7 @@ class LiveSessionNaming:
         metadata=self.hook._load_metadata(self.directory)
         # A custom name is a user choice, including legacy names without an
         # explicit source. Do not spend a model call proposing its replacement.
-        if metadata.get('name') and metadata.get('name_source') not in {'fallback', 'generated'}:
+        if not automatic_metadata(metadata):
             self.last_attempt=count
             return
         named=has_generated_or_manual_name(metadata)
@@ -105,6 +107,31 @@ class LiveSessionNaming:
             finally:CALL_PURPOSE.reset(token)
         self.pending=asyncio.create_task(generate())
         self.pending.add_done_callback(lambda _:self.schedule())
+
+    async def suggest(self):
+        """One explicit naming call, with no transcript input or metadata write."""
+        if not self.hook:
+            raise ValueError('This conversation bundle does not provide automatic naming.')
+        if self.pending and not self.pending.done():
+            raise ValueError('A chat name is already being generated. Try again when it finishes.')
+        before = self.hook._load_metadata(self.directory)
+        candidate = {}
+        hook = type(self.hook)(self.coordinator, self.hook.config)
+        hook._load_metadata = lambda directory: {**before, 'name_source': 'fallback'}
+        def capture(directory, metadata):
+            candidate.update(metadata)
+            return metadata
+        hook._save_metadata = capture
+        from ..execution_events import CALL_PURPOSE
+        token = CALL_PURPOSE.set({'label': 'Session naming', 'turnId': self.turn_id, 'lifecycle': 'background'})
+        try:
+            await hook._generate_name(self.coordinator.session_id, self.directory, is_update=False)
+        finally:
+            CALL_PURPOSE.reset(token)
+        if not candidate.get('name'):
+            raise ValueError('No new name was returned. Keep the current name and try again later.')
+        return {key: candidate[key] for key in ('name', 'description') if key in candidate} | {
+            'name_revision': before.get('name_revision', 0), 'name_policy_revision': before.get('name_policy_revision', 0)}
 
     async def close(self):
         if self.pending and not self.pending.done():

@@ -10,10 +10,10 @@ test('details and recovery use shared actions with immediate pending feedback an
  let release;const calls=[],act=(name,args)=>{calls.push({name,args});return new Promise(resolve=>{release=resolve})};
  const session={id:'chat',runtimeSessionId:'native',status:'error',workspace:'/workspace',bundle:'work',error:'Manager turn failed'};
  let root,operation;await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act}))});
- await renderAct(async()=>{operation=root.root.findByProps({'data-action':'session.inspect'}).props.onClick()});
+ // Read-only inspection starts when the details component opens.
  assert.deepEqual(calls,[{name:'session.inspect',args:{id:'chat'}}]);
  assert.equal(root.root.findByProps({'data-action':'session.recover'}).props.disabled,true);
- await renderAct(async()=>{release({accepted:true,result:{failure:{summary:'Invalid image',errorType:'InvalidRequestError'}}});await operation});
+ await renderAct(async()=>{release({accepted:true,result:{failure:{summary:'Invalid image',errorType:'InvalidRequestError'}}});await Promise.resolve()});
  assert.match(JSON.stringify(root.toJSON()),/Invalid image/);
  await renderAct(async()=>{operation=root.root.findByProps({'data-action':'session.recover'}).props.onClick()});
  await renderAct(async()=>root.root.findByProps({'data-action':'session.recover'}).props.onClick());
@@ -30,5 +30,11 @@ test('dismissal does not remove settings details; active work cannot be recovere
  assert.match(JSON.stringify(root.toJSON()),/Copy session ID/);
  await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,status:'error',workers:[{status:'working'}]},act,initiallyOpen:true})));
  assert.equal(root.root.findByProps({'data-action':'session.recover'}).props.disabled,true);
+ await renderAct(async()=>root.unmount());
+});
+
+test('error banner has no details or copy buttons',async()=>{
+ let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async()=>({accepted:true})}))});
+ assert.equal(root.root.findAllByType('button').length,0);assert.equal(root.toJSON().props.className,'a-alert');
  await renderAct(async()=>root.unmount());
 });

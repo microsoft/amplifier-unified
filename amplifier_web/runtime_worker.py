@@ -585,6 +585,11 @@ class Worker:
                 if data["operation"] == "schedule.submit":
                     from amplifier_web.scheduled_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation)
+                elif data["operation"] == "session.naming":
+                    self.controls.require_idle()
+                    if not self.naming:
+                        raise ValueError('Automatic naming is unavailable for this conversation.')
+                    result = await self.naming.suggest()
                 elif data["operation"] == "bundle.preview":
                     from amplifier_web.bundle_selection import preview
                     self.controls.require_idle()

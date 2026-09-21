@@ -26,16 +26,16 @@ export function ActivityPanel({state,act}){
 export function completionToRead(state){
  return state?.attention?.items?.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
 }
-export function useReadCompletion(state,act,pane){
+export function useReadCompletion(state,act,pane,ready=true){
  const item=completionToRead(state);
  const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused||!!state?.view?.navExpanded&&matchMedia('(max-width:760px)').matches||!!state?.canvas?.open&&matchMedia('(max-width:760px)').matches;
  React.useEffect(()=>{
-  if(!item||blocked||!pane.current)return;
+  if(!ready||!item||blocked||!pane.current)return;
   const element=pane.current;let timer;
   const visible=()=>!document.hidden&&document.hasFocus()&&element.clientHeight>0&&getComputedStyle(element).visibility!=='hidden'&&!element.closest('[inert]')&&element.scrollHeight-element.scrollTop-element.clientHeight<40;
   const check=()=>{clearTimeout(timer);if(visible())timer=setTimeout(()=>{if(visible())readItems(act,[item])},900)};
   element.addEventListener('scroll',check,{passive:true});document.addEventListener('visibilitychange',check);window.addEventListener('focus',check);window.addEventListener('blur',check);
   const resize=new ResizeObserver(check);resize.observe(element);for(const child of element.children)resize.observe(child);
   check();return()=>{clearTimeout(timer);resize.disconnect();element.removeEventListener('scroll',check);document.removeEventListener('visibilitychange',check);window.removeEventListener('focus',check);window.removeEventListener('blur',check)};
- },[item?.id,item?.fingerprint,blocked,act,pane]);
+ },[item?.id,item?.fingerprint,blocked,act,pane,ready]);
 }

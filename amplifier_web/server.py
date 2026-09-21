@@ -99,6 +99,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app["runtime"] = runtime
     from .voice_visual import setup_routes as visual_routes
     visual_routes(app)
+    from .terminal_setup import setup_routes as setup_terminal
+    setup_terminal(app)
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)
@@ -176,6 +178,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if request.method == "GET":
             return web.json_response(service.get_actions())
         payload = await request.json()
+        if isinstance(payload, dict) and payload.get('action') == 'terminal.prepare':
+            from .terminal_setup import require_safe_transport
+            require_safe_transport(request)
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
                                         command_id=payload.get("id"), expected_revision=payload.get("expectedRevision")))
         result = await asyncio.shield(task)

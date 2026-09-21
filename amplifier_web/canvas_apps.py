@@ -69,7 +69,7 @@ def validate(value, spec):
 
 
 HOST_ACTIONS = {'theme.preview', 'theme.apply', 'theme.revert'}
-THEME_TOKENS = ('bg', 'surface', 'soft', 'ink', 'muted', 'line', 'accent', 'tint', 'green', 'danger')
+from .themes import TOKENS as THEME_TOKENS, theme_input
 
 
 def manifest(value):
@@ -135,16 +135,6 @@ def theme_fingerprint(theme):
     return hashlib.sha256(json.dumps(theme, sort_keys=True).encode()).hexdigest()
 
 
-def theme_input(service, args):
-    if 'tokens' not in args:
-        return args
-    # A small palette change retains the complete applied skin. This avoids
-    # making authors copy the whole stylesheet into every generated surface.
-    declarations = ';'.join('--a-' + key + ':' + value for key, value in args['tokens'].items())
-    css = service.state['theme']['css'] + '\n#amp-one{' + declarations + '}'
-    return {'name': args['name'], 'css': css}
-
-
 def theme_command(service, action, args):
     """Same implementation for ordinary controls, app_control and approved requests."""
     from .service import validate_theme
@@ -153,6 +143,9 @@ def theme_command(service, action, args):
         args = theme_input(service, args)
         validate_theme(args['css'])
         theme = {'name': args['name'] or 'Custom skin', 'css': args['css']}
+        for key in ('definition', 'palettePatch'):
+            if key in args:
+                theme[key] = copy.deepcopy(args[key])
         if action == 'theme.preview':
             if service.clients.record() is None:
                 fail('Attach a client for a theme preview.', 409)

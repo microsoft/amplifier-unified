@@ -15,7 +15,7 @@ from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
-INDEX_FIELDS = ('draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'description', 'bundle', 'workspace',
+INDEX_FIELDS = ('draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
@@ -352,7 +352,7 @@ class AutomaticHistory:
                         previous = existing.get(key)
                         if previous is None:
                             previous = {'id': row['id'], 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
-                                        'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'bundle': row.get('bundle') or state['settings']['bundle'],
+                                        'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
                                         'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False),
                                         'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
@@ -371,7 +371,7 @@ class AutomaticHistory:
                             if previous.get('recentActivityAt') != recent:
                                 previous['recentActivityAt'] = recent; changed = True
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
-                                                    'nativeNameSource': row.get('nameSource'), 'workspaceId': row['workspaceId'],
+                                                    'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
                                                     'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
