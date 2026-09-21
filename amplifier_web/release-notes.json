@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.9",
+      "title": "Compact actions and inspectable model requests",
+      "changes": [
+        "Actions start as one-line summaries inside their chronological work groups. Expand a tool to inspect its input and result; brief worker containers add no extra disclosure.",
+        "Expand a model call for timing, usage, message and tool counts, and recorded request options. Large raw requests load from the existing event log only when requested; short requests appear directly.",
+        "Full request copy, retry, source-change checks and the 15-line/full or 10-line/preview behavior are preserved. Request bodies stay out of initial browser state and saved execution views."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.8",
       "title": "Settings collections that keep the details within reach",
       "changes": [

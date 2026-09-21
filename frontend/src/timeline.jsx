@@ -4,26 +4,33 @@ import React,{useEffect,useState} from 'react';
 import {ChevronRight,GitBranch,Wrench,MessageCircle,Check,Circle,Square,AlertCircle,Terminal,FileText,FilePenLine,ListChecks} from 'lucide-react';
 import {treeForTurn,usageLabel,isRunning,elapsedLabel,workSize} from './timeline-data';
 import {actionContent,cleanSummary} from './execution-content.js';
-import {useExecutionField,ToolContent} from './execution-content.jsx';
+import {useExecutionField,ToolContent,ModelContent} from './execution-content.jsx';
 import './execution-content.css';
 
 function Usage({value,pending=false}){const label=usageLabel(value,{pending});return label?<span className="a-execution-usage" title={label.title}>{label.text}</span>:null}
 function Status({status}){return ['error','failed','cancelled','interrupted'].includes(status)?<AlertCircle className="a-execution-warning" aria-label={status}/>:['complete','completed','success','done'].includes(status)?<Check className="a-execution-complete" aria-label="Completed"/>:isRunning({phase:status})?<span className="a-execution-dot" aria-label={status}/>:<Circle aria-label={status||'Recorded'}/>}
 const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
-function ExecutionNode({node,depth=0,ancestors=[],tree,act,now}){
- const tool=node.kind==='tool';
- const input=useExecutionField(node,'input',tool),output=useExecutionField(node,'output',tool),error=useExecutionField(node,'error',tool);
+function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle}){
+ const tool=node.kind==='tool',children=tree.children.get(node.id)||[],summary=cleanSummary(node.summary||node.detail);
+ const collapsible=tool||node.kind==='llm'||!!summary||children.length>15,open=!collapsible||expanded.has(node.id),requestOpen=expanded.has(`request:${node.id}`);
+ const Header=collapsible?'button':'div';
+ const requestInline=node.requestDetail?.lines<=15&&node.requestDetail?.length<=3000;
+ const input=useExecutionField(node,'input',open&&tool),output=useExecutionField(node,'output',open&&tool),error=useExecutionField(node,'error',open),request=useExecutionField(node,'request',open&&(requestInline||requestOpen));
  if(depth>20||ancestors.includes(node.id))return null;
- const children=tree.children.get(node.id)||[],action=tool?actionContent(node,input.value,output.value):null;
+ const action=tool?actionContent(node,input.value,output.value):null;
  const Icon=node.kind==='worker'?GitBranch:node.kind==='llm'?MessageCircle:({command:Terminal,read:FileText,write:FilePenLine,patch:FilePenLine,tasks:ListChecks,delegate:GitBranch}[action?.kind]||Wrench);
- const summary=cleanSummary(node.summary||node.detail),phase=node.status||node.phase,elapsed=elapsedLabel(node,now),usage=node.kind==='llm'?node.usage:null;
+ const phase=node.status||node.phase,elapsed=elapsedLabel(node,now),usage=node.kind==='llm'?node.usage:null;
  const label=action?.title||node.label||node.model||node.kind,model=[node.provider,node.model].filter(Boolean).join(' · ');
  return <div className="a-execution-node" data-kind={node.kind} data-node-id={node.id} data-action-kind={action?.kind}>
-  <div className="a-execution-line"><Icon/><span className="a-execution-label"><span>{label}{action?.target&&action.kind!=='command'&&<> <code>{action.target}</code></>}{action?.kind==='patch'&&(action.added>0||action.removed>0)&&<span className="a-execution-counts"><span>+{action.added}</span><span>−{action.removed}</span></span>}</span>{node.kind==='llm'&&model&&<small>{model}</small>}</span><span className="a-execution-phase" title={[node.toolCallId&&`Call: ${node.toolCallId}`,stamp(node.startedAt),stamp(node.endedAt)].filter(Boolean).join(" · ")}>{isRunning(node)||['error','failed','cancelled','interrupted'].includes(phase)?`${phase}${elapsed?' · ':''}`:''}{elapsed}</span><Usage value={usage} pending={node.kind==='llm'&&isRunning(node)}/><Status status={phase}/></div>
-  {(tool||summary||children.length>0)&&<div className="a-execution-body">
-   {tool?<ToolContent node={node} action={action} input={input} output={output} error={error}/>:summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} automatic markdown/>}
+  <Header className="a-execution-line a-execution-action-line" {...(collapsible?{type:"button",'data-action':'view.update','aria-expanded':open,onClick:()=>toggle(node.id)}:{})}>
+   {collapsible&&<ChevronRight className={`a-execution-chevron ${open?'open':''}`}/>}<Icon/>
+   <span className="a-execution-label" title={[label,action?.target,model,action?.preview||summary].filter(Boolean).join(' · ')}><span>{label}{action?.target&&<> <code>{action.target}</code></>}{node.kind==='llm'&&model&&<> · {model}</>}{!action?.target&&action?.preview&&<> · {action.preview}</>}{action?.kind==='patch'&&(action.added>0||action.removed>0)&&<span className="a-execution-counts"><span>+{action.added}</span><span>−{action.removed}</span></span>}</span></span>
+   <span className="a-execution-phase" title={[node.toolCallId&&`Call: ${node.toolCallId}`,stamp(node.startedAt),stamp(node.endedAt)].filter(Boolean).join(" · ")}>{isRunning(node)||['error','failed','cancelled','interrupted'].includes(phase)?`${phase}${elapsed?' · ':''}`:''}{elapsed}</span><Usage value={usage} pending={node.kind==='llm'&&isRunning(node)}/><Status status={phase}/>
+  </Header>
+  {open&&<div className="a-execution-body">
+   {tool?<ToolContent node={node} action={action} input={input} output={output} error={error}/>:node.kind==='llm'?<ModelContent node={node} request={request} error={error} requestOpen={requestOpen} requestInline={requestInline} toggleRequest={()=>toggle(`request:${node.id}`)} now={now}/>:summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} automatic markdown/>}
    {node.kind==='worker'&&isRunning(node)&&(node.workerId||node.sessionId)&&<button className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}
-   {children.length>0&&<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} act={act} now={now}/>)}</div>}
+   {children.length>0&&<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}
   </div>}
  </div>;
 }
@@ -35,9 +42,9 @@ export function TurnTimeline({data,turnId,state,act}){
  if(!tree.roots.length&&!turn.startedAt)return null;
  const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`turn:${turnId}`;
  const collapsible=workSize(nodes)>15||(turn.nodeCounts?.tools||0)+(turn.nodeCounts?.models||0)>15,open=!collapsible||expanded.has(summaryId);
- const toggle=()=>{const next=new Set(expanded);next.has(summaryId)?next.delete(summaryId):next.add(summaryId);act('view.update',{patch:{executionExpanded:[...next]}})};
+ const toggle=id=>{const next=new Set(expanded);next.has(id)?next.delete(id):next.add(id);act('view.update',{patch:{executionExpanded:[...next]}})};
  const tools=turn.nodeCounts?.tools??nodes.filter(node=>node.kind==='tool').length,models=turn.nodeCounts?.models??nodes.filter(node=>node.kind==='llm').length;
  const elapsed=elapsedLabel(turn,now),label=isRunning(turn)?`Working${elapsed?` · ${elapsed}`:'…'}`:elapsed?`Worked for ${elapsed}`:'Work details';
  const Header=collapsible?'button':'div';
- return <section className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><Header className="a-execution-line a-execution-turn-line" {...(collapsible?{'data-action':'view.update','aria-expanded':open,onClick:toggle}:{})}>{collapsible&&<ChevronRight className={`a-execution-chevron ${open?'open':''}`}/>}<span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></Header>{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now}/>)}</div>}</section>;
+ return <section className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><Header className="a-execution-line a-execution-turn-line" {...(collapsible?{'data-action':'view.update','aria-expanded':open,onClick:()=>toggle(summaryId)}:{})}>{collapsible&&<ChevronRight className={`a-execution-chevron ${open?'open':''}`}/>}<span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></Header>{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
 }

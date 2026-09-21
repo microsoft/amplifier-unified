@@ -20,12 +20,14 @@ try{
  assert.equal(detailReads.filter(url=>url.searchParams.get('part')==='nodes').length,0);
  const model=page.locator('[data-kind="llm"]'),modelLine=model.locator('.a-execution-line');
  assert.match(await modelLine.innerText(),/pending/);
- assert.equal(await model.locator('button').count(),0);
+ assert.equal(await model.locator('button.a-execution-action-line').count(),1);
+ assert.equal(await model.locator('.a-execution-body').count(),0);
  const firstTimer=await modelLine.innerText();await page.waitForFunction(first=>document.querySelector('[data-kind="llm"] .a-execution-line')?.innerText!==first,firstTimer);
  console.log('Live model timing checked');const turn=page.locator('[data-group-id="inspect@long-answer"]');
  let failOutput=true;await page.route('**/api/conversation/detail?**',route=>{if(failOutput&&new URL(route.request().url()).searchParams.get('field')==='output'){failOutput=false;return route.fulfill({status:503,json:{error:'Temporary result load failure'}})}return route.continue()});
- await turn.locator('button.a-execution-turn-line').click();
  const tool=turn.locator('[data-kind="tool"]');
+ assert.equal(await tool.locator('.a-execution-body').count(),0);
+ await tool.locator('button.a-execution-action-line').click();
  await tool.getByRole('button',{name:'Retry result',exact:true}).waitFor();console.log('Retry control visible');
  assert.equal(await tool.getByRole('button',{name:'Copy file content',exact:true}).isDisabled(),true);
  await tool.getByRole('button',{name:'Retry result',exact:true}).click();
@@ -45,5 +47,5 @@ try{
  await page.reload();await model.waitFor();assert.equal(await modelLine.innerText(),finalTimer);
  await answer.scrollIntoViewIfNeeded();await page.getByRole('button',{name:'Retry loading full text'}).click();await page.getByText('COMPLETE-RESPONSE-END',{exact:false}).waitFor();
  await tool.getByRole('link',{name:'https://example.com/artifact',exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; long fences preview 10 lines; short model rows stay visible; live timing and usage settle across reload.');
+ assert.deepEqual(errors,[]);console.log('Canonical owner content loads once with retry and full-copy support; long fences preview 10 lines; model one-liners stay visible; live timing and usage settle across reload.');
 }catch(error){console.error(log);throw error}finally{await browser.close();fixture.kill()}

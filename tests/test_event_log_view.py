@@ -218,3 +218,74 @@ def test_unmatched_legacy_history_is_preserved_when_log_is_incomplete(source,tmp
     saved=json.loads((path.parent.parent/'unified/view.json').read_text())
     retained,=saved['execution']['nodes']
     assert retained['input']==legacy['input'] and retained['output']==legacy['output']
+
+
+def test_model_request_is_lazy_complete_and_kept_with_stable_call(source, tmp_path):
+    session, path = source
+    raw = {'model':'fixture', 'instructions':'Owner request '*8000,
+           'input':[{'role':'user','content':'Inspect the project'}], 'tools':[{'name':'read_file'}],
+           'reasoning':{'effort':'high'}, 'max_output_tokens':1000}
+    append(path, 'provider:request', {'kind':'llm','id':'stable-request','sessionId':'native',
+           'model':'fixture','provider':'test','startedAt':9,'phase':'running'}, 9)
+    append(path, 'llm:request', {'model':'fixture','provider':'test','raw':raw,'message_count':1}, 10)
+    view = EventLogView(None)
+    session['status'] = 'working'
+    session['execution'] = view.read(session)
+    node, = session['execution']['nodes']
+    assert node['id'] == 'stable-request'
+    assert 'request' not in node and node['requestInfo']['tool_count'] == 1
+    assert node['requestInfo']['reasoning_effort'] == 'high'
+    initial = page(session, 'nodes')['items'][0]
+    assert len(json.dumps(initial)) < 2000 and 'Owner request' not in json.dumps(initial)
+    assert '_eventFields' not in initial
+    reference = initial['requestDetail']
+    before = path.read_bytes()
+    complete = read_text(session, {**reference, 'complete':'true'})
+    assert json.loads(complete['value']) == raw and complete['nextOffset'] is None
+    append(path, 'llm:response', {'model':'fixture','provider':'test','usage':{'input_tokens':5,'output_tokens':1}}, 12)
+    append(path, 'llm:response', {'kind':'llm','id':'stable-request','sessionId':'native',
+           'model':'fixture','provider':'test','startedAt':9,'endedAt':12.1,'phase':'completed',
+           'usage':{'inputTokens':5,'outputTokens':1}}, 12.1)
+    session['execution'] = view.read(session)
+    node, = session['execution']['nodes']
+    assert node['id'] == 'stable-request' and node['requestDetail']['id'] == node['id']
+    assert json.loads(read_text(session,{**node['requestDetail'],'complete':'true'})['value']) == raw
+    persist(tmp_path/'app', {'sessions':[session]}, {})
+    saved = (path.parent.parent/'unified/view.json').read_text()
+    assert 'Owner request' not in saved and 'requestDetail' not in saved
+    assert path.read_bytes().startswith(before)
+
+
+def test_raw_request_missing_is_not_fabricated_and_parallel_requests_not_misassigned(source):
+    _, path = source
+    append(path, 'llm:request', {'model':'fixture','message_count':7,'thinking_enabled':True}, 10)
+    append(path, 'llm:response', {'model':'fixture','duration_ms':1000}, 11)
+    index = EventIndex(path, 'native');index.refresh()
+    node, = index.rows()
+    assert node['requestInfo']['message_count'] == 7 and 'requestDetail' not in node
+    for label, at in [('first',12),('second',12.1)]:
+        append(path, 'llm:request', {'model':'parallel','raw':{'input':label}}, at)
+    for at in (14,15):append(path,'llm:response',{'model':'parallel','duration_ms':1000},at)
+    index.refresh()
+    assert all('requestDetail' not in row for row in index.rows() if row.get('model') == 'parallel')
+
+
+def test_raw_request_reference_detects_replaced_log(source):
+    session, path = source
+    append(path, 'llm:request', {'request_id':'request','model':'fixture','raw':{'input':'original'}}, 10)
+    session['execution'] = EventLogView(None).read(session)
+    reference = page(session,'nodes')['items'][0]['requestDetail']
+    path.write_text(path.read_text().replace('original','replaced'))
+    with pytest.raises(ValueError,match='changed'):
+        read_text(session,{**reference,'complete':'true'})
+
+
+def test_matching_model_names_on_different_providers_keep_own_request(source):
+    _, path = source
+    append(path,'provider:request',{'kind':'llm','id':'app','sessionId':'native','provider':'other','model':'shared','startedAt':10,'endedAt':12,'phase':'completed'},12)
+    append(path,'llm:request',{'provider':'test','model':'shared','raw':{'input':'own request'}},10)
+    append(path,'llm:response',{'provider':'test','model':'shared'},12)
+    index=EventIndex(path,'native');index.refresh();rows=index.rows()
+    assert len(rows)==2
+    assert 'requestDetail' not in next(row for row in rows if row['id']=='app')
+    assert next(row for row in rows if row.get('provider')=='test')['requestDetail']
