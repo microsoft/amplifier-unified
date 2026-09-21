@@ -1,3 +1,4 @@
+import {useNarrowScreen} from './responsive-navigation';
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
 
 export const CHAT_MIN=360,CANVAS_MIN=300,NAV_MIN=216;
@@ -18,21 +19,22 @@ export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasO
 }
 const Layout=createContext(null);
 export function WorkspaceLayout({state,act,children,presentation={}}){
+ const narrow=useNarrowScreen();
  const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:52}),[draft,setDraft]=useState(null);
  useEffect(()=>{
   const el=host.current;if(!el)return;
   const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:innerWidth<=700?44:52});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[]);
- const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
+ const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
  const persist=(key,value)=>{
-  const fitted=fitPanels({...metrics,navPinned:!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
+  const fitted=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
   const patch={[key]:Math.round(value)};
   if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch.canvasWidth=Math.round(fitted.canvas)}
   setDraft(null);act('view.update',{patch});
  };
- return <Layout.Provider value={{...sizes,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
-  <main ref={host} className="a-layout" data-part="workspace" data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
+ return <Layout.Provider value={{...sizes,narrow,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
+  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.canvas?.open} data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
  </Layout.Provider>;
 }
 export function usePanelLayout(state,act){

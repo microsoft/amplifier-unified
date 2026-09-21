@@ -137,14 +137,14 @@ test('canvas keyboard resize persists bounded width and closes through public ac
  await renderAct(async()=>root.root.findByProps({role:'separator'}).props.onKeyDown({key:'End',preventDefault(){}}));
  assert.equal(calls.at(-1).args.patch.canvasWidth,root.root.findByProps({role:'separator'}).props['aria-valuemax']);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Close canvas panel'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'canvas.close',args:{}});
+ assert.deepEqual(calls.at(-1),{name:'canvas.visibility',args:{open:false}});
  await renderAct(async()=>root.unmount());
 });
 
 test('reopening the canvas keeps its saved snapshot without creating another artifact',async()=>{
  let called;
  await reopenCanvas({canvas:{kind:'markdown',path:'/one/plan.md',title:'Plan',content:'Old content',events:[{}]}},async(name,args)=>{called={name,args}});
- assert.deepEqual(called,{name:'canvas.reopen',args:{}});
+ assert.deepEqual(called,{name:'canvas.visibility',args:{open:true}});
 });
 
 
