@@ -130,6 +130,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:toolbar-browser
+      - name: Verify validated shell component controls
+        working-directory: frontend
+        run: npm run test:shell-components-browser
       - name: Verify responsive navigation and immediate Canvas visibility
         working-directory: frontend
         run: npm run test:mobile-navigation-browser

@@ -3,11 +3,15 @@
   "releases": [
     {
       "version": "0.19.19",
-      "title": "Reliable runtime updates and clearer conversation diagnostics",
+      "title": "Reliable conversation recovery, runtime updates, and Settings navigation",
       "changes": [
         "Conversations use the same module cache validated by the ecosystem updater, including reopened conversations.",
         "Chat details shows actionable module loading failures and clears older failure reports after a successful preparation.",
-        "Update controls are easier to find in Settings, and older activity is grouped for easier scanning.",
+        "Check delivery can reconcile saved messages after reload or from another client. Sending an uncertain message again requires an explicit confirmation and preserves its original identity and attachments.",
+        "Runtime repair, reset, and failed application replacement leave the running host able to start work. Rollback retries preserve the intended previous version.",
+        "Mobile Settings restores your list position when returning from details, including on slower devices.",
+        "Validated shell components can replace supported controls through the same user and agent actions while preserving drafts and built-in recovery.",
+        "Update controls are easier to find in Settings, with older update activity grouped for easier scanning.",
         "Saved terminal connections open in your preferred terminal, with corrected Mac shortcuts and clearer setup feedback."
       ],
       "notices": []
