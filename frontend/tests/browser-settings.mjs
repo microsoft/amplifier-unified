@@ -1,6 +1,12 @@
 import {settingsSections} from '../src/settings-navigation.js';
+export async function openSettingsDialog(page){
+ if(await page.locator('.a-settings-experience').isVisible())return;
+ const settings=page.getByRole('button',{name:'Settings',exact:true});
+ if(!await settings.isVisible())await page.getByRole('button',{name:'More app options',exact:true}).click();
+ await settings.click();
+}
 export async function openSettingsPage(page,destination){
- if(!await page.locator('.a-settings-experience').isVisible())await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await openSettingsDialog(page);
  const section=settingsSections.find(section=>section.pages.some(([id])=>id===destination));
  if(!section)throw new Error('Unknown settings test destination: '+destination);
  await page.waitForFunction(()=>{const root=document.querySelector('.a-settings-experience');return root?.dataset.compact===String(root.closest('.a-overlay').clientWidth<960)});

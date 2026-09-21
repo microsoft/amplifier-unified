@@ -1,4 +1,4 @@
-import {openSettingsPage} from './browser-settings.mjs';
+import {openSettingsDialog,openSettingsPage} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -13,7 +13,7 @@ try{
  const root=page.locator('.a-settings-experience'),footer=page.locator('.a-settings-mobile-actions'),state=()=>page.evaluate(()=>window.amplifier.getState());
  const route=key=>expect(root).toHaveAttribute('data-settings-route',key);
  const back=async()=>{const before=await root.getAttribute('data-settings-route');await page.locator('.a-settings-mobile-head button').first().click();await page.waitForFunction(previous=>document.querySelector('.a-settings-experience')?.dataset.settingsRoute!==previous,before);};
- await page.goto(base);await page.waitForSelector('#amp-one');await page.getByRole('button',{name:'Settings',exact:true}).click();await route('index');
+ await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsDialog(page);await route('index');
  assert.equal(await page.locator('.a-dialog-head').isVisible(),false);assert.equal(await root.locator('.a-settings-sidebar>button').count(),settingsSections.length);
  await expect(page.getByRole('button',{name:'Close settings',exact:true})).toBeVisible();await page.screenshot({animations:'disabled',path:'/tmp/settings-mobile-index.png'});
  await openSettingsPage(page,'providers');await route('providers');
@@ -95,7 +95,7 @@ try{
  await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'providers');await providers.locator('[data-collection-id=two]>button').click();assert.equal(await page.locator('#provider-key').inputValue(),'mobile-private-never-share');
  const historyLength=await page.evaluate(()=>history.length);await page.reload();await route('providers/detail');assert.equal(await page.evaluate(()=>history.length),historyLength);
  await back();await route('providers');await back();await route('index');
- await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await page.getByRole('button',{name:'Settings',exact:true}).click();await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await openSettingsDialog(page);await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
 }catch(error){if(page)await page.screenshot({path:'/tmp/settings-mobile-failure.png'});throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}
