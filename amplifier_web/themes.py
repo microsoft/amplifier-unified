@@ -4,8 +4,6 @@ from __future__ import annotations
 import copy
 import re
 
-import tinycss2
-
 TOKENS = ('bg', 'surface', 'soft', 'ink', 'muted', 'line', 'accent', 'tint', 'green', 'danger')
 COLOR = {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'}
 PALETTE = {'type': 'object', 'additionalProperties': False, 'required': list(TOKENS),
@@ -26,6 +24,8 @@ PATCH_END = '/* amplifier:palette-patch:end */'
 
 def css_value(property, value):
     """Accept exactly one declaration value, never another rule or property."""
+    import tinycss2
+
     from .service import AppError, validate_theme
     declarations = tinycss2.parse_declaration_list(property + ':' + value, skip_comments=True, skip_whitespace=True)
     if len(declarations) != 1 or declarations[0].type != 'declaration' or declarations[0].important:

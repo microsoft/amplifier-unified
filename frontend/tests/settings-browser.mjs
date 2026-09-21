@@ -70,6 +70,7 @@ try{
  assert.equal(await page.locator('.a-release-reviewed').count(),noticeCount);
  await page.reload();
  await page.getByRole('region',{name:'Changelog',exact:true}).waitFor();
+ await page.getByRole('region',{name:'Changelog',exact:true}).locator('.a-update-disclosure > summary').click();
  assert.equal(await page.locator('.a-release-notices').count(),0);
  await page.locator('.a-release-entry summary').filter({hasText:'0.11.0'}).click();
  await page.locator('.a-release-entry').filter({hasText:'0.11.0'}).getByText('Settings now apply across Amplifier apps',{exact:true}).waitFor();

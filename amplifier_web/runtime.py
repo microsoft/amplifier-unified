@@ -44,6 +44,9 @@ class SessionInUseError(RuntimeError):
 def _worker_error(data):
     if data.get("code") == "session_busy":
         return SessionInUseError(data.get("owner"))
+    if data.get("code") == "module_load_failed":
+        from .module_failures import ConfiguredModuleError
+        return ConfiguredModuleError(data.get("moduleFailures", []))
     return RuntimeError(data.get("error", "Amplifier runtime failed"))
 
 
@@ -321,7 +324,9 @@ class RuntimeManager:
                     if isinstance(failure, SessionInUseError):
                         await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
                     else:
-                        await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
+                        from .module_failures import ConfiguredModuleError
+                        await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                            **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
                 elif data.get("type") == "history.revised":
                     await row["emit"]("history.revised", {**data, "sessionId": sid})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):

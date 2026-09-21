@@ -1,6 +1,7 @@
 """Disposable failed computer-tool conversation, with no provider calls."""
 import asyncio
 import json
+import os
 from pathlib import Path
 import tempfile
 from aiohttp import web
@@ -20,6 +21,12 @@ async def main(home):
     store=SessionStore.for_app(home,source['workspace']);store.save(source['id'],rows,{})
     folder=store.directory(source['id'])/'context-intelligence';folder.mkdir(exist_ok=True)
     (folder/'events.jsonl').write_text(json.dumps({'event':'provider:error','data':{'session_id':source['id'],'error':{'type':'InvalidRequestError','msg':'Invalid image_url: invalid base64-encoded value'}}})+'\n')
+    if os.environ.get('MODULE_FAILURE_FIXTURE'):
+        from amplifier_web.module_failures import persist_failures
+        failure = persist_failures(home / 'runtime-reports' / source['id'], [
+            {'module': 'hook-fixture', 'type': 'hook', 'reason_code': 'invalid_module_metadata'}])
+        await service.on_runtime_event('runtime.error', {
+            'sessionId': source['id'], 'error': str(failure), 'moduleFailures': failure.failures})
     original=(store.directory(source['id'])/'transcript.jsonl').read_bytes()
     naming_calls = []
     original_control = service.runtime.control

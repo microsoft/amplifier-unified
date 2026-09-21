@@ -513,7 +513,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime.observer:
             runtime.observer({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Preparing community modules (" + str(action).replace("_", " ")[:60] + ")."})
+    # Activate modules from the same generation as the bundle registry. The
+    # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
     prepared = await loaded.prepare(strict=True,
+        cache_dir=config.registry_home / "cache",
         source_resolver=lambda module, source: module_source(config, snapshot, module, source),
         progress_callback=progress)
     await materialize_bundle_providers(loaded, prepared)
@@ -610,8 +613,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         await checkpoint()
         failures = getattr(loop, "load_failures", [])
         if failures:
-            write_private(directory / "module-load-failures.json", json.dumps(redact(failures), indent=2, default=str))
-            raise RuntimeError("Configured modules failed to mount: " + ", ".join(str(row.get("module_id", row.get("module", "unknown"))) for row in failures))
+            from ..module_failures import persist_failures
+            raise persist_failures(directory, failures)
+        from ..module_failures import clear_failures
+        clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
         # mount. Registry caches and reports are intentionally excluded because
         # they are rewritten by normal preparation.

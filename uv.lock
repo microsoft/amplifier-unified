@@ -152,7 +152,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#52dec7e276db62f720448c8e2ec176b9cbffde2d" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#1125b4f95a7a9e9047a82e34744adbd43047371c" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.19.17"
+version = "0.19.19"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

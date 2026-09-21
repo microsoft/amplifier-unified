@@ -13,6 +13,15 @@ const empty=Object.freeze({view:{},workspaces:[],chatNavigation:{items:[],total:
 const recovery=typeof location!=='undefined'&&new URLSearchParams(location.search).get('shell')==='recovery';
 function freeze(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.values(value).forEach(freeze);Object.freeze(value)}return value}
 
+// An unmounted instance cannot borrow activation evidence from an older
+// generation of the same package. Appearance-only changes retain generation.
+function renderedStatuses(current,statuses){
+ return Object.fromEntries((current?.resolvedInstances||[]).map(row=>{
+  const evidence=statuses[row.id],generation=current.snapshots?.[row.id]?.generation||0;
+  return [row.id,evidence?.package===row.package&&evidence.generation===generation?evidence.status:'inactive'];
+ }));
+}
+
 export function useShell(state,dispatch,clientId){
  const [data,setData]=useState(null),[error,setError]=useState('');
  const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false);
@@ -94,21 +103,21 @@ export function useShell(state,dispatch,clientId){
   const key=instance.id+':'+instance.package+':'+generation;
   for(const old of statusCallbacks.current.keys())if(old.startsWith(instance.id+':')&&old!==key)statusCallbacks.current.delete(old);
   if(!statusCallbacks.current.has(key)){
-   statuses.current[instance.id]={package:instance.package,status:'loading'};
+   statuses.current[instance.id]={package:instance.package,generation,status:'loading'};
    statusCallbacks.current.set(key,(status,message='')=>{
     // Late cleanup/errors from a replaced package cannot mark its replacement.
     const current=latest.current.data;
     if(!current?.resolvedInstances?.some(row=>row.id===instance.id&&row.package===instance.package)||(current.snapshots?.[instance.id]?.generation||0)!==generation)return;
-    statuses.current[instance.id]={package:instance.package,status};
+    statuses.current[instance.id]={package:instance.package,generation,status};
     clearTimeout(reportTimer.current);
-    reportTimer.current=setTimeout(()=>report(Object.fromEntries((latest.current.data?.resolvedInstances||[]).map(row=>[row.id,statuses.current[row.id]?.package===row.package?statuses.current[row.id].status:'inactive'])),message),50);
+    reportTimer.current=setTimeout(()=>report(renderedStatuses(latest.current.data,statuses.current),message),50);
    });
   }
   return statusCallbacks.current.get(key);
  },[report]);
  useEffect(()=>{
   clearTimeout(reportTimer.current);
-  reportTimer.current=setTimeout(()=>report(Object.fromEntries((data?.resolvedInstances||[]).map(row=>[row.id,statuses.current[row.id]?.package===row.package?statuses.current[row.id].status:'inactive']))),80);
+  reportTimer.current=setTimeout(()=>report(renderedStatuses(data,statuses.current)),80);
   return()=>clearTimeout(reportTimer.current);
  },[data?.revision,data?.preview?.id,report]);
  return {data,error,composition,hostFor,recover,report,statusFor,refresh,setPresentation,ready:!!data,recovery,clientId};

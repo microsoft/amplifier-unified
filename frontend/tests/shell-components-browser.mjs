@@ -53,6 +53,21 @@ try{
  await expect.poll(async()=>((await inspect()).views.preferences||{}).dirty).toBe(false);
  await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ // A dormant Settings instance must earn new mounting evidence after it is
+ // removed and re-added, even if the package and saved view state are identical.
+ const beforeRemoval=structuredClone((await inspect()).composition);
+ const removed=structuredClone(beforeRemoval);removed.instances=removed.instances.filter(row=>row.id!=='preferences');
+ const removedChange=await change(removed);await action('shell.changes.apply',removedChange);
+ await page.waitForFunction(revision=>window.amplifier.getShellState()?.revision===revision,removedChange.expectedRevision+1);
+ const restoredChange=await change(beforeRemoval);await action('shell.changes.apply',restoredChange);
+ await page.waitForFunction(revision=>window.amplifier.getShellState()?.revision===revision,restoredChange.expectedRevision+1);
+ await expect.poll(async()=>(await inspect()).reported?.instances?.preferences).toBe('inactive');
+ assert.equal((await inspect()).reported.status,'incomplete');
+ await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.locator('[data-settings-section="shell:preferences"]').click();
+ await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
+ await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.deepEqual(await page.evaluate(()=>({root:window.componentProof.root===document.getElementById('amp-one'),composer:window.componentProof.composer===document.querySelector('[aria-label="Message Amplifier"]'),viewer:window.componentProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.componentProof.session===window.amplifier.getState().selectedSessionId})),{root:true,composer:true,viewer:true,session:true});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Draft survives contribution changes');
  const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
