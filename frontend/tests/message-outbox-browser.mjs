@@ -45,6 +45,13 @@ try{
  const lostRejection=await send('Rejection reply lost');await lostRejection.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).click();
  const rejectionCheck=await next();assert.equal(rejectionCheck.body.id,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state}});
  await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
+ const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
+ await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
+ await delayed.route.fulfill({status:504,json:{error:'The runtime operation has not returned yet. It may still be running; do not automatically repeat it.',code:'runtime_pending',delivery:'unknown'}});
+ await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Retry',exact:true}).count(),0,'Unknown delivery does not offer a fresh retry');
+ assert.equal(await composer().inputValue(),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Timeout does not automatically resend');
+ chat().messages.at(-1).delivery.status='accepted';chat().status='idle';await emit();
+ await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Acknowledgement delayed',{exact:true}).count(),1);assert.equal(await composer().inputValue(),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Late acknowledgement does not resend');
  const lost=await send('Delivery uncertain');await lost.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  await page.reload();await composer().waitFor();await page.getByRole('button',{name:'Check delivery',exact:true}).click();const checked=await next();assert.equal(checked.body.id,lost.body.id);assert.deepEqual(checked.body.args,lost.body.args);assert.notEqual(checked.client,lost.client,'Reload has a new client identity, same delivery identity');
  await checked.route.fulfill({json:{accepted:true,duplicate:true,delivery:'sending',state}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
@@ -58,5 +65,5 @@ try{
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('Outbox browser passed: immediate clear/bubble, late identical draft, server dedup, rejected-message edit, uncertain reload/check, explicit current/fork modes, failure keeps edit, mobile, blocked storage.');
+ assert.deepEqual(errors,[]);console.log('Outbox browser passed: immediate clear/bubble, late identical draft, server dedup, rejected-message edit, delayed504/late acknowledgement without replay, uncertain reload/check, explicit current/fork modes, failure keeps edit, mobile, blocked storage.');
 }finally{await browser?.close();await vite?.close()}

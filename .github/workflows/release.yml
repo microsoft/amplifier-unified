@@ -61,6 +61,9 @@ jobs:
           path: .ci/loop-live
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
+      - name: Install browser dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
       - name: Verify candidate module source validation
         if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
         working-directory: frontend
@@ -75,9 +78,7 @@ jobs:
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:empty-host-browser
+        run: npm run test:empty-host-browser
       - name: Verify draft-first chat setup and composer controls
         working-directory: frontend
         run: npm run test:new-chat-browser
