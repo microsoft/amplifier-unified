@@ -10,13 +10,25 @@ import uuid
 
 PROBE_PREFIX = 'AMPLIFIER_UPDATE_PROBE='
 ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','ImportError','ModuleNotFoundError','FileNotFoundError','PermissionError',
-               'OSError','RuntimeError','ValueError','TimeoutError','CancelledError'}
+               'OSError','RuntimeError','ValueError','TimeoutError','CancelledError','ModuleActivationError',
+               'BundleNotFoundError','BundleLoadError','BundleValidationError','BundleDependencyError'}
+PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNotFoundError':'bundle-not-found',
+                       'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
+                       'BundleDependencyError':'bundle-dependency-failed'}
+RECOVERY_REASONS = {'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','capabilities','cleanup'}
 
 
 def exception_type(error):
     name=type(error).__name__
     return name if name in ERROR_TYPES else 'Exception'
+
+
+def probe_failure(error, stage):
+    facts={'ok':False,'errorType':exception_type(error)}
+    reason=PREPARATION_REASONS.get(type(error).__name__) if stage=='prepare' else None
+    if reason:facts['reason']=reason
+    return facts
 
 
 def probe_record(output):
@@ -30,6 +42,7 @@ def probe_record(output):
         safe={key:value[key] for key in ('ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent') if type(value.get(key)) is bool}
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
+        if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
         if 'ok' in safe:records.append(safe)
@@ -86,6 +99,9 @@ class UpdateDiagnostics:
         event={'id':uuid.uuid4().hex,'at':time.time(),'attemptId':self.state.get('attemptId'),
                'kind':self.state.get('kind'),'phase':phase,'status':status}
         if self.state.get('revision'):event['revision']=self.state['revision']
+        if isinstance(facts.get('reason'),str) and facts['reason'] in RECOVERY_REASONS:event['reason']=facts['reason']
+        if isinstance(facts.get('package'),str) and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',facts['package']) and len(facts['package'])<=128:
+            event['package']=facts['package']
         for key in ('durationMs','exitCode','stdoutBytes','stderrBytes'):
             if type(facts.get(key)) is int:event[key]=facts[key]
         if isinstance(facts.get('errorType'),str) and facts['errorType'] in ERROR_TYPES:event['errorType']=facts['errorType']

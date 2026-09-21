@@ -10,7 +10,7 @@ if __package__:
 else:
     from runtime_bootstrap import bootstrap_app_package
 bootstrap_app_package()
-from amplifier_web.update_diagnostics import exception_type,PROBE_PREFIX
+from amplifier_web.update_diagnostics import exception_type,probe_failure,PROBE_PREFIX
 
 async def main():
     parser = argparse.ArgumentParser()
@@ -31,7 +31,7 @@ async def main():
         facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))
         if not facts['cliAbsent']:raise RuntimeError('A CLI host dependency was introduced')
         facts.update(ok=True,stage='complete')
-    except Exception as error:facts.update(ok=False,errorType=exception_type(error))
+    except Exception as error:facts.update(probe_failure(error,facts['stage']))
     finally:
         if session:
             try:await session.cleanup()

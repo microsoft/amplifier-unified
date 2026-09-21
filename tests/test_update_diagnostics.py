@@ -148,3 +148,72 @@ async def test_cancelled_application_replacement_clears_automatic_pending_retry(
     assert updates['diagnostics']['lastFailure']['phase']=='replacement-install'
     assert updates['diagnostics']['lastFailure']['status']=='interrupted'
     await service.close()
+
+
+from test_updates import app, repo, prepare
+
+
+@pytest.mark.parametrize('kind', ['protected', 'timeout', 'cancelled'])
+async def test_runtime_preflight_failure_is_attributed_and_closes_parent(app, repo, monkeypatch, kind):
+    import asyncio
+    from amplifier_web import runtime_environment
+    manager, cache = await prepare(app, repo)
+    sessions = json.loads(json.dumps(app.state['sessions']))
+    async def fail(home):
+        if kind == 'protected':
+            raise runtime_environment.ProtectedRuntimeSource('amplifier-legacy-hooks')
+        if kind == 'timeout':
+            raise CommandTimeout(12)
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(runtime_environment, 'update_manifest', fail)
+    if kind == 'cancelled':
+        with pytest.raises(asyncio.CancelledError):
+            await manager.install()
+    else:
+        await manager.install()
+    diagnostics = app.state['updates']['diagnostics']
+    failure = diagnostics['lastFailure']
+    assert failure['phase'] == 'ecosystem-runtime-preflight'
+    assert failure['commandId'] and failure['attemptId']
+    assert failure['status'] == ('interrupted' if kind == 'cancelled' else 'failed')
+    assert 'runtime preflight' in app.state['updates']['error']
+    assert any(row['phase'] == 'ecosystem-checkout' and row['status'] == 'succeeded' for row in diagnostics['events'])
+    if kind == 'protected':
+        assert failure['reason'] == 'protected-runtime-source'
+        assert failure['package'] == 'amplifier-legacy-hooks'
+    if kind == 'timeout':
+        assert failure['timedOut'] and failure['durationMs'] == 12000
+    parent = [row for row in diagnostics['events'] if row['phase'] == 'ecosystem-stage']
+    assert [row['status'] for row in parent] == ['started', failure['status']]
+    assert parent[0]['commandId'] == parent[1]['commandId']
+    assert app.state['sessions'] == sessions and app.runtime.closed == 0
+    assert not (app.data_dir / 'updates/active.json').exists()
+
+
+async def test_recovery_details_exclude_unknown_reason_package_paths_and_exception_text(tmp_path):
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    async def fail():
+        error = ValueError('private credential-bearing exception message')
+        error.diagnostic_facts = {'reason': 'private reason', 'package': 'https://user:secret@example.invalid/module',
+                                  'stdout': 'secret', 'path': '/private/local/cache'}
+        raise error
+    with pytest.raises(ValueError):
+        await manager.diagnostics.run('ecosystem-runtime-preflight', fail)
+    failure = manager.diagnostics.state['lastFailure']
+    assert failure['errorType'] == 'ValueError'
+    assert not {'reason', 'package', 'stdout', 'path'} & failure.keys()
+    assert 'secret' not in json.dumps(failure) and 'private' not in json.dumps(failure)
+    await service.close()
+
+
+@pytest.mark.parametrize('name,reason', [('ModuleActivationError','module-prepare-failed'), ('BundleLoadError','bundle-load-failed')])
+def test_recognized_prepare_failure_keeps_class_and_guidance_without_exception_text(name, reason):
+    from amplifier_web.update_diagnostics import probe_failure
+    error = type(name, (Exception,), {})('secret source URL and local path')
+    frame = PROBE_PREFIX + json.dumps({'stage': 'prepare', **probe_failure(error, 'prepare')})
+    result = probe_record(frame)
+    assert result == {'ok': False, 'stage': 'prepare', 'errorType': name, 'reason': reason}
+    assert 'secret' not in frame
+    assert 'reason' not in probe_failure(error, 'cleanup')

@@ -6,6 +6,7 @@ an isolated generation. Checks never create or modify an environment.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -70,7 +71,7 @@ def package_name(value):
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
-def installed_sources(project):
+def installed_sources(project, *, graph=None):
     """Read worker metadata without importing modules or executing its Python.
 
     The lock cannot describe modules installed later by Foundation. Conversely a
@@ -79,7 +80,7 @@ def installed_sources(project):
     """
     from .runtime_qualification import installed_graph
     result = {}
-    for record in installed_graph(project):
+    for record in installed_graph(project) if graph is None else graph:
         name = record['name']
         if not name.startswith('amplifier-'):
             continue
@@ -101,7 +102,7 @@ def installed_sources(project):
     return result
 
 
-def inventory(home):
+def inventory(home, *, installed=None):
     from .updates import active_release, safe_label, pinned
     generation = active_release(home).get('current')
     project = project_path(home, generation)
@@ -125,7 +126,7 @@ def inventory(home):
                           'ref': policy.get('ref') or next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '') or source.get('branch') or source.get('rev') or '',
                           'current': resolved.fragment, 'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
                           'provenance': 'worker resolution lock'}
-    for name, source in installed_sources(project).items():
+    for name, source in (installed_sources(project) if installed is None else installed).items():
         resolved = locked.get(name)
         policy = recorded_policies.get(name)
         if (policy and resolved and source.get('current') == resolved.fragment
@@ -151,6 +152,68 @@ def inventory(home):
                      'eligible': eligible, 'usage': 'configured',
                      'usageEvidence': ['Conversation worker environment', source['provenance']]})
     return rows
+
+
+class ProtectedRuntimeSource(ValueError):
+    """A fixed reason and package name, never source paths or exception text."""
+    def __init__(self, package, reason='protected-runtime-source'):
+        super().__init__('A worker dependency has protected changes; preserve its source configuration before updating.')
+        self.diagnostic_facts = {'errorType': 'ValueError', 'reason': reason, 'package': package}
+
+
+async def update_inventory(home):
+    """Legacy update policy is separate from immutable qualification evidence.
+
+    Pre-0.20 workers may have generated-only changes in editable module caches.
+    Recognize those using the same read-only classifier as bundle staging. A
+    fresh worker resolves the recorded Git source into its own generation; no
+    active cache, editable path, fingerprint or old receipt is rewritten.
+    """
+    from .updates import active_release, cache_changes, foundation_home
+    from .runtime_qualification import installed_graph
+    generation = active_release(home).get('current')
+    receipt = receipt_directory(home, generation)
+    project = project_path(home, generation)
+    graph = await asyncio.to_thread(installed_graph, project)
+    policy = installed_sources(project, graph=graph)
+    # Frozen generations retain their exact graph rules, including bytecode.
+    if not (receipt / 'runtime-installed.json').exists():
+        roots = [foundation_home(home) / 'cache']
+        if generation:
+            roots.append(receipt / 'shared-config/cache')
+        else:
+            from .session_files import amplifier_home
+            roots.append(amplifier_home() / 'cache')
+        checked = {}
+        for record in graph:
+            cached = record.get('cacheSource')
+            if not cached or not cached['dirty'] or record['name'] not in policy:
+                continue
+            root = Path(record['path'])
+            for _ in Path(cached['subdirectory']).parts:
+                root = root.parent
+            # A metadata file alone must not make an external local override
+            # disposable. Only check managed caches, never symlink escapes.
+            managed = any(root.is_relative_to(base.resolve()) and not base.is_symlink()
+                          and not any(path.is_symlink() for path in (root, *root.parents)
+                                      if path.is_relative_to(base.resolve())) for base in roots)
+            if not managed:
+                continue
+            if root not in checked:
+                checked[root] = await cache_changes(root)
+            protected, artifacts = checked[root]
+            if not protected and artifacts:
+                policy[record['name']].pop('override', None)
+        # Bind the classification to the exact source identity/content we read.
+        # stage() calls this again, so edits after Check now are also protected.
+        if checked and await asyncio.to_thread(installed_graph, project) != graph:
+            raise ProtectedRuntimeSource('', 'runtime-source-changed')
+    return inventory(home, installed=policy)
+
+
+async def update_manifest(home):
+    observed = await update_inventory(home)
+    return observed, augmented_manifest(manifest_path().read_bytes(), observed)
 
 
 def toml_value(value):
@@ -180,14 +243,14 @@ def augmented_manifest(content, rows):
             continue
         name = row['package']
         if row.get('override') and (name in declared or row.get('cacheManaged')):
-            raise ValueError('A declared worker dependency has an installed local or registry override; preserve its source configuration before updating.')
+            raise ProtectedRuntimeSource(name)
         if row.get('override') or not row.get('url') or not row.get('ref'):
             continue
         if name in declared:
             source = sources[declared[name]]
             # Preserve a concrete installed override rather than silently
             # replacing it with the app's default repository/branch.
-            if row.get('provenance') == 'installed Git distribution' and (
+            if row.get('provenance') in {'installed Git distribution', 'installed Foundation cache module'} and (
                 source.get('git') != row['url'] or (source.get('branch') or source.get('rev')) != row['ref']
                 or source.get('subdirectory', '') != row.get('subdirectory', '')
             ):
@@ -234,8 +297,10 @@ async def stage(manager, generation, candidates, *, finalize=True):
         shutil.copy2(current / 'pyproject.toml', previous_receipt.with_name('runtime.toml'))
         shutil.copy2(current / 'uv.lock', previous_receipt)
     receipt = receipt_directory(manager.home, generation) / 'runtime.lock'
-    observed = inventory(manager.home) if not receipt.exists() else []
-    content = manifest_content(manager.home, generation) if receipt.exists() else augmented_manifest(manifest_path().read_bytes(), observed)
+    if receipt.exists():
+        observed, content = [], manifest_content(manager.home, generation)
+    else:
+        observed, content = await manager.diagnostics.run('ecosystem-runtime-preflight', update_manifest, manager.home)
     project = prepare_project(manager.home, generation, content=content)
     baseline = receipt if receipt.exists() else previous_receipt if previous_receipt.exists() else current / 'uv.lock'
     if baseline.exists():
