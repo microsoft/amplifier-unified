@@ -14,14 +14,14 @@ export const settingsSections=[
  {id:'advanced',title:'Advanced',group:'Application',scope:'Scope selected below',pages:[['ready-conversations','Readiness'],['registries','Module & source registries'],['permissions','File access'],['automation','Terminal & automation'],['install-app','Install app'],['runtime','Session controls']]},
 ];
 const legacySections={setup:['overview','appearance','voice','providers','routing','defaults','conversation','install-app','runtime'],capabilities:['smart-tools','app-bundles','add-bundles','loaded-modules','registries','share-bundle'],maintenance:['ready-conversations','updates','diagnostics','history','permissions','notifications','automation','repair','reset']};
-const knownPages=new Set(settingsSections.flatMap(section=>section.pages.map(([page])=>page)));
-export function settingsLocation(view={}){
- const page=view.panel==='appearance'?'appearance':view.settingsExpanded?.find?.(page=>knownPages.has(page))||({capabilities:'app-bundles',maintenance:'updates'})[view.settingsSection]||'overview';
- return {page,section:settingsSections.find(section=>section.pages.some(([key])=>key===page))};
+export function settingsLocation(view={},sections=settingsSections){
+ const pages=new Set(sections.flatMap(section=>section.pages.map(([page])=>page)));
+ const page=view.panel==='appearance'?'appearance':view.settingsExpanded?.find?.(page=>pages.has(page))||({capabilities:'app-bundles',maintenance:'updates'})[view.settingsSection]||'overview';
+ return {page,section:sections.find(section=>section.pages.some(([key])=>key===page))};
 }
-export function settingsPatch(page){
- if(!knownPages.has(page))throw new Error('Unknown settings page');
- return {panel:'settings',settingsSection:Object.keys(legacySections).find(key=>legacySections[key].includes(page)),settingsExpanded:[page]};
+export function settingsPatch(page,sections=settingsSections){
+ if(!sections.some(section=>section.pages.some(([id])=>id===page)))throw new Error('Unknown settings page');
+ return {panel:'settings',settingsSection:Object.keys(legacySections).find(key=>legacySections[key].includes(page))||'setup',settingsExpanded:[page]};
 }
 export function settingsUnread(state,section){
  return section.pages.reduce((sum,[page])=>sum+(state.attention?.pages?.[page]||0),0);

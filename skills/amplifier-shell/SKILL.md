@@ -18,7 +18,9 @@ delivered by a behavior so agents can learn the shell's separate extension API.
 2. Request current action schemas using `app_control(operation="list_actions",
    args={"prefix":"shell."})` and, for artifact views,
    `args={"prefix":"canvas.views."}`.
-   Inspect the relevant shell or view before preparing a change. Discover
+   Inspect the relevant shell or view before preparing a change. For shell
+   components, use the returned `slots`, `registry`, `resolvedInstances` and
+   `componentCommands`; only author against contracts that host exposes. Discover
    theme actions separately when a CSS skin is requested.
 3. If working outside an app session, use the host's authenticated
    `GET /api/actions` and `POST /api/actions` interfaces through the user's
