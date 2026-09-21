@@ -29,14 +29,15 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
     declaration = {'module': 'tool-filesystem' if writer == 'filesystem' else 'tool-apply-patch',
                    'config': {'denied_write_paths': ['private'],
                               **({} if writer == 'filesystem' else {'engine': writer})}}
-    bundle = SimpleNamespace(tools=[] if child else [declaration],
+    from amplifier_foundation import Bundle
+    bundle = Bundle(name='writer-policy-fixture', tools=[] if child else [declaration],
         agents={'worker': {'tools': [declaration]}} if child else {},
         version=SNAPSHOT_VERSION if snapshot else '1.0.0', providers=[], session={},
         hooks=[{'module': 'hook-context-intelligence'}])
     shared = {'allowed_write_paths': [str(extra)], 'denied_write_paths': ['shared-private', str(extra / 'absolute-private')]}
     settings = ({'overrides': {'tool-filesystem': {'config': shared}}} if section == 'overrides'
                 else {section: {'tools': [{'module': 'tool-filesystem', 'config': shared}]}})
-    config = SimpleNamespace(workspace=history, settings=settings, app_bundles=[], providers=[])
+    config = SimpleNamespace(workspace=history, settings=settings, app_bundles=[], providers=[], module_sources={})
     await compose_configured_bundle(None, bundle, config,
         execution_workspace=workspace if execution_checkout else None)
     assert config.workspace == history
