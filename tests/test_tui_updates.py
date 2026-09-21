@@ -38,19 +38,45 @@ async def test_update_stages_and_replaces_the_same_optional_install(tmp_path, mo
         await service.close()
 
 
-async def test_changed_extras_require_revalidation_before_closing_work(tmp_path, monkeypatch):
+@pytest.mark.parametrize('previous,current', [([], ['tui']), (['tui'], [])])
+async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, monkeypatch, previous, current):
     service, manager, _ = await prepared_activation(tmp_path, monkeypatch)
-    monkeypatch.setattr(app_updates, 'installed_extras', lambda: ['tui'])
+    service.state['updates']['application'] = service.state['updates']['pendingApp']
+    marker = manager.directory / 'applications' / ('a' * 40) / 'validated.json'
+    marker.write_text(json.dumps({**json.loads(marker.read_text()), 'extras': previous}))
+    monkeypatch.setattr(app_updates, 'installed_extras', lambda: current)
     process = AsyncMock()
-    close = AsyncMock()
+    close = AsyncMock(return_value=None)
     monkeypatch.setattr(app_updates, 'process', process)
     monkeypatch.setattr(service.runtime, 'close', close)
     try:
         with pytest.raises(ValueError, match='Optional clients changed'):
-            await app_updates.activate(manager)
+            await manager.app()
         process.assert_not_awaited()
         close.assert_not_awaited()
-        assert service.state['updates']['phase'] != 'activating'
+        assert service.state['updates']['phase'] == 'error'
+        assert service.state['updates']['pendingApp'] is None
+        assert service.state['updates']['appAvailable']
+        assert 'Install the update again' in service.state['updates']['detail']
+        calls = []
+
+        async def install(*args, **kwargs):
+            calls.append(args)
+            return '99.0.0' if '-c' in args else ''
+
+        monkeypatch.setattr(app_updates, 'process', install)
+        monkeypatch.setattr(app_updates.shutil, 'which', lambda _: '/fixture/uv')
+        monkeypatch.setattr('amplifier_web.deployment_service.current_process_is_unit_managed', lambda _: True)
+        monkeypatch.setattr(manager, 'busy', lambda: True)
+        await manager.app()
+        assert json.loads(marker.read_text())['extras'] == current
+        assert service.state['updates']['pendingApp']
+        assert len(calls) == 2  # Candidate install and probe only; work stays open.
+        close.assert_not_awaited()
+        monkeypatch.setattr(manager, 'busy', lambda: False)
+        await manager.app()
+        close.assert_awaited_once()
+        assert service.state['updates']['pendingRestart']['version'] == '99.0.0'
     finally:
         await service.close()
 

@@ -213,7 +213,13 @@ async def _activate(manager):
         raise ValueError('The pending release does not match its validated package')
     extras=validated.get('extras',[])
     if extras not in ([],['tui']) or extras!=installed_extras():
-        raise ValueError('Optional clients changed after validation; stage the release again before updating')
+        message='Optional clients changed after validation. Install the update again to validate the current selection.'
+        manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
+        manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
+        # Removing the pending pointer lets the normal install command stage a
+        # fresh candidate. Keep its receipt on disk for diagnosis, never reuse it.
+        await manager.publish(phase='error',pendingApp=None,appAvailable=True,error=message,detail=message)
+        raise ValueError(message)
     async with manager.service.lock:
         if manager.busy():return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
