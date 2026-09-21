@@ -228,9 +228,8 @@ class NativeHistory:
             native = self._native_metadata(directory, issues, slug)
             capture = self._read(directory / 'context-intelligence' / 'metadata.json', issues, slug, directory.name)
             naming = self._read(directory / 'naming.json', issues, slug, directory.name)
-            meta = {**capture, **native}
-            meta.update({key: value for key, value in naming.items()
-                         if key in {'name', 'description', 'name_source'}})
+            meta = {**capture, **({key: value for key, value in naming.items()
+                        if key in {'name', 'description', 'name_source'}} if not native.get('name') else {}), **native}
             for source in (native, capture):
                 candidate = self._working_dir(source, slug)
                 if candidate:

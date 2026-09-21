@@ -21,7 +21,7 @@ try{
  await draft.fill('Keep this draft');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(access).toBeVisible();await expect(takeover).toBeEnabled();
- await expect(draft).toHaveValue('Keep this draft');
+ await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  await expect(draft).toBeDisabled();await expect(fields).toHaveAttribute('inert','');
  await expect(page.getByText('Saved history stays readable.',{exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-alert.a-ownership').count(),0,'no separate top ownership banner');
@@ -42,7 +42,7 @@ try{
   const clipboardData=new DataTransfer();clipboardData.items.add(new File(['content'],'blocked.txt',{type:'text/plain'}));clipboardData.setData('text/plain','Must not replace the draft');
   form.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData}));
  });
- await expect(draft).toHaveValue('Keep this draft');
+ await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  assert.equal((await stats()).sends,before.sends,'form submission is also guarded');
  const visibleControls=await page.evaluate(()=>window.amplifier.getState().renderedView.controls);
  assert.equal(visibleControls.find(control=>control.label==='Message Amplifier').disabled,true,'agent view reflects the disabled composer');
@@ -55,12 +55,12 @@ try{
  await takeover.click();
  await expect(access).toHaveAttribute('aria-busy','true');
  await expect(access.locator('strong')).toHaveText('Taking over…');
- await expect(draft).toBeDisabled();await expect(draft).toHaveValue('Keep this draft');
+ await expect(draft).toBeDisabled();await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  await expect.poll(async()=>(await stats()).takeovers).toBe(1);
  await finish();
  await expect(access).toHaveCount(0);await expect(draft).toBeEnabled();await expect(draft).toBeFocused();
- await expect(draft).toHaveValue('Keep this draft');
- await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
+ await page.getByRole('button',{name:'Retry',exact:true}).click();
  await page.getByText('Continued successfully.',{exact:true}).waitFor();
  await draft.fill('Keep this too');
  await configure({result:'error'});

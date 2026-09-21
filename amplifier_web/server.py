@@ -12,6 +12,7 @@ from . import __version__
 from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
+from .runtime import RuntimeOperationPending
 from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
@@ -42,6 +43,11 @@ async def boundaries(request, handler):
     except web.HTTPException as exc:
         _set_response_headers(exc, request.path)
         raise
+    except RuntimeOperationPending as exc:
+        payload = {'error': str(exc), 'code': 'runtime_pending'}
+        if exc.operation == 'send':
+            payload['delivery'] = 'unknown'
+        return _set_response_headers(web.json_response(payload, status=504), request.path)
     except AppError as exc:
         payload = {"error": str(exc), "accepted": False}
         if exc.code:
@@ -90,6 +96,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .management import Management
     service.management = Management(service)
     service.history.start()
+    service.event_log_view.start()
     if preload_providers:
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
@@ -119,7 +126,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         from .browser_detail import page, read_text
         session = service._session(request.query.get('sessionId'))
         if 'field' in request.query:
-            return web.json_response(read_text(session, request.query))
+            return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before')))
 
     async def conversation_export(request):
@@ -182,6 +189,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             await service._flush_pending_progress()
             queue = service.subscribe()
             snapshot = service.browser_state()
+            selected = next((row for row in snapshot['sessions'] if row['id'] == snapshot.get('selectedSessionId')), None)
+            if selected and selected.get('nativeProject'):
+                # Reconnecting restores a client's selection without dispatching
+                # session.select. Load its display history without warming or
+                # starting a runtime, while the initial snapshot paints promptly.
+                service._task(service.history.refresh_session(selected['id']))
             while True:
                 if "shellClientId" in snapshot:
                     await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())

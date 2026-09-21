@@ -27,7 +27,8 @@ try{
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const api=(path,body)=>page.evaluate(async([path,body])=>{
-  const response=await fetch(path,body===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const headers={'X-Amplifier-Client':window.amplifier.getState().client.id};
+  const response=await fetch(path,body===undefined?{headers}:{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!response.ok)throw Error(await response.text());return response.json();
  },[path,body]);
  const info=()=>api('/api/fixture/info');
@@ -50,7 +51,7 @@ try{
  assert.equal((await state()).chatNavigation.total,203);
  assert.equal(await rows().count(),100);
  assert.equal(await page.getByRole('button',{name:'Workspaces',exact:true}).getAttribute('aria-pressed'),'true');
- assert.equal(await page.locator('.a-workspace-explorer').isVisible(),true);
+ assert.equal(await page.locator('.a-workspace-explorer').count(),0);
 
  // Scope changes are keyboard accessible and leave the conversation untouched.
  await page.getByRole('button',{name:'All chats',exact:true}).focus();await page.keyboard.press('Enter');await waitScope('all');
@@ -62,7 +63,7 @@ try{
  assert.equal(current.chatNavigation.items[0].title,'Beta 002');
  assert.equal(await page.getByRole('button',{name:'All chats',exact:true}).getAttribute('aria-pressed'),'true');
  assert.equal(await page.locator('.a-workspace-explorer:visible').count(),0);
- for(const path of [paths.one,paths.two])assert.ok((await page.locator('.a-nav-chat-workspace').allTextContents()).includes(path),'full workspace paths distinguish repeated leaf names');
+ for(const path of [paths.one,paths.two])assert.ok((await page.locator('.a-nav-chat-workspace').evaluateAll(rows=>rows.map(row=>row.title))).includes(path),'full workspace paths remain available with compact distinguishing labels');
  assert.equal(current.chatNavigation.items.some(chat=>chat.title==='Hidden worker'||chat.title==='Deleted workspace chat'),false);
  assert.deepEqual((await info()).runtimeStarts,[]);
  assert.deepEqual((await info()).runtimeSends,[]);
@@ -76,11 +77,13 @@ try{
  await page.getByRole('button',{name:'Show more conversations'}).click();await waitPage(1);assert.equal(await rows().count(),100);
  await page.getByRole('button',{name:'Show more conversations'}).click();await waitPage(2);assert.equal(await rows().count(),6);
  assert.equal((await state()).selectedSessionId,initial);
- await row(quiet).hover();
- await row(quiet).getByRole('button',{name:'Pin Quiet older chat',exact:true}).click();
+ await row(quiet).getByRole('button',{name:/Details and actions/}).click();
+ await page.locator('.a-navigation-flyout').getByRole('button',{name:'Pin Quiet older chat',exact:true}).click();
  await page.waitForFunction(id=>window.amplifier.getState().pinnedSessionIds.includes(id),quiet);await waitPage(0);
  assert.equal((await ids())[0],quiet);
- assert.equal(await row(quiet).getByRole('button',{name:'Unpin Quiet older chat',exact:true}).getAttribute('aria-pressed'),'true');
+ await row(quiet).getByRole('button',{name:/Details and actions/}).click();
+ assert.equal(await page.locator('.a-navigation-flyout').getByRole('button',{name:'Unpin Quiet older chat',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.getByRole('button',{name:'Close details',exact:true}).click();
  assert.equal((await state()).selectedSessionId,initial);
 
  // Search includes full paths and fnmatch wildcards, irrespective of folder browsing.
@@ -150,8 +153,10 @@ try{
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),'document stays inside narrow viewport');
  const overflow=await rows().evaluateAll(elements=>elements.filter(element=>element.scrollWidth>element.clientWidth+1).length);
- assert.equal(overflow,0,'chat paths wrap without horizontal row overflow');
- assert.ok(await row(beta.id).getByRole('button',{name:'Unpin Beta latest renamed',exact:true}).isVisible());
+ assert.equal(overflow,0,'chat labels truncate without horizontal row overflow');
+ await row(beta.id).getByRole('button',{name:/Details and actions/}).click();
+ assert.ok(await page.locator('.a-navigation-flyout').getByRole('button',{name:'Unpin Beta latest renamed',exact:true}).isVisible());
+ await page.getByRole('button',{name:'Close details',exact:true}).click();
  await page.screenshot({path:'/tmp/chat-library-views-narrow.png'});
  await page.setViewportSize({width:1280,height:900});
 
@@ -165,12 +170,13 @@ try{
  // The All view retains an explicit workspace target for new chats.
  await row(beta.id).locator('.a-nav-chat-select').click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,beta.id);
- const newChat=page.getByRole('button',{name:'New chat in workspace',exact:true});
- assert.ok((await newChat.getAttribute('title')).includes(paths.two));
+ const newChat=page.getByRole('button',{name:'New chat',exact:true});
+ assert.equal(await newChat.getAttribute('title'),'New chat');
  await newChat.click();
- await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId!==id,beta.id);
+ await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId===null&&window.amplifier.getShellState()?.snapshots?.chats?.selectedSessionId===null);
  current=await state();
- assert.equal(current.sessions.find(chat=>chat.id===current.selectedSessionId).workspace,paths.two);
+ assert.equal(current.selectedSessionId,null);
+ assert.equal(current.view.newSessionDraft.workspace,paths.two);
  assert.equal(current.view.navChatScope,'all');
  assert.deepEqual((await info()).runtimeSends,[quiet]);
 
@@ -178,7 +184,7 @@ try{
   await agent('view.update',{patch:{navChatScope:'all'}});await waitScope('all');
   beta=(await state()).chatNavigation.items.find(chat=>chat.title==='Beta 002');
  }
- const touchTitle=beta.title;
+ const touchTitle=(await state()).sessions.find(chat=>chat.id===beta.id).title;
  // A saved custom skin is injected after new base CSS. Its hidden
  // actions/nowrap rules must not make the new controls inaccessible on touch.
  const legacyCss=await readFile(new URL('../../tests/fixtures/legacy_theme.css',import.meta.url),'utf8');
@@ -197,17 +203,22 @@ try{
   assert.notEqual(selectedBefore,beta.id);
   assert.equal(await touchPage.evaluate(()=>window.amplifier.getState().theme.css),legacyCss,'saved theme is retained unchanged');
   const touchRow=touchPage.locator(`.a-nav-chat[data-session-id="${beta.id}"]`);
-  const pin=touchRow.getByRole('button',{name:'Pin '+touchTitle,exact:true});
+  const more=touchRow.getByRole('button',{name:/Details and actions/});
+  assert.equal(await more.isVisible(),true);await more.tap();
+  const pin=touchPage.locator('.a-navigation-flyout').getByRole('button',{name:'Pin '+touchTitle,exact:true});
+  await pin.waitFor();
   assert.equal(await pin.isVisible(),true,'an unselected/unpinned row exposes Pin on touch, despite the saved old skin');
   assert.ok(['flex','inline-flex'].includes(await pin.evaluate(element=>getComputedStyle(element).display)));
   const path=touchRow.locator('.a-nav-chat-workspace');
-  assert.equal(await path.innerText(),paths.two);
-  assert.equal(await path.evaluate(element=>getComputedStyle(element).whiteSpace),'normal');
+  assert.equal(await path.getAttribute('title'),paths.two);
+  assert.ok((await touchPage.locator('.a-navigation-flyout').innerText()).includes(paths.two));
+  assert.equal(await path.evaluate(element=>getComputedStyle(element).whiteSpace),'nowrap');
   assert.equal(await touchRow.evaluate(element=>element.scrollWidth>element.clientWidth+1),false);
   await pin.tap();
   await touchPage.waitForFunction(id=>window.amplifier.getState().pinnedSessionIds.includes(id),beta.id);
   assert.equal(await touchPage.evaluate(()=>window.amplifier.getState().selectedSessionId),selectedBefore,'pinning an unselected chat does not select it');
-  assert.ok(await touchRow.getByRole('button',{name:'Unpin '+touchTitle,exact:true}).isVisible());
+  await touchRow.getByRole('button',{name:/Details and actions/}).tap();
+  await touchPage.locator('.a-navigation-flyout').getByRole('button',{name:'Unpin '+touchTitle,exact:true}).waitFor();
   assert.ok(await touchPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight));
   await touchPage.screenshot({path:'/tmp/chat-library-views-legacy-touch.png'});
  }catch(error){
@@ -215,7 +226,7 @@ try{
   throw error;
  }finally{await touchContext.close()}
  assert.deepEqual(errors,[]);
- console.log(legacyTouchOnly?'Saved custom skin real-touch checks passed: visible unselected-row Pin, wrapped full paths, tap without selecting, saved skin retained.':'Chat library browser checks passed: 206 roots, bounded pages, keyboard scope switch, full paths, fnmatch search, pins first, true activity recency, agent parity, real service restart pin/unpin persistence, narrow layout, correct new-chat workspace, real touch with saved custom skin, no provider calls.');
+ console.log(legacyTouchOnly?'Saved custom skin real-touch checks passed: visible unselected-row details and Pin, fixed rows and full-path flyouts, tap without selecting, saved skin retained.':'Chat library browser checks passed: 206 roots, bounded pages, keyboard scope switch, full paths, fnmatch search, pins first, true activity recency, agent parity, real service restart pin/unpin persistence, narrow layout, correct new-chat workspace, real touch with saved custom skin, no provider calls.');
 }catch(error){
  await page?.screenshot({path:'/tmp/chat-library-views-failure.png'}).catch(()=>{});
  if(fixtureLog)console.error(fixtureLog);

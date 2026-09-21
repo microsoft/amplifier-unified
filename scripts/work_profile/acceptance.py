@@ -23,12 +23,12 @@ import uuid
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-WORK_BUNDLE = "git+https://github.com/bkrabach/amplifier-bundle-work@e87f692a34c43debe445b644dfc74e695d00c9d5#subdirectory=bundle.md"
+WORK_BUNDLE = "git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md"
 PROVIDER_SOURCES = {
-    "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@c9b0e8e60702269c7a637875b89d011facfde020",
-    "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@12fffb6ad2bafb1bb7999ab02245a35e42ca8672",
+    "provider-openai": "git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+    "provider-anthropic": "git+https://github.com/microsoft/amplifier-module-provider-anthropic@main",
 }
-SIMPLE_SOURCE = "git+https://github.com/microsoft/amplifier-module-context-simple@2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6"
+SIMPLE_SOURCE = "git+https://github.com/microsoft/amplifier-module-context-simple@main"
 
 
 def private_json(path, value):

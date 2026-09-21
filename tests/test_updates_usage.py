@@ -32,7 +32,9 @@ async def test_source_classification_leaves_event_loop_free_and_uses_detached_se
     entered, release = threading.Event(), threading.Event()
     before = service.state['settings']['bundle']
     service.state['sessions'].append({'id': 'original', 'workspace': '/original', 'bundle': 'original'})
-    service.state['workspaces'].append({'path': '/original'})
+    service.state['workspaces'].append(
+        {'nativeProject': 'original', 'path': '/original', 'available': True}
+    )
     captured = {}
     def classify(snapshot):
         entered.set()
@@ -46,13 +48,17 @@ async def test_source_classification_leaves_event_loop_free_and_uses_detached_se
         assert await asyncio.to_thread(entered.wait, 2)
         service.state['settings']['bundle'] = 'changed'
         service.state['sessions'][-1]['bundle'] = 'changed'
+        service.state['workspaces'][-1]['nativeProject'] = 'changed'
         service.state['workspaces'][-1]['path'] = '/changed'
+        service.state['workspaces'][-1]['available'] = False
     finally:
         release.set()
         await pending
     assert captured['settings']['bundle'] == before
     assert captured['sessions'][-1]['bundle'] == 'original'
+    assert captured['workspaces'][-1]['nativeProject'] == 'original'
     assert captured['workspaces'][-1]['path'] == '/original'
+    assert captured['workspaces'][-1]['available'] is True
 
 
 @pytest.mark.parametrize('identity_field', ['runtimeSessionId', 'nativeIdentity', 'id'])
@@ -95,26 +101,50 @@ async def test_usage_reads_shared_scopes_and_actual_runtime_session(
     assert before == {p: p.read_bytes() for p in watched}
 
 
-async def test_retained_missing_workspaces_and_sessions_do_not_raise_usage_warning(
+async def test_pathless_native_workspace_placeholders_do_not_raise_usage_warning(
     repository, service, tmp_path,
 ):
-    root = cached(service, repository, 'historical')
-    missing = tmp_path/'unavailable'
-    service.state['workspaces'].append({'id': 'missing', 'path': str(missing), 'available': False})
+    workspace = tmp_path/'configured-workspace'
+    workspace.mkdir()
+    settings = workspace/'.amplifier/settings.yaml'
+    settings.parent.mkdir()
+    settings.write_text('bundle:\n  active: git+https://example.invalid/configured@main\n')
+    configured = cached(service, repository, 'configured')
+    historical = cached(service, repository, 'historical')
     service.state['workspaces'].extend([
-        {'id': 'unknown-native-project', 'path': None, 'available': False},
-        {'id': 'unresolved-native-project', 'available': False},
-        {'id': 'empty-native-project', 'path': '', 'available': False},
+        {'id': 'configured', 'path': str(workspace), 'available': True},
+        {'id': 'unknown-native-project', 'nativeProject': 'unknown-native-project',
+         'path': None, 'available': False},
+        {'id': 'unresolved-native-project', 'nativeProject': 'unresolved-native-project',
+         'path': None, 'available': False},
     ])
-    service.state['sessions'].append({'id': 'old-session', 'workspace': str(missing), 'bundle': 'old-alias'})
     before = copy.deepcopy(service.state)
     _, incomplete = configured_sources(service)
     assert not incomplete
-    rows = await service.update_manager.inventory_sources()
-    assert len(rows) == 1
-    assert rows[0]['usage'] == 'unknown' and rows[0]['eligible']
+    rows = {row['label'].split('/')[-1]: row for row in await service.update_manager.inventory_sources()}
+    assert 'Source configuration' not in rows
+    assert rows['configured']['usage'] == 'configured' and rows['configured']['eligible']
+    assert rows['historical']['usage'] == 'unknown' and rows['historical']['eligible']
     assert service.state == before
-    assert root.is_dir() and not missing.exists()
+    assert configured.is_dir() and historical.is_dir()
+
+
+@pytest.mark.parametrize('workspace', [
+    {'id': 'missing-path', 'available': False},
+    {'id': 'pathless-non-native', 'path': None, 'available': False},
+    {'id': 'available-pathless', 'path': None, 'available': True},
+    {'id': 'empty-path', 'path': '', 'available': False},
+])
+async def test_only_pathless_unavailable_native_workspace_sentinel_skips_source_configuration_warning(
+    repository, service, workspace,
+):
+    cached(service, repository, 'historical')
+    service.state['workspaces'].append(workspace)
+    _, incomplete = configured_sources(service)
+    assert incomplete
+    rows = {row['label'].split('/')[-1]: row for row in await service.update_manager.inventory_sources()}
+    assert rows['Source configuration']['status'] == 'check_failed'
+    assert rows['historical']['usage'] == 'unknown' and rows['historical']['eligible']
 
 
 async def test_returned_workspace_uses_filesystem_availability(repository, service, tmp_path):
@@ -171,9 +201,41 @@ async def test_cli_local_bundles_resolve_for_inventory_and_preparation(
     assert path.read_bytes() == before
 
 
-def test_unresolved_local_name_still_reports_incomplete_configuration(service, tmp_path):
+async def test_unresolved_local_name_still_reports_source_configuration_warning(
+    repository, service, tmp_path,
+):
     workspace = tmp_path/'workspace'
     workspace.mkdir()
     service.state['settings'].update(workspace=str(workspace), bundle='missing-lane')
+    cached(service, repository, 'historical')
     _, incomplete = configured_sources(service)
     assert incomplete
+    rows = {row['label'].split('/')[-1]: row for row in await service.update_manager.inventory_sources()}
+    assert rows['Source configuration']['status'] == 'check_failed'
+    assert rows['historical']['usage'] == 'unknown' and rows['historical']['eligible']
+
+
+async def test_configuration_warning_identifies_affected_source_and_session(service, tmp_path):
+    service.state['sessions'].append({'id':'broken-root','workspace':str(tmp_path),'bundle':'missing-work-bundle'})
+    rows=await service.update_manager.inventory_sources()
+    warning=next(row for row in rows if row['id']=='source-configuration')
+    issue=next(row for row in warning['sourceIssues'] if row.get('sessionId')=='broken-root')
+    assert issue['reference']=='missing-work-bundle'
+    assert issue['workspace']==str(tmp_path)
+    assert 'Choose an available bundle' in issue['reason']
+    assert not warning['eligible']
+
+
+async def test_old_unregistered_bundle_is_historical_until_selected(service, tmp_path):
+    source={'id':'old-app-id','runtimeSessionId':'old-runtime-id','workspace':str(tmp_path),'bundle':'converge-w4','historyManaged':True}
+    service.state['sessions'].append(source)
+    rows=await service.update_manager.inventory_sources()
+    assert not any(row['id']=='source-configuration' for row in rows)
+    history=next(row for row in rows if row['kind']=='history')
+    assert history['sourceIssues'][0]['appSessionId']=='old-app-id'
+    assert history['sourceIssues'][0]['sessionId']=='old-runtime-id'
+    assert history['status']=='historical' and not history['eligible']
+    assert source['bundle']=='converge-w4'
+    service.state['selectedSessionId']=source['id']
+    rows=await service.update_manager.inventory_sources()
+    assert any(row['id']=='source-configuration' for row in rows)

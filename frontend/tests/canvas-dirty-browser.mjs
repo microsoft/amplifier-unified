@@ -53,6 +53,9 @@ try {
  await page.getByRole('button',{name:'Close canvas panel'}).click();
  await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
  assert.equal((await state()).canvas.open,true);
+ await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+ await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
+ assert.equal((await state()).canvas.open,true,'Toolbar close uses the same dirty-edit guard');
  // A secondary edit must not prevent safe primary/chat navigation.
  await action('canvas.select',{id:otherArtifact.resourceId});
  await action('canvas.tabClose',{id:otherArtifact.resourceId});

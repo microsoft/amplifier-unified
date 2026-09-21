@@ -164,8 +164,11 @@ class ClientViews:
     def attachments(self, session):
         record = self.record()
         if record is None:
+            if session is None:
+                from .service import AppError
+                raise AppError('Attach a client to add files before starting a chat.')
             return session.setdefault("draftAttachments", [])
-        return record.setdefault("attachments", {}).setdefault(session["id"], [])
+        return record.setdefault("attachments", {}).setdefault(session["id"] if session else "", [])
 
     def project(self, snapshot):
         record = self.record()
@@ -180,6 +183,7 @@ class ClientViews:
                                        for row in snapshot.get("canvasArtifacts", [])]
         snapshot["client"] = {"id": self.current.get(), "kind": record["kind"], "protocolVersion": 1,
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
+        snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         snapshot["sessions"] = [dict(row) for row in snapshot.get("sessions", [])]
         for session in snapshot["sessions"]:
             session["draft"] = record.get("drafts", {}).get(session["id"], "")

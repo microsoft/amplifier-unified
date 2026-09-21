@@ -52,6 +52,7 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
     'instances': {'type': 'array', 'maxItems': 12, 'items': INSTANCE},
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
+        'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
         'density': {'enum': ['comfortable', 'compact']}, 'accent': {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'},
     }},
 }}
@@ -61,7 +62,7 @@ DEFAULT = {'instances': [
 ], 'presentation': {}}
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
-VIEW_KEYS = {'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -249,8 +250,9 @@ class ShellModules:
     def navigation(self, client, instance):
         from .chat_navigation import snapshot as chats
         from .workspace_navigation import snapshot as workspaces
+        from .attention import snapshot as attention
         state = self.service.state
-        scoped = self.scoped_state(client, instance)
+        scoped = {**self.scoped_state(client, instance), 'attention': attention(state)}
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
         chat_page = chats(scoped)
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
@@ -261,7 +263,7 @@ class ShellModules:
                 'chatNavigation': chat_page, 'workspaceExplorer': workspaces(scoped),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error']},
-                'attention': {'sessions': {row['id']: state.get('attention', {}).get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
+                'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {'locations.list': state.get('actionStatus', {}).get('locations.list')}}
 
@@ -348,6 +350,15 @@ class ShellModules:
             if not capability or capability not in self.manifest(instance['package'])['capabilities']:
                 fail('Module has not declared this capability.', 403)
             receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
+            if args['action'] in {'workspace.select', 'workspace.create'} and instance['package'] == 'builtin.workspaces':
+                client = self.client(identity)
+                composition = client['preview']['composition'] if client.get('preview') else client['composition']
+                target = instance.get('hideWhen', {}).get('instanceId')
+                if any(row['id'] == target and row['package'] == 'builtin.chats' for row in composition['instances']):
+                    item = client['views'].setdefault(target, {'view': {}, 'dirty': False})
+                    item['view'].update(navChatScope='workspace', navWorkspaceList=False, navFilter='', navStatusFilter='all')
+                    self.put('client', identity, client)
+                    self.notify(identity)
             if args['action'] == 'session.pin':
                 # Pinning intentionally reveals the pin in this list. Other
                 # lists retain their own current page and filter.

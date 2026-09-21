@@ -1,3 +1,4 @@
+import {openSettingsPage} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -12,8 +13,8 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await page.getByRole('button',{name:'Settings',exact:true}).click();
- await page.getByRole('button',{name:'Maintenance',exact:true}).click();
- await page.getByRole('button',{name:'Ready conversations Idle lifetime and background preparation',exact:true}).click();
+
+ await openSettingsPage(page,'ready-conversations');
  const count=page.getByLabel('Conversations to keep ready',{exact:true}),hours=page.getByLabel('Hours to keep an idle conversation ready',{exact:true});
  await expect(count).toHaveValue('32');await expect(hours).toHaveValue('12');
  await count.fill('100');await hours.fill('336');

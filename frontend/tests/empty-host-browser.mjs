@@ -20,7 +20,7 @@ try{
  const initial=await page.evaluate(()=>window.amplifier.getState());
  assert.equal(initial.sessions.length,0);
  assert.ok(!initial.selectedSessionId);
- await expect(page.getByRole('heading',{name:'What shall we work on?'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'New chat',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-message').count(),0);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeEditable();
@@ -41,25 +41,54 @@ try{
  assert.ok(!(await page.evaluate(()=>window.amplifier.getState())).selectedSessionId);
  // The first send creates its conversation. Hold its HTTP acknowledgement to
  // exercise the genuine pending-send state as well as the empty idle state.
- let release;
+ let release,releaseCreate,createSeen;
  const held=new Promise(resolve=>{release=resolve});
+ const creating=new Promise(resolve=>{createSeen=resolve});
+ const heldCreate=new Promise(resolve=>{releaseCreate=resolve});
+ let firstCreate=true;
  await page.route('**/api/actions',async route=>{
-  if(route.request().method()==='POST'&&route.request().postDataJSON()?.action==='conversation.send')await held;
+  const action=route.request().method()==='POST'&&route.request().postDataJSON()?.action;
+  if(action==='session.create'&&firstCreate){firstCreate=false;createSeen();await heldCreate;if(process.argv.includes('--lost-create')){await route.fetch();return route.fulfill({status:503,json:{error:'Creation acknowledgement lost'}})}if(process.argv.includes('--fail-create'))return route.fulfill({status:503,json:{error:'Synthetic creation failure'}})}
+  if(action==='conversation.send')await held;
   await route.continue();
  });
  await composer.fill('First input on an empty host');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('Sending message…',{exact:true})).toBeVisible();
- await expect(composer).not.toBeEditable();
- release();
- await page.getByText('Synthetic first response',{exact:true}).waitFor();
+ await expect(composer).toBeEditable();
  await expect(composer).toHaveValue('');
+ await creating;
+ await composer.fill('Next draft while the first delivery is pending');
+ // Exceed the debounce while creation is held; the draft must remain bound to
+ // this first conversation even if autosave becomes ready before its ID exists.
+ await page.waitForTimeout(350);
+ await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+ releaseCreate();
+ if(process.argv.includes('--fail-create')){
+  await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
+  await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+  await page.getByRole('button',{name:'Check delivery',exact:true}).click();
+ }
+ release();
+ if(process.argv.includes('--lost-create')){
+  await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId);
+  const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  await page.reload();await composer.waitFor();
+  const check=page.getByRole('button',{name:'Check delivery',exact:true});
+  if(await check.count())await check.click();
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),first);
+ }
+ await page.getByText('Synthetic first response',{exact:true}).waitFor();
+ await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  await expect(composer).toBeEditable();
  await expect(page.getByText('Sending message…',{exact:true})).toHaveCount(0);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  const sent=await (await page.request.get(url+'/fixture')).json();
  assert.equal(sent.sent.length,1);
  assert.equal(sent.sent[0].text,'First input on an empty host');
+ await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Next draft while the first delivery is pending');
+ await page.reload();
+ await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  await page.waitForFunction(()=>window.amplifier.getState().sessions.length===1&&window.amplifier.getState().selectedSessionId);
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('An unsent first-chat draft');
@@ -69,5 +98,5 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  assert.deepEqual(errors,[]);
- console.log('Empty host passed: debounced draft before any conversation, no validation errors, draft survives reload, first send creates one chat, pending send feedback, draft and selection after reload; synthetic runtime only.');
+ console.log('Empty host passed: debounced draft before any conversation, delayed creation '+(process.argv.includes('--fail-create')?'failure/retry':'success')+', next draft preserved, exactly one first delivery, draft and selection after reload; synthetic runtime only.');
 }finally{await browser?.close();fixture.kill();}

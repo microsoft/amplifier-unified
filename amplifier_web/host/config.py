@@ -16,8 +16,8 @@ from ..deployment import write_private
 from ..shared_settings import read_yaml, read_settings
 from ..session_files import amplifier_home
 
-FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@3796a32351d32a93ccbb5e230c9ffe02964db42e"
-WORK_SOURCE = "git+https://github.com/bkrabach/amplifier-bundle-work@ce0e297d9cb4fffc9f677cf81481d0ec3e623a18#subdirectory=bundle.md"
+FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@main"
+WORK_SOURCE = "git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md"
 _KEY_FILE_VALUES = {}
 
 

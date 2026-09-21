@@ -2,6 +2,212 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.13",
+      "title": "Keep delayed message delivery separate from stopped work",
+      "changes": [
+        "A delayed message acknowledgement no longer marks the conversation or its running work as failed. The saved message stays unconfirmed until delivery can be established.",
+        "A late acknowledgement updates the original message without resending it or restarting a finished turn. Genuine worker failures continue to report an error."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.12",
+      "title": "An optional terminal client for shared conversations",
+      "changes": [
+        "Install the optional terminal client and use amplifier-unified tui to join the same conversations as the web app. Each terminal keeps its own selection and draft while messages, results and pending decisions stay shared.",
+        "The terminal supports reconnecting, history browsing, rename, approvals, Stop and cooperative takeover. Closing it leaves work running on the service.",
+        "Automatic naming uses the shared session naming hook and preserves custom names, including against late generated results.",
+        "Application updates retain the optional terminal client. If the installed selection changes after validation, retrying the update validates it again without interrupting active work.",
+        "The terminal client is early access. Voice, uploads, rich canvas, full settings editing and queue/steer remain available through the web app."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.11",
+      "title": "Keep reconnected chats ready to send",
+      "changes": [
+        "Reconnected chats load their saved history automatically, so Send becomes available without switching away and back. Your unsent draft stays in place.",
+        "Saved history refresh follows the chats open in connected browsers. Reconnecting or reading history does not start a worker or replay previous work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.10",
+      "title": "Collapse every work section",
+      "changes": [
+        "Every Worked for or Working section can be expanded and collapsed, including sections with only a few actions.",
+        "Work sections use the same saved expansion controls at every size. Collapsing a section preserves its individual action choices and keeps interim replies in place."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.9",
+      "title": "Compact actions and inspectable model requests",
+      "changes": [
+        "Actions start as one-line summaries inside their chronological work groups. Expand a tool to inspect its input and result; brief worker containers add no extra disclosure.",
+        "Expand a model call for timing, usage, message and tool counts, and recorded request options. Large raw requests load from the existing event log only when requested; short requests appear directly.",
+        "Full request copy, retry, source-change checks and the 15-line/full or 10-line/preview behavior are preserved. Request bodies stay out of initial browser state and saved execution views."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.8",
+      "title": "Settings collections that keep the details within reach",
+      "changes": [
+        "Models, bundles and Smart Tools use compact lists with focused details. The whole row responds to hover and selection, while checkboxes stay independent.",
+        "Reorder provider preferences, routing choices and bundle composition in dedicated views. Neighboring rows move as you drag, a line shows where the item will land, and Save commits the draft. Buttons and keyboard controls provide the same choices.",
+        "Routing opens without waiting for provider discovery and shows one role and choice at a time. Model names and patterns remain editable; private model and schema caches last 24 hours and retain the last successful results during refresh.",
+        "Select multiple catalog tools across filters and pages, choose package extras, and install them together. Catalogs show all results through 50 items, then use pages of 40. Each installation records its outcome, and retry handles only unfinished items.",
+        "Existing settings, advanced configuration and shared agent actions remain available. Queued installation selections survive interruption without automatically replaying work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.7",
+      "title": "Set up your chat before it starts",
+      "changes": [
+        "New chat lives in the sidebar and opens a setup page. Choose the workspace, name, bundle and model before the first message; drafts and attachments survive reload without saving an empty chat.",
+        "Goals, modes and session controls are accessible beside the composer. The header holds chat details, the shared session ID and export controls.",
+        "The composer uses one Send/Stop button. It stops active work when the draft is empty and sends when text or attachments are present.",
+        "Canvas opens from an icon-only toolbar button. Unavailable older artifact sources no longer block the drawer, and their saved references remain intact for recovery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.6",
+      "title": "Work details from your event log",
+      "changes": [
+        "Expanded work reads recorded tool inputs and results from native event logs, without another redaction pass, new payload copies or the old Tool completed placeholder.",
+        "Work sections appear between assistant replies in their actual order. Brief groups stay open, and actions no longer have nested disclosure controls or duplicate raw input/results.",
+        "Code blocks show all content through 15 lines, then preview the first 10. Copy keeps the complete content, and unavailable reads offer retry.",
+        "Choose time only, time with tokens and cost, or those details with tool/model call counts in Appearance. Group totals include earlier action pages and count cache writes once.",
+        "Live timing and usage survive delayed log writes and reloads. Existing native logs and historical saved content remain intact."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.5",
+      "title": "Keep conversations ready after ecosystem updates",
+      "changes": [
+        "Ecosystem updates and rollbacks now retire old workers while keeping the runtime available for your next message.",
+        "If a message cannot reach its worker, the conversation shows an error instead of staying marked as working. Delivery remains unconfirmed and no work is automatically replayed."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.4",
+      "title": "Keep conversation names consistent across apps",
+      "changes": [
+        "Web-created conversations now store their names where the Amplifier CLI reads them. Existing web names are adopted when a shared name is missing.",
+        "Renames from either interface remain visible when switching back. Background naming and later saves preserve your explicit choice, without changing saved messages or event history.",
+        "Unified and the updated CLI use Foundation for shared metadata and settings. Native session settings are included when the CLI resumes a conversation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.3",
+      "title": "Canvas within reach",
+      "changes": [
+        "Open or close Canvas from a stable toggle at the far right of the top toolbar. Its active state follows the panel, and its icon follows the selected Canvas side.",
+        "Customize appearance, What the agent sees and Send feedback are grouped under More app options, with feedback attention indicators, keyboard navigation and focus return.",
+        "Narrow screens use accessible icon controls with touch targets. Saved artifacts, conversation drafts and unsaved Canvas edits retain the same shared user and agent protections."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.2",
+      "title": "Keep Work and its ecosystem current",
+      "changes": [
+        "Work and the bundled tools, context, live loop, skills and routing now follow their current branches instead of fixed commits.",
+        "Ecosystem checks include the conversation worker libraries. Updates prepare and validate a separate environment, then activate when work and calls are idle.",
+        "Rollback retains the installed dependency manifest and revisions, including after an app update or removal of a disposable runtime cache. New app dependency declarations appear as ecosystem updates."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.1",
+      "title": "See the actual work behind each action",
+      "changes": [
+        "Expand work to see commands and their output, exit codes, file contents and highlighted changes, task checklists, app actions, and delegated work.",
+        "Collapsed actions identify the command or file involved. Detailed timing, usage, call IDs, and original inputs and results remain available under Details, without repeated completion messages.",
+        "Streaming tool results are now retained correctly, including failures and empty output. Long saved content loads on expansion with retry and copy controls. Older steps whose content was never saved say so explicitly."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.0",
+      "title": "Shared canvas awareness and reliable editing",
+      "changes": [
+        "Agents receive small freshness notices for interactive surfaces when they next respond, including exact counts and pending edits. Ordinary drawing and control changes do not start model work.",
+        "Agents can selectively read current state, visible controls or drawing images. Images use the model's image format and remain separate from conversation text; unavailable or stale evidence is identified explicitly.",
+        "Generated surfaces can use a shared draft helper that saves completed edits before a question, retains failed saves and protects unfinished gestures. User and agent edits continue to share one tab and compatible state.",
+        "Drawing resize and tab changes preserve artwork. Older save acknowledgments cannot clear newer edits, and rendering errors remain visible until corrected. Chat drafts typed during first-conversation creation remain intact.",
+        "Saved conversation reconciliation avoids duplicated messages around steering, and context-limit failures preserve completed work with focused recovery guidance."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.18.0",
+      "title": "A complete, easier-to-navigate settings experience",
+      "changes": [
+        "Find every existing setting through a persistent sidebar, with separate Appearance, Voice, Notifications and Updates sections and focused pages for models, bundles, history and advanced controls.",
+        "Notifications retain server, private topic and access-token configuration. Smart Tools keeps catalog discovery, source installation, MCP connections, tool forms and interactive views.",
+        "Existing saved configuration, scoped defaults, generic bundle module editing and agent navigation remain compatible. Conversation diagnosis and safe recovery copies remain available from Current conversation. Unsaved private fields survive moving between settings sections while the dialog is open.",
+        "Notification refreshes and maintenance actions keep progress visible until completion. Mobile layouts, keyboard navigation, and shared or custom skins remain supported.",
+        "Sending clears the composer immediately and tracks pending delivery beside the message, with explicit retry or delivery checks. Message editing can continue in the current conversation or create a fork, preserving the original history."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.17.2",
+      "title": "Use the shared Amplifier CLI session ID",
+      "changes": [
+        "Chat flyouts show and copy one Session ID matching Amplifier CLI, including chats first created in the CLI. Internal app keys are no longer labeled as session IDs in the flyout.",
+        "Find chats by their shared session ID or its prefix. Conversation details use the same ID, and the flyout clarifies that CLI session lists belong to the shown workspace.",
+        "Existing session files, saved history, pins and selection are preserved.",
+        "This release also includes immediate message delivery feedback and editing within the current conversation, with an explicit option to start a new conversation instead."
+      ],
+      "notices": [
+        {
+          "id": "current-conversation-message-edits",
+          "title": "Message edits stay in the current conversation",
+          "detail": "Editing a sent message now revises the current conversation by default. Saved revision evidence is retained; external tool effects are not undone or replayed.",
+          "action": "Select Start a new conversation instead in the edit dialog when you want a separate conversation."
+        }
+      ]
+    },
+    {
+      "version": "0.17.1",
+      "title": "Work patch editing and clearer conversation recovery",
+      "changes": [
+        "Work includes contextual patch editing alongside existing file tools. Shared file-access choices apply to both, including older settings and delegated workers.",
+        "Agents receive clearer guidance for finding and reading other conversations and using the existing shared app, workspace, voice and permission controls.",
+        "Inspect a stopped conversation, copy its session ID or diagnostics, and create a recovery copy that preserves readable history without repeating work. The original conversation is kept.",
+        "Updates identify unresolved sources and workspaces. Unregistered bundles in older conversations are shown separately from current configuration problems.",
+        "Activity appears beside the action that is running. Dialogs support outside dismissal while preserving in-progress drafts and reporting failures."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.17.0",
+      "title": "Stable workspace and chat navigation",
+      "changes": [
+        "Workspace and chat rows keep a fixed height when hovered. Details and actions open in a flyout with full names, copyable paths, session IDs and last activity.",
+        "See working, attention and unread indicators directly in the list, and filter working conversations or those needing attention across the complete matching library.",
+        "Find workspaces through recent activity or browse nested folders, then open a workspace to give its chats the full sidebar. Duplicate folder names retain distinguishing parent paths.",
+        "Keyboard and touch controls, narrow screens and saved themes retain accessible details and actions. Browsing and opening details leave conversation selection, unread state and activity order unchanged.",
+        "Failed conversations can also be diagnosed and continued in a safe recovery copy, preserving the original history without replaying work."
+      ],
+      "notices": [
+        {
+          "id": "navigation-details-and-drill-in",
+          "title": "Navigation details and actions moved",
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
+        }
+      ]
+    },
+    {
       "version": "0.15.3",
       "title": "Conversation export, execution details and feedback follow-up",
       "changes": [
@@ -17,7 +223,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -36,7 +242,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

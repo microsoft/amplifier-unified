@@ -49,16 +49,66 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
+      - name: Resolve declared private runtime dependency
+        id: runtime-dependency
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - name: Check out loop-live with its dedicated read-only key
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime-dependency.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Verify typed surface context through Core and loop-live
+        run: |
+          mkdir -p "$RUNNER_TEMP/surface-runtime"
+          cp amplifier_web/runtime_deps/pyproject.toml "$RUNNER_TEMP/surface-runtime/pyproject.toml"
+          uv add --project "$RUNNER_TEMP/surface-runtime" --no-sync --editable "$GITHUB_WORKSPACE/.ci/loop-live"
+          uv sync --project "$RUNNER_TEMP/surface-runtime"
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
         run: |
           npx playwright install --with-deps chromium
           npm run test:empty-host-browser
+      - name: Verify draft-first chat setup and composer controls
+        working-directory: frontend
+        run: npm run test:new-chat-browser
+      - name: Restored composer readiness
+        working-directory: frontend
+        run: npm run test:composer-readiness-browser
+      - name: Verify live surface awareness and draft checkpoints
+        working-directory: frontend
+        run: npm run test:surface-context-browser
+      - name: Verify settings navigation and retained capabilities
+        working-directory: frontend
+        run: |
+          npm run test:settings-browser
+          npm run test:settings-completeness-browser
+          npm run test:settings-collections-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:review-during-send-browser
+      - name: Verify action content and execution detail loading
+        working-directory: frontend
+        run: |
+          npm run test:execution-browser
+          npm run test:execution-actions-browser
+      - name: Verify stable navigation and workspace drill-in
+        if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:navigation-browser
+      - name: Verify pending message delivery and editing
+        working-directory: frontend
+        run: npm run test:message-outbox-browser
+      - name: Verify canvas toolbar and app options
+        if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:toolbar-browser
       - name: Verify cached-source update reporting
         if: ${{ hashFiles('frontend/tests/cache-usage-browser.mjs') != '' }}
         working-directory: frontend
@@ -83,6 +133,17 @@ jobs:
       - name: Verify shared conversation surfaces and isolation
         working-directory: frontend
         run: npm run test:canvas-apps-browser
+      - name: Verify shared drawing, resize and save recovery
+        working-directory: frontend
+        run: npm run test:canvas-drawing-browser
+      - name: Verify conversation diagnosis and recovery
+        if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:session-health-browser
+      - name: Verify activity feedback and dismissal
+        if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:activity-feedback-browser
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}

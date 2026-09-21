@@ -148,7 +148,7 @@ async def test_github_boundary_uses_fixed_repo_structured_stdin_and_validates_ur
     monkeypatch.setattr(feedback.asyncio, "create_subprocess_exec", spawn)
     title = "Literal `whoami` $(echo anything)"
     assert await feedback.create_issue(title, "Body\nline two") == feedback.ISSUES_URL + "/12"
-    assert spawn.call_args.args == ("/fixture/gh", "api", "--hostname", "github.com", "--method", "POST", "repos/bkrabach/amplifier-unified/issues", "--input", "-")
+    assert spawn.call_args.args == ("/fixture/gh", "api", "--hostname", "github.com", "--method", "POST", "repos/microsoft/amplifier-unified/issues", "--input", "-")
     assert child.payload == {"title": title, "body": "Body\nline two"}
     child.communicate = AsyncMock(return_value=(b'{"html_url":"https://other.example/issue"}', b""))
     with pytest.raises(ValueError, match="invalid issue receipt"):

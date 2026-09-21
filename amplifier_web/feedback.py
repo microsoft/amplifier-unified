@@ -19,8 +19,10 @@ import time
 from . import __version__
 from . import attachments, feedback_attachments, feedback_diagnostics
 
-REPOSITORY = "bkrabach/amplifier-unified"
+REPOSITORY = "microsoft/amplifier-unified"
 ISSUES_URL = "https://github.com/" + REPOSITORY + "/issues"
+# Existing receipts keep their original repository and issue identity.
+RECEIPT_REPOSITORIES = (REPOSITORY, "bkrabach/amplifier-unified")
 CATEGORIES = {"bug": "Bug report", "idea": "Feature idea", "question": "Question", "other": "Other feedback"}
 UNKNOWN = "GitHub may have received this feedback. Check the repository issues before starting a new submission; this request will not be posted again."
 UNKNOWN_FILES = "Files may have been stored in the private repository, and an issue may have been created. Check the repository issues and attachment branch before starting a new submission; this request will not be posted again."
@@ -33,7 +35,7 @@ def definitions(schema, string):
     return {
         **followup_definitions(schema, string),
         "feedback.submit": (
-            "Create a GitHub issue in bkrabach/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "includeDiagnostics": {"type": "boolean"},

@@ -9,6 +9,7 @@ from amplifier_web.updates import UpdateManager,active_release,foundation_home,s
 class Runtime:
     def __init__(self): self.closed=0
     async def close(self): self.closed+=1
+    async def reset(self): self.closed+=1
 
 def git(path,*args):
     return subprocess.check_output(['git',*args],cwd=path,text=True,stderr=subprocess.DEVNULL).strip()
@@ -199,3 +200,53 @@ async def test_ecosystem_activation_does_not_claim_application_was_installed(app
     assert app.state['updates']['application']==release
     assert app.state['updates']['available']==1
     assert app.state['updates']['items'][1]['status']=='current'
+
+
+async def test_real_runtime_accepts_new_messages_after_update_and_rollback(app, repo, tmp_path):
+    """Exercise the process manager, not a close-only fake, across both swaps."""
+    import sys
+    from amplifier_web.runtime import RuntimeManager
+    script = r'''
+import json,sys
+from pathlib import Path
+for line in sys.stdin:
+    request=json.loads(line)
+    if request['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif request['op']=='send':
+        with Path(sys.argv[1]).open('a') as stream:
+            stream.write(request['input_id']+'\n')
+        print(json.dumps({'op':'reply','id':request['id'],'result':{'accepted':True}}),flush=True)
+    elif request['op']=='stop':
+        break
+'''
+    log = tmp_path / 'delivered.txt'
+    runtime = RuntimeManager(command=[sys.executable, '-c', script, str(log)], startup_timeout=3)
+    app.runtime = runtime
+    session = app.state['sessions'][0]
+    async def emit(*args): pass
+    await runtime.send(session, 'first', 'before-update', emit)
+    original_process = runtime.workers[session['id']]['process']
+    original_retention = runtime.retention.task
+    manager, _ = await prepare(app, repo)
+    async def validate(*args): pass
+    manager.validate = validate
+    await manager.install()
+    assert app.state['updates']['phase'] == 'installed'
+    assert original_process.returncode is not None
+    assert original_retention.done()
+    assert not runtime.workers
+    assert log.read_text().splitlines() == ['before-update']
+    assert (await runtime.send(session, 'next', 'after-update', emit))['accepted']
+    assert runtime.retention.task is not original_retention
+    assert not runtime.retention.task.done()
+    updated_process = runtime.workers[session['id']]['process']
+    await manager.rollback()
+    assert active_release(app.data_dir)['current'] is None
+    assert updated_process.returncode is not None
+    assert (await runtime.send(session, 'next', 'after-rollback', emit))['accepted']
+    assert log.read_text().splitlines() == ['before-update', 'after-update', 'after-rollback']
+    await runtime.close()
+    with pytest.raises(RuntimeError, match='host is closing'):
+        await runtime.send(session, 'do not send', 'after-shutdown', emit)
+    assert log.read_text().splitlines() == ['before-update', 'after-update', 'after-rollback']

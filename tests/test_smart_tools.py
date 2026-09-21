@@ -327,3 +327,64 @@ async def test_python_install_is_explicit_records_commit_and_does_not_guess_mcp_
     assert not manager.state["servers"] and not manager.connections
     assert "documented MCP executable" in result["nextStep"]
     assert manager.state["installations"][0]["binDir"].endswith("/venv/bin")
+
+
+async def test_batch_install_shared_progress_partial_success_and_retry(manager,monkeypatch):
+    manager.state['catalog']=[{'id':name,'name':name,'repository':'https://github.com/example/'+name,'ref':'main','path':'.'} for name in ['one','two','three']]
+    calls=[];fail={'two'}
+    async def install(args):
+        name=args['repository'].rsplit('/',1)[-1];calls.append(name)
+        if name in fail:raise ValueError('fixture unavailable')
+        return {'id':name}
+    monkeypatch.setattr(manager,'install',install)
+    result=await manager.command('smartTools.installBatch',{'ids':['one','two','three']},'batch',origin='agent')
+    assert result['completed']==2 and result['failed']==1
+    receipt=manager.operation('batch')
+    assert [row['status'] for row in receipt['items']]==['completed','failed','completed']
+    assert any(s['smartTools']['operations'][-1].get('items',[{}])[0].get('status')=='running' for s in manager.service.published)
+    fail.clear()
+    await manager.command('smartTools.installBatch',{'retryOperationId':'batch'},'retry',origin='ui')
+    assert calls==['one','two','three','two']
+    assert manager.operation('retry')['items'][0]['status']=='completed'
+    # The original receipt, including partial successes, is never rewritten.
+    assert manager.operation('batch')==receipt
+    with pytest.raises(ValueError,match='already has a receipt'):
+        await manager.command('smartTools.installBatch',{'ids':['one']},'batch')
+    await manager.command('smartTools.installBatch',{'ids':['missing']},'invalid')
+    assert manager.operation('invalid')['status']=='failed'
+    assert calls==['one','two','three','two']
+
+
+async def test_batch_interruption_retains_progress_and_never_replays(manager,monkeypatch):
+    manager.state['catalog']=[{'id':name,'name':name,'repository':'https://github.com/example/'+name} for name in ['one','two','three']]
+    started=asyncio.Event();calls=[]
+    async def install(args):
+        calls.append(args['repository'])
+        if len(calls)==2:started.set();await asyncio.Event().wait()
+        return {'id':'one'}
+    monkeypatch.setattr(manager,'install',install)
+    task=asyncio.create_task(manager.command('smartTools.installBatch',{'ids':['one','two','three']},'interrupted'))
+    await started.wait();task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    receipt=manager.operation('interrupted')
+    assert receipt['status']=='interrupted'
+    assert [row['status'] for row in receipt['items']]==['completed','interrupted','interrupted']
+    restarted=SmartToolsManager(manager.service)
+    assert restarted.operation('interrupted')['items']==receipt['items']
+    assert len(calls)==2
+    await restarted.close()
+
+
+async def test_waiting_batch_retains_source_and_extras_before_install_lane(manager,monkeypatch):
+    manager.state['catalog']=[{'id':'tool','name':'Tool','repository':'https://example.com/tool','ref':'pinned'}]
+    await manager.batch_lock.acquire()
+    task=asyncio.create_task(manager.command('smartTools.installBatch',{'ids':['tool'],'extrasById':{'tool':['mcp']}},'waiting'))
+    for _ in range(100):
+        receipt=manager.operation('waiting')
+        if receipt and receipt.get('items'):break
+        await asyncio.sleep(.001)
+    assert receipt['items'][0]['source']=={'repository':'https://example.com/tool','ref':'pinned','extras':['mcp']}
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    manager.batch_lock.release()
+    assert manager.operation('waiting')['items'][0]['status']=='interrupted'

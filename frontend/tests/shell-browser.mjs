@@ -147,7 +147,7 @@ try{
  clientId=await page.evaluate(()=>window.amplifier.shellClientId);actionClientId=clientId;
  await page.locator('[data-shell-instance="chats"] .a-nav-chat').first().waitFor();
  assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),persisted);
- await page.getByRole('button',{name:'Customize appearance'}).click();
+ await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
  await page.locator('#scheme').selectOption('dark');
  await expect.poll(async()=>(await inspect()).composition.presentation.scheme).toBe('dark');
  await page.getByRole('button',{name:'Close panel'}).click();

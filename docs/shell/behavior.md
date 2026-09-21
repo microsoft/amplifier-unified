@@ -15,7 +15,7 @@ there. The skill body loads on demand.
 ## App defaults and existing configurations
 
 When no `bundle.app` list is configured, Unified shows **Unified shell** as an
-enabled app behavior in Settings → Capabilities → Bundles and composes it into
+enabled app behavior in Settings → Bundles & modules → Configured bundles and composes it into
 ordinary sessions. The default is computed without writing shared settings.
 The usual add, toggle, reorder, and remove actions are shared by the UI and
 agents. Explicit lists, including an empty list, remain authoritative. Disabled
@@ -26,7 +26,7 @@ through the Bundles UI or the `bundles.add` action:
 
 ```json
 {
-  "uri": "git+https://github.com/bkrabach/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml",
+  "uri": "git+https://github.com/microsoft/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml",
   "role": "behavior",
   "name": "Unified shell"
 }
@@ -51,7 +51,7 @@ across exports matters.
 Other hosts can compose the same Git behavior directly. For Amplifier CLI:
 
 ```sh
-amplifier bundle add 'git+https://github.com/bkrabach/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml' --app
+amplifier bundle add 'git+https://github.com/microsoft/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml' --app
 ```
 
 Repository access is required when loading from Git. Unified's built-in copy

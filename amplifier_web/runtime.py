@@ -21,6 +21,14 @@ from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 
 Emitter = Callable[[str, dict], Awaitable[None]]
 
+class RuntimeOperationPending(RuntimeError):
+    """A written operation has no reply yet; its outcome remains uncertain."""
+
+    def __init__(self, operation):
+        self.operation = operation
+        super().__init__('The runtime operation has not returned yet. It may still be running; do not automatically repeat it.')
+
+
 class SessionInUseError(RuntimeError):
     """A definite rejected admission, not an uncertain execution failure."""
 
@@ -46,11 +54,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == 'runtime.ownership':
         return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:
-        return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs') if key in event}}
+        return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
-            "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle")
+            "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         return "execution.event", {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
     if kind == "runtime.activity":
         allowed = {"model", "processing", "waiting-workers", "tools", "retrying", "compacting"}
@@ -96,7 +104,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **({"inputId": event["input_id"]} if "input_id" in event else {})}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
-                                  "event": kind}
+                                  "event": kind, "errorType": event.get("error_type")}
     if kind in {"tool.pre", "tool.post", "tool.error"}:
         return "runtime.tool", {**base, "tool": event.get("tool"), "callId": event.get("call_id"), "phase": kind[5:]}
     return None
@@ -130,28 +138,22 @@ class RuntimeManager:
         self.retention.settings = updated
         self.retention.wake()
 
-    def _command(self, release=None):
+    def _command(self, release=None, *, home=None):
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
         uv = shutil.which("uv")
         if not uv:
-            raise RuntimeError("Install uv to prepare the pinned Amplifier runtime.")
+            raise RuntimeError("Install uv to prepare the Amplifier runtime.")
         # The packaged manifest is copied to a writable cache: installed package
         # directories may be read-only and uv creates its lock and .venv there.
-        import hashlib
-        manifest = Path(__file__).with_name("runtime_deps") / "pyproject.toml"
-        content = manifest.read_bytes()
-        digest = hashlib.sha256(content)
         from .updates import active_release
-        home = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
+        from .runtime_environment import prepare_project, receipt_directory
+        home = Path(home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
         generation = release if release is not None else active_release(home).get("current")
-        if generation:
-            digest.update(generation.encode())
-        cache = Path(os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified")) / "runtime" / digest.hexdigest()[:16]
-        cache.mkdir(parents=True, exist_ok=True)
-        (cache / "pyproject.toml").write_bytes(content)
-        return [uv, "run", "--project", str(cache), "--python", "3.13", "python", str(worker)]
+        cache = prepare_project(home, generation)
+        recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
+        return [uv, "run", *(["--locked"] if recorded else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
 
     async def start(self, session: dict, emit: Emitter):
         sid = session["id"]
@@ -273,12 +275,19 @@ class RuntimeManager:
                     task.add_done_callback(row["bridge_tasks"].discard)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
+                    input_id = row.get('sendInputs', {}).pop(data.get('id'), None)
                     future = row["pending"].get(data.get("id"))
                     if future and not future.done():
                         if data.get("error"):
                             future.set_exception(_worker_error(data))
                         else:
                             future.set_result(data.get("result"))
+                    result = data.get('result')
+                    if (input_id and not data.get('error') and isinstance(result, dict)
+                            and result.get('accepted') is True and result.get('inputId', input_id) == input_id):
+                        # The HTTP caller may already have timed out. Reconcile
+                        # only this send's receipt, without changing turn state.
+                        await row['emit']('runtime.delivery', {'sessionId': sid, 'inputId': input_id})
                 elif data.get("type") == "runtime.parked":
                     row["parked"] = True
                     row["parked_at"] = self.retention.clock()
@@ -313,6 +322,8 @@ class RuntimeManager:
                         await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
                     else:
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
+                elif data.get("type") == "history.revised":
+                    await row["emit"]("history.revised", {**data, "sessionId": sid})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
                     await row["emit"](data["type"], {**data, "sessionId": sid})
                 else:
@@ -344,6 +355,7 @@ class RuntimeManager:
             if not row["ready"].done():
                 row["ready"].set_exception(RuntimeError(error))
         finally:
+            row.get('sendInputs', {}).clear()
             for future in row["pending"].values():
                 if not future.done():
                     future.set_exception(RuntimeError("Amplifier worker disconnected"))
@@ -382,6 +394,8 @@ class RuntimeManager:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         row["pending"][identity] = future
+        if op == 'send':
+            row.setdefault('sendInputs', {})[identity] = args['input_id']
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
@@ -392,6 +406,7 @@ class RuntimeManager:
         except (ValueError, TypeError):
             row["inflight"].discard(identity)
             row["pending"].pop(identity, None)
+            row.get('sendInputs', {}).pop(identity, None)
             raise
         except BaseException as exc:
             # A partial transport write has an unknown outcome. Keep the
@@ -406,11 +421,11 @@ class RuntimeManager:
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = None if op == "retire" or op == "control" and args.get("operation") == "bundle.switch" else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
-                raise RuntimeError("The runtime operation has not returned yet. It may still be running; do not automatically repeat it.") from exc
+                raise RuntimeOperationPending(op) from exc
         finally:
             row["pending"].pop(identity, None)
 
@@ -436,7 +451,9 @@ class RuntimeManager:
 
     async def send(self, session, text, input_id, emit):
         await self.start(session, emit)
-        return await self._request(session["id"], "send", text=text, input_id=input_id, attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+        return await self._request(session["id"], "send", text=text, input_id=input_id,
+            context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
+            attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
     async def takeover(self, session, emit, expected_owner=None, timeout=30):
         """One deliberate request; a competing successor is never asked to yield."""
@@ -550,6 +567,11 @@ class RuntimeManager:
         await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         self.workers.pop(session_id, None)
+
+    async def reset(self):
+        """Retire workers at an idle update boundary, retaining this host."""
+        await self.close()
+        self._closed = False
 
     async def close(self):
         self._closed = True

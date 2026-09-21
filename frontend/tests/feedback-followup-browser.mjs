@@ -50,7 +50,7 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
- await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByLabel('Submitted report',{exact:true}).selectOption('original-feedback');
  await page.getByRole('button',{name:'Refresh report',exact:true}).click();
  await page.getByText('Feedback report loaded.',{exact:true}).waitFor();
@@ -59,7 +59,7 @@ try{
  const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  other.on('pageerror',error=>errors.push(error.message));
  await other.goto(vite.resolvedUrls.local[0]);await other.waitForSelector('#amp-one');
- await other.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await other.getByRole('button',{name:'More app options',exact:true}).click();await other.getByRole('button',{name:'Send feedback',exact:true}).click();
  await other.getByLabel('Submitted report',{exact:true}).selectOption('original-feedback');
  await other.getByLabel('Add a comment',{exact:true}).fill('Unsent draft on the other browser.');
  await other.evaluate(()=>window.amplifier.dispatch('feedback.get',{requestId:'second-browser-read',feedbackId:'original-feedback',page:2}));
@@ -68,7 +68,7 @@ try{
  await page.getByLabel('Add a comment',{exact:true}).fill('Additional details from the browser.');
  await page.getByRole('button',{name:'Send comment',exact:true}).click();
  await page.getByText('Comment added to your feedback report.',{exact:true}).waitFor();
- assert.equal(await page.getByRole('link',{name:'View comment',exact:true}).getAttribute('href'),'https://github.com/bkrabach/amplifier-unified/issues/42#issuecomment-123');
+ assert.equal(await page.getByRole('link',{name:'View comment',exact:true}).getAttribute('href'),'https://github.com/microsoft/amplifier-unified/issues/42#issuecomment-123');
  const pending=await page.evaluate(()=>window.amplifier.getState().view.feedbackFollowupDraft.pending);
  await page.evaluate(args=>window.amplifier.dispatch('feedback.comment',args),pending);
  const sent=await page.evaluate(()=>fetch('/api/fixture/followup').then(response=>response.json()));

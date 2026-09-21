@@ -28,7 +28,7 @@ try{
  await act(a,'session.select',{id:first});await act(b,'session.select',{id:first});
  await composer(a).fill('Draft belonging to A');await composer(b).fill('Draft belonging to B');
  await b.getByRole('button',{name:'Settings',exact:true}).click();
- await b.getByRole('heading',{name:'Your Amplifier',exact:true}).waitFor();
+ await b.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  assert.equal(await a.locator('[role=dialog]').count(),0);
  await b.getByRole('button',{name:'Close panel',exact:true}).click();
  await composer(a).fill('Shared input from A');

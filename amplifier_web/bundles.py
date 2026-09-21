@@ -328,6 +328,14 @@ class BundleManager:
                             raise ValueError("That standalone bundle name is already registered; choose another name.")
                         entries.append({"id": uuid.uuid4().hex, "uri": uri, "name": name, "role": role, "enabled": True})
                     excluded.discard(uri)
+                elif action == "bundles.reorder":
+                    current_ids=[row['id'] for row in entries if row.get('role')!='standalone' and row.get('enabled',True)]
+                    ids=args['ids']
+                    if args.get('expectedIds')!=current_ids or len(ids)!=len(current_ids) or set(ids)!=set(current_ids):
+                        raise ValueError('Enabled capabilities changed. Refresh the list before saving composition order.')
+                    by_id={row['id']:row for row in entries}
+                    ordered=iter(ids)
+                    entries=[by_id[next(ordered)] if row['id'] in current_ids else row for row in entries]
                 else:
                     index = next((index for index, row in enumerate(entries) if row["id"] == args.get("id")), None)
                     if index is None:
@@ -436,7 +444,7 @@ class BundleManager:
                         result["source"] = replacement
                     elif result.get("module") == "loop-live":
                         result["module"] = "loop-streaming"
-                        result["source"] = "git+https://github.com/microsoft/amplifier-module-loop-streaming@603aa6eefacd28367fc886d58eb89de993c58dea"
+                        result["source"] = "git+https://github.com/microsoft/amplifier-module-loop-streaming@main"
                         result.get("config", {}).pop("configured_bundle", None)
                         result.get("config", {}).pop("background_delegate", None)
                         warnings.append("Amplifier Unified reapplies its live engine when this bundle loads; other hosts use the portable streaming engine.")

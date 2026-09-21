@@ -48,7 +48,7 @@ def prepare():
                         ignore=shutil.ignore_patterns('__pycache__'))
         info = target / distribution._path.name
         shutil.copytree(distribution._path, info, dirs_exist_ok=True)
-        write(info / 'direct_url.json', {'url': 'https://github.com/bkrabach/amplifier-unified',
+        write(info / 'direct_url.json', {'url': 'https://github.com/microsoft/amplifier-unified',
               'vcs_info': {'vcs': 'git', 'commit_id': revision}})
         if name == 'old':
             init = target / 'amplifier_web/__init__.py'
@@ -59,7 +59,7 @@ def prepare():
     # Exact historical updater, not a reimplementation of its faulty branch.
     shutil.copy('/opt/legacy-app-updates.py', snapshots / 'old-buggy/amplifier_web/app_updates.py')
     # The actual isolated replacement probe executes this environment.
-    write(distribution._path / 'direct_url.json', {'url': 'https://github.com/bkrabach/amplifier-unified',
+    write(distribution._path / 'direct_url.json', {'url': 'https://github.com/microsoft/amplifier-unified',
           'vcs_info': {'vcs': 'git', 'commit_id': REVISION}})
     ROOT.mkdir(parents=True, exist_ok=True)
     write(ROOT / 'version.json', version)

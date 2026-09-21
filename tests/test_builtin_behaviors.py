@@ -90,7 +90,7 @@ async def test_builtin_resources_export_without_local_paths(tmp_path):
     controls.prepared = SimpleNamespace(bundle=behavior)
     resources = controls.export_resources()
     result = BundleManager(tmp_path).export_document({}, effective_plan={"tools": behavior.tools}, resources=resources)
-    assert "git+https://github.com/bkrabach/amplifier-unified@main#subdirectory=skills" in result["content"]
+    assert "git+https://github.com/microsoft/amplifier-unified@main#subdirectory=skills" in result["content"]
     assert str(resource_root()) not in result["content"]
     assert "amplifier-shell" in result["content"]
     assert any("main branch" in warning for warning in result["warnings"])

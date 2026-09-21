@@ -78,7 +78,7 @@ def display_message(row, index, session, *, include_internal=False):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0), **observation}
+            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None, **observation}
 
 
 def read_transcript(session, *, before=None, limit=100):
@@ -189,17 +189,35 @@ def merge_web_history(session, incoming):
         cursor = match[0] + 1
         start = next((number + 1 for number in range(len(current) - 1, -1, -1)
                       if current[number].get('nativeIndex') == boundary), len(current))
-    merged = current[:start]
-    for message in current[start:]:
-        match = next((number for number in range(cursor, len(incoming))
+    # Steering inputs are displayed as soon as submitted, but enter the native
+    # transcript at the next model boundary. User/assistant order can therefore
+    # cross. Align each role one-to-one before inserting native-only messages;
+    # otherwise a later user match inserts a second copy of a live reply.
+    matches = {}
+    claimed = set()
+    role_cursors = {}
+    for position, message in enumerate(current[start:], start):
+        role = message.get('role')
+        begin = role_cursors.get(role, cursor)
+        anchor = indexed.get(message.get('nativeIndex'))
+        if anchor and (anchor[1]['role'], anchor[1]['text']) != (role, message.get('text')):
+            raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
+        match = anchor[0] if anchor else next((number for number in range(begin, len(incoming))
                       if (incoming[number]['role'], incoming[number]['text']) ==
-                         (message.get('role'), message.get('text'))), None)
+                         (role, message.get('text'))), None)
         if match is not None:
-            merged.extend(incoming[cursor:match])
+            matches[position] = match
+            claimed.add(match)
+            role_cursors[role] = max(begin, match + 1)
+    merged = current[:start]
+    for position, message in enumerate(current[start:], start):
+        match = matches.get(position)
+        if match is not None:
+            merged.extend(incoming[number] for number in range(cursor, match) if number not in claimed)
             message['nativeIndex'] = incoming[match]['nativeIndex']
-            cursor = match + 1
+            cursor = max(cursor, match + 1)
         merged.append(message)
-    merged.extend(incoming[cursor:])
+    merged.extend(incoming[number] for number in range(cursor, len(incoming)) if number not in claimed)
     for message in merged:
         match=indexed.get(message.get('nativeIndex'))
         if match and (match[1]['role'],match[1]['text'])==(message.get('role'),message.get('text')) and match[1].get('observation'):
@@ -358,10 +376,16 @@ class AutomaticHistory:
                                                     'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
-                            if previous.get('historyManaged') and previous.get('titleSource') != 'manual':
+                            if row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual'):
                                 title = row.get('name') or row.get('title') or previous['title']
                                 if title != previous['title']:
                                     previous['title'] = title; changed = True
+                                # Native catalog names are not local UI overrides.
+                                # Keeping this provenance avoids persisting the
+                                # entire discovered library after each refresh.
+                                source = ('manual' if previous.get('titleSource') == 'manual' else 'native') if previous.get('historyManaged') else row.get('nameSource') or 'manual'
+                                if row.get('name') and previous.get('titleSource') != source:
+                                    previous['titleSource'] = source; changed = True
                             if previous.get('historyManaged') and previous.get('historyReadOnlyReason') != row.get('readOnlyReason'):
                                 previous['historyReadOnlyReason'] = row.get('readOnlyReason'); changed = True
                             if previous.get('historyManaged'):
@@ -401,8 +425,14 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         self.service._publish()
-                selected = next((s for s in self.service.state['sessions'] if s['id'] == self.service.state.get('selectedSessionId')), None)
-                if selected and selected.get('nativeProject') and selected.get('status') not in BUSY and not selected.get('configurationBusy'):
+                # Browsers have independent selections. Refresh only connected
+                # views, not every historical client record retained on disk.
+                selected_ids = {self.service.state.get('selectedSessionId')}
+                selected_ids.update(self.service.clients.records.get(client, {}).get('selectedSessionId')
+                                    for client in self.service.queue_clients.values())
+                for selected in [row for row in self.service.state['sessions'] if row['id'] in selected_ids]:
+                    if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
+                        continue
                     current = await asyncio.to_thread(revision, selected)
                     if not selected.get('historyLoaded', True) or current != selected.get('nativeRevision'):
                         await self.load(selected['id'])

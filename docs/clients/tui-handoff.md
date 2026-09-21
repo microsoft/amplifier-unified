@@ -1,10 +1,13 @@
 # Amplifier TUI: Unified-backed live sessions
 
-Status: Ready for TUI implementation. Use Unified 0.11.9 or later.
+Status: Connected implementation is available in amplifier-app-tui's
+`feat/unified-client` candidate. This paired service change adds the optional
+`tui` install and launcher. It is not a claim that either candidate is released.
+Use Unified 0.19.5 or later; this change supplies stable streamed-response identity.
 
 ## Outcome and scope
 
-Add a connected backend to the TUI. A user can open the same Unified-hosted
+The native Ratatui TUI uses a connected backend. A user can open the same Unified-hosted
 conversation in the TUI and the web app, submit from either, and follow the same
 accepted messages, live responses, tool/worker progress and pending approvals.
 Each interface keeps its own selection and unsent drafts.
@@ -15,13 +18,41 @@ history, or move execution to the terminal's machine. Existing standalone CLI
 ownership and explicit takeover remain separate operations.
 
 This document describes the service integration; it does not prescribe a TUI
-framework or require replacing an existing standalone backend. No external
-amplifier-app-tui repository has been modified by this work.
+framework or require replacing an existing standalone backend. The connected implementation lives in `bkrabach/amplifier-app-tui`; its explicit
+standalone extra retains the previous local execution host.
+
+## Install and launch
+
+Install Unified with its `[tui]` extra, then run `amplifier-unified tui`.
+`--session ID` opens a known conversation; `--list-sessions` reads the host catalog;
+`--new` starts an empty composer. New conversation creation waits for explicit Send.
+`--workspace` on the `tui` subcommand is a path on the host, not a local-terminal cwd.
+A separately installed `amplifier-tui` can connect with `--server`, `--token-file`
+and `--ca-file` using the same contract.
+
+Each terminal gets a fresh client identity. `--client ID` deliberately recovers
+that terminal's local selection, private drafts and outbox; the state file has a
+local exclusive lock. This is unrelated to Foundation execution ownership.
+Reconnect only reads. `/deliveries` provides deliberate exact retry after an
+uncertain transport result. A definitively rejected message can be edited back
+into an empty composer. Stop remains available while send acknowledgement waits.
+
+Supported first slice: listing/creation/selection, rename, bounded history pages,
+text send and response streaming, tool/worker observations, approval decisions,
+Stop, cooperative takeover and detach. Configuration editing, voice, uploads,
+queue/steer and full canvas remain web controls. Unavailable standalone commands
+are refused, never forwarded as model instructions. This is not full UI parity.
+
+Local evidence: actual installed TUI and web SPA on one isolated HTTP/SSE host,
+two native terminals at 120×40 and 40×20, and a separate real-worker lifecycle
+check using a deterministic provider. See the TUI repository's ACCEPTANCE.md for
+commands and the unrelated standalone baseline failures. No production devices
+or paid provider are claimed qualified by those fixtures.
 
 ## Release baseline and source of truth
 
 - Protocol: version 1, HTTP commands and SSE snapshots.
-- Recommended host: [Unified 0.11.9](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.9)
+- Historical transport baseline: [Unified 0.11.9](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.9)
   or a later compatible release, which corrects canvas resource retention across
   clients. Use the immutable release tag to resolve its commit.
 - Live-client validation baseline: Unified 0.11.7. Its exact evidence and runtime
@@ -189,13 +220,42 @@ session target and exact arguments before sending. Reuse that same tuple after
 an uncertain network response. A new user action gets a new command ID.
 
 Command IDs are stored in a host-wide receipt table; use globally unique IDs.
-The fingerprint includes the client identity and contents. Reusing an ID with
-different arguments or another client is a conflict, not a safe retry.
+The baseline fingerprint includes the client identity and contents. Hosts
+advertising `conversation.send.preserveDraft` in the action schema omit the
+presentation client identity for sends, so an exact send can be checked after
+reattaching with a new client ID. Other commands still include client identity.
+Reusing an ID with different arguments is a conflict, not a safe retry.
 
 A successful response says the command was accepted; it does not mean the model
 or a tool finished. A duplicate receipt returns `duplicate: true`. Read current
 session state to show progress. Never send another command merely because a
 socket closed or a model response has not appeared.
+
+On hosts advertising `preserveDraft`, show a local user bubble immediately and
+clear the composer, preserving the captured input in an outbox. Merge the
+server bubble by `inputId`. Receipts expose `delivery: sending | accepted |
+unknown`; message projections expose `delivery.status`. A provisional bubble
+or a `sending` receipt does not confirm delivery to the runtime. Keep uncertain
+input visible and let **Check delivery** repeat its exact ID and payload. A
+confirmed rejection permits **Retry** with a new ID. A duplicate rejection can
+arrive as HTTP 200 with `accepted: false` and its original `status`/`code`;
+the adapter raises `SessionClientError` for that result too. Never silently
+repeat unknown work after reconnect or restart.
+
+When using host draft storage, save the empty draft separately and include
+`preserveDraft: true` in the captured send arguments. This prevents a delayed
+acknowledgement from clearing newer typing, including an identical next message.
+Show activity on the pending bubble and keep input and navigation responsive.
+For option reloads, retain the current same-source content and mark that region
+busy until refresh completes; do not blank the entire interface.
+
+Discover `message.edit` and its `mode` schema before offering editing. Explicit
+`mode: current` edits within the conversation; `mode: fork` creates a new one.
+Omitted mode keeps the legacy fork behavior. Locally rejected input can be
+edited in the outbox and retried without a history operation. Current-conversation
+edits require idle execution and ownership; later active context is replaced
+while original event evidence remains. Tool effects are not undone or replayed.
+See [message delivery and editing](../MESSAGE-DELIVERY-EDIT.md) for details.
 
 Receipt deduplication does not prove exactly-once external tool effects after a
 crash. An interrupted or unknown outcome requires recovery/reconciliation; the
@@ -349,6 +409,10 @@ from a live provider. Keep credentials and raw transcripts out of commits.
       are visible without changing the other client's draft or selection.
 - [ ] A session idles/parks, then accepts another turn while UI controls refresh.
 - [ ] A slow acknowledgement does not freeze input or retarget a queued send.
+- [ ] Composer clears immediately, a pending bubble indicates delivery, and a
+      late acknowledgement cannot erase a newer identical draft.
+- [ ] A lost rejection is recovered as a rejection; explicit retry uses a new
+      ID, while an uncertain result keeps the original ID and exact payload.
 - [ ] Repeating the exact uncertain command uses its existing ID and produces
       one accepted input. Reusing the ID for changed contents fails.
 - [ ] Detaching/closing TUI leaves a bounded running task alive; reconnect catches
@@ -370,8 +434,19 @@ testing the actual TUI's event loop and rendering.
 ## Outside this handoff
 
 Event-log-only runtime recovery, replay of compaction from an authoritative
-`events.jsonl`, direct history editing, execution migration between machines,
+`events.jsonl`, direct event-file editing, execution migration between machines,
 native device capabilities and multi-device voice arbitration remain separate
 work. They are not prerequisites for the first connected TUI text client.
 The current contract preserves existing persistence and ownership; it does not
 claim those future recovery mechanisms are implemented.
+
+
+### Canonical names across standalone and connected clients
+
+Use `session.rename` for an attached client. The host persists the name in native
+`metadata.json`, and list/detail projections reflect later standalone CLI renames.
+Do not create a TUI naming sidecar. Standalone hosts should adopt Foundation's
+`SessionMetadataStore` and checkpoint metadata merging; common scoped settings
+I/O is available in `amplifier_foundation.settings`. An empty composer does not
+create a native execution session solely to store its title. Once native state
+exists, the provisional or generated title is visible to CLI readers as well.

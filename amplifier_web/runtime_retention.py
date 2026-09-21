@@ -122,6 +122,7 @@ class WorkerRetention:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+            self.task = None
         tasks = list(self.retirements)
         for task in tasks:
             task.cancel()

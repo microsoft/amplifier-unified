@@ -1,9 +1,10 @@
 """Deduplicated public execution tree and usage rollups (no reasoning payloads)."""
 import time
+from .token_usage import with_gross_tokens
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
-USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens')
+USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens')
 
 def ensure_turn(session,identity,label=''):
     tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
@@ -38,7 +39,7 @@ def rollup(calls):
     result={key:0 for key in USAGE_KEYS}
     result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
     for node in calls:
-        usage=node.get('usage') or {}
+        usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
             value=usage.get(key)
             if isinstance(value,(int,float)) and value>=0:result[key]+=value
@@ -61,12 +62,16 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle'}
+    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)
     node=next((n for n in tree['nodes'] if n['id']==identity),None)
-    if node:node.update(safe)
+    if node:
+        if event.get('liveObservation') and event.get('phase') == 'running':
+            for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields'):
+                node.pop(field, None)
+        node.update(safe)
     else:
         node=safe;tree['nodes'].append(node)
     refresh_usage(tree)

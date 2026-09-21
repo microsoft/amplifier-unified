@@ -5,6 +5,7 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {ChatDetails}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
@@ -15,7 +16,7 @@ test('workspace rail scopes chats to registered workspace and honors fnmatch fil
  const state=initial();state.view.navFilter='First*';let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true}),session:state.sessions[0]}))});
  const rows=root.root.findAll(node=>node.props.className==='a-nav-chat-select');
- assert.equal(rows.length,1);assert.equal(rows[0].props.title,'First plan');
+ assert.equal(rows.length,1);assert.equal(rows[0].props['aria-label'],'First plan');
  await renderAct(async()=>root.unmount());
 });
 
@@ -30,10 +31,10 @@ test('all-chat switch hides the folder explorer without changing its location or
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,0);
  assert.deepEqual(root.root.findAll(node=>node.type==='small'&&node.props.className==='a-nav-chat-workspace').map(node=>node.children.join('')),['/one','/one','/two']);
- const newChat=root.root.findByProps({'aria-label':'New chat in workspace'});
- assert.equal(newChat.props.title,'New chat in /one');
+ const newChat=root.root.findByProps({'aria-label':'New chat'});
+ assert.equal(newChat.props.title,'New chat');
  await renderAct(async()=>newChat.props.onClick());
- assert.ok(calls.some(call=>call.name==='session.create'&&call.args.workspace==='/one'));
+ assert.ok(calls.some(call=>call.name==='session.draft'));
  assert.equal(state.view.navWorkspacePath,'/saved/folder');
  await renderAct(async()=>root.root.findByProps({role:'group','aria-label':'Chat view'}).findAllByType('button')[0].props.onClick());
  await renderAct(async()=>root.update(render()));
@@ -51,14 +52,18 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  const rows=()=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']).map(node=>node.props['data-session-id']);
  assert.deepEqual(rows(),['b','a','c']);
  assert.equal(root.root.findByProps({'aria-label':'Pinned chats'}).findAll(node=>node.type==='div'&&node.props['data-session-id']).length,1);
- const unpin=root.root.findByProps({'aria-label':'Unpin Another plan'});
+ let detail;const renderDetail=chat=>React.createElement(ChatDetails,{chat,model:{state,act,draft:{},choose:()=>{},setDraft:()=>{}},now:100,close:()=>{}});
+ await renderAct(async()=>{detail=create(renderDetail({...state.sessions[1],pinned:true}))});
+ const unpin=detail.root.findByProps({'aria-label':'Unpin Another plan'});
  assert.equal(unpin.props['aria-pressed'],true);
  await renderAct(async()=>unpin.props.onClick());
  assert.deepEqual(calls,[{name:'session.pin',args:{id:'b',pinned:false}}]);
  state.pinnedSessionIds=[];
  await renderAct(async()=>root.update(render()));
  assert.deepEqual(rows(),['a','c','b']);
- await renderAct(async()=>root.root.findByProps({'aria-label':'Pin Other workspace'}).props.onClick());
+ await renderAct(async()=>detail.update(renderDetail(state.sessions[2])));
+ await renderAct(async()=>detail.root.findByProps({'aria-label':'Pin Other workspace'}).props.onClick());
+ await renderAct(async()=>detail.unmount());
  assert.deepEqual(calls.at(-1),{name:'session.pin',args:{id:'c',pinned:true}});
  assert.deepEqual(state.sessions.map(row=>row.recentActivityAt),[30,1,20]);
  assert.equal(calls.some(call=>call.name==='session.select'),false);
@@ -79,13 +84,15 @@ test('rail pin, workspace selection, chat selection and drafts all use shared ac
  await renderAct(async()=>root.unmount());
 });
 
-test('chat rename opens the editor for that conversation and submits its new title',async()=>{
- const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};let root;
- await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
+test('chat rename opens the flyout editor and submits its new title',async()=>{
+ const state=initial(),chat=state.sessions[1],calls=[];
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const setDraft=value=>{state.view.workspaceDraft=value;calls.push({name:'view.update',args:{patch:{workspaceDraft:value}}})};
+ let root;const render=()=>React.createElement(ChatDetails,{chat,model:{state,act,draft:state.view.workspaceDraft||{},setDraft,prefix:'nav-chats'},now:100,close:()=>{}});
+ await renderAct(async()=>{root=create(render())});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Rename Another plan'}).props.onClick());
- await renderAct(async()=>root.update(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]})));
- const input=root.root.findByProps({id:'nav-chats-name'});
- assert.equal(input.props.value,'Another plan');
+ await renderAct(async()=>root.update(render()));
+ const input=root.root.findByProps({id:'nav-chats-name'});assert.equal(input.props.value,'Another plan');
  await renderAct(async()=>input.props.onChange({target:{value:'Renamed plan'}}));
  await renderAct(async()=>root.root.findByType(ChatRename).findByType('form').props.onSubmit({preventDefault(){}}));
  assert.ok(calls.some(call=>call.name==='session.rename'&&call.args.id==='b'&&call.args.title==='Renamed plan'));
@@ -176,7 +183,7 @@ test('automatic discovery reports loading/errors and refreshes through the share
  await renderAct(async()=>root.unmount());
 });
 
-test('unresolved native project folders are hidden and cannot start a chat',async()=>{
+test('unresolved folders are hidden but the launcher lets users choose a valid workspace',async()=>{
  const state=initial();state.workspaces=[{id:'native-one',name:'One',path:null,available:false},{id:'native-two',name:'Two',path:null,available:false}];state.selectedWorkspaceId='native-two';state.workspaceExplorer={rows:[],totalWorkspaces:0};
  state.sessions=[{id:'a',title:'Project one chat',workspaceId:'native-one',workspace:null},{id:'b',title:'Project two chat',workspaceId:'native-two',workspace:null}];let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
@@ -184,7 +191,7 @@ test('unresolved native project folders are hidden and cannot start a chat',asyn
  assert.equal(rows.length,0);
  assert.equal(root.root.findAllByProps({'data-action':'workspace.select'}).length,0);
  assert.match(JSON.stringify(root.toJSON()),/Create a workspace to start a chat/);
- assert.equal(root.root.findByProps({'aria-label':'New chat in workspace'}).props.disabled,true);
+ assert.ok(!root.root.findByProps({'aria-label':'New chat'}).props.disabled);
  await renderAct(async()=>root.unmount());
 });
 
@@ -226,7 +233,7 @@ test('conversation pagination stays bounded and is shared with agents',async()=>
  await renderAct(async()=>root.root.findByProps({'aria-label':'Show more conversations'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatPage:{mode:'workspace',workspaceId:'one',filter:'',selectedSessionId:'chat-0',index:1}}}});
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props.title,'Saved 100');
+ assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props['aria-label'],'Saved 100');
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
  await renderAct(async()=>root.unmount());
 });

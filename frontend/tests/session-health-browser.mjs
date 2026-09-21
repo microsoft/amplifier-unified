@@ -1,0 +1,30 @@
+import {openSettingsPage} from './browser-settings.mjs';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
+ browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);
+ await expect(page.getByText('Conversation stopped.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Copy session ID',exact:true}).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
+ await page.getByRole('button',{name:'Conversation details',exact:true}).click();await expect(page.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Copy diagnostics',exact:true}).click();assert.equal(JSON.parse(await page.evaluate(()=>navigator.clipboard.readText())).failure.category,'invalid_image');
+ await openSettingsPage(page,'conversation');
+ const dialog=page.getByRole('dialog');
+ await dialog.getByRole('button',{name:'Conversation details',exact:true}).click();
+ await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
+ await dialog.getByRole('button',{name:'Copy session ID',exact:true}).click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
+ await dialog.getByRole('button',{name:'Close panel',exact:true}).click();
+ await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Create recovery copy',exact:true}).scrollIntoViewIfNeeded();
+ assert.ok(await page.locator('.a-conversation-details').evaluate(element=>element.scrollWidth<=element.clientWidth));
+ await page.screenshot({animations:'disabled',path:'/tmp/amplifier-session-health-mobile.png'});
+ await page.getByRole('button',{name:'Create recovery copy',exact:true}).click();await expect(page.getByText(/Recovery copy · Readable history retained/)).toBeVisible();
+ const state=await page.evaluate(()=>window.amplifier.getState());assert.notEqual(state.selectedSessionId,ready.sessionId);
+ const check=await (await page.request.get(ready.url+'/fixture/check')).json();assert.equal(check.originalUnchanged,true);assert.equal(check.sessions,2);
+ await page.reload();await expect(page.getByText(/Recovery copy · Readable history retained/)).toBeVisible();assert.deepEqual(errors,[]);
+ console.log('Session health browser passed: identity, recorded cause, clipboard, mobile bounds, recovery copy, original unchanged, refresh persistence.');
+}finally{await browser?.close();fixture.kill();}

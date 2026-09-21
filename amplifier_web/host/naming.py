@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 from ..naming import read
+from amplifier_foundation.session.metadata import has_generated_or_manual_name
 
 log=logging.getLogger(__name__)
 
@@ -44,14 +45,21 @@ class LiveSessionNaming:
                     saved=adapter.store.load(coordinator.session_id)
                     return {**(saved[1] if saved else {}),**read(session_dir)}
                 def _save_metadata(self,session_dir,metadata):
-                    # Accepted results are persisted by the app event handler, which
-                    # also protects manual names if a result arrives after a rename.
-                    pass
+                    # Cached bundles can still supply an older naming hook.
+                    # Enforce the shared writer even before that cache updates.
+                    from amplifier_foundation.session.metadata import SessionMetadataStore
+                    store=SessionMetadataStore(session_dir)
+                    if metadata.get('name'):
+                        return store.set_name(metadata['name'],source='generated',
+                            description=metadata.get('description'),
+                            expected_revision=metadata.get('name_revision',0))
+                    return store.update({key:metadata[key] for key in ('description','description_updated_at') if key in metadata})
             self.hook=AppNamingHook(coordinator,settings)
             async def result(event,data):
                 from amplifier_core import HookResult
                 if data.get('session_id')==coordinator.session_id:
-                    self.publish({'type':'session.naming','name':data.get('name'),'description':data.get('description')})
+                    accepted=read(adapter.directory)
+                    self.publish({'type':'session.naming','name':accepted.get('name'),'description':accepted.get('description'),'nameRevision':accepted.get('name_revision')})
                 return HookResult()
             coordinator.hooks.register('session-naming:set',result,name='unified-session-naming')
             coordinator.register_cleanup(self.close)
@@ -75,7 +83,12 @@ class LiveSessionNaming:
         count=len(self.completed)
         if count<=self.last_attempt:return
         metadata=self.hook._load_metadata(self.directory)
-        named=bool(metadata.get('name'))
+        # A custom name is a user choice, including legacy names without an
+        # explicit source. Do not spend a model call proposing its replacement.
+        if metadata.get('name') and metadata.get('name_source') not in {'fallback', 'generated'}:
+            self.last_attempt=count
+            return
+        named=has_generated_or_manual_name(metadata)
         config=self.hook.config
         initial=not named and count>=config.initial_trigger_turn and self.hook._defer_counts.get(self.coordinator.session_id,0)<config.max_retries
         update=named and count>=config.update_interval_turns and count//config.update_interval_turns>self.last_attempt//config.update_interval_turns

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Standalone Foundation and loop-live runtime for Amplifier Unified"
 requires-python = ">=3.13"
 dependencies = [
-  "amplifier-core==1.6.1",
+  "amplifier-core>=1.6.1",
   "amplifier-module-loop-live",
   "amplifier-foundation",
   "amplifier-module-loop-streaming",
@@ -21,19 +21,20 @@ dependencies = [
 ]
 
 [tool.uv]
-# Keep Foundation at the reviewed host API revision while bundles resolve their modules.
+# Follow the same Foundation branch while bundles resolve their modules.
 override-dependencies = [
-  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@695f875c0908f45f8dc78b1fcde80ecddebffd7c",
+  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
 ]
 
 [tool.uv.sources]
-amplifier-module-loop-live = { git = "https://github.com/bkrabach/amplifier-module-loop-live", rev = "de307c398facea5d4d656e14f84938a74b934ff2" }
-amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "695f875c0908f45f8dc78b1fcde80ecddebffd7c" }
-amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "603aa6eefacd28367fc886d58eb89de993c58dea" }
-amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6" }
-amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "12fffb6ad2bafb1bb7999ab02245a35e42ca8672" }
-amplifier-module-provider-openai = { git = "https://github.com/microsoft/amplifier-module-provider-openai", rev = "c9b0e8e60702269c7a637875b89d011facfde020" }
-amplifier-module-provider-openai-chatgpt = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt", rev = "b522d4fb57b8c5aebd03cb4cf4eacb7d5e64bd19" }
-amplifier-module-provider-github-copilot = { git = "https://github.com/microsoft/amplifier-module-provider-github-copilot", rev = "d2d27663d8808d7692e588d709c63e58ec418545" }
-amplifier-module-provider-gemini = { git = "https://github.com/microsoft/amplifier-module-provider-gemini", rev = "1c1bcbaf4d296eae2cabe1ec0f84bcd9fb8aa109" }
+amplifier-core = { git = "https://github.com/microsoft/amplifier-core", rev = "main" }
+amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
+amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
+amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
+amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "main" }
+amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "main" }
+amplifier-module-provider-openai = { git = "https://github.com/microsoft/amplifier-module-provider-openai", rev = "main" }
+amplifier-module-provider-openai-chatgpt = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt", rev = "main" }
+amplifier-module-provider-github-copilot = { git = "https://github.com/microsoft/amplifier-module-provider-github-copilot", rev = "main" }
+amplifier-module-provider-gemini = { git = "https://github.com/microsoft/amplifier-module-provider-gemini", rev = "main" }
 

@@ -2,13 +2,44 @@
 
 A local Python host serving a bundled React interface. One conversation supports typed chat, notification-oriented text, and real-time voice. Community bundles and tools execute through AmplifierSession, Foundation and loop-live in isolated worker processes.
 
+## Optional terminal client
+
+Install the native TUI alongside Unified:
+
+```sh
+uv tool install --no-sources 'amplifier-unified[tui] @ git+https://github.com/microsoft/amplifier-unified'
+amplifier-unified tui
+amplifier-unified tui --session HOST_CONVERSATION_ID
+```
+
+The command connects to the existing service using its configured local port,
+control-token file and app-owned CA. It does not start another service. Source
+installation builds the Ratatui frontend and needs Rust/Cargo and a C linker;
+launching an installed platform wheel does not. Omit `[tui]` to install the web
+host alone. Application updates retain and validate an installed optional TUI.
+Native builds support macOS/Linux; Windows uses WSL2.
+
+For a different host, use `amplifier-unified tui --server https://host.example:8443
+--token-file /private/host-token --ca-file /private/host-ca.crt`. Remote connections
+verify HTTPS. Tokens are never placed in command arguments. Each terminal gets an
+independent selection and private draft; web and terminal views share host-owned
+conversation work. Quit detaches without stopping it. See the
+[terminal client guide](docs/clients/tui-handoff.md) for supported operations and
+current limitations.
+
+Automatic conversation names come from the configured ecosystem naming hook on
+the service, shared by web and terminal clients. The hook controls initial naming
+and later update intervals. A custom name supplied through Rename is preserved,
+including against a late generated result; automatic naming calls are skipped
+for custom names. Canonical names remain in shared session metadata for CLI use.
+
 ## Run this checkout
 
 ```sh
 uv run --project /path/to/amplifier-web amplifier-unified --workspace /path/to/your/project
 ```
 
-Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, use the `work` default or choose another standalone bundle, and send a message. The runtime prepares its pinned environment on first use. Work currently requires GitHub access to its private bundle repository; Anchors remains available in the bundle picker. Explicit app, workspace, and shared bundle choices still take precedence, and existing conversations keep their saved bundle. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
+Then open http://127.0.0.1:8941 and sign in with the system account that runs the host. Start a conversation, use the `work` default or choose another standalone bundle, and send a message. The runtime prepares its branch-tracking environment on first use. Work currently requires GitHub access to its private bundle repository; Anchors remains available in the bundle picker. Explicit app, workspace, and shared bundle choices still take precedence, and existing conversations keep their saved bundle. Unified reads the shared Amplifier settings and credentials on every session activation, including workspace overrides. Its runtime registry/cache remains app-owned. Missing credentials or unavailable providers are reported as errors, never simulated responses.
 
 The first message may take several minutes while the runtime environment and configured modules are prepared. The conversation shows the current preparation phase and elapsed time; your message remains queued until preparation finishes. A preparation timeout reports an error instead of silently resending it.
 
@@ -24,15 +55,15 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified
+uv tool install git+https://github.com/microsoft/amplifier-unified
 amplifier-unified
 ```
 
-End users need no Node installation: compiled React assets ship in the Python package. **Settings → Maintenance → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
+End users need no Node installation: compiled React assets ship in the Python package. **Settings → Updates** checks community sources and this private release channel. Automatic checking is on daily while the host is open; automatic installation is opt-in. App releases restart the host when idle. See [the update design](docs/UPDATES.md).
 
 ## Smart Tools and collaborative canvas apps
 
-**Settings → Capabilities → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
+**Settings → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
 
 ## Shell customization and agent guidance
 
@@ -61,7 +92,7 @@ It checks external-link navigation and the browser's actual form `Origin`;
 handwritten HTTP headers alone miss these failures. PAM is stubbed only in the
 isolated test, which never uses real credentials or changes system certificate trust.
 
-The runtime dependencies are pinned separately under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
+The runtime dependencies follow branches declared under `amplifier_web/runtime_deps/`. The launcher prepares them through uv in a writable user cache. The outer host remains small and independent of provider import dependencies.
 
 ## Deployment, PAM, and HTTPS
 
@@ -134,7 +165,7 @@ a private timestamped backup. Installation captures the invoking shell's `PATH`
 so the runtime can find `uv` in Snap or custom locations, and starts/restarts
 the service to apply it. After changing tool locations, rerun installation from
 the shell where `uv --version` works (keep your `--workspace` selection).
-`uv tool install git+https://github.com/bkrabach/amplifier-unified`
+`uv tool install git+https://github.com/microsoft/amplifier-unified`
 installs the same CLI and service support.
 
 ## Standalone host and session flow
@@ -167,7 +198,7 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ### Automatic CLI workspaces and chats
 
-Unified pins Foundation's native `session.history` reader/writer and
+Unified uses Foundation's native `session.history` reader/writer and
 `session.shared_state` ownership lock. CLI lock participation
 requires the upgraded shared-root adapter; restart older CLI processes after
 updating. Native Windows CLI persistence remains available, but shared-session
@@ -234,7 +265,7 @@ never requests it. No lock expiry, force-unlock, or automatic work replay is pro
 
 ### Conversation Markdown export
 
-**Settings → Setup → Current conversation** offers **Copy Markdown** and
+**Settings → History & recovery → Current conversation** offers **Copy Markdown** and
 **Download Markdown** for the entire conversation, including native history
 outside the loaded page. The export preserves message Markdown and code,
 labels spoken exchanges, and includes attachment and saved-artifact references.
@@ -280,7 +311,7 @@ commands, approvals, bridges, naming work, pending children or configuration
 transaction, before retirement. It resumes from saved state on the next command;
 earlier inputs and tool effects are not replayed.
 
-Use **Settings → Maintenance → Ready conversations** to change the idle count,
+Use **Settings → Advanced → Readiness** to change the idle count,
 hours, and preparation-on-selection policy. The shared
 `runtime.retention.update {patch: {...}}` action saves and applies these settings
 without a restart. They live under `runtime` in the host's `config/server.yaml`:
@@ -473,7 +504,7 @@ are not all marked unread retroactively.
 ### Send feedback
 
 Use **Send feedback** in the app header to submit a bug report, idea, or question
-as an issue in the private `bkrabach/amplifier-unified` repository. The host uses
+as an issue in the private `microsoft/amplifier-unified` repository. The host uses
 its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
 access. Review the title and details, then send. The result includes a link to
 the created issue. No label configuration is required. After durable acceptance,
@@ -544,7 +575,7 @@ remain separate work. Report text is external content, not agent instructions.
 
 ### Diagnostics and Context Intelligence
 
-Settings → Maintenance → **Diagnostics & Context Intelligence** keeps correlated
+Settings → **Diagnostics** keeps correlated
 app, session, worker, tool, canvas, usage and update metadata locally. You can add
 personal and team servers independently, choose the streams for each, and test
 credentials and ingestion. No destination is configured automatically; conversation

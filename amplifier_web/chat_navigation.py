@@ -4,6 +4,7 @@ import math
 import time
 
 from .session_navigation import is_top_level
+from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
 
@@ -75,6 +76,10 @@ def view_patch(patch):
             raise ValueError('Worker history search must be text of at most 500 characters.')
         if 'index' in value and (type(value['index']) is not int or not 0 <= value['index'] <= 1_000_000):
             raise ValueError('Worker history page index must be a nonnegative integer.')
+    if 'navWorkspaceList' in patch and type(patch['navWorkspaceList']) is not bool:
+        raise ValueError('navWorkspaceList must be a boolean.')
+    if 'navStatusFilter' in patch and patch['navStatusFilter'] not in ('all', 'attention', 'working', 'unread'):
+        raise ValueError('Choose all, attention, working, or unread conversations.')
     if 'navChatScope' in patch and patch['navChatScope'] not in ('workspace', 'all'):
         raise ValueError('navChatScope must be workspace or all.')
     if 'navFilter' in patch and (not isinstance(patch['navFilter'], str) or len(patch['navFilter']) > 500):
@@ -105,6 +110,7 @@ def snapshot(state):
                   if row.get('available') is True and isinstance(row.get('path'), str) and row['path']]
     by_id = {row['id']: row for row in workspaces}
     by_path = {row['path']: row for row in workspaces}
+    labels = path_labels(by_path)
     selected = by_id.get(state.get('selectedWorkspaceId'))
     view = state.get('view', {})
     mode = 'all' if view.get('navChatScope') == 'all' else 'workspace'
@@ -112,6 +118,11 @@ def snapshot(state):
     query = query if isinstance(query, str) else ''
     scope = {'mode': mode, 'workspaceId': selected['id'] if mode == 'workspace' and selected else None,
              'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
+    status_filter = view.get('navStatusFilter', 'all')
+    if status_filter != 'all':
+        scope['statusFilter'] = status_filter
+    counts = dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)
+    unread = state.get('attention', {}).get('sessions', {})
     pins = set(state.get('pinnedSessionIds', []))
     rows = []
     for session in state.get('sessions', []):
@@ -122,11 +133,19 @@ def snapshot(state):
             continue
         title = session.get('title') or 'Untitled conversation'
         description = session.get('description') or ''
-        if not _matches((title, description, session['id'], workspace['path'], workspace.get('name', '')), query):
+        shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+        if not _matches((title, description, session['id'], shared_id, workspace['path'], workspace.get('name', '')), query):
+            continue
+        summary = activity(session, bool(unread.get(session['id'])))
+        counts[summary['kind']] += 1
+        if status_filter != 'all' and summary['kind'] != status_filter:
             continue
         rows.append({'id': session['id'], 'title': title, 'description': description,
                      'status': session.get('status', 'idle'), 'workspace': workspace['path'],
-                     'workspaceId': workspace['id'], 'pinned': session['id'] in pins,
+                     'workspaceId': workspace['id'], 'workspaceName': workspace.get('name', ''),
+                     'workspaceLabel': labels[workspace['path']], 'activity': summary,
+                     'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
+                     'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
                      'recentActivityAt': recent_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
     rows.sort(key=lambda row: (not row['pinned'], -row['recentActivityAt']))
@@ -138,4 +157,4 @@ def snapshot(state):
     index = max(0, min(pages - 1, requested))
     start, end = index * PAGE_SIZE, min(len(rows), (index + 1) * PAGE_SIZE)
     return {'items': rows[start:end], 'total': len(rows), 'index': index, 'pages': pages,
-            'start': start, 'end': end, 'scope': scope}
+            'start': start, 'end': end, 'scope': scope, 'activityCounts': counts}

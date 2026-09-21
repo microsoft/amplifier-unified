@@ -57,8 +57,12 @@ class SessionClient:
         async with self.http.request(method, self.base_url + path, json=payload, ssl=self.ssl,
                                      timeout=aiohttp.ClientTimeout(total=60)) as response:
             data = await response.json()
-            if response.status >= 400:
-                raise SessionClientError(response.status, data)
+            if response.status >= 400 or data.get('accepted') is False:
+                status = response.status
+                if status < 400:
+                    recorded = data.get('status')
+                    status = recorded if type(recorded) is int and 400 <= recorded < 600 else 400
+                raise SessionClientError(status, data)
             return data
 
     async def attach(self, *, resume_client_id=None):

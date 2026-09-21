@@ -455,7 +455,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 /* Shell surfaces inherit every color from the active single-file skin. */
 #amp-one.a-chat-shell .a-layout{position:relative}
-#amp-one .a-nav-slot{--nav-width:260px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
+#amp-one .a-nav-slot{--nav-width:320px;position:relative;flex:0 0 52px;width:52px;min-width:52px;min-height:0;align-self:stretch;z-index:15}
 #amp-one .a-nav-slot.is-pinned{flex-basis:var(--nav-width);width:var(--nav-width)}
 #amp-one .a-nav-rail{position:absolute;inset:0 auto 12px 0;width:52px;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:7px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:16px;transition:width .16s ease,box-shadow .16s ease}
 #amp-one .a-nav-slot.is-expanded .a-nav-rail{width:var(--nav-width);box-shadow:8px 10px 30px #18244118}
@@ -775,3 +775,6 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 @media(max-width:600px){#amp-one .a-execution-node>.a-execution-line{flex-wrap:wrap}#amp-one .a-execution-node .a-execution-label{flex-basis:calc(100% - 66px)}#amp-one .a-execution-phase{display:inline;font-size:10px;margin-left:36px}#amp-one .a-execution-usage{white-space:normal}#amp-one .a-execution-timing{padding:0 8px}}
 
 #amp-one .a-execution-result-link{display:block;font-size:11px;overflow-wrap:anywhere;margin:6px 0;color:var(--a-accent)}
+.a-conversation-details{padding:.5rem 0;min-width:0}.a-conversation-details p{margin:.55rem 0}.a-conversation-details code{user-select:text}.a-conversation-details .a-dialog-actions{flex-wrap:wrap;justify-content:flex-start}
+
+.a-message-delivery{display:inline-flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--a-muted);flex-wrap:wrap}.a-message-delivery>svg{width:14px;height:14px;flex-shrink:0}.a-message-delivery .a-link{font-size:inherit}.a-inline-checkbox{display:flex;gap:.5rem;align-items:center;font-size:.85rem}.a-inline-checkbox input{width:auto}

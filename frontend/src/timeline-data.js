@@ -1,6 +1,6 @@
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
- if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns}}
+ if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[]}}
  const workers=visibleWorkers(session?.workers||[]),events=session?.runtimeEvents||[];
  if(!workers.length&&!events.some(e=>e.type==='runtime.tool'||String(e.type).startsWith('tool.')))return {nodes:[],turns:[]};
  const turnId='observed-activity',nodes=[],tools=new Map();
@@ -54,7 +54,8 @@ export function elapsedLabel(record,now=Date.now()/1000){
 export function usageLabel(usage,{pending=false}={}){
  if(!usage)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
  if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
- const tokens=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
+ const reported=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
+ const tokens=usage.grossTotalTokens??(reported===null?null:reported+(usage.cacheWriteTokens||0));
  // Older saved rows may lack per-metric pending counts. Only a live lifecycle
  // can supply that fallback; a finished call must not promise future telemetry.
  const tokenPending=usage.tokenPendingCalls??(pending?usage.tokenUnknownCalls||0:0),costPending=usage.costPendingCalls??(pending?usage.unknownCalls||0:0);
@@ -91,4 +92,44 @@ export function detailLinks(text){
   }
  }
  visit(value);return [...urls];
+}
+
+export function segmentUsage(nodes){
+ const calls=nodes.filter(node=>node.kind==='llm'),value={calls:calls.length,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0,costUsd:0};
+ for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])value[key]=0;
+ for(const node of calls){const usage=node.usage||{},pending=isRunning(node);
+  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])if(Number.isFinite(usage[key]))value[key]+=usage[key];
+  if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null))value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);
+  if(usage.totalTokens==null&&usage.inputTokens==null&&usage.outputTokens==null){value.tokenUnknownCalls++;if(pending)value.tokenPendingCalls++}
+  if(Number.isFinite(usage.costUsd)){value.costUsd+=usage.costUsd;value.pricedCalls++;if(usage.costType==='estimated')value.estimatedCalls++}else{value.unknownCalls++;if(pending)value.costPendingCalls++}
+ }
+ value.costType=!value.pricedCalls?'unavailable':value.unknownCalls?'partial':value.estimatedCalls?'estimated':'reported';return value;
+}
+export function splitWork(messages,data){
+ const turns=[],nodes=[];
+ for(const turn of data.turns){
+  const source=data.nodes.filter(node=>node.turnId===turn.id),groups=new Map();
+  for(const node of source){
+   const at=Number.isFinite(node.startedAt)?node.startedAt:Number.isFinite(node.endedAt)?node.endedAt:turn.startedAt;
+   let anchor=turn.anchorMessageId??null;
+   if(Object.hasOwn(node,'anchorMessageId'))anchor=node.anchorMessageId;
+   else if(Number.isFinite(at))for(const message of messages){if(message.timestampKnown!==false&&Number.isFinite(message.createdAt)&&message.createdAt<=at)anchor=message.id}
+   // Explicit anchors are still useful when older logs have no timestamps.
+   const id=`${turn.id}@${anchor||'start'}`;
+   if(!groups.has(id))groups.set(id,{id,anchor,nodes:[]});
+   groups.get(id).nodes.push({...node,turnId:id});
+  }
+  if(!source.length&&isRunning(turn))groups.set(`${turn.id}@${turn.anchorMessageId||'start'}`,{id:`${turn.id}@${turn.anchorMessageId||'start'}`,anchor:turn.anchorMessageId,nodes:[]});
+  for(const group of groups.values()){
+   const starts=group.nodes.map(node=>node.startedAt).filter(Number.isFinite),ends=group.nodes.map(node=>node.endedAt).filter(Number.isFinite);
+   const running=group.nodes.some(isRunning)||(!starts.length&&!ends.length&&isRunning(turn));
+   const failure=group.nodes.find(node=>['error','failed','cancelled','interrupted'].includes(node.status||node.phase));
+   turns.push({...turn,id:group.id,originalTurnId:turn.id,anchorMessageId:group.anchor,startedAt:starts.length?Math.min(...starts):turn.startedAt,
+    endedAt:running?undefined:ends.length?Math.max(...ends):turn.endedAt,phase:running?'running':failure?(failure.status||failure.phase):ends.length||turn.endedAt?'completed':'recorded',status:undefined,
+    aggregateUsage:segmentUsage(group.nodes),nodeCounts:{tools:group.nodes.filter(n=>n.kind==='tool').length,models:group.nodes.filter(n=>n.kind==='llm').length},
+    ...(data.segments||[]).find(segment=>segment.id===group.id)});
+   nodes.push(...group.nodes);
+  }
+ }
+ return {nodes,turns};
 }

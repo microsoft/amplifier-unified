@@ -81,3 +81,28 @@ def test_new_running_turn_is_visible_before_the_first_execution_node():
     view=project(session)
     assert view['execution']['turns'][0]['id']=='empty'
     assert view['execution']['turns'][0]['nodeCounts']=={'tools':0,'workers':0}
+
+
+def test_segment_totals_cover_all_calls_when_actions_are_paged():
+    session={'id':'chat','messages':[{'id':'question','role':'user','createdAt':1},
+              {'id':'interim','role':'assistant','createdAt':150}],
+             'execution':{'turns':[{'id':'turn','anchorMessageId':'question'}],
+              'nodes':[{'id':str(i),'turnId':'turn','kind':'llm','startedAt':i+2,'endedAt':i+3,'phase':'completed',
+                        'usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.01}} for i in range(200)]}}
+    view=project(session);assert len(view['execution']['nodes'])==100
+    groups=view['execution']['segments'];assert len(groups)==2
+    assert groups[0]['nodeCounts']=={'tools':0,'models':148}
+    assert groups[1]['nodeCounts']=={'tools':0,'models':52}
+    assert sum(group['aggregateUsage']['totalTokens'] for group in groups)==2400
+    assert view['execution']['nodes'][0]['anchorMessageId']=='question'
+    assert view['execution']['nodes'][-1]['anchorMessageId']=='interim'
+    earlier=page(session,'nodes',view['executionWindow']['before'])
+    assert earlier['segments']==groups[:1]
+
+
+def test_group_summary_keeps_failures_visible_and_unknown_completion_honest():
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn'}],
+             'nodes':[{'id':'one','turnId':'turn','kind':'tool','phase':'error','startedAt':1,'endedAt':2}]}}
+    assert project(session)['execution']['segments'][0]['phase']=='error'
+    node=session['execution']['nodes'][0];node.update(phase='recorded');node.pop('endedAt')
+    assert project(session)['execution']['segments'][0]['phase']=='recorded'

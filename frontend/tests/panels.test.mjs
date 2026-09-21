@@ -13,7 +13,7 @@ test('setup panels render redacted provider configuration and valid required rou
  const provider=renderToStaticMarkup(React.createElement(ProviderSettings,{state,session:{id:'s',status:'ready'},act}));
  assert.match(provider,/credentials ready/);assert.match(provider,/type="password"/);assert.match(provider,/data-action="providers.save"/);
  const routing=renderToStaticMarkup(React.createElement(RoutingSettings,{state,act}));
- assert.match(routing,/general description/);assert.match(routing,/fast description/);assert.match(routing,/routing.save/);
+ assert.match(routing,/general description/);assert.match(routing,/data-collection-id="fast"/);assert.match(routing,/routing.save/);
 });
 test('runtime controls expose only bundle-supported goal actions',()=>{
  const state={view:{runtimeDraft:{tab:'direction'}},runtimeControl:{s:{'catalog.inspect':{capabilities:{goals:false,modes:false}}}}};
@@ -73,7 +73,7 @@ test('no pending updates still distinguishes failed checks from current sources'
 test('provider model results and metadata choices are visible even after other management actions finish',()=>{
  const state={view:{providerEditor:{id:'openai',module:'provider-openai',model:'gpt-6-astra',config:'{"reasoning_effort":"high"}'}},management:{phase:'ready',operation:'notifications.get'},setup:{modelCatalogs:{openai:[{id:'gpt-6-astra',display_name:'Astra'}]},metadata:{'provider-openai':{info:{config_fields:[{id:'reasoning_effort',display_name:'Reasoning effort',field_type:'choice',choices:['low','high'],requires_model:true},{id:'enabled',field_type:'boolean'}]}}},operations:{'providers.models:openai':{phase:'ready'}}}};
  const html=renderToStaticMarkup(React.createElement(ProviderSettings,{state,act}));
- assert.match(html,/Found 1 models/);assert.doesNotMatch(html,/Available models/);assert.match(html,/<select id="provider-model"/);
+ assert.match(html,/Found 1 models/);assert.doesNotMatch(html,/Available models/);assert.match(html,/<select id="provider-model-catalog"/);
  assert.match(html,/<select id="provider-option-reasoning_effort"/);
  assert.match(html,/<option value="high" selected="">high/);
  assert.match(html,/<select id="provider-option-enabled"/);

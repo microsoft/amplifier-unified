@@ -114,3 +114,42 @@ async def test_changed_config_during_discovery_never_reuses_old_result(tmp_path,
     with pytest.raises(ValueError,match='configuration changed'):await pending
     assert old not in cache.entries
     await cache.close()
+
+
+async def test_persistent_ttl_failed_refresh_and_private_file(tmp_path):
+    now=[1000.0];path=tmp_path/'cache/catalog.json';calls=0
+    async def load():
+        nonlocal calls
+        calls+=1
+        return {'models':[{'id':'saved'}]}
+    cache=ProviderCatalog(path,ttl=60,clock=lambda:now[0])
+    key=('providers.models','private-configuration-digest')
+    await cache.get(key,load)
+    assert path.stat().st_mode & 0o777 == 0o600
+    restarted=ProviderCatalog(path,ttl=60,clock=lambda:now[0])
+    assert restarted.peek(key)['models'][0]['id']=='saved'
+    await restarted.get(key,load);assert calls==1
+    assert restarted.peek(('providers.models','different-account')) is None
+    now[0]+=61
+    assert not restarted.fresh(key)
+    async def fail():raise ValueError('temporarily unavailable')
+    with pytest.raises(ValueError):await restarted.get(key,fail)
+    assert restarted.peek(key)['models'][0]['id']=='saved'
+    now[0]+=61
+    await restarted.get(key,load);assert calls==2
+    assert restarted.fresh(key)
+    path.write_text('{broken')
+    assert ProviderCatalog(path).peek(key) is None
+
+
+async def test_provider_priority_does_not_invalidate_models(tmp_path,monkeypatch):
+    settings(tmp_path)
+    manager=SetupManager(tmp_path,catalog=ProviderCatalog())
+    before=manager.catalog_key({'id':'0'},str(tmp_path))
+    document=yaml.safe_load((amplifier_home()/'settings.yaml').read_text())
+    document['config']['providers'][0]['config']['priority']=99
+    write_private(amplifier_home()/'settings.yaml',yaml.safe_dump(document))
+    assert manager.catalog_key({'id':'0'},str(tmp_path))==before
+    document['config']['providers'][0]['config']['base_url']='https://other.example/v1'
+    write_private(amplifier_home()/'settings.yaml',yaml.safe_dump(document))
+    assert manager.catalog_key({'id':'0'},str(tmp_path))!=before

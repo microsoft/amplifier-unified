@@ -116,6 +116,9 @@ class SetupManager:
         config=self.config(workspace)
         row=next((row for row in config.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') or (row or {}).get('module')
+        # Priority is Unified-owned ordering, not provider catalog identity.
+        row=copy.deepcopy(row) if row else None
+        if row:row.get('config',{}).pop('priority',None)
         raw=(row or {}).get('config',{})
         credential=environment_credential(module,raw)
         environment={name:os.environ.get(name) for name in (*PROVIDER_ENV.get(module,()),credential.get('envVar')) if name}
@@ -132,7 +135,7 @@ class SetupManager:
         key=(action,self.catalog_key(args,workspace))
         result=await self.catalog.get(key,lambda:self.probe(action,args,workspace),refresh=args.get('refresh',False))
         if key[1]!=self.catalog_key(args,workspace):
-            self.catalog.entries.pop(key,None)
+            self.catalog.discard(key)
             raise ValueError('Provider configuration changed during discovery. The new configuration is being refreshed.')
         return result
 
@@ -267,7 +270,8 @@ class SetupManager:
     def routing(self,workspace):
         active=self.config(workspace).settings.get('routing',{}).get('matrix','balanced')
         rows=[]; seen=set(); roles=set()
-        for directory in self._routing_dirs(workspace):
+        directories=self._routing_dirs(workspace)
+        for directory in directories:
             for path in sorted(directory.glob('*.yaml')):
                 if path.is_symlink() or path.stat().st_size>256*1024:continue
                 name=path.stem
@@ -276,7 +280,7 @@ class SetupManager:
                     value=yaml.safe_load(path.read_text());validate_matrix(value)
                 except (ValueError,yaml.YAMLError):continue
                 seen.add(name);roles.update(value['roles'])
-                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in self._routing_dirs(workspace)[:3] else 'bundle','active':active==name})
+                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in directories[:3] else 'bundle','active':active==name})
         return {'matrices':rows,'active':active,'roles':sorted(roles)}
 
     def matrix(self,workspace,name):
@@ -296,14 +300,23 @@ class SetupManager:
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
         if action in {'providers.schema','providers.models','providers.test'}:
             return await (self.probe(action,args,workspace) if action=='providers.test' else self.cached_probe(action,args,workspace))
-        if action=='providers.move':
+        if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
             rows=current.providers
             ids=[row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-') for row in rows]
-            identity=args['id'];before=args.get('beforeId')
-            if identity not in ids or before is not None and before not in ids:raise ValueError('Refresh the provider list before reordering.')
-            if identity!=before:
-                ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
+            if action=='providers.reorder':
+                ordered=args['ids']
+                if args.get('expectedIds')!=ids or len(ordered)!=len(ids) or set(ordered)!=set(ids):
+                    raise ValueError('Provider connections changed. Refresh the list before saving order.')
+                changed=ordered!=ids
+                ids=ordered
+            else:
+                identity=args['id'];before=args.get('beforeId')
+                if identity not in ids or before is not None and before not in ids:raise ValueError('Refresh the provider list before reordering.')
+                changed=identity!=before
+                if changed:
+                    ids.remove(identity);ids.insert(ids.index(before) if before else len(ids),identity)
+            if changed:
                 def reorder(settings):
                     scoped=settings.setdefault('config',{}).setdefault('providers',[])
                     for priority, key in enumerate(ids,1):
