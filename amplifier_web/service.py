@@ -1500,7 +1500,7 @@ class AppService:
                     if action in {'smartTools.call','smartTools.open'}:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
-                        self.smart_canvas.binding(args['canvasId'])
+                        self.smart_canvas.admit_call(args)
                     pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action == 'bundle.default':
                 from .preferences import SettingsStore

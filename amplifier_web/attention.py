@@ -3,6 +3,26 @@ import hashlib
 import json
 
 
+def connection_failure_key(operation):
+    """Group host pre-dispatch refusals, never tool results or uncertain work.
+
+    Older receipts lack a reason code. Their exact host-generated exception
+    and absence of a result identify the same pre-transport refusal. This is
+    display grouping only: no receipt is edited, retried or reclassified.
+    """
+    from .smart_tool_lifecycle import CONNECTION_UNAVAILABLE
+    if (operation.get('status') != 'failed' or operation.get('origin') != 'app'
+            or operation.get('action') != 'smartTools.call'
+            or operation.get('result') is not None):
+        return None
+    typed = (operation.get('failureReason') == 'connection_unavailable'
+             and operation.get('requestState') == 'not_sent')
+    legacy = not operation.get('failureReason') and operation.get('error') == CONNECTION_UNAVAILABLE
+    server = operation.get('target', {}).get('id')
+    configuration = operation.get('configuration')
+    return (server, configuration) if server and configuration and (typed or legacy) else None
+
+
 def snapshot(state):
     items=[]
     read=state.get('attentionRead',{})
@@ -31,9 +51,28 @@ def snapshot(state):
         if op.get('phase') not in {'error','failed'} or not op.get('error'):continue
         section,page=routes.get(action.split('.')[0],('maintenance','repair'))
         add('action:'+action,'Action needs attention',section,page,op['error'],op.get('commandId'))
+    connection_groups = {}
     for op in state.get('smartTools',{}).get('operations',[]):
         if op.get('status') in {'failed','interrupted'}:
-            add('smart-tool:'+op['id'],'Smart Tool needs attention','capabilities','smart-tools',op.get('error','The tool did not finish.'),op.get('updatedAt'))
+            group = connection_failure_key(op)
+            if group:
+                connection_groups.setdefault(group, []).append(op)
+            else:
+                add('smart-tool:'+op['id'],'Smart Tool needs attention','capabilities','smart-tools',op.get('error','The tool did not finish.'),op.get('updatedAt'))
+    for (server_id, configuration), operations in connection_groups.items():
+        group_id = hashlib.sha256(json.dumps([server_id, configuration]).encode()).hexdigest()[:24]
+        count = len(operations)
+        add('smart-tool-connection:'+group_id, 'Smart Tool connection needs attention',
+            'capabilities', 'smart-tools',
+            f'{count} recent request'+('s' if count != 1 else '')+' could not use this connection. Reconnect in Settings; individual records remain in tool activity.',
+            sorted((op['id'], op.get('updatedAt')) for op in operations),
+            operationIds=[op['id'] for op in operations], serverId=server_id)
+        # A projection upgrade must not resurrect already reviewed receipts.
+        if all(read.get('smart-tool:'+op['id']) == hashlib.sha256(json.dumps(
+                ['smart-tool:'+op['id'], 'Smart Tool needs attention',
+                 op.get('error', 'The tool did not finish.'), op.get('updatedAt')],
+                sort_keys=True, default=str).encode()).hexdigest()[:24] for op in operations):
+            items[-1]['read'] = True
     for dest in state.get('diagnostics',{}).get('destinations',[]):
         if dest.get('error'):add('diagnostics:'+dest['id'],'Context Intelligence delivery needs attention','maintenance','diagnostics',dest['error'].get('type','Delivery failed'))
     local=state.get('diagnostics',{}).get('local',{})
