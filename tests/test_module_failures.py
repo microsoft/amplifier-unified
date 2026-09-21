@@ -76,7 +76,8 @@ def test_native_history_inspection_reads_only_safe_current_failure(tmp_path):
     assert inspect_session(tmp_path,session)['moduleFailures']==[]
 
 
-def test_current_worker_report_wins_over_native_history_and_clears(tmp_path):
+@pytest.mark.parametrize("current_exists", [False, True])
+def test_current_worker_report_wins_over_native_history_and_clears(tmp_path, current_exists):
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.session_health import inspect_session
     from amplifier_web.module_failures import clear_failures
@@ -84,7 +85,10 @@ def test_current_worker_report_wins_over_native_history_and_clears(tmp_path):
     legacy = SessionStore.for_app(tmp_path, tmp_path).directory(session["id"])
     current = tmp_path / "runtime-reports" / session["id"]
     persist_failures(legacy, [{"module": "old-tool", "type": "tool", "reason_code": "missing_source"}])
-    failure = persist_failures(current, [{"module": "current-hook", "type": "hook", "reason_code": "invalid_module_metadata"}])
-    assert inspect_session(tmp_path, session)["moduleFailures"] == failure.failures
+    if current_exists:
+        failure = persist_failures(current, [{"module": "current-hook", "type": "hook", "reason_code": "invalid_module_metadata"}])
+        assert inspect_session(tmp_path, session)["moduleFailures"] == failure.failures
+    else:
+        assert inspect_session(tmp_path, session)["moduleFailures"][0]["module"] == "old-tool"
     clear_failures(current)
     assert inspect_session(tmp_path, session)["moduleFailures"] == []

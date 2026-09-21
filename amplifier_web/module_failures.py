@@ -54,4 +54,5 @@ def read_failures(directory):
 
 def clear_failures(directory):
     path=Path(directory)/'module-load-failures.json'
-    if path.exists():write_private(path,'[]')
+    # A successful preparation also supersedes any older native-side report.
+    write_private(path,'[]')
