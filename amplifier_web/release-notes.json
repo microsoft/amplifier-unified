@@ -40,6 +40,15 @@
       ]
     },
     {
+      "version": "0.19.15",
+      "title": "Keep local source validation results visible",
+      "changes": [
+        "Validation and save confirmations now remain visible for relative paths and file URLs, while the saved source retains its resolved path.",
+        "Changing the source type hides an earlier module validation result so it cannot describe a bundle candidate."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.14",
       "title": "Validate replacement module sources before saving",
       "changes": [
