@@ -14,7 +14,8 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle})
  const tool=node.kind==='tool',children=tree.children.get(node.id)||[],summary=cleanSummary(node.summary||node.detail);
  const collapsible=tool||node.kind==='llm'||!!summary||children.length>15,open=!collapsible||expanded.has(node.id),requestOpen=expanded.has(`request:${node.id}`);
  const Header=collapsible?'button':'div';
- const input=useExecutionField(node,'input',open&&tool),output=useExecutionField(node,'output',open&&tool),error=useExecutionField(node,'error',open),request=useExecutionField(node,'request',open&&requestOpen);
+ const requestInline=node.requestDetail?.lines<=15&&node.requestDetail?.length<=3000;
+ const input=useExecutionField(node,'input',open&&tool),output=useExecutionField(node,'output',open&&tool),error=useExecutionField(node,'error',open),request=useExecutionField(node,'request',open&&(requestInline||requestOpen));
  if(depth>20||ancestors.includes(node.id))return null;
  const action=tool?actionContent(node,input.value,output.value):null;
  const Icon=node.kind==='worker'?GitBranch:node.kind==='llm'?MessageCircle:({command:Terminal,read:FileText,write:FilePenLine,patch:FilePenLine,tasks:ListChecks,delegate:GitBranch}[action?.kind]||Wrench);
@@ -27,7 +28,7 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle})
    <span className="a-execution-phase" title={[node.toolCallId&&`Call: ${node.toolCallId}`,stamp(node.startedAt),stamp(node.endedAt)].filter(Boolean).join(" · ")}>{isRunning(node)||['error','failed','cancelled','interrupted'].includes(phase)?`${phase}${elapsed?' · ':''}`:''}{elapsed}</span><Usage value={usage} pending={node.kind==='llm'&&isRunning(node)}/><Status status={phase}/>
   </Header>
   {open&&<div className="a-execution-body">
-   {tool?<ToolContent node={node} action={action} input={input} output={output} error={error}/>:node.kind==='llm'?<ModelContent node={node} request={request} error={error} requestOpen={requestOpen} toggleRequest={()=>toggle(`request:${node.id}`)} now={now}/>:summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} automatic markdown/>}
+   {tool?<ToolContent node={node} action={action} input={input} output={output} error={error}/>:node.kind==='llm'?<ModelContent node={node} request={request} error={error} requestOpen={requestOpen} requestInline={requestInline} toggleRequest={()=>toggle(`request:${node.id}`)} now={now}/>:summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} automatic markdown/>}
    {node.kind==='worker'&&isRunning(node)&&(node.workerId||node.sessionId)&&<button className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}
    {children.length>0&&<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}
   </div>}

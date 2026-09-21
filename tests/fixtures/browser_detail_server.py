@@ -129,6 +129,8 @@ async def main():
                     log_hook(aid,'llm:response',{'request_id':'second','model':'fixture','duration_ms':1000,'usage':{'input_tokens':20,'output_tokens':3,'cost_usd':.002}},base+18)
                 else:
                     tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
+                    log_hook(aid,'llm:request',{'request_id':'small','model':'fixture','raw':{'model':'fixture','input':'Small recorded request'}},base+23)
+                    log_hook(aid,'llm:response',{'request_id':'small','model':'fixture'},base+24)
                 await service.event_log_view.refresh(aid)
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn

@@ -148,6 +148,7 @@ class EventIndex:
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
         node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
                                  'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
+        if field == 'request':node[field + 'Detail']['lines'] = value.count('\n') + 1
 
     def ingest(self, event, reference):
         name, data = event.get('event'), event['data']

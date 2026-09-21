@@ -53,6 +53,8 @@ try{
  await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  assert.equal(await page.locator('[data-group-id$="@final"] button.a-execution-turn-line').count(),0);
+ const small=page.locator('[data-group-id$="@final"] [data-kind="llm"]');await small.locator('button.a-execution-action-line').click();
+ await expect(small.locator('pre')).toContainText('Small recorded request');assert.equal(await small.getByRole('button',{name:/Load raw request|Show all/}).count(),0);assert.equal(requestReads.length,3);
  await openSettingsPage(page,'appearance');
  const detail=page.getByLabel('Work summary detail');await expect(detail).toHaveValue('standard');
  await detail.selectOption('minimal');await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');
