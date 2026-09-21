@@ -383,6 +383,14 @@ class EventLogView:
             return (root if sid in aliases else sid, row.get('toolCallId'))
         tool_ids = {call_key(row): row for row in live_nodes if row.get('kind') == 'tool'}
         turns = {row['id']: copy.deepcopy(row) for row in live.get('turns', [])}
+        input_turns, message_turns = {}, {}
+        for turn in turns.values():
+            if turn.get('canonicalHistory') or turn.get('nativeHistory'):
+                continue
+            for identity in {turn['id'], turn.get('inputId')} - {None}:
+                input_turns.setdefault(identity, set()).add(turn['id'])
+            for identity in {turn.get('messageId'), turn.get('userMessageId')} - {None}:
+                message_turns.setdefault(identity, set()).add(turn['id'])
         messages = session.get('messages', [])
         users = [row for row in messages if row.get('role') == 'user']
         from .automatic_history import directory
@@ -430,7 +438,13 @@ class EventLogView:
             association = associations.get(node.get('eventOrder')) if node.get('sessionId') in aliases else None
             if association and native_messages:
                 anchor = next((row for row in native_messages if row['nativeIndex'] == association['turn']), None)
-                key = 'native-turn:' + (anchor['id'] if anchor else str(association['turn']))
+                # Native history and live admission describe the same input.
+                # Preserve its host turn rather than leaving an empty running
+                # placeholder beside a second canonical work group. An anchor
+                # alone is insufficient: independent voice turns can share one.
+                matches = (input_turns.get(anchor.get('inputId'), set()) |
+                           message_turns.get(anchor['id'], set())) if anchor else set()
+                key = next(iter(matches)) if len(matches) == 1 else 'native-turn:' + (anchor['id'] if anchor else str(association['turn']))
                 node['turnId'] = key
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
