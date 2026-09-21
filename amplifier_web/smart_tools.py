@@ -293,6 +293,9 @@ class SmartToolsManager(Lifecycle):
             await self._change(lambda _: finish(status="interrupted", error="The request was interrupted. Work was not replayed."), defer_publish=defer_publish)
             raise
         except Exception as exc:
+            from .smart_tool_lifecycle import ConnectionUnavailable
+            if isinstance(exc, ConnectionUnavailable):
+                operation.update(failureReason='connection_unavailable', requestState='not_sent')
             error = self._redact(str(exc))[:1500]
             await self._change(lambda _: finish(status="failed", error=error), defer_publish=defer_publish)
             return None

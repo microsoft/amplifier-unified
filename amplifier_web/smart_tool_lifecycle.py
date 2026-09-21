@@ -17,6 +17,11 @@ import jsonschema
 from .mcp_connection import AuthenticationRequired, Connection
 
 HEADER = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,99}$")
+CONNECTION_UNAVAILABLE = "Connect this tool before using it. Previous requests are never replayed."
+
+
+class ConnectionUnavailable(ValueError):
+    """The host refused before sending any request to the transport."""
 
 
 def endpoint(value):
@@ -207,7 +212,7 @@ class Lifecycle:
         self._server(identity)
         connection = self.connections.get(identity)
         if not connection or connection.task.done() or connection.failure:
-            raise ValueError("Connect this tool before using it. Previous requests are never replayed.")
+            raise ConnectionUnavailable(CONNECTION_UNAVAILABLE)
         return connection
 
     def _catalog(self, identity, revision=None):

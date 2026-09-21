@@ -141,3 +141,16 @@ Possibly's optional adapter is tested separately, including against an independe
 MCP Apps host. Tool-specific integration tests live with that adapter or in development
 reports, keeping Unified's production implementation generic. The collaborative-surface
 proposal remains a discussion draft, not an adopted standard or conformance claim.
+
+## Disconnected canvas requests and activity
+
+A disconnected canvas rejects new tool requests before admission. Reconnecting
+remains explicit and does not resend earlier requests. Calls admitted before a
+connection change keep their durable receipts, including uncertain outcomes.
+
+Activity groups equivalent host connection refusals for the same saved connection
+and configuration, with a count of the recent records in its bounded overview.
+The original operation records remain individually inspectable. Tool-returned
+errors, timeouts and interruptions retain their own attention entries. Reviewing
+a group acknowledges only the exact membership shown; another failure makes it
+unread again. Historical individual acknowledgments remain respected.

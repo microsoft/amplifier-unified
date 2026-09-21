@@ -17,7 +17,22 @@ export function completedTurnEnds(session){
  }
  return ends;
 }
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,dispatch=act}){
+
+export function groupRecoveryMessages(messages,after=new Map()){
+ const groups=[];let pending=[];
+ const flush=()=>{if(pending.length)groups.push(pending.length>1?pending:pending[0]);pending=[]};
+ for(const message of messages){
+  if(message.observation?.source==='local-job-recovery'&&!(after.get(message.id)||[]).length)pending.push(message);
+  else {flush();groups.push(message)}
+ }
+ flush();return groups;
+}
+
+export function RecoveryGroup({messages,renderArtifacts,...props}){
+ return <details className="a-recovery-group"><summary>{messages.length} recovered work updates</summary>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
+}
+
+export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,dispatch=act,expandedObservation=false}){
  const [saving,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null);
  useEffect(()=>{if(!editing){pendingText.current=null;return}if(pendingText.current===null||edit.text===pendingText.current){setText(edit.text||'');pendingText.current=null}},[editing,edit?.text]);
@@ -26,7 +41,10 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const submit=async e=>{e.preventDefault();if(saving||blocked||!text.trim())return;setSaving(true);try{if(localDelivery)await retry(m,text);else await dispatch('message.edit',{sessionId:session.id,messageId:m.id,text,mode:edit?.fork?'fork':'current'})}catch(error){setDetailError(error.message)}finally{setSaving(false)}};
- if(m.observation)return <article className="a-message a-assistant" data-message-id={m.id}><details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary><DetailText text={m.text} reference={m.textDetail} markdown/><button type="button" className="a-link" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>Copy observation</button></details></article>;
+ if(m.observation){
+  const content=<><DetailText text={m.text} reference={m.textDetail} markdown/><button type="button" className="a-link" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>Copy observation</button></>;
+  return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?content:<details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary>{content}</details>}</article>;
+ }
  return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id}>
   <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&`via ${m.via} · `}{stamp(m.createdAt)}</span></div>
   <AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}

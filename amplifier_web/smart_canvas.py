@@ -68,6 +68,18 @@ class SmartCanvas:
         self.binding(identity)
         return result
 
+    def admit_call(self, args):
+        canvas, binding = self.binding(args['canvasId'])
+        if args['name'] not in binding['allowedTools']:
+            raise api.AppError('This tool was not granted to this canvas view.', 403)
+        server = next(s for s in self.service.state['smartTools']['servers']
+                      if s['id'] == binding['serverId'])
+        if server.get('status') not in {None, 'connected'}:
+            # Refuse before queued intent/command receipts are created. Never
+            # reinterpret an already admitted request or reconnect implicitly.
+            raise api.AppError('Tool disconnected. Reconnect it in Settings before trying again.', 409)
+        return canvas, binding
+
     async def command(self, action, args, operation_id, origin, *, defer_publish=False):
         manager = self.service.smart_tools
         if action == 'smartTools.open':
