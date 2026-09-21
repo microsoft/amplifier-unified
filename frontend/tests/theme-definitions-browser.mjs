@@ -17,7 +17,9 @@ try{
  const definition={version:1,palette:{light:Object.fromEntries(tokens.map(key=>[key,key==='bg'?'#eef8f6':'#245b53'])),dark:Object.fromEntries(tokens.map(key=>[key,key==='bg'?'#102c28':'#b4e4d8']))},background:{light:'linear-gradient(135deg, #b4e4d8, #eef8f6)',dark:'radial-gradient(ellipse at top, #245b53, #102c28)'}};
  const css=()=>page.locator('#amp-one').evaluate(el=>{const s=getComputedStyle(el);return {background:s.backgroundImage,color:s.backgroundColor,scheme:s.colorScheme}});
  await page.goto(url);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
- await action('session.create');await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Preserve this unsent draft');
+ await action('session.create');
+ const draft='Preserve this unsent draft\nwith eight\nsaved\nlines\nthat need\nroom\nto stay\nreadable';
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);
  await presentation({scheme:'light'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','light');
  await action('theme.preview',{name:'Quiet water',definition});
  await expect.poll(async()=>(await css()).color).toBe('rgb(238, 248, 246)');
@@ -28,17 +30,22 @@ try{
  const decoration=page.getByRole('checkbox',{name:'Show decorative theme background'});
  await decoration.uncheck();await expect.poll(async()=>(await css()).background).toBe('none');
  await decoration.check();await expect.poll(async()=>(await css()).background).toBe(preview.background);
- await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ // Keep Settings open: its focus trap must attach after shell restoration.
  // Delay shell preferences on reload: the app must not paint system-dark UI
  // while waiting for the authoritative client composition to arrive.
- let release;const gate=new Promise(resolve=>{release=resolve});
- await page.route('**/api/shell?*',async route=>{await gate;await route.continue()});
+ let release,continued;const gate=new Promise(resolve=>{release=resolve});
+ const continuation=new Promise(resolve=>{continued=resolve});
+ await page.route('**/api/shell?*',async route=>{await gate;await route.continue();continued()});
  await page.reload({waitUntil:'domcontentloaded'});
  await expect(page.locator('.boot')).toBeVisible();await expect(page.locator('#amp-one')).toHaveCount(0);
  assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).colorScheme),'light');
  assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgb(238, 248, 246)');
- release();await page.unroute('**/api/shell?*');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Preserve this unsent draft');
+ release();await continuation;await page.unrouteAll({behavior:'wait'});
+ await expect(page.getByRole('dialog')).toBeVisible();
+ await expect.poll(()=>page.getByRole('dialog').evaluate(el=>el.contains(document.activeElement))).toBe(true);
+ await page.keyboard.press('Escape');await expect(page.getByRole('dialog')).toHaveCount(0);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(draft);
+ await expect.poll(()=>page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(170);
  assert.deepEqual(await css(),preview);
  await presentation({scheme:'system'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','dark');
  await expect.poll(async()=>(await css()).color).toBe('rgb(16, 44, 40)');

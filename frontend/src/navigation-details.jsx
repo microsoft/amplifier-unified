@@ -1,8 +1,9 @@
-import React,{useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
+import React,{useContext,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {AlertCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal,X} from 'lucide-react';
 import {relativeActivity} from './navigation-presentation';
 import './navigation-details.css';
+import {NavigationOpen,useNarrowScreen,useModalFocus} from './responsive-navigation';
 
 export function useActivityClock(){
  const [now,setNow]=useState(()=>Date.now()/1000);
@@ -29,10 +30,12 @@ export function WorkspaceDetails({row,now,actions}){
 // Portals stay inside the rail's outer slot, outside its scroll/clip container.
 // Peeking is local presentation only: it never selects a chat or changes recency.
 export function NavigationRow({className='',label,children,details,expanded=false,...props}){
+ const narrow=useNarrowScreen(),navigationOpen=useContext(NavigationOpen);
  const row=useRef(null),panel=useRef(null),trigger=useRef(null),opening=useRef(null),closing=useRef(null),focusRequested=useRef(false),id=useId();
  const [open,setOpen]=useState(false),[locked,setLocked]=useState(false),[position,setPosition]=useState({left:0,top:0});
  const clear=()=>{clearTimeout(opening.current);clearTimeout(closing.current)};
  const close=(focus=false)=>{clear();setOpen(false);setLocked(false);if(focus)trigger.current?.focus({preventScroll:true})};
+ useModalFocus(panel,navigationOpen&&narrow&&open,()=>close(true));
  const show=(lock=false)=>{
   clear();
   if(!lock&&document.querySelector('.a-navigation-flyout[data-locked="true"]'))return;
@@ -40,6 +43,7 @@ export function NavigationRow({className='',label,children,details,expanded=fals
   focusRequested.current=lock;setLocked(lock);setOpen(true);
  };
  useEffect(()=>()=>clear(),[]);
+ useEffect(()=>{if(!navigationOpen)close()},[navigationOpen]);
  useEffect(()=>{if(expanded)show(true)},[expanded]);
  useEffect(()=>{
   if(!open)return;
@@ -67,12 +71,12 @@ export function NavigationRow({className='',label,children,details,expanded=fals
   clearTimeout(opening.current);if(!locked)closing.current=setTimeout(()=>close(),250);
  };
  const target=row.current?.closest('.a-nav-slot')||(typeof document!=='undefined'?document.getElementById('amp-one'):null);
- return <div {...props} ref={row} className={className+(open?' is-peeking':'')} onPointerEnter={e=>{clearTimeout(closing.current);if(e.pointerType!=='touch'&&!open)opening.current=setTimeout(()=>show(),550)}} onPointerLeave={leave} onClick={e=>{if(e.target.closest('[data-navigation-select]'))close()}}>
+ return <div {...props} ref={row} className={className+(open?' is-peeking':'')} onPointerEnter={e=>{clearTimeout(closing.current);if(!narrow&&e.pointerType!=='touch'&&!open)opening.current=setTimeout(()=>show(),550)}} onPointerLeave={leave} onClick={e=>{if(e.target.closest('[data-navigation-select]'))close()}}>
   {children}
   <button ref={trigger} type="button" className="a-icon a-navigation-more" aria-label={'Details and actions for '+label} aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>open&&locked?close():show(true)}><MoreHorizontal/></button>
-  {open&&target&&createPortal(<section ref={panel} id={id} role="dialog" aria-label={'Details for '+label} className="a-navigation-flyout" data-locked={locked} style={position} onPointerEnter={()=>clearTimeout(closing.current)} onPointerLeave={leave} onFocus={()=>{clearTimeout(closing.current);if(!locked)setLocked(true)}}>
+  {open&&target&&createPortal(<>{narrow&&<div className="a-details-scrim" onClick={()=>close(true)}/>}<section ref={panel} id={id} role="dialog" aria-modal={narrow||undefined} aria-label={'Details for '+label} className="a-navigation-flyout" data-locked={locked} style={position} onPointerEnter={()=>clearTimeout(closing.current)} onPointerLeave={leave} onFocus={()=>{clearTimeout(closing.current);if(!locked)setLocked(true)}}>
    <button type="button" className="a-icon a-navigation-close" aria-label="Close details" onClick={()=>close(locked)}><X/></button>
    {details({close})}
-  </section>,target)}
+  </section></>,target)}
  </div>;
 }

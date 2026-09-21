@@ -56,6 +56,10 @@ try{
  assert.deepEqual(await page.evaluate(()=>({root:window.componentProof.root===document.getElementById('amp-one'),composer:window.componentProof.composer===document.querySelector('[aria-label="Message Amplifier"]'),viewer:window.componentProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.componentProof.session===window.amplifier.getState().selectedSessionId})),{root:true,composer:true,viewer:true,session:true});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Draft survives contribution changes');
  const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
+ for(const width of [320,390,600,760]){
+  await page.setViewportSize({width,height:844});
+  await expect.poll(()=>page.locator('.a-top').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+ }
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:output+'mobile-contributions.png'});
  assert.ok(await page.locator('.a-top').evaluate(el=>el.scrollWidth<=el.clientWidth),'Header contributions fit a narrow viewport');
  const additional=page.getByRole('button',{name:'Additional controls',exact:true});await additional.click();
@@ -66,6 +70,17 @@ try{
  await controls.getByRole('button',{name:'Toggle compact spacing'}).press('Escape');
  await expect(additional).toBeFocused();await expect(additional).toHaveAttribute('aria-expanded','false');
  await page.getByRole('button',{name:'Additional status',exact:true}).click();await expect(page.getByLabel('Conversation status',{exact:true})).toBeVisible();
+ const mobileSnapshot=(await action('shell.query',{clientId,instanceId:'extra-actions'})).result;
+ await action('shell.command',{clientId,instanceId:'extra-actions',generation:mobileSnapshot.generation,action:'panel.open',args:{panel:'settings',section:'preferences'}});
+ const settings=page.locator('.a-settings-experience');
+ await expect(settings).toHaveAttribute('data-settings-route','shell:preferences');
+ await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
+ await page.getByRole('button',{name:'Back to Settings',exact:true}).click();
+ await expect(settings).toHaveAttribute('data-settings-route','index');
+ await page.locator('[data-settings-section="shell:preferences"]').click();
+ await expect(settings).toHaveAttribute('data-settings-route','shell:preferences');
+ await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect(settings).toHaveCount(0);
  await page.setViewportSize({width:1440,height:1000});
  const replacement=await action('shell.packages.stage',{manifest:{...manifest,version:'1.0.1'},source:source+'\n// Reviewed revision'});
  assert.equal((await action('shell.packages.validate',{digest:replacement.result.digest})).result.status,'passed');

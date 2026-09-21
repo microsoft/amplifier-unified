@@ -13,6 +13,12 @@ try{
  });
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const persistedDraft=async text=>expect.poll(async()=>{
+  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
+  const response=await page.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':clientId}});
+  assert.equal(response.status(),200);
+  const result=await response.json();return (result.state||result).view?.draft;
+ }).toBe(text);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const bootError=new Promise((_,reject)=>page.once('pageerror',reject));
  await page.goto(url);
@@ -86,13 +92,15 @@ try{
  const sent=await (await page.request.get(url+'/fixture')).json();
  assert.equal(sent.sent.length,1);
  assert.equal(sent.sent[0].text,'First input on an empty host');
- await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Next draft while the first delivery is pending');
+ // The public UI snapshot includes pending edits. Reload acceptance must wait
+ // for the actual client state saved by the host, not the optimistic display.
+ await persistedDraft('Next draft while the first delivery is pending');
  await page.reload();
  await expect(composer).toHaveValue('Next draft while the first delivery is pending');
  await page.waitForFunction(()=>window.amplifier.getState().sessions.length===1&&window.amplifier.getState().selectedSessionId);
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('An unsent first-chat draft');
- await page.waitForFunction(()=>window.amplifier.getState().view.draft==='An unsent first-chat draft');
+ await persistedDraft('An unsent first-chat draft');
  await page.reload();
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('An unsent first-chat draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);

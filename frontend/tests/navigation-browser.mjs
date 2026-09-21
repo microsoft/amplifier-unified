@@ -26,7 +26,7 @@ try{
  assert.equal(await page.locator('.a-workspace-explorer').count(),0,'selected workspace gets the full chat list');
  const geometry=()=>page.locator('.a-nav-chat').evaluateAll(rows=>rows.slice(0,8).map(el=>{const r=el.getBoundingClientRect();return {top:r.top,height:r.height,width:r.width}}));
  const before=await geometry();await chatrow(selected).hover();await details.waitFor();
- assert.deepEqual(await geometry(),before,'hover must not move, wrap or resize rows');assert.equal(before[0].height,54);
+ assert.deepEqual(await geometry(),before,'hover must not move, wrap or resize rows');assert.equal(before[0].height,60);
  assert.ok((await details.innerText()).includes(initial.paths.one));
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201'],'flyout exposes only the shared CLI session ID');
  assert.equal((await details.innerText()).includes(selected),false,'internal record key is not presented as a session ID');
@@ -67,7 +67,7 @@ try{
  await page.reload();await page.locator('.a-workspace-explorer').waitFor();assert.equal(await page.getByRole('button',{name:'Browse folders',exact:true}).getAttribute('aria-pressed'),'true');
  await page.getByRole('button',{name:'All chats',exact:true}).click();await page.locator('.a-nav-chat').first().waitFor();await patch('chats',{navStatusFilter:'all',navFilter:''});
  for(const width of [390,320]){
-  await page.setViewportSize({width,height:844});await page.locator('.a-nav-chat').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
+  await page.setViewportSize({width,height:844});await page.waitForTimeout(120);if(!(await page.locator('.a-nav-slot').isVisible()))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.locator('.a-nav-chat').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();
   const rect=await details.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1&&rect.y+rect.height<=844+1,'flyout fits viewport');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:out+`/navigation-${width}.png`});await page.keyboard.press('Escape');
  }

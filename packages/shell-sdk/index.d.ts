@@ -8,6 +8,7 @@ export interface ShellHost {
  setDirty(dirty: boolean): Promise<unknown>;
 }
 export interface NavigationSnapshot {
+ readonly generation: number;
  readonly view: Readonly<Record<string, unknown>>;
  readonly selectedWorkspaceId: string | null;
  readonly selectedSessionId: string | null;
@@ -43,7 +44,7 @@ export interface ComponentSnapshot {
  readonly generation: number;
  readonly slot: 'app.actions' | 'app.status' | 'conversation.header' | 'composer.actions' | 'canvas.toolbar' | 'settings.appearance' | 'settings.section';
  readonly view: Readonly<Record<string, unknown>>;
- readonly presentation: Readonly<{scheme?:'light'|'dark'|'system';density?:'comfortable'|'compact';layout?:'balanced'|'conversation'|'work';decorations?:boolean;accent?:string}>;
+ readonly presentation: Readonly<{scheme?:'light'|'dark'|'system';density?:'comfortable'|'compact';layout?:'balanced'|'conversation'|'work';executionDetail?:'minimal'|'standard'|'detailed';decorations?:boolean;accent?:string}>;
  readonly selectedSessionId: string | null;
  readonly selectedWorkspaceId: string | null;
  readonly runtime: {readonly available:boolean};
