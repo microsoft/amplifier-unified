@@ -19,7 +19,7 @@ export function Collection({list,children,detailOpen=true,onBack,label='items'})
 export function moveItem(ids,id,to){const next=ids.filter(key=>key!==id);next.splice(Math.max(0,Math.min(to,next.length)),0,id);return next;}
 
 // Preview is local until drop; the enclosing editor owns the draft and Save/Cancel.
-export function OrderEditor({title,description,items,ids,onChange,onSave,onCancel,busy=false,error,action='view.update'}){
+export function OrderEditor({title,description,items,ids,onChange,onSave,onCancel,busy=false,error,notice,action='view.update'}){
  const root=useRef(null),drag=useRef(null),rects=useRef(new Map()),[preview,setPreview]=useState(null),[floating,setFloating]=useState(null),[announcement,announce]=useState('');
  const shown=preview||ids,rows=new Map(items.map(item=>[item.id,item]));
  const focus=id=>requestAnimationFrame(()=>root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-order-grip`)?.focus({preventScroll:true}));
@@ -59,7 +59,7 @@ export function OrderEditor({title,description,items,ids,onChange,onSave,onCance
   setFloating({id:current.id,left:box.left+8,top:event.clientY-(current.y-box.top),width:box.width,valid:current.valid});
  };
  return <section className="a-order-editor" ref={root} onPointerMove={moving} onPointerUp={()=>finish(false)} onPointerCancel={()=>finish(true)} onLostPointerCapture={()=>{if(drag.current)finish(true);}} onDragStart={e=>e.preventDefault()}>
-  <h4>{title}</h4><p>{description}</p><p className="a-caption">Drag the handle or choose a position. Changes apply when you save.</p>
+  <h4>{title}</h4>{notice&&<p role="status">{notice}</p>}<p>{description}</p><p className="a-caption">Drag the handle or choose a position. Changes apply when you save.</p>
   <div className="a-order-list">{shown.map((id,index)=>{const item=rows.get(id)||{label:id};return <div key={id} data-order-id={id} className={'a-order-item'+(floating?.id===id?' a-order-placeholder':'')}>
    {floating?.id===id&&floating.valid&&<span className="a-order-insertion" aria-hidden="true"/>}
    <button type="button" className="a-icon a-order-grip" disabled={busy} draggable={false} data-action="view.update" aria-label={'Reorder '+item.label} title="Drag, or press the up and down arrow keys" onPointerDown={e=>down(e,id)} onKeyDown={e=>{if(['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();capture();const next=moveItem(ids,id,index+(e.key==='ArrowUp'?-1:1));onChange(next);announce(`${item.label}, position ${next.indexOf(id)+1}`);focus(id);}}}><GripVertical/></button>

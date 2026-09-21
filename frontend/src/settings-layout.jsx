@@ -54,7 +54,7 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   return()=>cancelAnimationFrame(frame);
  },[key]);
  const rememberScroll=()=>{if(body.current&&!scrollRestore.current)scrolls.current.set(lastKey.current,body.current.scrollTop);};
- useEffect(()=>{
+ useLayoutEffect(()=>{
   if(!compact||typeof window==='undefined')return;
   const marker=history.state?.amplifierSettings;
   const inherited=typeof marker?.token==='string'&&marker.token.startsWith('settings-')&&Number.isInteger(marker.index)&&marker.index>0&&marker.index<10?marker:null;
@@ -79,7 +79,7 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
    if(history.state?.amplifierSettings?.token===token&&!current.closing)history.go(-current.index);
   };
  },[compact]);
- useEffect(()=>{
+ useLayoutEffect(()=>{
   const current=session.current;if(!compact||!current||current.closing)return;
   const entry=current.entries[current.index-1];
   // A history level represents the current hierarchy, not a stale editor snapshot.

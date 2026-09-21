@@ -21,6 +21,7 @@ try{
  await providers.locator('summary').filter({hasText:'Provider & access'}).click();await page.locator('#provider-key-source').selectOption('private');await page.locator('#provider-key').fill('mobile-private-never-share');await page.locator('#provider-model').fill('mobile-unsaved-model');
  await expect(footer.getByRole('button',{name:/Save/})).toBeVisible();
  await page.evaluate(()=>history.back());await route('providers');await page.evaluate(()=>history.forward());await route('providers/detail');
+ for(let i=0;i<8;i++){await page.locator('#provider-model').fill('mobile-unsaved-model');await page.evaluate(()=>history.back());await route('providers');await page.evaluate(()=>history.forward());await route('providers/detail');}
  assert.equal(await page.locator('#provider-key').inputValue(),'mobile-private-never-share');assert.equal(await page.locator('#provider-model').inputValue(),'mobile-unsaved-model');
  assert.ok(!JSON.stringify(await state()).includes('mobile-private-never-share'));assert.ok(!JSON.stringify(await page.evaluate(()=>history.state)).includes('mobile-private-never-share'));
  await back();await providers.getByRole('button',{name:'Preference order',exact:true}).click();await route('providers/order');
@@ -41,6 +42,13 @@ try{
  await openSettingsPage(page,'routing');await route('routing');await page.locator('[data-collection-id=general]>button').click();await route('routing/role/general');await page.locator('.a-routing-candidates [data-collection-id="0"]>button').click();await route('routing/choice/general');
  await page.getByLabel('general model 1',{exact:true}).fill('mobile-routing-*');await page.screenshot({path:'/tmp/settings-mobile-choice.png'});await back();await route('routing/role/general');await back();await route('routing');
  await footer.getByRole('button',{name:'Save active profile',exact:true}).click();await expect(page.getByText('Routing profile saved and selected.',{exact:true})).toBeVisible();assert.equal((await state()).setup.matrix.roles.general.candidates[0].model,'mobile-routing-*');
+
+ // A changed candidate set cannot reuse positional IDs from an unfinished order.
+ await page.locator('[data-collection-id=general]>button').click();await page.getByRole('button',{name:'Preference order',exact:true}).click();
+ await page.getByLabel('Position of mobile-routing-*',{exact:true}).selectOption({value:'5'});await back();
+ await page.locator('.a-routing-candidates [data-collection-id="5"]>button').click();await page.getByRole('button',{name:'Remove general candidate 6',exact:true}).click();await back();
+ await page.getByRole('button',{name:'Preference order',exact:true}).click();await expect(page.locator('[data-order-id]')).toHaveCount(5);await expect(page.getByText('The choices changed. Review the current order before saving.',{exact:true})).toBeVisible();
+ await footer.getByRole('button',{name:'Save order',exact:true}).click();await route('routing/role/general');assert.equal((await state()).view.routingEditor.matrix.roles.general.candidates.length,5);assert.equal((await state()).setup.matrix.roles.general.candidates.length,6);
  await openSettingsPage(page,'notifications');await page.getByLabel(/^Topic/).fill('mobile-private-topic');await page.getByLabel(/^Access token/).fill('mobile-private-token');await back();await root.locator('[data-settings-section=appearance]').click();await back();await root.locator('[data-settings-section=notifications]').click();assert.equal(await page.getByLabel(/^Topic/).inputValue(),'mobile-private-topic');assert.equal(await page.getByLabel(/^Access token/).inputValue(),'mobile-private-token');
  await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Browse catalog',exact:true}).click();await route('tools/catalog');
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByRole('checkbox',{name:'Select Tool 50',exact:true}).check();await page.locator('#filter-smart-tool-catalog').fill('Research');

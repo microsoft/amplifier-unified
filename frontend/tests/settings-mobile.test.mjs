@@ -24,3 +24,15 @@ test('catalog source setup and module details have meaningful parents',()=>{
  const tool=settingsTrail({...settingsPatch('smart-tools'),smartToolsEditor:{page:'source',returnPage:'catalog',repository:'private-repo'}});assert.deepEqual(tool.map(row=>row.key),['index','smart-tools','tools/catalog','tools/source']);assert.equal(JSON.stringify(tool).includes('private-repo'),false);
  const modules=settingsTrail({...settingsPatch('loaded-modules'),moduleEditor:{detailOpen:true,selectedKey:'tools:0',text:JSON.stringify({tools:[{module:'tool-example',id:'Example'}]})}});assert.equal(modules.at(-1).title,'Example');
 });
+
+import {currentRoutingOrder,routingOrderDraft} from '../src/setup-data.js';
+test('routing order drafts cannot index a replaced or shortened candidate set',()=>{
+ const choices=[{provider:'one',model:'first',config:{custom:'keep'}},{provider:'two',model:'second'}];
+ const draft={...routingOrderDraft(choices,'general'),ids:['1','0']};
+ assert.equal(currentRoutingOrder(choices,'general',draft),true);assert.equal(routingOrderDraft(choices,'general',draft),draft);
+ for(const changed of [choices.slice(0,1),[...choices,{provider:'three',model:'third'}],[choices[0],{provider:'other',model:'replacement'}]]){
+  assert.equal(currentRoutingOrder(changed,'general',draft),false);const fresh=routingOrderDraft(changed,'general',draft);assert.equal(currentRoutingOrder(changed,'general',fresh),true);assert.match(fresh.notice,/choices changed/);
+ }
+ assert.equal(currentRoutingOrder(choices,'general',{...draft,ids:['0','0']}),false);
+ assert.equal(currentRoutingOrder(choices,'fast',draft),false);assert.equal(choices[0].config.custom,'keep');
+});
