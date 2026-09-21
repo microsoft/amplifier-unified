@@ -80,3 +80,13 @@ An older incomplete or malformed pending restart receipt is retired at startup i
 Older releases could report a failed `systemctl` command after an otherwise successful restart and erase the pending marker. The successor can reconcile that exact legacy state using its matching validated release receipt, successful replacement probe, and current HTTP health. It records `restart-reconcile`, retains the original failed command in history, and stops recommending another restart. This is current-health verification, not an invented historical `restart-ack`. Unrelated failures or mismatched installation identities are not cleared. This recovery also covers the first upgrade from an old process still running the faulty updater in memory.
 
 Run `python scripts/test_systemd_update.py` to exercise the Linux handoff in a disposable Docker container. It requires privileged Linux-container support, publishes no host ports, and uses an isolated user service. Package staging is a local fixture; cgroup membership, systemctl requests, signals, replacement processes, HTTP readiness, rejection, and the historical outgoing updater are real. The managed-update CI workflow runs the same integration check.
+# Selecting a maintenance release
+
+The manual release workflow accepts an optional `release_revision`: the full
+40-character SHA of a commit already merged into main. This allows a qualified
+maintenance version to finish publication after main advances to the next
+version. Branch names, abbreviated SHAs, unknown commits and unmerged commits
+are refused. The selected commit supplies the version and is checked out before
+all normal runtime, browser and package gates. Existing immutable tags cannot
+be moved or reused for different source. Leaving the input blank keeps the
+normal main-commit release behavior.

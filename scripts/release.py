@@ -39,11 +39,20 @@ def version_at(root, ref=None):
     return package_version(read("pyproject.toml"), read("amplifier_web/__init__.py"))
 
 
-def plan(root):
-    version = version_at(root)
+def plan(root, selected_revision=None):
+    if selected_revision:
+        if not re.fullmatch(r'[0-9a-f]{40}', selected_revision):
+            raise ValueError('Select a full immutable commit SHA, not a branch or abbreviated revision')
+        try:
+            if run('git', 'rev-parse', selected_revision+'^{commit}', cwd=root) != selected_revision:
+                raise ValueError('Not a commit object')
+            run('git', 'merge-base', '--is-ancestor', selected_revision, 'HEAD', cwd=root)
+        except ValueError:
+            raise ValueError('The selected release commit must be an ancestor of the checked-out main commit') from None
+    version = version_at(root, selected_revision)
     tag = "v" + version
     tags = run("git", "tag", "--list", tag, cwd=root).splitlines()
-    revision = run("git", "rev-parse", "HEAD", cwd=root)
+    revision = selected_revision or run("git", "rev-parse", "HEAD", cwd=root)
     if tags:
         tagged_revision = run("git", "rev-parse", tag + "^{commit}", cwd=root)
         if version_at(root, tagged_revision) != version:
@@ -178,7 +187,7 @@ def main():
     args = parser.parse_args()
     root = Path.cwd()
     if args.command == "plan":
-        result = plan(root)
+        result = plan(root, args.revision)
         if args.output:
             with args.output.open("a") as output:
                 output.write("".join(f"{key}={value}\n" for key, value in result.items()))
