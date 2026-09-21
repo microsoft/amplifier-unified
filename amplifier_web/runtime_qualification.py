@@ -65,7 +65,7 @@ def requirement(row):
     return row['name'] + '==' + row['version']
 
 
-def lock_overrides(project, target):
+def override_content(project):
     """Hold the already checked resolver graph while new module deps refresh."""
     data = tomllib.loads((Path(project) / 'uv.lock').read_text())
     lines = []
@@ -81,7 +81,16 @@ def lock_overrides(project, target):
             lines.append(value)
         elif source.get('registry'):
             lines.append(row['name'] + '==' + row['version'])
-    Path(target).write_text('\n'.join(sorted(lines)) + '\n')
+        elif source.get('editable') or source.get('directory'):
+            path = (Path(project) / (source.get('editable') or source['directory'])).resolve()
+            # A direct file requirement loses editable mode during a later
+            # uv pip install. Preserve both the path and PEP 610 editability.
+            lines.append(('-e ' if source.get('editable') else row['name'] + ' @ ') + path.as_uri())
+    return '\n'.join(sorted(lines)) + '\n'
+
+
+def lock_overrides(project, target):
+    Path(target).write_text(override_content(project))
     return Path(target)
 
 
@@ -177,9 +186,16 @@ async def freeze(manager, generation, project):
     return final
 
 
-def verify_recorded(project, receipt):
+def verify_recorded(project, receipt, *, allow_additions=False):
     evidence = Path(receipt) / 'runtime-installed.json'
-    if evidence.exists() and installed_graph(project) != json.loads(evidence.read_text()):
+    if not evidence.exists():
+        return
+    expected = json.loads(evidence.read_text())
+    actual = installed_graph(project)
+    if allow_additions:
+        names = {row['name'] for row in expected}
+        actual = [row for row in actual if row['name'] in names]
+    if actual != expected:
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
@@ -200,5 +216,9 @@ def active_install_overrides(home, current_override=None):
         return None
     if not target.is_file():
         raise ValueError('The recorded worker installation policy is missing; its generation was preserved.')
-    verify_recorded(environments.project_path(home, generation), receipt)
+    project = environments.project_path(home, generation)
+    if ((project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes()
+            or target.read_text() != override_content(project)):
+        raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
+    verify_recorded(project, receipt, allow_additions=True)
     return target

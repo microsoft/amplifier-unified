@@ -179,9 +179,9 @@ def augmented_manifest(content, rows):
         if row.get('kind') != 'runtime dependency':
             continue
         name = row['package']
-        if row.get('override') and name in declared:
+        if row.get('override') and (name in declared or row.get('cacheManaged')):
             raise ValueError('A declared worker dependency has an installed local or registry override; preserve its source configuration before updating.')
-        if not row.get('url') or not row.get('ref'):
+        if row.get('override') or not row.get('url') or not row.get('ref'):
             continue
         if name in declared:
             source = sources[declared[name]]
@@ -251,7 +251,10 @@ async def stage(manager, generation, candidates, *, finalize=True):
             installed = baseline_sources.get(row['package'])
             if not installed or any(installed.get(key, '') != row.get(key, '') for key in ('current', 'url', 'ref', 'subdirectory')):
                 raise ValueError('Runtime dependencies changed since checking; check for updates again.')
-    packages = sorted({row['package'] for row in selected if row.get('kind') == 'runtime dependency'})
+    from .updates import pinned
+    declared = tomllib.loads(content.decode()).get('tool', {}).get('uv', {}).get('sources', {})
+    packages = sorted({row['package'] for row in observed if row.get('kind') == 'runtime dependency' and row.get('eligible')} |
+                      {name for name, source in declared.items() if source.get('git') and not pinned(source.get('branch') or source.get('rev') or '')})
     # A new generation also needs a lock when only bundle/module caches changed.
     flags = ['--locked'] if receipt.exists() else [arg for name in packages for arg in ('--upgrade-package', name, '--refresh-package', name)]
     await manager.diagnostics.run('ecosystem-runtime-lock', process, uv, 'lock', '--project', str(project),

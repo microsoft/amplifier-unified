@@ -271,6 +271,8 @@ class Worker:
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                 execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
+            if install_overrides is not None:
+                active_install_overrides(self.home, str(install_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)

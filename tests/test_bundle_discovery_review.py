@@ -70,6 +70,8 @@ async def test_branch_drift_between_inspect_and_add_preserves_settings(repositor
     with pytest.raises(ValueError, match='changed after browsing'):
         await manager.perform('bundles.add', {'uri': candidate['uri'], 'workspace': str(tmp_path), 'role': 'standalone'})
     assert manager.store.read(tmp_path) == before
+    with pytest.raises(ValueError, match='changed after browsing'):
+        await manager.perform('bundles.add', {'uri': ' ' + candidate['uri'] + ' ', 'workspace': str(tmp_path), 'role': 'standalone'})
     refreshed = (await manager.discover(url))['candidates'][0]
     assert refreshed['revision'] != candidate['revision']
     await manager.perform('bundles.add', {**refreshed, 'workspace': str(tmp_path), 'role': 'standalone'})
@@ -97,3 +99,13 @@ async def test_explicit_user_commit_and_tag_are_retained(repository, tmp_path):
         candidate = (await manager.discover(url + '@' + ref))['candidates'][0]
         assert candidate['ref'] == ref and '@' + ref + '#' in candidate['uri']
         await manager.perform('bundles.add', {**candidate, 'role': 'behavior'})
+
+
+async def test_unspecified_community_source_keeps_its_actual_default_branch(repository, tmp_path):
+    remote, url, document, calls = repository
+    git(remote, 'branch', '-m', 'master')
+    manager = bundles.BundleManager(tmp_path / 'app')
+    candidate = (await manager.discover(url))['candidates'][0]
+    assert candidate['ref'] == 'master'
+    assert candidate['uri'] == 'git+' + url + '@master#subdirectory=bundle.md'
+    await manager.perform('bundles.add', {**candidate, 'workspace': str(tmp_path), 'role': 'standalone'})

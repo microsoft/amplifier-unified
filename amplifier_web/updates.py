@@ -670,7 +670,8 @@ class UpdateManager:
         from .runtime_qualification import freeze, lock_overrides, verify_recorded
         receipt=receipt_directory(self.home,release)
         fresh=not (receipt/'runtime.lock').exists()
-        project=await stage_runtime(self, release, [row for row in self.inventory if row.get('status') == 'update' and row.get('eligible')], finalize=not fresh)
+        project=await stage_runtime(self, release, [row for row in self.inventory if row.get('eligible') and (row.get('status') == 'update' or
+            (row.get('kind') == 'runtime dependency' and row.get('status') == 'current'))], finalize=not fresh)
         state=self.service.get_state()
         # Browsing historical CLI projects does not opt their old bundles into
         # this application's update validation or mount missing workspaces.

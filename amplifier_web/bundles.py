@@ -230,7 +230,6 @@ class BundleManager:
 
     async def discover(self, value: str) -> dict:
         url, ref, subdirectory = remote_source(value)
-        ref = ref or "main"
         inspected_at = datetime.now(timezone.utc).isoformat()
         with tempfile.TemporaryDirectory(prefix="amplifier-bundles-") as directory:
             root = Path(directory) / "repo"
@@ -239,7 +238,10 @@ class BundleManager:
                 await git("fetch", "--depth=1", "origin", ref, cwd=root, timeout=60)
                 commit = (await git("rev-parse", "FETCH_HEAD^{commit}", cwd=root)).decode().strip()
             else:
-                commit = (await git("rev-parse", "HEAD", cwd=root)).decode().strip()
+                # Keep arbitrary community repositories usable when their
+                # default branch is not main; never turn its HEAD into a pin.
+                ref = (await git("symbolic-ref", "--short", "refs/remotes/origin/HEAD", cwd=root)).decode().strip().removeprefix("origin/")
+                commit = (await git("rev-parse", "HEAD^{commit}", cwd=root)).decode().strip()
             records = (await git("ls-tree", "-r", "-z", commit, cwd=root)).split(b"\0")
             candidates = []
             if len(records) > 25000:
@@ -277,16 +279,17 @@ class BundleManager:
             return {"url": url, "ref": ref, "revision": commit, "candidates": candidates, "classification": "advisory"}
 
     async def verify_discovery_review(self, args):
+        uri = validate_uri(args["uri"])
         review_id = args.get("reviewId")
         if review_id is None:
             # Agent callers can add the selected URI directly; retain the same
             # review guard as the UI when this host discovered that candidate.
             review_id = next((key for key in reversed(self.discovery_reviews)
-                              if self.discovery_reviews[key]["uri"] == args.get("uri")), None)
+                              if self.discovery_reviews[key]["uri"] == uri), None)
             if review_id is None:
                 return None  # Existing direct registrations remain an explicit choice.
         review = self.discovery_reviews.get(review_id)
-        if review is None or review["uri"] != validate_uri(args["uri"]):
+        if review is None or review["uri"] != uri:
             raise ValueError("Browse this repository again before adding the selected bundle.")
         ref = review["ref"]
         # A caller's explicit immutable commit remains immutable; discovered

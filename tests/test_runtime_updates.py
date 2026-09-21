@@ -322,3 +322,32 @@ async def test_editable_foundation_cache_has_real_source_evidence_and_freezes(in
     with pytest.raises(ValueError, match='changed after qualification'):
         verify_recorded(final, receipt)
     assert (repo / 'child/marker.txt').read_text() == 'changed after qualification'
+
+
+async def test_lazy_install_cannot_replace_a_qualified_editable_dependency(installed_transitive):
+    from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
+    manager, current, row, old, new, repo = installed_transitive
+    (repo / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': repo.as_uri(), 'ref': 'main', 'commit': new}))
+    uv = shutil.which('uv')
+    subprocess.run([uv, 'pip', 'install', '--python', str(current / '.venv/bin/python'), '--editable', str(repo / 'child')], check=True, capture_output=True)
+    generation = '7' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    final = await freeze(manager, generation, current)
+    overrides = receipt / 'runtime-install-overrides.txt'
+    assert '-e ' + (repo / 'child').as_uri() in overrides.read_text()
+    before = next(row for row in installed_graph(final) if row['name'] == 'amplifier-fixture-child')
+    lazy = manager.home.parent / 'lazy'
+    lazy.mkdir()
+    (lazy / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-lazy"\nversion="0.1.0"\ndependencies=[' + json.dumps('amplifier-fixture-child @ git+' + repo.as_uri() + '@main#subdirectory=child') + ']\n[build-system]\nrequires=["setuptools"]\nbuild-backend="setuptools.build_meta"\n[tool.setuptools]\npackages=[]\n')
+    subprocess.run([uv, 'pip', 'install', '--python', str(final / '.venv/bin/python'), '--overrides', str(overrides), '--editable', str(lazy)], check=True, capture_output=True)
+    after = next(row for row in installed_graph(final) if row['name'] == 'amplifier-fixture-child')
+    assert before == after
+    verify_recorded(final, receipt, allow_additions=True)
+    with pytest.raises(ValueError, match='changed after qualification'):
+        verify_recorded(final, receipt)
+    (repo / 'child/marker.txt').write_text('local edit must survive')
+    rows = environments.inventory(manager.home)
+    with pytest.raises(ValueError, match='preserve its source configuration'):
+        environments.augmented_manifest(environments.manifest_path().read_bytes(), rows)
+    assert (repo / 'child/marker.txt').read_text() == 'local edit must survive'
