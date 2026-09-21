@@ -25,7 +25,7 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
     bundle = SimpleNamespace(tools=[] if child else [declaration],
         agents={'worker': {'tools': [declaration]}} if child else {})
     settings = {'modules': {'tools': [{'module': 'tool-filesystem', 'config': {
-        'allowed_write_paths': [str(extra)], 'denied_write_paths': [str(workspace / 'private')]}}]}}
+        'allowed_write_paths': [str(extra)], 'denied_write_paths': ['private']}}]}}
     _apply_host_policy(bundle, SimpleNamespace(workspace=workspace, settings=settings))
     tools, capabilities = {}, {'session.working_dir': str(workspace)}
 

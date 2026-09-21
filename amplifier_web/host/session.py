@@ -317,6 +317,8 @@ def _apply_host_policy(bundle, config):
                 row["config"] = merge(current, policy)
                 row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
                     *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
+                if "denied_write_paths" in row["config"]:
+                    row["config"]["denied_write_paths"] = [str(path) for path in paths(row["config"]["denied_write_paths"])]
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.
