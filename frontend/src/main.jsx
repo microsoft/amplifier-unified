@@ -160,7 +160,7 @@ function App(){
  },[acceptState,bootAttempt]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...latest.current,renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
  useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state,shell.ready]);
- useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView]);
+ useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.ready]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
  useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key}},[state?.theme]);
@@ -168,7 +168,7 @@ function App(){
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}});
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',panel=view.panel,activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
  useEffect(()=>{const title=session?.title?.trim();document.title=title?title+' - Amplifier':'Amplifier'},[session?.id,session?.title]);
- useReadCompletion(state,act,messagesPane);
+ useReadCompletion(state,act,messagesPane,shell.ready);
  const live=liveActivity(session,activityClock),execution=splitWork(messages,executionData(session));
  const catalogWorkspace=useRef(null);
  useEffect(()=>{if(session?.historyManaged)return;const workspace=session?.workspace||state?.settings?.workspace;if(!workspace||catalogWorkspace.current===workspace)return;catalogWorkspace.current=workspace;if(state.setup?.providersWorkspace!==workspace||!state.setup?.providersLoadedAt)act('providers.list',session?{sessionId:session.id}:{})},[session?.workspace,session?.historyManaged,state?.settings?.workspace]);
@@ -178,16 +178,16 @@ function App(){
  const workPlacement=turnPlacements(messages,execution);
  useEffect(()=>{if(!live)return;const timer=setInterval(()=>setActivityClock(Date.now()),1000);return()=>clearInterval(timer)},[!!live,session?.id]);
  useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
- useLayoutEffect(()=>{chatScroll.current?.reveal()},[session?.id]);
+ useLayoutEffect(()=>{chatScroll.current?.reveal()},[session?.id,shell.ready]);
  useEffect(()=>{
   const pane=messagesPane.current;if(!pane||!session)return;
   return followEarlierHistory(pane,()=>!detail.busy&&!session.historyLoading&&(session.messageWindow?.offset>0||session.sharedHistoryOffset>0),()=>{
    stickToBottom.current=false;
    return session.messageWindow?.offset>0?detail.earlier('messages'):act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100});
   });
- },[session?.id,session?.messageWindow?.offset,session?.sharedHistoryOffset,session?.historyLoading,detail.busy,act]);
- useLayoutEffect(()=>{const saved=historyScrollAnchor.current;if(!saved)return;historyScrollAnchor.current=null;if(saved.sessionId!==session?.id)return;const pane=messagesPane.current,anchor=[...(pane?.querySelectorAll('[data-message-id]')||[])].find(node=>node.dataset.messageId===saved.messageId);if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-saved.top},[session?.id,session?.sharedHistoryOffset,session?.messageWindow?.offset,session?.executionWindow?.offset]);
- useLayoutEffect(()=>{resizeComposer(composerRef.current);chatScroll.current?.update()},[draft,state?.selectedSessionId]);
+ },[session?.id,session?.messageWindow?.offset,session?.sharedHistoryOffset,session?.historyLoading,detail.busy,act,shell.ready]);
+ useLayoutEffect(()=>{const saved=historyScrollAnchor.current;if(!saved||!messagesPane.current)return;historyScrollAnchor.current=null;if(saved.sessionId!==session?.id)return;const pane=messagesPane.current,anchor=[...(pane?.querySelectorAll('[data-message-id]')||[])].find(node=>node.dataset.messageId===saved.messageId);if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-saved.top},[session?.id,session?.sharedHistoryOffset,session?.messageWindow?.offset,session?.executionWindow?.offset,shell.ready]);
+ useLayoutEffect(()=>{resizeComposer(composerRef.current);chatScroll.current?.update()},[draft,state?.selectedSessionId,shell.ready]);
  useEffect(()=>{const resize=()=>resizeComposer(composerRef.current);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize)},[]);
  useEffect(()=>{
   if(!state)return;
@@ -205,9 +205,10 @@ function App(){
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false}})};
  const close=()=>{setPreview(false);act('view.update',{patch:{panel:null}})};
  useEffect(()=>{
-  if(!panel)return;
+  if(!panel||!shell.ready)return;
   const previous=panelReturnFocus.current||document.activeElement;
-  const dialog=root.current?.querySelector('[role=dialog]');
+  const dialog=root.current?.querySelector('.a-overlay [role=dialog]');
+  if(!dialog)return;
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
   controls()[0]?.focus();
   const handler=e=>{
@@ -216,7 +217,7 @@ function App(){
   };
   window.addEventListener('keydown',handler);
   return()=>{window.removeEventListener('keydown',handler);panelReturnFocus.current=null;if(previous?.isConnected)previous.focus()};
- },[panel,act]);
+ },[panel,act,shell.ready]);
  function preserveOtherDraft(sessionId){
   const payload=stagedDraftPayload.current;
   if(!stagedDraft.current||payload?.sessionId===sessionId)return;
