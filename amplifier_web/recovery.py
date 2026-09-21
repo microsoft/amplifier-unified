@@ -100,43 +100,48 @@ async def reset(manager,args):
         await manager.publish(maintenance={'resetPreview':{'parts':parts,'paths':targets},'detail':'Reset only affects this app’s data. A private backup and retained originals are created before applying.'})
         return
     if args.get('confirmation')!='RESET':raise ValueError('Type RESET to apply the selected reset')
-    async with service.lock:
-        if service.update_manager and (service.update_manager.busy() or service.update_manager.lock.locked()):raise ValueError('Finish active work and updates before resetting')
-        service.state.setdefault('updates',{})['phase']='activating'
-        service._publish()
-    try:
-        await service.runtime.close()
-        if manager.setup_manager:await manager.setup_manager.close();manager.setup_manager=None
-        result=await backup(service)
+    from .runtime_retention import DEFAULT_RETENTION
+    async with service.runtime_lifecycle():
         async with service.lock:
-            retained=service.data_dir/'backups'/('reset-'+uuid.uuid4().hex)
-            retained.mkdir(mode=0o700)
-            for name in targets:
-                path=service.data_dir/name
-                if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
-                if path.exists():
-                    target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
-                    shutil.move(str(path),str(target))
-            if 'conversations' in parts:
-                for session in service.state['sessions']:
-                    service.history.hide_session(session)
-                service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
-                service.db.execute('DELETE FROM commands')
-            if 'settings' in parts:
-                service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':24}
-                service._shared_preferences_stamp=None
-                service._refresh_shared_preferences()
-                service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
-                service.state['notificationSettings']=manager.notifications.public()
-                for session in service.state['sessions']:
-                    if not session.get('historyManaged'):session['configurationPending']=True
-            if 'cache' in parts:
-                service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
-                service.update_manager.inventory=[]
-            service.state['updates'].update(phase='idle',pendingApp=None)
-            result.update(retained=str(retained),detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
-            service.state['maintenance']=result
+            if service.closed:raise RuntimeError('The runtime host is closing.')
+            if service.update_manager and (service.update_manager.busy() or service.update_manager.lock.locked()):raise ValueError('Finish active work and updates before resetting')
+            candidate=service.runtime_candidate(retention=DEFAULT_RETENTION if 'settings' in parts else None)
+            service.state.setdefault('updates',{})['phase']='activating'
             service._publish()
-    except BaseException:
-        await manager.publish(updates={**service.state.get('updates',{}),'phase':'error','error':'Reset did not complete; retained originals are in backups.'})
-        raise
+        try:
+            await service.replace_runtime(candidate)
+            if manager.setup_manager:await manager.setup_manager.close();manager.setup_manager=None
+            result=await backup(service)
+            async with service.lock:
+                retained=service.data_dir/'backups'/('reset-'+uuid.uuid4().hex)
+                retained.mkdir(mode=0o700)
+                for name in targets:
+                    path=service.data_dir/name
+                    if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
+                    if path.exists():
+                        target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
+                        shutil.move(str(path),str(target))
+                if 'conversations' in parts:
+                    for session in service.state['sessions']:
+                        service.history.hide_session(session)
+                    service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
+                    service.db.execute('DELETE FROM commands')
+                if 'settings' in parts:
+                    service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':24}
+                    service._shared_preferences_stamp=None
+                    service._refresh_shared_preferences()
+                    service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
+                    service.state['notificationSettings']=manager.notifications.public()
+                    for session in service.state['sessions']:
+                        if not session.get('historyManaged'):session['configurationPending']=True
+                if 'cache' in parts:
+                    service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
+                    service.update_manager.inventory=[]
+                service.state['updates'].update(phase='idle',pendingApp=None)
+                result.update(retained=str(retained),detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
+                service.state['maintenance']=result
+                service._publish()
+        except BaseException:
+            await service.discard_runtime(candidate)
+            await manager.publish(updates={**service.state.get('updates',{}),'phase':'error','error':'Reset did not complete; retained originals are in backups.'})
+            raise

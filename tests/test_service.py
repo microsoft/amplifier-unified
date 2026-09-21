@@ -24,6 +24,199 @@ class Runtime:
         pass
 
 
+class ClosableRuntime:
+    def __init__(self):
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
+
+
+class BlockingRuntime(ClosableRuntime):
+    def __init__(self):
+        super().__init__()
+        self.entered, self.release = asyncio.Event(), asyncio.Event()
+        self.cancelled = False
+        self.finished = False
+
+    async def close(self):
+        self.closed += 1
+        self.entered.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.finished = True
+
+
+async def test_shutdown_waits_for_lifecycle_replacement_then_closes_installed_runtime(tmp_path):
+    original, candidate = BlockingRuntime(), ClosableRuntime()
+    service = AppService(tmp_path, original, workspace=tmp_path)
+
+    async def replace():
+        async with service.runtime_lifecycle_lock:
+            await service.replace_runtime(candidate)
+
+    lifecycle = asyncio.create_task(replace())
+    await asyncio.wait_for(original.entered.wait(), 3)
+    shutdown = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    assert service.closed and not shutdown.done()
+    original.release.set()
+    await lifecycle
+    await shutdown
+    assert service.runtime is candidate and candidate.closed == 1
+
+
+async def test_shutdown_waits_for_replacement_to_finish_retiring_previous_runtime(tmp_path):
+    original, candidate = BlockingRuntime(), ClosableRuntime()
+    service = AppService(tmp_path, original, workspace=tmp_path)
+
+    async def replace():
+        async with service.runtime_lifecycle():
+            await service.replace_runtime(candidate)
+
+    lifecycle = asyncio.create_task(replace())
+    await asyncio.wait_for(original.entered.wait(), 3)
+    shutdown = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    assert service.closed and not shutdown.done()
+    assert not original.cancelled
+    original.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await lifecycle
+    await shutdown
+    assert original.finished and candidate.closed == 1
+
+
+async def test_shutdown_rejects_and_closes_lifecycle_candidate_queued_before_shutdown(tmp_path):
+    original, candidate = ClosableRuntime(), ClosableRuntime()
+    service = AppService(tmp_path, original, workspace=tmp_path)
+    await service.runtime_lifecycle_lock.acquire()
+
+    async def replace():
+        async with service.runtime_lifecycle_lock:
+            await service.replace_runtime(candidate)
+
+    lifecycle = asyncio.create_task(replace())
+    await asyncio.sleep(0)
+    shutdown = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    assert service.closed
+    service.runtime_lifecycle_lock.release()
+    with pytest.raises(RuntimeError, match="host is closing"):
+        await lifecycle
+    await shutdown
+    assert service.runtime is original and original.closed == 1
+    assert candidate.closed == 1
+
+
+async def test_repair_does_not_construct_a_candidate_after_shutdown_begins_while_waiting_on_state_lock(tmp_path, monkeypatch):
+    from amplifier_web import updates
+    from amplifier_web.management import Management
+
+    original, candidate = ClosableRuntime(), ClosableRuntime()
+    service = AppService(tmp_path, original, workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    created = asyncio.Event()
+
+    def runtime_candidate():
+        created.set()
+        return candidate
+
+    async def process(*args, **kwargs):
+        raise AssertionError("Repair must not start after shutdown begins.")
+
+    monkeypatch.setattr(service, "runtime_candidate", runtime_candidate)
+    monkeypatch.setattr(updates, "process", process)
+    await service.runtime_lifecycle_lock.acquire()
+    await service.lock.acquire()
+    repair = asyncio.create_task(manager.perform("maintenance.repair", {}))
+    await asyncio.sleep(0)
+    service.runtime_lifecycle_lock.release()
+    await asyncio.sleep(0)
+    shutdown = asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    assert service.closed
+    service.lock.release()
+    with pytest.raises(asyncio.CancelledError):
+        await repair
+    await shutdown
+    assert not created.is_set()
+    assert original.closed == 1 and candidate.closed == 0
+
+
+async def test_shutdown_cancels_blocked_repair_and_closes_all_runtime_candidates(tmp_path, monkeypatch):
+    from amplifier_web import updates
+    from amplifier_web.management import Management
+
+    original, candidate = ClosableRuntime(), ClosableRuntime()
+    service = AppService(tmp_path, original, workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    entered = asyncio.Event()
+
+    def runtime_candidate():
+        return candidate
+
+    async def process(*args, **kwargs):
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(service, "runtime_candidate", runtime_candidate)
+    monkeypatch.setattr(updates, "process", process)
+    repair = asyncio.create_task(manager.perform("maintenance.repair", {}))
+    await asyncio.wait_for(entered.wait(), 3)
+
+    await asyncio.wait_for(service.close(), 3)
+
+    with pytest.raises(asyncio.CancelledError):
+        await repair
+    assert service.runtime is original
+    assert original.closed == 1
+    assert candidate.closed == 1
+
+
+async def test_repair_rechecks_busy_after_a_queued_message_is_admitted(tmp_path, monkeypatch):
+    from amplifier_web import updates
+    from amplifier_web.management import Management
+    from amplifier_web.updates import UpdateManager
+
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    await service.dispatch("session.create", {})
+    sending, release = asyncio.Event(), asyncio.Event()
+
+    async def send(*args):
+        sending.set()
+        await release.wait()
+
+    async def process(*args, **kwargs):
+        pytest.fail("Repair must not start after a message is admitted.")
+
+    monkeypatch.setattr(service, "_send", send)
+    monkeypatch.setattr(updates, "process", process)
+    await service.lock.acquire()
+    message = asyncio.create_task(service.dispatch("conversation.send", {"text": "Queued first"}))
+    await asyncio.sleep(0)
+    repair = asyncio.create_task(manager.perform("maintenance.repair", {}))
+    while not service.runtime_lifecycle_lock.locked():
+        await asyncio.sleep(0)
+    service.lock.release()
+    try:
+        await asyncio.wait_for(sending.wait(), 3)
+        with pytest.raises(ValueError, match="Finish active work"):
+            await repair
+    finally:
+        release.set()
+        await message
+        await service.close()
+
+
 @pytest.fixture
 async def service(tmp_path):
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
