@@ -28,6 +28,8 @@ try{
   await expect(page.getByRole('button',{name:'Preparing…',exact:true})).toBeDisabled();
   const receipt=await (await preparing).json();
   await expect(page.getByRole('link',{name:'Download setup file'})).toBeVisible();
+  await expect(page.getByText('Open your preferred terminal app',{exact:false})).toBeVisible();
+  await expect(page.getByText('without launching a different terminal app.',{exact:false})).toBeVisible();
   // Registration on a different computer/process must appear without clicking Refresh.
   const response=await page.request.get(url+receipt.installer.downloadUrl);
   assert.equal(response.status(),200);

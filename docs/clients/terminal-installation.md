@@ -13,12 +13,16 @@ conversation behavior after connection.
    Sign in if asked.
 3. Choose **Mac with Apple silicon**, name the connection, and select **Prepare
    setup file**. The page shows progress while Spark prepares the download.
-4. Download the file. Open Terminal, paste the displayed command, and run it.
+4. Download the file. Open your preferred terminal app (WezTerm, iTerm2, Terminal
+   or another emulator), paste the displayed command, and run it.
    If your browser saves outside Downloads, use that location instead.
-5. Wait for **Ready**. Use the generated Amplifier Terminal launcher in your home
-   Applications folder for future visits. The Mac launcher is a `.terminal`
-   profile that starts the client directly, without your login-shell startup prompts. It remembers Spark and its trust
-   configuration. Each launch has its own conversation selection and draft.
+5. Wait for **Ready**, then run `amplifier-terminal` in that same terminal window.
+   It remembers the selected service and its trust configuration. Each launch
+   has its own conversation selection and draft. No separate terminal app opens.
+6. If the short command is not found, use
+   `"$HOME/.local/share/amplifier-terminal/launch"`. Setup prints the exact path
+   for custom install locations. The optional `.terminal` launcher in your home
+   Applications folder opens Apple Terminal for people who prefer a clickable file.
 
 The Mac needs internet access but no existing Python, Rust, compiler or personal
 GitHub account. Setup installs a verified runtime bootstrap, managed Python, and
@@ -26,14 +30,24 @@ the prebuilt TUI. It preserves existing TUI launchers and development checkouts.
 Conversations and tools keep running on Spark after closing the terminal.
 Downloading a file is not reported as a completed installation.
 
-This is a shell setup file followed by a macOS `.terminal` profile (a `.command`
-launcher on Linux), **not** a signed or
-notarized desktop application. macOS security controls and terminal availability
+This is a shell setup file and a saved terminal command, with an optional macOS
+`.terminal` profile (`.command` launcher on Linux), **not** a signed or notarized
+desktop application. macOS security controls and terminal availability
 still apply. The current release is `microsoft/amplifier-app-tui` `0.4.0rc1`:
 Apple silicon/macOS 26+, or Linux ARM64/glibc. Intel Macs, older macOS, native
 Windows and other Linux architectures need their own published builds.
 
 ## CLI and agent access
+
+The guided installer provides `amplifier-terminal` without installing the Unified
+service on the client computer. It starts the last successfully selected saved
+connection in the current terminal and forwards conversation options such as
+`--session ID`, `--new` and `--list-sessions`. The saved launcher still refuses
+server/credential overrides. A command under `~/.local/bin` is added only when
+that name is free or already belongs to this installation; unrelated commands
+are preserved. Setup never changes shell profiles or `PATH`, and prints an
+absolute fallback when the short command cannot be used. Custom install roots
+keep their commands inside that root.
 
 Where Unified is already installed:
 
@@ -108,7 +122,7 @@ when you return to it; **Refresh connections** remains available. A matching
 registration disables reuse of that setup file and survives a page reload. The
 page reports registration, not proof that local installation completed or a
 terminal is currently online. Wait for the installer's **Ready** message before
-opening the launcher. Existing enrollments without setup correlation remain listed.
+running the saved terminal command. Existing enrollments without setup correlation remain listed.
 
 Unified owns distribution/enrollment policy. Foundation keeps shared session
 storage/ownership. The TUI repository owns client protocol and builds. This

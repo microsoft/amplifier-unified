@@ -108,16 +108,31 @@ receipt, unchanged polls retain focus, failed refresh preserves last-known data,
 revocation updates the page, and an older attempt cannot complete a newer setup.
 No client is installed by this fixture.
 
-**Native acceptance remains pending.** The computer-use tool rejects Terminal
-access in this environment, so no substitute UI-control method was used. A
-replacement launcher was prepared beside the user's existing launcher for their
-actual Finder double-click check. Direct-command and profile checks do not prove
-Finder/Gatekeeper behavior; record the user's result before claiming that boundary
-qualified or shipping the replacement as verified.
+**User-confirmed native acceptance:** the user reported that the replacement
+`.terminal` launcher worked on their Mac. They then requested that their existing
+terminal (WezTerm) be the primary entry point. The computer-use tool rejects
+Terminal access in this environment; no substitute UI-control method was used.
+The user's result establishes that specific launcher path, not a general
+Gatekeeper or clean-device certification.
 
-Final focused run: **90 passed, 1 skipped** across terminal setup, authentication,
+The installer now also creates a terminal-neutral `amplifier-terminal` command.
+It reads the selected saved connection at launch time, forwards view arguments,
+and never opens an emulator. Its managed base Python stays outside disposable
+candidate environments. Tests cover switching the saved default, removal of a
+failed candidate, spaces/arguments, malformed defaults and preservation of an
+unrelated command. The short command is optional when `~/.local/bin` is not on
+PATH; setup always prints a usable absolute path and does not edit shell files.
+
+Final focused run: **93 passed, 1 skipped** across terminal setup, authentication,
 server authentication, CLI deployment and setup-page checks (the separate Python
 Playwright setup-page probe is unavailable in this environment). The real-route
 headless browser check passed. A built wheel contains byte-identical updated
 installer, setup page/script and device-registration code. These checks leave
-actual Finder launch pending as described above.
+broader emulator/clean-device acceptance outside the stated evidence.
+
+The new short command was added to the user's existing installation without
+reinstalling or changing enrollment. `amplifier-terminal --list-sessions`
+authenticated to Spark successfully; output was captured and only exit status
+and byte counts were reported. A server override was refused with exit code 2.
+Shell configuration was unchanged. No new physical WezTerm inspection is claimed;
+the command executes in its caller's terminal and does not launch an emulator.

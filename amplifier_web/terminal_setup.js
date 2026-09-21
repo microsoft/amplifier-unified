@@ -32,7 +32,7 @@ function updateRegistration(devices){
     prepared.registeredId=registered.id;
     try{sessionStorage.setItem(storageKey,JSON.stringify(prepared));}catch{}
     get('status').className='success';
-    get('status').textContent='Connection registered. Finish the remaining steps in Terminal and wait for “Ready,” then open your saved Amplifier Terminal launcher.';
+    get('status').textContent='Connection registered. Finish the remaining steps in Terminal and wait for “Ready,” then run amplifier-terminal in your preferred terminal app.';
     get('expiry').textContent='This setup file has been used. Registration confirms access; it does not show whether setup finished locally or the terminal is open.';
   }else if(prepared.registeredId){
     get('status').className='';get('status').textContent='This connection’s access was removed. Prepare a new setup file to reconnect.';

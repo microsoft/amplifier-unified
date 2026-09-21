@@ -364,3 +364,60 @@ def test_linux_shortcut_still_executes_saved_connection_and_arguments(tmp_path, 
     result = subprocess.run([str(shortcut), 'argument with spaces'], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0 and result.stdout == 'argument with spaces'
     assert shortcut.suffix == '.command'
+
+
+def test_terminal_command_uses_current_saved_connection_and_forwards_args(tmp_path):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    root = tmp_path / 'client with spaces'
+    root.mkdir()
+    for identity, label in [('a' * 32, 'first'), ('b' * 32, 'second')]:
+        connection = root / 'connections' / identity
+        connection.mkdir(parents=True)
+        launch = connection / 'launch'
+        launch.write_text('#!/bin/sh\nprintf "%s:%s" ' + label + ' "$1"\n')
+        launch.chmod(0o700)
+    (root / 'default.json').write_text(json.dumps({'id': 'a' * 32}))
+    # Resolve out of the venv, so retiring a failed candidate cannot break it.
+    env = tmp_path / 'candidate'
+    (env / 'bin').mkdir(parents=True)
+    (env / 'bin/python').symlink_to(Path(sys.executable).resolve())
+    command, alias = create_terminal_command(root, env)
+    assert alias == root / 'bin/amplifier-terminal'
+    (env / 'bin/python').unlink()
+    first = subprocess.run([str(alias), 'two words'], capture_output=True, text=True, timeout=5)
+    assert first.returncode == 0 and first.stdout == 'first:two words'
+    (root / 'default.json').write_text(json.dumps({'id': 'b' * 32}))
+    second = subprocess.run([str(alias), '--new'], capture_output=True, text=True, timeout=5)
+    assert second.returncode == 0 and second.stdout == 'second:--new'
+    assert command.stat().st_mode & 0o777 == 0o700
+
+
+def test_terminal_command_preserves_unrelated_short_command(tmp_path, monkeypatch):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    root = tmp_path / '.local/share/amplifier-terminal'
+    root.mkdir(parents=True)
+    binary = tmp_path / '.local/bin/amplifier-terminal'
+    binary.parent.mkdir(parents=True)
+    binary.write_text('existing unrelated executable')
+    command, alias = create_terminal_command(root, Path(sys.prefix))
+    assert alias is None and command == root / 'launch'
+    assert binary.read_text() == 'existing unrelated executable'
+
+
+def test_terminal_command_handles_incomplete_default_without_path_escape(tmp_path):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    command, alias = create_terminal_command(tmp_path, Path(sys.prefix))
+    for contents in [None, '{invalid', json.dumps({'id': '../other'}), json.dumps({'id': 'a' * 32})]:
+        if contents is not None:
+            (tmp_path / 'default.json').write_text(contents)
+        result = subprocess.run([str(alias)], capture_output=True, text=True, timeout=5)
+        assert result.returncode == 1
+        assert 'Finish setup' in result.stderr
+        assert 'Traceback' not in result.stderr and str(tmp_path) not in result.stderr
