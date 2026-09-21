@@ -51,9 +51,11 @@ try{
  const held=new Promise(resolve=>{release=resolve});
  const creating=new Promise(resolve=>{createSeen=resolve});
  const heldCreate=new Promise(resolve=>{releaseCreate=resolve});
- let firstCreate=true;
+ let firstCreate=true,createAttempts=0,sendAttempts=0;
  await page.route('**/api/actions',async route=>{
   const action=route.request().method()==='POST'&&route.request().postDataJSON()?.action;
+  if(action==='session.create')createAttempts++;
+  if(action==='conversation.send')sendAttempts++;
   if(action==='session.create'&&firstCreate){firstCreate=false;createSeen();await heldCreate;if(process.argv.includes('--lost-create')){await route.fetch();return route.fulfill({status:503,json:{error:'Creation acknowledgement lost'}})}if(process.argv.includes('--fail-create'))return route.fulfill({status:503,json:{error:'Synthetic creation failure'}})}
   // Selection arrives before the queued draft save. Keep that interval visible
   // so reload acceptance must observe durable state rather than win a race.
@@ -77,6 +79,14 @@ try{
   await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
   await expect(composer).toHaveValue('Next draft while the first delivery is pending');
   await page.getByRole('button',{name:'Check delivery',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Send again',exact:true})).toBeVisible();
+  assert.equal(createAttempts,1,'Checking delivery must not retry conversation creation');
+  assert.equal(sendAttempts,0,'Checking delivery must not send the message');
+  await page.getByRole('button',{name:'Send again',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Send this message again',exact:true})).toBeVisible();
+  assert.equal(createAttempts,1,'Opening confirmation must not retry conversation creation');
+  assert.equal(sendAttempts,0,'Opening confirmation must not send the message');
+  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
  }
  release();
  if(process.argv.includes('--lost-create')){
@@ -96,6 +106,8 @@ try{
  const sent=await (await page.request.get(url+'/fixture')).json();
  assert.equal(sent.sent.length,1);
  assert.equal(sent.sent[0].text,'First input on an empty host');
+ assert.equal(createAttempts,process.argv.includes('--fail-create')?2:1);
+ assert.equal(sendAttempts,1,'The confirmed first message is submitted exactly once');
  // The public UI snapshot includes pending edits. Reload acceptance must wait
  // for the actual client state saved by the host, not the optimistic display.
  await persistedDraft('Next draft while the first delivery is pending');

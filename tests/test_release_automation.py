@@ -68,6 +68,48 @@ def test_release_refuses_a_tag_on_a_different_package_version(repository):
     with pytest.raises(ValueError,match='immutable release tag'):release.plan(repository)
 
 
+def test_manual_plan_can_qualify_merged_maintenance_commit_after_main_advances(repository):
+    original = git(repository, 'rev-parse', 'HEAD')
+    (repository/'pyproject.toml').write_text('[project]\nversion="2.0.0"\n')
+    (repository/'amplifier_web/__init__.py').write_text('__version__="2.0.0"\n')
+    git(repository, 'add', '.');git(repository, 'commit', '-m', 'next release')
+    head = git(repository, 'rev-parse', 'HEAD')
+    assert release.plan(repository, original) == {
+        'version': '1.2.3', 'tag': 'v1.2.3', 'revision': original, 'existing_tag': False}
+    assert git(repository, 'rev-parse', 'HEAD') == head
+    assert release.plan(repository)['version'] == '2.0.0'
+    git(repository, 'tag', 'v1.2.3', original)
+    assert release.plan(repository, original)['existing_tag'] is True
+    git(repository, 'tag', '-f', 'v1.2.3', head)
+    with pytest.raises(ValueError, match='immutable release tag'):
+        release.plan(repository, original)
+
+
+@pytest.mark.parametrize('revision', ['main', 'abc123', '--all', 'f'*40])
+def test_manual_plan_rejects_moving_invalid_and_unknown_references(repository, revision):
+    with pytest.raises(ValueError):
+        release.plan(repository, revision)
+
+
+def test_manual_plan_rejects_unmerged_commit(repository):
+    original = git(repository, 'rev-parse', 'HEAD')
+    git(repository, 'checkout', '-b', 'unmerged')
+    (repository/'unmerged.txt').write_text('not accepted')
+    git(repository, 'add', '.');git(repository, 'commit', '-m', 'unmerged')
+    other = git(repository, 'rev-parse', 'HEAD')
+    git(repository, 'checkout', 'main')
+    with pytest.raises(ValueError, match='ancestor'):
+        release.plan(repository, other)
+    assert git(repository, 'rev-parse', 'HEAD') == original
+
+
+def test_manual_plan_rejects_tag_and_tree_object_shas(repository):
+    git(repository, 'tag', '-a', '-m', 'annotated', 'candidate')
+    for ref in ('candidate', 'HEAD^{tree}'):
+        with pytest.raises(ValueError, match='ancestor'):
+            release.plan(repository, git(repository, 'rev-parse', ref))
+
+
 def test_release_distribution_verification_checks_source_assets_and_references(repository):
     dist=distributions(repository)
     release.verify_dist(repository,dist,'1.2.3')

@@ -8,6 +8,11 @@ on:
       - .github/workflows/release.yml
       - scripts/release.py
   workflow_dispatch:
+    inputs:
+      release_revision:
+        description: Full merged commit SHA to qualify and publish; blank selects this main commit
+        required: false
+        type: string
 permissions:
   contents: write
 concurrency:
@@ -31,9 +36,11 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Resolve immutable release target
         id: release
+        env:
+          SELECTED_RELEASE_REVISION: ${{ inputs.release_revision }}
         run: |
           cp scripts/release.py "$RUNNER_TEMP/release.py"
-          python "$RUNNER_TEMP/release.py" plan --output "$GITHUB_OUTPUT"
+          python "$RUNNER_TEMP/release.py" plan --revision "$SELECTED_RELEASE_REVISION" --output "$GITHUB_OUTPUT"
       - name: Pin the verified selected commit
         env:
           RELEASE_REVISION: ${{ steps.release.outputs.revision }}
