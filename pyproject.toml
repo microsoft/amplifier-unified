@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tui = ["amplifier-app-tui @ git+https://github.com/bkrabach/amplifier-app-tui@main"]
+tui = ["amplifier-app-tui @ git+https://github.com/microsoft/amplifier-app-tui@main"]
 native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use"]
 
 [project.scripts]
