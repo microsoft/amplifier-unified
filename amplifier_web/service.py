@@ -39,6 +39,9 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
+    "terminal.prepare": ("Prepare a private, short-lived terminal setup download for a configured service address. Installs on the computer where the user runs it; does not install on the server.", schema({"server": string(500), "platform": {"enum": ["macos-arm64", "linux-arm64"]}, "name": string(80)}, ["server", "platform", "name"])),
+    "terminal.devices": ("List enrolled terminal connections without revealing credentials.", schema({})),
+    "terminal.revoke": ("Remove one terminal connection's access; accepted work continues on the host.", schema({"id": string(100)}, ["id"])),
     "diagnostics.configure": ("Configure local Context Intelligence capture and explicitly enabled per-server stream routes. API keys are environment references. Changing a destination cancels its queued deliveries; already accepted or in-flight data cannot be recalled.", schema({"config":{"type":"object"}})),
     "diagnostics.test": ("Test saved destination authentication and write access by sending one synthetic probe; no conversation content.", schema({"id":string(100)})),
     "diagnostics.environment": ("Check that a credential environment variable exists in the service without revealing it.",schema({"name":string(200)})),
@@ -616,6 +619,14 @@ class AppService:
                 raise AppError('The canvas view command targets a different client.')
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
+        if action.startswith('terminal.'):
+            manager = getattr(self, 'terminal_setup', None)
+            if manager is None:
+                raise AppError('Terminal setup is available through the running Unified service.', 503)
+            try:
+                return await manager.perform(action, args, command_id)
+            except (ValueError, OSError, TimeoutError) as exc:
+                raise AppError(str(exc) if isinstance(exc, ValueError) else 'Terminal setup could not finish. Check server release access and retry.', 409) from None
         if action == 'runtime.control' and args.get('operation') in {'history.edit','history.rewind'}:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
