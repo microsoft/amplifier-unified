@@ -16,7 +16,7 @@ PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNo
                        'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
                        'BundleDependencyError':'bundle-dependency-failed'}
 RECOVERY_REASONS = {'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
-PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','capabilities','cleanup'}
+PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup'}
 
 
 def exception_type(error):
@@ -39,7 +39,7 @@ def probe_record(output):
         try:value=json.loads(line[len(PROBE_PREFIX):])
         except ValueError:continue
         if not isinstance(value,dict):continue
-        safe={key:value[key] for key in ('ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent') if type(value.get(key)) is bool}
+        safe={key:value[key] for key in ('ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared') if type(value.get(key)) is bool}
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']

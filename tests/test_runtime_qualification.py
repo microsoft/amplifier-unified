@@ -162,3 +162,26 @@ source={directory="../local-module"}
     output = runtime_qualification.lock_overrides(tmp_path, tmp_path / 'overrides.txt').read_text()
     assert '-e ' + (tmp_path.parent / 'cached-module').as_uri() in output
     assert 'amplifier-local @ ' + (tmp_path.parent / 'local-module').as_uri() in output
+
+
+async def test_refresh_preparation_never_imports_or_mounts_live_runtime(mounted_host, monkeypatch):
+    import builtins
+    from amplifier_web.host.session import prepare_dependencies
+    h = mounted_host
+    original = builtins.__import__
+    def guarded(name, *args, **kwargs):
+        if name.startswith('amplifier_module_loop_live') or name in {'children', 'storage'}:
+            raise AssertionError('Refresh preparation imported a live session before its sources froze')
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', guarded)
+    overrides = h.home / 'qualified-overrides.txt'
+    await prepare_dependencies(h.config.workspace, bundle='anchors', install_overrides=overrides)
+    h.loaded.prepare.assert_awaited_once()
+    policy = h.loaded.prepare.call_args.kwargs
+    assert policy['refresh_dependencies'] is True and policy['strict'] is True
+    assert policy['install_overrides'] == overrides
+    assert policy['cache_dir'] == h.config.registry_home / 'cache'
+    assert policy['source_resolver']('loop-live', 'old-source').endswith('amplifier-module-loop-live@main')
+    h.prepared.create_session.assert_not_awaited()
+    h.session.execute.assert_not_awaited()
+    assert not h.path.exists() and not h.writes

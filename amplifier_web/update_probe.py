@@ -23,14 +23,19 @@ async def main():
     facts={'ok':False,'stage':'prepare'}
     session=None
     try:
-        from amplifier_web.host.session import prepare_manager
-        session,runtime,report=await prepare_manager(args.workspace,bundle=args.bundle,resume=False,ask=deny,
-            refresh_dependencies=args.refresh_dependencies, install_overrides=args.install_overrides)
-        facts.update(stage='capabilities',standalone=bool(report.get('standalone')),providersPresent=bool(report.get('providers')))
-        if not facts['standalone'] or not facts['providersPresent']:raise RuntimeError('Incomplete staged runtime')
-        facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))
-        if not facts['cliAbsent']:raise RuntimeError('A CLI host dependency was introduced')
-        facts.update(ok=True,stage='complete')
+        if args.refresh_dependencies:
+            from amplifier_web.host.session import prepare_dependencies
+            await prepare_dependencies(args.workspace,bundle=args.bundle,install_overrides=args.install_overrides)
+            facts.update(ok=True,stage='prepared',dependenciesPrepared=True)
+        else:
+            from amplifier_web.host.session import prepare_manager
+            session,runtime,report=await prepare_manager(args.workspace,bundle=args.bundle,resume=False,ask=deny,
+                install_overrides=args.install_overrides)
+            facts.update(stage='capabilities',standalone=bool(report.get('standalone')),providersPresent=bool(report.get('providers')))
+            if not facts['standalone'] or not facts['providersPresent']:raise RuntimeError('Incomplete staged runtime')
+            facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))
+            if not facts['cliAbsent']:raise RuntimeError('A CLI host dependency was introduced')
+            facts.update(ok=True,stage='complete')
     except Exception as error:facts.update(probe_failure(error,facts['stage']))
     finally:
         if session:

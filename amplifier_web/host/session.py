@@ -433,6 +433,31 @@ class ResolvedRoot:
         return root
 
 
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None):
+    """Prepare a fresh qualification worker before importing its live runtime.
+
+    This first probe only installs configured dependencies. A separate process
+    mounts the resulting frozen worker normally; source changes never mix an
+    already imported wheel runtime with an editable cache in one interpreter.
+    No conversation, history store, job recovery or model execution is opened.
+    """
+    config = load_config(workspace)
+    from .config import prepare_registry
+    prepare_registry(config)
+    execution_workspace = Path(config.workspace).expanduser().resolve(strict=True)
+    os.chdir(execution_workspace)
+    _, loaded, _ = await load_root_bundle(config, bundle or config.active_bundle,
+                                          execution_workspace=execution_workspace)
+    snapshot = is_snapshot(loaded)
+    adapted, _ = live_plan(loaded.to_mount_plan())
+    loaded.session = adapted['session']
+    loaded.agents = adapted.get('agents', {})
+    await loaded.prepare(strict=True, refresh_dependencies=True,
+        **({'install_overrides': Path(install_overrides)} if install_overrides is not None else {}),
+        cache_dir=config.registry_home / 'cache',
+        source_resolver=lambda module, source: module_source(config, snapshot, module, source))
+
+
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
