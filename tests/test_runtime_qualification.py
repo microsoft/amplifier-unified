@@ -174,6 +174,7 @@ async def test_refresh_preparation_never_imports_or_mounts_live_runtime(mounted_
             raise AssertionError('Refresh preparation imported a live session before its sources froze')
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, '__import__', guarded)
+    monkeypatch.setattr('amplifier_web.host.session.installed_loop_source', lambda: '/qualified/loop-package')
     overrides = h.home / 'qualified-overrides.txt'
     await prepare_dependencies(h.config.workspace, bundle='anchors', install_overrides=overrides)
     h.loaded.prepare.assert_awaited_once()
@@ -181,7 +182,27 @@ async def test_refresh_preparation_never_imports_or_mounts_live_runtime(mounted_
     assert policy['refresh_dependencies'] is True and policy['strict'] is True
     assert policy['install_overrides'] == overrides
     assert policy['cache_dir'] == h.config.registry_home / 'cache'
-    assert policy['source_resolver']('loop-live', 'old-source').endswith('amplifier-module-loop-live@main')
+    assert policy['source_resolver']('loop-live', 'old-source') == '/qualified/loop-package'
     h.prepared.create_session.assert_not_awaited()
     h.session.execute.assert_not_awaited()
     assert not h.path.exists() and not h.writes
+
+
+@pytest.mark.parametrize('editable', [False, True])
+def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatch, editable):
+    import importlib.metadata
+    import importlib.util
+    from amplifier_web.host.session import installed_loop_source, module_source
+    package = tmp_path / ('src/amplifier_module_loop_live' if editable else 'amplifier_module_loop_live')
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('raise AssertionError("Do not import source while locating it")\n')
+    direct = {'url': tmp_path.as_uri(), 'dir_info': {'editable': True}} if editable else {'url':'https://example.invalid/loop','vcs_info':{'vcs':'git','commit_id':'a'*40}}
+    distribution = SimpleNamespace(read_text=lambda _: json.dumps(direct), locate_file=lambda path: tmp_path / path)
+    monkeypatch.setattr(importlib.metadata, 'distribution', lambda name: distribution)
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name: SimpleNamespace(origin=str(package / '__init__.py')))
+    assert installed_loop_source() == str(package)
+    assert module_source(SimpleNamespace(module_sources={}), False, 'loop-live', 'git+https://example.invalid/second-copy') == str(package)
+    # Matching version/revision is not enough to excuse a second import tree.
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name: SimpleNamespace(origin=str(tmp_path / 'other-copy/__init__.py')))
+    with pytest.raises(ValueError, match='does not match its installed distribution'):
+        installed_loop_source()

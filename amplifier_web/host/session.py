@@ -391,9 +391,38 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     return loaded
 
 
+def installed_loop_source():
+    """Mount the exact loop distribution that supplies the host's Runtime.
+
+    The worker lock/qualification receipt owns this explicit dependency. A
+    second checkout of the same Git revision is still a different Python source
+    tree and must not be mixed with its already imported Runtime submodules.
+    Core still validates and imports the selected package through its guard.
+    """
+    import importlib.metadata
+    import importlib.util
+    from urllib.parse import unquote, urlsplit
+    distribution = importlib.metadata.distribution('amplifier-module-loop-live')
+    direct = json.loads(distribution.read_text('direct_url.json') or '{}')
+    if direct.get('dir_info') is not None:
+        parsed = urlsplit(direct.get('url', ''))
+        if parsed.scheme != 'file':
+            raise ValueError('The installed loop runtime has unsupported local source metadata.')
+        root = Path(unquote(parsed.path)).resolve()
+        candidates = [root / 'amplifier_module_loop_live', root / 'src/amplifier_module_loop_live']
+    else:
+        candidates = [Path(distribution.locate_file('amplifier_module_loop_live')).resolve()]
+    candidates = [path for path in candidates if (path / '__init__.py').is_file()]
+    spec = importlib.util.find_spec('amplifier_module_loop_live')
+    if (len(candidates) != 1 or spec is None or not spec.origin
+            or Path(spec.origin).resolve() != (candidates[0] / '__init__.py').resolve()):
+        raise ValueError('The loop runtime import does not match its installed distribution; its source was preserved.')
+    return str(candidates[0])
+
+
 def module_source(config, snapshot, module, source):
     if module == "loop-live":
-        return LOOP_SOURCE
+        return installed_loop_source()
     return source if snapshot else config.module_sources.get(module) or source
 
 
