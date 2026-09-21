@@ -42,14 +42,19 @@ def distributions(root):
     return dist
 
 
-def test_release_plan_validates_versions_and_resumes_original_tag(repository):
+@pytest.mark.parametrize('annotated',[False,True])
+def test_release_plan_resumes_only_the_selected_commit(repository,annotated):
     original=git(repository,'rev-parse','HEAD')
     assert release.plan(repository)=={'version':'1.2.3','tag':'v1.2.3','revision':original,'existing_tag':False}
-    git(repository,'tag','v1.2.3')
-    (repository/'README.md').write_text('Unrelated subsequent work')
-    git(repository,'add','.');git(repository,'commit','-m','later')
+    git(repository,'tag',*(['-a','-m','release'] if annotated else []),'v1.2.3')
     assert release.plan(repository)['revision']==original
-    assert git(repository,'rev-parse','v1.2.3')==original
+    (repository/'README.md').write_text('A fix that still needs a version bump')
+    git(repository,'add','.');git(repository,'commit','-m','later')
+    with pytest.raises(ValueError,match='selected commit'):
+        release.plan(repository)
+    assert git(repository,'rev-parse','v1.2.3^{commit}')==original
+    git(repository,'checkout','--detach',original)
+    assert release.plan(repository)['revision']==original
     (repository/'amplifier_web/__init__.py').write_text('__version__ = "1.2.4"\n')
     with pytest.raises(ValueError,match='matching stable versions'):release.plan(repository)
 

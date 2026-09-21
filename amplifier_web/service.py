@@ -133,7 +133,8 @@ ACTION_DEFINITIONS = {
     "modules.remove": ("Remove a scoped module override",schema({"section":string(100),"id":string(200),"scope":{"enum":["global","project","local"]}},["section","id"])),
     "modules.validate": ("Validate a module using its public Core contract",schema({"behavioral":{"type":"boolean"},"section":string(100),"id":string(200),"scope":{"enum":["global","project","local"]}},["section","id"])),
     "sources.list": ("List scoped source overrides",schema({"scope":{"enum":["global","project","local"]}},[])),
-    "sources.save": ("Set a scoped bundle or module source",schema({"kind":{"enum":["module","bundle"]},"name":string(200),"source":string(4000),"scope":{"enum":["global","project","local"]}},["kind","name","source"])),
+    "sources.validate": ("Validate a candidate module source without saving it",schema({"kind":{"enum":["module"]},"name":string(200),"source":string(4000),"section":{"enum":["tools","hooks","providers","orchestrator","context"]},"scope":{"enum":["global","project","local"]}},["kind","name","source","section"])),
+    "sources.save": ("Set a scoped bundle or module source; validate=true validates the candidate first and saves only on success",schema({"kind":{"enum":["module","bundle"]},"name":string(200),"source":string(4000),"validate":{"type":"boolean"},"section":{"enum":["tools","hooks","providers","orchestrator","context"]},"scope":{"enum":["global","project","local"]}},["kind","name","source"])),
     "sources.remove": ("Remove a scoped source override",schema({"kind":{"enum":["module","bundle"]},"name":string(200),"scope":{"enum":["global","project","local"]}},["kind","name"])),
     "history.importFile": ("Import a transcript as an independent conversation",schema({"content":string(1000000),"format":{"enum":["json","jsonl"]},"title":string(200),"bundle":string(2000)},["content","format"])),
     "notifications.get": ("Inspect notification delivery preferences",schema()),
@@ -927,7 +928,7 @@ class AppService:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
                     input_id = command_id or str(uuid.uuid4())
-                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])))
+                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,attachments=copy.deepcopy(original.get('attachments',[])),delivery={'status':'sending'})
                     self._activity(session,'queued','Generating from your edited message.',reset=True)
                     session['status']='working'
                     ensure_turn(session,input_id,text)
@@ -1314,6 +1315,11 @@ class AppService:
         try:
             await fn(*args, **(kwargs or {}))
         except Exception as exc:
+            from .runtime import RuntimeOperationPending
+            if isinstance(exc, RuntimeOperationPending) and exc.operation == 'send' and fn == self._send:
+                # _send already published this input's uncertain delivery. A
+                # missing acknowledgement does not terminate its live turn.
+                return
             if (kwargs or {}).get('defer_publish'):
                 # A failure outside the manager's effect/result handler must not
                 # leave an accepted interactive call polling a queued receipt.
@@ -1378,14 +1384,20 @@ class AppService:
 
     def _delivery(self, session, input_id, status):
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
-        if message is None or 'delivery' not in message:
-            return
-        if message['delivery'].get('status') == 'accepted' and status == 'unknown':
-            return
-        message['delivery'] = {'status':status}
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+        receipt = json.loads(row[0]) if row else {}
+        message_bound = message is not None and 'delivery' in message
+        # Voice delegation has no separate user bubble. Only its saved exact
+        # input/session binding permits a receipt update without that message.
+        receipt_bound = receipt.get('inputId') == input_id and receipt.get('sessionId') == session['id']
+        if not message_bound and not receipt_bound:
+            return
+        if status == 'unknown' and (receipt.get('delivery') == 'accepted' or
+                message_bound and message['delivery'].get('status') == 'accepted'):
+            return
+        if message_bound:
+            message['delivery'] = {'status':status}
         if row:
-            receipt = json.loads(row[0])
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
 
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False):
@@ -1803,7 +1815,7 @@ class AppService:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
-            receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"]}
+            receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)

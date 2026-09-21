@@ -332,7 +332,7 @@ class Management:
             async with self.service.lock:
                 self.service.state.setdefault('registry',{}).update(result)
                 self.service._publish()
-            if action.endswith(('.save','.remove')):await self.invalidate_configuration()
+            if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
             session=self.configuration_session(args)

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import signal
 from .preferences import SettingsStore
-from .host.config import load_config
+from .host.config import load_config,merge,expand_environment
 from .setup import SetupManager,redact,safe_name,public_source
 from .bundles import validate_uri,SECRET_KEYS
 
@@ -30,7 +30,7 @@ class RegistryManager:
     def __init__(self,home,*,store=None,validation_command=None):
         self.home=Path(home);self.store=store or SettingsStore(home);self.validation_command=validation_command
 
-    def rows(self,settings,scope):
+    def _modules(self,settings,scope):
         modules=[];config=settings.get('config',{})
         for section in ('tools','hooks','providers'):
             rows={}
@@ -38,12 +38,18 @@ class RegistryManager:
                 identity=row.get('id') or row.get('instance_id') or row['module']
                 rows[identity]={**rows.get(identity,{}),**row}
             for identity,row in rows.items():
-                patch=settings.get('overrides',{}).get(identity,settings.get('overrides',{}).get(row['module'],{}))
-                modules.append({'id':identity,'module':row['module'],'section':section,'source':public_source(patch.get('source',row.get('source'))),
-                    'config':redact(patch.get('config',row.get('config',{}))),'enabled':patch.get('enabled',row.get('enabled',True)),'scope':scope})
+                overrides=settings.get('overrides',{})
+                patch=merge(overrides.get(row['module'],{}),overrides.get(identity,{}))
+                modules.append({'id':identity,'module':row['module'],'section':section,'source':patch.get('source',row.get('source')),
+                    'config':merge(row.get('config',{}),patch.get('config',{})),'enabled':patch.get('enabled',row.get('enabled',True)),'scope':scope})
         for section,row in config.get('session',{}).items():
             if section in {'orchestrator','context'} and isinstance(row,dict) and row.get('module'):
-                modules.append({'id':row['module'],'module':row['module'],'section':section,'source':public_source(row.get('source')),'config':redact(row.get('config',{})),'enabled':True,'scope':scope})
+                patch=settings.get('overrides',{}).get(row['module'],{})
+                modules.append({'id':row['module'],'module':row['module'],'section':section,'source':patch.get('source',row.get('source')),'config':merge(row.get('config',{}),patch.get('config',{})),'enabled':True,'scope':scope})
+        return modules
+
+    def rows(self,settings,scope):
+        modules=[{**row,'source':public_source(row['source']),'config':redact(row['config'])} for row in self._modules(settings,scope)]
         sources=[{'kind':kind,'name':name,'source':public_source(source),'scope':scope} for kind,key in (('module','modules'),('bundle','bundles')) for name,source in settings.get('sources',{}).get(key,{}).items()]
         return {'modules':modules,'sources':sources,'scope':scope}
 
@@ -71,6 +77,19 @@ class RegistryManager:
         settings=self.store.read(workspace,scope)
         if action in {'modules.list','sources.list'}:return self.rows(settings,scope)
         if action=='modules.validate':return await self.validate(args,workspace,scope)
+        validation=None
+        if action=='sources.validate' or (action=='sources.save' and args.get('validate')):
+            if args.get('kind')!='module' or args.get('section') not in SECTIONS:
+                raise ValueError('Choose a module type to validate a candidate source.')
+            name=safe_name(args['name'])
+            candidate=source_uri(args['source'],workspace)
+            validation=(await self._validate_row({'id':name,'module':name,'section':args['section'],'source':candidate},args))['validation']
+            # Never write a candidate on failure. Validated saves validate again,
+            # rather than trusting a previous browser result or draft identity.
+            result={'sourceValidation':{**validation,'name':name,'source':public_source(candidate),'scope':scope,'section':args['section'],'saved':False}}
+            if action=='sources.validate' or not validation.get('passed'):
+                return result
+            args={**args,'source':candidate}
         def mutate(settings):
             if action.startswith('sources.'):
                 kind=args['kind']
@@ -117,14 +136,20 @@ class RegistryManager:
                 settings.setdefault('overrides',{}).setdefault(identity,{})['enabled']=enabled
             if updates:SetupManager(self.home,store=self.store)._keys(updates)
         updated=self.store.update(workspace,scope,mutate)
-        return {**self.rows(updated,scope),'takesEffect':'new_sessions'}
+        result={**self.rows(updated,scope),'takesEffect':'new_sessions'}
+        if validation is not None:result['sourceValidation']={**validation,'name':args['name'],'source':public_source(args['source']),'scope':scope,'section':args['section'],'saved':True}
+        return result
 
     async def validate(self,args,workspace,scope):
-        settings=load_config(workspace,home=self.home).settings
-        rows=self.rows(settings,'effective')['modules']
+        from .host.session import module_source
+        config=load_config(workspace,home=self.home,legacy_home=self.store.shared_home)
+        rows=self._modules(config.settings,'effective')
         row=next((row for row in rows if row['id']==args['id'] and row['section']==args['section']),None)
         if not row:raise ValueError('Choose a configured module to validate.')
-        if not row.get('source'):row['source']=settings.get('sources',{}).get('modules',{}).get(row['module'])
+        row['source']=expand_environment(module_source(config,False,row['module'],row.get('source')))
+        return await self._validate_row(row,args)
+
+    async def _validate_row(self,row,args):
         if self.validation_command:command=list(self.validation_command)
         else:
             from .runtime import RuntimeManager

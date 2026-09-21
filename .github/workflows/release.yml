@@ -34,7 +34,7 @@ jobs:
         run: |
           cp scripts/release.py "$RUNNER_TEMP/release.py"
           python "$RUNNER_TEMP/release.py" plan --output "$GITHUB_OUTPUT"
-      - name: Use the original commit when resuming an existing tag
+      - name: Pin the verified selected commit
         env:
           RELEASE_REVISION: ${{ steps.release.outputs.revision }}
         run: git checkout --detach "$RELEASE_REVISION"
@@ -61,6 +61,13 @@ jobs:
           path: .ci/loop-live
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
+      - name: Install browser dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Verify candidate module source validation
+        if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
+        working-directory: frontend
+        run: npm run test:registry-browser
       - name: Verify typed surface context through Core and loop-live
         run: |
           mkdir -p "$RUNNER_TEMP/surface-runtime"
@@ -71,9 +78,7 @@ jobs:
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:empty-host-browser
+        run: npm run test:empty-host-browser
       - name: Verify draft-first chat setup and composer controls
         working-directory: frontend
         run: npm run test:new-chat-browser
