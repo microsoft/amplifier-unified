@@ -53,6 +53,8 @@ def prepare(service, args, origin, caller_session_id):
     config, summary = template(service, source)
     if inheritance['configurationHash'] != summary['configurationHash']:
         raise ValueError('The reviewed source configuration changed; preview again')
+    if args.get('selection') and args['selection'] != config['selection']:
+        raise ValueError('The explicit model selection must match the reviewed inherited configuration')
     if args.get('workspace') != config['workspace'] or args.get('bundle') != config['bundle']:
         raise ValueError('The new conversation must use the reviewed workspace and bundle')
     return config
