@@ -26,8 +26,34 @@ try{
  await page.getByRole('button',{name:'Validate & save source',exact:true}).click();
  await expect(page.getByText('Candidate validated and saved',{exact:true})).toBeVisible();
  assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sources)).at(-1).name,'tool-fixture');
+ // Local draft text is intentionally different from the canonical saved path.
+ await source.fill('./valid-candidate');
+ await expect(page.getByText('Candidate validated and saved',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Validate without saving',exact:true}).click();
+ await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toBeVisible();
+ const localReceipt=await page.evaluate(()=>window.amplifier.getState().registry.sourceValidation);
+ assert.equal(localReceipt.kind,'module');assert.equal(localReceipt.submittedSource,'./valid-candidate');
+ assert.ok(localReceipt.source.startsWith('/'));assert.ok(localReceipt.source.endsWith('/workspace/valid-candidate'));
+ assert.notEqual(localReceipt.source,localReceipt.submittedSource);assert.equal(localReceipt.saved,false);
+ assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sources)).at(-1).source,'git+https://github.com/example/valid-candidate');
+ await page.getByLabel('Source type',{exact:true}).selectOption('bundle');
+ await expect(page.getByRole('button',{name:'Save source override',exact:true})).toBeVisible();
+ await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toHaveCount(0);
+ assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sourceValidation)).kind,'module');
+ await page.getByLabel('Source type',{exact:true}).selectOption('module');
+ await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toBeVisible();
+ const fileSource='file://'+localReceipt.source;
+ await source.fill(fileSource);
+ await expect(page.getByText('Candidate validated; nothing saved',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Validate & save source',exact:true}).click();
+ await expect(page.getByText('Candidate validated and saved',{exact:true})).toBeVisible();
+ const savedLocal=await page.evaluate(()=>window.amplifier.getState().registry);
+ assert.equal(savedLocal.sourceValidation.submittedSource,fileSource);
+ assert.equal(savedLocal.sourceValidation.source,localReceipt.source);
+ assert.equal(savedLocal.sources.at(-1).source,localReceipt.source);
  await page.reload();await page.getByRole('button',{name:'Load registry',exact:true}).click();
  await expect(page.locator('.a-routing-profiles').getByText('tool-fixture',{exact:true})).toBeVisible();
+ assert.equal((await page.evaluate(()=>window.amplifier.getState().registry.sources)).at(-1).source,localReceipt.source);
  await page.screenshot({path:'/tmp/registry-validation.png'});
- assert.deepEqual(errors,[]);console.log('Registry candidate: check without save, failed save unchanged, changed draft, validated save and reload passed.');
+ assert.deepEqual(errors,[]);console.log('Registry candidate: check without save, failed save unchanged, relative/file local receipts, module-to-bundle fencing, validated save and reload passed.');
 }finally{await browser?.close();fixture.kill('SIGTERM');}

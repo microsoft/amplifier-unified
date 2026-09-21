@@ -86,7 +86,10 @@ class RegistryManager:
             validation=(await self._validate_row({'id':name,'module':name,'section':args['section'],'source':candidate},args))['validation']
             # Never write a candidate on failure. Validated saves validate again,
             # rather than trusting a previous browser result or draft identity.
-            result={'sourceValidation':{**validation,'name':name,'source':public_source(candidate),'scope':scope,'section':args['section'],'saved':False}}
+            # Keep the submitted draft identity as well as the resolved source:
+            # local paths can resolve differently from the text in the editor.
+            receipt={**validation,'kind':'module','name':name,'submittedSource':public_source(args['source'].strip()),'source':public_source(candidate),'scope':scope,'section':args['section'],'saved':False}
+            result={'sourceValidation':receipt}
             if action=='sources.validate' or not validation.get('passed'):
                 return result
             args={**args,'source':candidate}
@@ -137,7 +140,7 @@ class RegistryManager:
             if updates:SetupManager(self.home,store=self.store)._keys(updates)
         updated=self.store.update(workspace,scope,mutate)
         result={**self.rows(updated,scope),'takesEffect':'new_sessions'}
-        if validation is not None:result['sourceValidation']={**validation,'name':args['name'],'source':public_source(args['source']),'scope':scope,'section':args['section'],'saved':True}
+        if validation is not None:result['sourceValidation']={**receipt,'saved':True}
         return result
 
     async def validate(self,args,workspace,scope):
