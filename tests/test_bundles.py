@@ -116,7 +116,7 @@ async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_
     assert plan['providers'][0]['config']=={'api_key':'credential-for-this-host','model':'saved-model'}
     assert plan['providers'][0]['instance_id']=='saved-provider'
     assert plan.get('hooks',[])==[]
-    assert plan['tools'][0]['config']=={'setting':'saved','allowed_write_paths':['/allowed'],'denied_write_paths':['/denied']}
+    assert plan['tools'][0]['config']=={'setting':'saved','allowed_write_paths':[str(tmp_path), '/allowed'],'denied_write_paths':['/denied']}
     assert module_source(config,True,'tool-filesystem',plan['tools'][0]['source'])==source
     assert module_source(config,False,'tool-filesystem',source)==config.module_sources['tool-filesystem']
     # An ordinary root still composes the host's configured behavior normally.
