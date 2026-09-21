@@ -1378,10 +1378,17 @@ class AppService:
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
-        from .runtime import SessionInUseError
+        from .runtime import RuntimeOperationPending, SessionInUseError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             await self.runtime.send(session, text, input_id, self.on_runtime_event)
+        except RuntimeOperationPending:
+            async with self.lock:
+                self._delivery(self._session(session['id']), input_id, 'unknown')
+                self._publish()
+            # A missing acknowledgement is not a failed turn. Keep the saved
+            # input and live work; the exact late receipt can reconcile delivery.
+            raise
         except SessionInUseError as exc:
             async with self.lock:
                 current = self._session(session["id"])
@@ -1528,6 +1535,8 @@ class AppService:
                 if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background':
                     session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
                     session.pop('health', None)
+            elif kind == 'runtime.delivery':
+                self._delivery(session, payload['inputId'], 'accepted')
             elif kind == "runtime.ended":
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
