@@ -81,3 +81,58 @@ Skipped runtime/environment gates remain outside this qualification.
 Existing personal TUI launchers, development checkouts, service installations,
 and conversation data were left intact. Release approval is separate from this
 qualification record.
+
+
+## Follow-up: Mac launch and registration feedback
+
+A user completed installation and enrollment, then Finder opened the `.command`
+launcher in Terminal while oh-my-zsh displayed an update question. The first
+character of the injected absolute path was consumed by that question, leaving
+`Users/...` and a file-not-found error. The launcher file itself remained valid;
+the same saved client subsequently authenticated to Spark through a read-only
+request. No conversation content was included in the check's output.
+
+The replacement is a `.terminal` profile with `RunCommandAsShell=true`, invoking
+`/bin/sh` and the saved connection script directly. Terminal's bundled
+`TTAppPreferences.nib` binds the visible "Run inside shell" checkbox to
+`selection.RunCommandAsShell` using `NSNegateBoolean`: true selects direct command
+execution. No personal shell or default Terminal settings are changed, and the
+existing `.command` file and enrollment are preserved.
+
+Focused backend checks cover registration correlation, legacy device records,
+reused setup IDs, direct launch command execution, existing-launcher preservation
+and the unchanged Linux launcher. The headless browser fixture uses actual
+setup/enrollment routes with a synthetic wheel: registration appears without
+manual refresh, used downloads become unavailable, reload reconciles a non-secret
+receipt, unchanged polls retain focus, failed refresh preserves last-known data,
+revocation updates the page, and an older attempt cannot complete a newer setup.
+No client is installed by this fixture.
+
+**User-confirmed native acceptance:** the user reported that the replacement
+`.terminal` launcher worked on their Mac. They then requested that their existing
+terminal (WezTerm) be the primary entry point. The computer-use tool rejects
+Terminal access in this environment; no substitute UI-control method was used.
+The user's result establishes that specific launcher path, not a general
+Gatekeeper or clean-device certification.
+
+The installer now also creates a terminal-neutral `amplifier-terminal` command.
+It reads the selected saved connection at launch time, forwards view arguments,
+and never opens an emulator. Its managed base Python stays outside disposable
+candidate environments. Tests cover switching the saved default, removal of a
+failed candidate, spaces/arguments, malformed defaults and preservation of an
+unrelated command. The short command is optional when `~/.local/bin` is not on
+PATH; setup always prints a usable absolute path and does not edit shell files.
+
+Final focused run: **93 passed, 1 skipped** across terminal setup, authentication,
+server authentication, CLI deployment and setup-page checks (the separate Python
+Playwright setup-page probe is unavailable in this environment). The real-route
+headless browser check passed. A built wheel contains byte-identical updated
+installer, setup page/script and device-registration code. These checks leave
+broader emulator/clean-device acceptance outside the stated evidence.
+
+The new short command was added to the user's existing installation without
+reinstalling or changing enrollment. `amplifier-terminal --list-sessions`
+authenticated to Spark successfully; output was captured and only exit status
+and byte counts were reported. A server override was refused with exit code 2.
+Shell configuration was unchanged. No new physical WezTerm inspection is claimed;
+the command executes in its caller's terminal and does not launch an emulator.

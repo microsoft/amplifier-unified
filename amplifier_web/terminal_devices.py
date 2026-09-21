@@ -66,7 +66,7 @@ class TerminalDevices:
                 raise ValueError('Setup expired or was already used. Download a new setup file.')
             if len(state['devices']) >= MAX_DEVICES:
                 raise ValueError('Remove an unused terminal connection before adding another.')
-            state['devices'][device_id] = {'id': device_id, 'name': row['name'], 'digest': digest(token), 'createdAt': int(time.time())}
+            state['devices'][device_id] = {'id': device_id, 'name': row['name'], 'digest': digest(token), 'createdAt': int(time.time()), 'setupId': identity, 'setupExpiresAt': row['expiresAt']}
             del state['grants'][identity]
         return {'id': device_id, 'token': token}
 
@@ -78,7 +78,8 @@ class TerminalDevices:
         return identity if row and hmac.compare_digest(row['digest'], digest(token)) else None
 
     def listing(self):
-        return [{k: row[k] for k in ('id', 'name', 'createdAt')} for row in self.read()['devices'].values()]
+        return [{k: row[k] for k in ('id', 'name', 'createdAt', 'setupId', 'setupExpiresAt') if k in row}
+                for row in self.read()['devices'].values()]
 
     def revoke(self, identity):
         with self.transaction() as state:

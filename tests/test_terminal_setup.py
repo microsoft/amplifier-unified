@@ -285,3 +285,139 @@ def test_enrollment_tls_failure_does_not_replace_previous_local_installation(tmp
                  'ca': '', 'grant': 'fixture', 'name': 'Mac'}, tmp_path, tmp_path / 'candidate')
     assert (tmp_path / 'default.json').read_text() == '{"id":"previous"}'
     assert not (tmp_path / 'connections').exists()
+
+
+async def test_registration_correlates_to_exact_setup_without_exposing_grant(terminal):
+    client, manager, cookie, _ = terminal
+    device, profile, receipt = await issued(terminal)
+    response = await client.post('/api/actions', headers=cookie,
+                                 json={'action': 'terminal.devices'})
+    listing = (await response.json())['devices']
+    assert listing[0]['id'] == device['id']
+    assert listing[0]['setupId'] == receipt['installer']['id']
+    assert listing[0]['setupExpiresAt'] == receipt['installer']['expiresAt']
+    assert profile['grant'] not in json.dumps(listing)
+    assert device['token'] not in json.dumps(listing)
+    # An older enrollment has no setup correlation; it must remain listable.
+    with manager.devices.transaction() as state:
+        del state['devices'][device['id']]['setupId']
+        del state['devices'][device['id']]['setupExpiresAt']
+    assert manager.devices.listing() == [{k: listing[0][k] for k in ('id', 'name', 'createdAt')}]
+
+
+def test_reused_setup_identity_keeps_registration_attempts_distinct(tmp_path, monkeypatch):
+    devices = TerminalDevices(tmp_path)
+    first_grant, first_expiry = devices.grant('My Mac', 'a' * 32)
+    first = devices.redeem(first_grant)
+    monkeypatch.setattr('amplifier_web.terminal_devices.time.time', lambda: first_expiry + 1)
+    second_grant, second_expiry = devices.grant('My Mac', 'a' * 32)
+    second = devices.redeem(second_grant)
+    rows = {row['id']: row for row in devices.listing()}
+    assert rows[first['id']]['setupId'] == rows[second['id']]['setupId']
+    assert rows[first['id']]['setupExpiresAt'] == first_expiry
+    assert rows[second['id']]['setupExpiresAt'] == second_expiry
+    assert first_expiry != second_expiry
+
+
+def test_mac_shortcut_runs_without_login_shell_and_preserves_existing_launcher(tmp_path, monkeypatch):
+    import plistlib
+    import shlex
+    from pathlib import Path
+    from amplifier_web import terminal_install_client as installer
+    monkeypatch.setattr(installer.sys, 'platform', 'darwin')
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    root = tmp_path / '.local/share/amplifier-terminal'
+    connection = root / 'connections' / ('a' * 32)
+    connection.mkdir(parents=True)
+    (connection / 'launch').write_text('#!/bin/sh\nprintf "direct-client-started"\n')
+    applications = tmp_path / 'Applications'
+    applications.mkdir()
+    old = applications / 'Amplifier Terminal - spark.example - aaaaaaaa.command'
+    old.write_text('old launcher stays intact')
+    # A login-shell startup prompt would block if the replacement ran it.
+    (tmp_path / '.zshrc').write_text('echo unexpected-startup-prompt; read answer\n')
+    shortcut = installer.create_shortcut(root, connection, 'https://spark.example:8443', 'a' * 32)
+    settings = plistlib.loads(shortcut.read_bytes())
+    assert shortcut.parent == applications and shortcut.suffix == '.terminal'
+    assert settings['RunCommandAsShell'] is True
+    assert settings['type'] == 'Window Settings'
+    assert settings['shellExitAction'] == 1
+    argv = shlex.split(settings['CommandString'])
+    assert argv == ['/bin/sh', str(connection / 'launch')]
+    result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0 and result.stdout == 'direct-client-started'
+    assert old.read_text() == 'old launcher stays intact'
+    assert shortcut.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match='already exists'):
+        installer.create_shortcut(root, connection, 'https://spark.example:8443', 'a' * 32)
+
+
+def test_linux_shortcut_still_executes_saved_connection_and_arguments(tmp_path, monkeypatch):
+    from amplifier_web import terminal_install_client as installer
+    monkeypatch.setattr(installer.sys, 'platform', 'linux')
+    connection = tmp_path / 'connection with spaces'
+    connection.mkdir()
+    launch = connection / 'launch'
+    launch.write_text('#!/bin/sh\nprintf "%s" "$1"\n')
+    launch.chmod(0o700)
+    shortcut = installer.create_shortcut(tmp_path, connection, 'https://spark.example', 'a' * 32)
+    result = subprocess.run([str(shortcut), 'argument with spaces'], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0 and result.stdout == 'argument with spaces'
+    assert shortcut.suffix == '.command'
+
+
+def test_terminal_command_uses_current_saved_connection_and_forwards_args(tmp_path):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    root = tmp_path / 'client with spaces'
+    root.mkdir()
+    for identity, label in [('a' * 32, 'first'), ('b' * 32, 'second')]:
+        connection = root / 'connections' / identity
+        connection.mkdir(parents=True)
+        launch = connection / 'launch'
+        launch.write_text('#!/bin/sh\nprintf "%s:%s" ' + label + ' "$1"\n')
+        launch.chmod(0o700)
+    (root / 'default.json').write_text(json.dumps({'id': 'a' * 32}))
+    # Resolve out of the venv, so retiring a failed candidate cannot break it.
+    env = tmp_path / 'candidate'
+    (env / 'bin').mkdir(parents=True)
+    (env / 'bin/python').symlink_to(Path(sys.executable).resolve())
+    command, alias = create_terminal_command(root, env)
+    assert alias == root / 'bin/amplifier-terminal'
+    (env / 'bin/python').unlink()
+    first = subprocess.run([str(alias), 'two words'], capture_output=True, text=True, timeout=5)
+    assert first.returncode == 0 and first.stdout == 'first:two words'
+    (root / 'default.json').write_text(json.dumps({'id': 'b' * 32}))
+    second = subprocess.run([str(alias), '--new'], capture_output=True, text=True, timeout=5)
+    assert second.returncode == 0 and second.stdout == 'second:--new'
+    assert command.stat().st_mode & 0o777 == 0o700
+
+
+def test_terminal_command_preserves_unrelated_short_command(tmp_path, monkeypatch):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    root = tmp_path / '.local/share/amplifier-terminal'
+    root.mkdir(parents=True)
+    binary = tmp_path / '.local/bin/amplifier-terminal'
+    binary.parent.mkdir(parents=True)
+    binary.write_text('existing unrelated executable')
+    command, alias = create_terminal_command(root, Path(sys.prefix))
+    assert alias is None and command == root / 'launch'
+    assert binary.read_text() == 'existing unrelated executable'
+
+
+def test_terminal_command_handles_incomplete_default_without_path_escape(tmp_path):
+    import sys
+    from pathlib import Path
+    from amplifier_web.terminal_install_client import create_terminal_command
+    command, alias = create_terminal_command(tmp_path, Path(sys.prefix))
+    for contents in [None, '{invalid', json.dumps({'id': '../other'}), json.dumps({'id': 'a' * 32})]:
+        if contents is not None:
+            (tmp_path / 'default.json').write_text(contents)
+        result = subprocess.run([str(alias)], capture_output=True, text=True, timeout=5)
+        assert result.returncode == 1
+        assert 'Finish setup' in result.stderr
+        assert 'Traceback' not in result.stderr and str(tmp_path) not in result.stderr
