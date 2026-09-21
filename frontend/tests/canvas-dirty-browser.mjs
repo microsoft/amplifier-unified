@@ -52,14 +52,20 @@ try {
  }
  await page.getByRole('button',{name:'Close canvas panel'}).click();
  await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- assert.equal((await state()).canvas.open,true);
- await page.getByRole('button',{name:'Close canvas',exact:true}).click();
+ assert.equal((await state()).canvas.open,false);
+ await expect(secondary).toBeHidden();
+ await page.getByRole('button',{name:'Open canvas',exact:true}).click();
  await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- assert.equal((await state()).canvas.open,true,'Toolbar close uses the same dirty-edit guard');
+ assert.equal((await state()).canvas.open,true,'Visibility changes retain the dirty editor');
+ await expect(secondary).toBeVisible();
+ await action('canvas.visibility',{open:false});
  // A secondary edit must not prevent safe primary/chat navigation.
  await action('canvas.select',{id:otherArtifact.resourceId});
  await action('canvas.tabClose',{id:otherArtifact.resourceId});
+ await action('canvas.visibility',{open:false});
  await action('session.select',{id:otherSession});
+ await expect(secondary).toBeHidden();
+ await action('canvas.visibility',{open:true});
  await expect(secondary).toBeVisible();await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
  await action('session.select',{id:session});
  assert.deepEqual(target(await view('secondary')),secondaryTarget);

@@ -32,7 +32,7 @@ function Mounted({report}){useEffect(()=>{report('ready','Renderer mounted')},[r
 function Renderer({view,canvas,dispatch,recovery}){
  const targetKey=JSON.stringify(targetOf(view));
  const target=useMemo(()=>JSON.parse(targetKey),[targetKey]);
- const listeners=useRef(new Set()),snapshot=useMemo(()=>({viewId:view.viewId,resource:{id:canvas.id,kind:canvas.kind,title:canvas.title,content:canvas.content,surface:canvas.surface,url:canvas.url,path:canvas.path,revision:view.resourceRevision},view:canvas.view||{}}),[canvas,view.viewId,view.resourceRevision]);
+ const listeners=useRef(new Set()),snapshot=useMemo(()=>({visible:!!canvas.open,viewId:view.viewId,resource:{id:canvas.id,kind:canvas.kind,title:canvas.title,content:canvas.content,surface:canvas.surface,url:canvas.url,path:canvas.path,revision:view.resourceRevision},view:canvas.view||{}}),[canvas,view.viewId,view.resourceRevision]);
  const latest=useRef(snapshot);latest.current=snapshot;
  useEffect(()=>{listeners.current.forEach(listener=>listener())},[snapshot]);
  const host=useMemo(()=>Object.freeze({apiVersion:'1.0',instanceId:target.viewId,viewId:target.viewId,
@@ -80,7 +80,7 @@ function ResourceView({view,state,dispatch,recovery}){
  },[targetKey,isPrimary,view.error]);
  const canvas=useMemo(()=>{
   const source=isPrimary?state.canvas:loaded;
-  return source?{...source,...(view.app?{app:view.app}:{}),...targetOf(view),viewId:view.viewId,view:view.view||source.view,renderReports:view.renderReports,...(!isPrimary?{document:view.document,interaction:view.interaction,events:view.events}:{})}:null;
+  return source?{...source,open:!!state.canvas?.open,...(view.app?{app:view.app}:{}),...targetOf(view),viewId:view.viewId,view:view.view||source.view,renderReports:view.renderReports,...(!isPrimary?{document:view.document,interaction:view.interaction,events:view.events}:{})}:null;
  },[isPrimary,state.canvas,loaded,view]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  if(view.error)return <section className="a-resource-view" role="alert">{view.error}<button type="button" onClick={()=>run('canvas.views.close',targetOf(view))}>Close unavailable view</button></section>;
@@ -100,7 +100,14 @@ function ResourceView({view,state,dispatch,recovery}){
 }
 
 export function CanvasWorkspace({state,dispatch,hidden=false}){
- const views=state.canvasWorkspace?.views||[];
+ const retained=useRef(new Map()),allViews=state.canvasWorkspace?.views||[];
+ // Keep only the current two viewer slots. Do not initialize a newly selected
+ // hidden artifact, but retain a mounted secondary editor across chat changes.
+ for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id))retained.current.delete(id);
+ const views=allViews.filter(view=>{
+  if(state.canvas?.open)retained.current.set(view.viewId,view.resourceId);
+  return retained.current.get(view.viewId)===view.resourceId;
+ });
  const recovery=typeof location!=='undefined'&&new URLSearchParams(location.search).get('shell')==='recovery';
  // Passive Library navigation must not destroy renderer-local edits or frames.
  return <div className="a-canvas-workspace" hidden={hidden} inert={hidden} data-split={views.length>1}>{views.map(view=><ResourceView key={view.viewId} view={view} state={state} dispatch={dispatch} recovery={recovery}/>)}</div>;

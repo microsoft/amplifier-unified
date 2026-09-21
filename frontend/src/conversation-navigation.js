@@ -12,7 +12,7 @@ export function createConversationNavigation(limit=32){
  }
  function begin(state,id){
   // A dirty renderer must remain mounted until the server accepts navigation.
-  if(state?.canvas?.open&&state.canvasWorkspace?.views?.some(row=>row.dirty))return null;
+  if(state?.canvasWorkspace?.views?.some(row=>row.dirty))return null;
   const row=state?.sessions?.find(row=>row.id===id)||cache.get(id)?.session;
   if(!row)return null;
   const current=selected(state);

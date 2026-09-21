@@ -23,8 +23,8 @@ export function CanvasAppViewer({canvas,dispatch}){
  const send=(force=false)=>{
   const current=latest.current;
   if(current.app.revision!==shown.current.app.revision)return;
-  const snapshot={id:current.id,app:current.app,theme:hostTheme()};
-  const key=JSON.stringify([channel.current,current.app.revision,current.app.stateRevision,snapshot.theme]);
+  const snapshot={id:current.id,app:current.app,visible:!!current.open,theme:hostTheme()};
+  const key=JSON.stringify([channel.current,current.app.revision,current.app.stateRevision,snapshot.visible,snapshot.theme]);
   if(!force&&key===sent.current)return;
   sent.current=key;
   frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:current.id,channel:channel.current,snapshot},'*');

@@ -18,7 +18,7 @@ export function createActionFeedback(){
  function begin(action){
   // Local navigation and edits already paint immediately. Do not lock them
   // behind persistence (closing a panel must always remain available).
-  if(action==='view.update')return ()=>{};
+  if(action==='view.update'||action==='canvas.visibility')return ()=>{};
   const button=gesture?.action===action?gesture.button:null;
   if(!button)return ()=>{};
   const finishRegion=action==='view.update'?()=>{}:beginRegionActivity(activityRegion(button));

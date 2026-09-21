@@ -11,6 +11,7 @@ import {ArtifactLinks} from './canvas-library';
 import {MessageEntry,completedTurnEnds} from './message-actions';
 import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
 import {MoreAppActions} from './app-toolbar';
+import {MobileChatTitle,useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
 import {ConversationExport} from './conversation-export.jsx';
 import {WorkspaceLayout} from './panel-layout';
@@ -20,7 +21,7 @@ import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
 import {FileDrop,PathField,BundlePicker} from './settings-ui';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal} from 'lucide-react';
+import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
 import {createPendingView} from './pending-view';
 import {createConversationNavigation} from './conversation-navigation';
@@ -49,15 +50,17 @@ import defaultSkin from './unified.css?raw';
 import './base.css';
 import './unified.css';
 import './settings-experience.css';
+import responsiveNavigation from './responsive-navigation.css?raw';
 
 const icons={call:Phone,text:Bell,chat:MessageCircle};
 const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 function App(){
+ const narrow=useNarrowScreen();
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -98,7 +101,7 @@ function App(){
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
   serverState.current=next;conversationNavigation.current.remember(next);
-  latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(latest.current));
+  latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
  const dispatch=useCallback((action,args={},meta={})=>{
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
@@ -107,7 +110,8 @@ function App(){
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
   const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
-  const pending=action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
+  if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
+  const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
   const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
@@ -124,7 +128,7 @@ function App(){
   const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
-  const queue=navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit'].includes(action)?sendQueue:commandQueue;
+  const queue=action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit'].includes(action)?sendQueue:commandQueue;
   const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
@@ -151,13 +155,13 @@ function App(){
    if(!alive)return;
    request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);setConnected(true)}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)setError(actionErrorMessage(e))}).finally(()=>clearTimeout(timer));
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
-   source=new EventSource(clientUrl('/api/events'));source.addEventListener('state',e=>{if(!alive)return;try{acceptState(JSON.parse(e.data));setConnected(true);setError('');clearTimeout(timer)}catch{}});
+   source=new EventSource(clientUrl('/api/events'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;acceptState(JSON.parse(e.data));setConnected(true);if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
    source.onopen=()=>setConnected(true);source.onerror=()=>setConnected(false);
   }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')setError(actionErrorMessage(e))});
   return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close()};
  },[acceptState,bootAttempt]);
- useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...latest.current,renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
+ useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
  useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
@@ -206,7 +210,7 @@ function App(){
  useEffect(()=>{
   if(!panel)return;
   const previous=panelReturnFocus.current||document.activeElement;
-  const dialog=root.current?.querySelector('[role=dialog]');
+  const dialog=root.current?.querySelector('.a-overlay [role=dialog]');
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
   controls()[0]?.focus();
   const handler=e=>{
@@ -293,7 +297,8 @@ function App(){
  if(!state)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||'Connecting to your workspace…'}</p>{error&&<button onClick={()=>setBootAttempt(value=>value+1)}>Retry connection</button>}</div>;
  return <div id="amp-one" className="a-chat-shell" ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-execution-detail={presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-part="app">
   {activeCss&&<style>{activeCss}</style>}
-  <header className="a-top" data-part="header"><div className="a-brand" data-part="brand"><img src={logo} alt="Amplifier logo"/><span>Amplifier</span></div><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected to your local Amplifier':'Reconnecting…'}/><ConversationSelect state={state} session={session} choices={conversationChoices} onSelect={id=>{stickToBottom.current=true;act('session.select',{id})}}/><div className="a-top-end"><button className="a-icon" aria-label="Chat details" disabled={!session} data-action="view.update" onClick={()=>open('session-details')}><Info/></button><button className="a-icon" onClick={()=>open('activity')} data-action="view.update" aria-label="Activity"><Bell/><AttentionBadge state={state}/></button><button className="a-icon" onClick={()=>open('settings')} data-action="view.update" aria-label="Settings"><Settings/><AttentionBadge state={state} settings/></button><MoreAppActions state={state} act={act} openPanel={open}/><CanvasToggle state={state} act={act} layout={presentation.layout}/></div></header>
+  <style>{responsiveNavigation}</style>
+  <header className="a-top" data-part="header">{narrow&&<button type="button" className="a-icon a-mobile-nav-trigger" aria-label="Open navigation" aria-expanded={!!view.navExpanded} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button>}<div className="a-brand" data-part="brand"><img src={logo} alt="Amplifier logo"/><span>Amplifier</span></div><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected to your local Amplifier':'Reconnecting…'}/><MobileChatTitle state={state} session={session}/><ConversationSelect state={state} session={session} choices={conversationChoices} onSelect={id=>{stickToBottom.current=true;act('session.select',{id})}}/><div className="a-top-end"><button className="a-icon a-desktop-action" aria-label="Chat details" disabled={!session} data-action="view.update" onClick={()=>open('session-details')}><Info/></button><button className="a-icon a-desktop-action" onClick={()=>open('activity')} data-action="view.update" aria-label="Activity"><Bell/><AttentionBadge state={state}/></button><button className="a-icon a-desktop-action" onClick={()=>open('settings')} data-action="view.update" aria-label="Settings"><Settings/><AttentionBadge state={state} settings/></button><CanvasToggle state={state} act={act} layout={presentation.layout}/><MoreAppActions state={state} act={act} openPanel={open}/></div></header>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   <ConversationError state={state} session={session} act={act}/>{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <WorkspaceLayout state={state} act={act} presentation={presentation}><WorkspaceRail shell={shell} state={state} session={session} act={act} selectSession={id=>{stickToBottom.current=true;act('session.select',{id})}} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation">

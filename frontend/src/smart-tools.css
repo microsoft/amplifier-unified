@@ -1,9 +1,9 @@
 #amp-one .a-smart-tools { min-width: 0; }
 #amp-one .a-smart-tools .a-smart-back { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px; }
 #amp-one .a-smart-tools .a-smart-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 9px; }
-#amp-one .a-smart-tools h4 { margin: 0; font-size: 14px; }
+#amp-one .a-smart-tools h4 { margin: 0; font-size: var(--a-text-lg,16px); }
 #amp-one .a-smart-tools .a-smart-heading p { margin: 4px 0 0; }
-#amp-one .a-smart-tools .a-smart-heading small { color: var(--a-muted); font-size: 11px; }
+#amp-one .a-smart-tools .a-smart-heading small { color: var(--a-muted); font-size: var(--a-text-sm,13px); }
 #amp-one .a-smart-entry-actions { display: grid; gap: 7px; margin: 18px 0; }
 #amp-one .a-smart-entry-actions > button { display: flex; flex-direction: row; gap: 9px; justify-content: flex-start; width: 100%; }
 #amp-one .a-smart-entry-actions > button > svg:last-child { margin-left: auto; }
@@ -13,24 +13,24 @@
 #amp-one .a-smart-list-row:focus-visible { outline: 2px solid var(--a-accent); outline-offset: 2px; border-radius: 5px; }
 #amp-one .a-smart-list-row > svg { width: 17px; height: 17px; flex: 0 0 17px; color: var(--a-muted); }
 #amp-one .a-smart-list-row > span { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
-#amp-one .a-smart-list-row strong { font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
-#amp-one .a-smart-list-row small { font-size: 11px; color: var(--a-muted); line-height: 1.5; overflow-wrap: anywhere; }
+#amp-one .a-smart-list-row strong { font-size: var(--a-text-base,14px); font-weight: 550; overflow-wrap: anywhere; }
+#amp-one .a-smart-list-row small { font-size: var(--a-text-sm,13px); color: var(--a-muted); line-height: 1.5; overflow-wrap: anywhere; }
 #amp-one .a-smart-list-row .a-smart-view-label { color: var(--a-accent); }
 #amp-one .a-smart-tools .a-smart-empty { padding: 18px 0; margin: 0; }
 #amp-one .a-smart-tools .a-smart-source-summary { border: 1px solid var(--a-line); border-radius: 12px; padding: 14px; margin-top: 16px; min-width: 0; }
-#amp-one .a-smart-source-summary > strong { display: flex; flex-direction: row; align-items: center; gap: 7px; font-size: 13px; }
+#amp-one .a-smart-source-summary > strong { display: flex; flex-direction: row; align-items: center; gap: 7px; font-size: var(--a-text-base,14px); }
 #amp-one .a-smart-source-summary > strong > svg { width: 16px; height: 16px; color: var(--a-success, #267753); }
-#amp-one .a-smart-source-summary dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 12px 0 0; font-size: 11px; }
+#amp-one .a-smart-source-summary dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 12px 0 0; font-size: var(--a-text-sm,13px); }
 #amp-one .a-smart-source-summary dl > div { display: flex; gap: 7px; }
 #amp-one .a-smart-source-summary dt { color: var(--a-muted); }
 #amp-one .a-smart-source-summary dd { margin: 0; }
 #amp-one .a-smart-source-summary p { margin: 8px 0; }
 #amp-one .a-smart-source-summary button { margin-top: 10px; }
-#amp-one .a-smart-path, #amp-one .a-smart-tool-id { display: block; font-size: 11px; overflow-wrap: anywhere; color: var(--a-muted); }
-#amp-one .a-smart-tools pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 ui-monospace, SFMono-Regular, monospace; padding: 12px; border-radius: 9px; background: var(--a-soft); margin: 10px 0; }
+#amp-one .a-smart-path, #amp-one .a-smart-tool-id { display: block; font-size: var(--a-text-sm,13px); overflow-wrap: anywhere; color: var(--a-muted); }
+#amp-one .a-smart-tools pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--a-text-sm,13px)/1.6 ui-monospace, SFMono-Regular, monospace; padding: 12px; border-radius: 9px; background: var(--a-soft); margin: 10px 0; }
 #amp-one .a-smart-tools .a-smart-result { margin-top: 20px; min-width: 0; }
 #amp-one .a-smart-tools .a-smart-field > label { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 10px; }
-#amp-one .a-smart-required { font-size: 10px; font-weight: 400; color: var(--a-muted); }
+#amp-one .a-smart-required { font-size: var(--a-text-xs,12px); font-weight: 400; color: var(--a-muted); }
 #amp-one .a-smart-field .a-caption { margin: 5px 0 0; }
 #amp-one .a-smart-field textarea { min-height: 62px; }
 #amp-one .a-smart-tools .a-smart-advanced { margin-top: 18px; }
