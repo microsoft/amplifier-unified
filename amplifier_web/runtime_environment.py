@@ -169,7 +169,7 @@ async def update_inventory(home):
     fresh worker resolves the recorded Git source into its own generation; no
     active cache, editable path, fingerprint or old receipt is rewritten.
     """
-    from .updates import active_release, cache_changes, foundation_home
+    from .updates import active_release, cache_changes, foundation_home, process
     from .runtime_qualification import installed_graph
     generation = active_release(home).get('current')
     receipt = receipt_directory(home, generation)
@@ -184,7 +184,7 @@ async def update_inventory(home):
         else:
             from .session_files import amplifier_home
             roots.append((amplifier_home() / 'cache', amplifier_home().resolve()))
-        checked = {}
+        checked, indexes = {}, {}
         for record in graph:
             cached = record.get('cacheSource')
             if not cached or not cached['dirty'] or record['name'] not in policy:
@@ -200,6 +200,7 @@ async def update_inventory(home):
             if not managed:
                 continue
             if root not in checked:
+                indexes[root] = await process('git', 'ls-files', '--stage', '-z', cwd=root, timeout=10, raw=True)
                 checked[root] = await cache_changes(root)
             protected, artifacts = checked[root]
             if not protected and artifacts:
@@ -208,6 +209,9 @@ async def update_inventory(home):
         # stage() calls this again, so edits after Check now are also protected.
         if checked and await asyncio.to_thread(installed_graph, project) != graph:
             raise ProtectedRuntimeSource('', 'runtime-source-changed')
+        for root, index in indexes.items():
+            if await process('git', 'ls-files', '--stage', '-z', cwd=root, timeout=10, raw=True) != index:
+                raise ProtectedRuntimeSource('', 'runtime-source-changed')
     if active_release(home).get('current') != generation:
         raise ProtectedRuntimeSource('', 'runtime-source-changed')
     return inventory(home, installed=policy)

@@ -153,12 +153,16 @@ async def test_local_cache_metadata_cannot_enable_external_override(legacy_worke
         await environments.update_manifest(manager.home)
 
 
-async def test_classification_race_rejects_mixed_source_evidence(legacy_worker, monkeypatch):
+@pytest.mark.parametrize('change', ['source', 'index'])
+async def test_classification_race_rejects_mixed_source_evidence(legacy_worker, monkeypatch, change):
     manager, current, receipt, cache, bytecode = legacy_worker
     classify = updates.cache_changes
     async def changed(root):
         result = await classify(root)
-        (cache / 'modules/hooks/source.py').write_text('changed_during_check = True\n')
+        if change == 'source':
+            (cache / 'modules/hooks/source.py').write_text('changed_during_check = True\n')
+        else:
+            git(cache, 'add', str(bytecode))
         return result
     monkeypatch.setattr(updates, 'cache_changes', changed)
     with pytest.raises(environments.ProtectedRuntimeSource) as caught:
