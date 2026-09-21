@@ -1,7 +1,11 @@
-import React,{useCallback,useEffect,useRef,useState} from 'react';
+import React,{createContext,useContext,useCallback,useEffect,useRef,useState} from 'react';
 import {request} from '../api';
 import {WorkspaceManager,ConversationList} from './navigation-components';
 import './shell.css';
+import {SlotOverflow} from './slot-overflow';
+
+export const ShellContext=createContext(null);
+export function useShellContext(){return useContext(ShellContext)}
 
 const builtins={'builtin.workspaces':WorkspaceManager,'builtin.chats':ConversationList};
 const defaultComposition={instances:[{id:'workspaces',package:'builtin.workspaces',slot:'navigation',hideWhen:{instanceId:'chats',navChatScope:'all'}},{id:'chats',package:'builtin.chats',slot:'navigation'}],presentation:{}};
@@ -17,8 +21,9 @@ export function useShell(state,dispatch,clientId){
   if(inflight.current){again.current=true;return inflight.current}
   inflight.current=request('/api/shell?clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(next=>{
    latest.current.data=next;setData(next);setError('');
-   for(const [id,host] of hosts.current){
-    const raw=next.snapshots?.[id]||empty;
+   for(const host of hosts.current.values()){
+    const raw=next.snapshots?.[host.id]||empty;
+    if((raw.generation||0)!==host.generation)continue;
     const snapshot={...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}};
     if(JSON.stringify(snapshot)!==JSON.stringify(host.snapshot)){
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
@@ -34,32 +39,35 @@ export function useShell(state,dispatch,clientId){
   return()=>window.removeEventListener('amplifier-shell',onShell);
  },[clientId,refresh]);
  const hostFor=useCallback(instance=>{
-  if(!hosts.current.has(instance.id)){
-   const record={listeners:new Set(),pending:[],snapshot:freeze(latest.current.data?.snapshots?.[instance.id]||empty)};
+  const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;
+  const key=instance.id+':'+generation;
+  if(!hosts.current.has(key)){
+   const record={id:instance.id,generation,listeners:new Set(),pending:[],snapshot:freeze(latest.current.data?.snapshots?.[instance.id]||empty)};
    let queue=Promise.resolve();
    const run=(action,args)=>{
     const pending=action==='shell.view.update'?{patch:args.patch}:null;
     if(pending){record.pending.push(pending);record.snapshot=freeze({...record.snapshot,view:{...record.snapshot.view,...pending.patch}});record.listeners.forEach(fn=>fn())}
     const execute=async()=>{
      try{
-      const result=await latest.current.dispatch(action,args);
+      const result=await latest.current.dispatch(action,{...args,generation});
       if(action==='shell.command'&&args.action==='session.select'&&!latest.current.state?.view?.navPinned)await latest.current.dispatch('view.update',{patch:{navExpanded:false}});
-      return result;
+      return {accepted:result.accepted,result:result.result};
      }finally{if(pending)record.pending=record.pending.filter(item=>item!==pending);await refresh()}
     };
     const promise=queue.then(execute,execute);queue=promise.catch(()=>{});return promise;
    };
    record.api=Object.freeze({apiVersion:'1.0',clientId,instanceId:instance.id,
-    getSnapshot:()=>record.snapshot,subscribe:fn=>{record.listeners.add(fn);return()=>record.listeners.delete(fn)},
+    getSnapshot:()=>record.snapshot,subscribe:fn=>{record.listeners.add(fn);return()=>{record.listeners.delete(fn);if(!record.listeners.size&&(latest.current.data?.snapshots?.[instance.id]?.generation||0)!==generation)hosts.current.delete(key)}},
     setDirty:dirty=>run('shell.view.update',{clientId,instanceId:instance.id,patch:{},dirty}),
     dispatch:(action,args={})=>action==='view.update'
      ?run('shell.view.update',{clientId,instanceId:instance.id,patch:args.patch||{}})
      :run('shell.command',{clientId,instanceId:instance.id,action,args}),
    });
-   hosts.current.set(instance.id,record);
+   hosts.current.set(key,record);
   }
-  return hosts.current.get(instance.id).api;
+  return hosts.current.get(key).api;
  },[clientId,refresh]);
+ const statuses=useRef({}),statusCallbacks=useRef(new Map()),reportTimer=useRef(null);
  const composition=recovery?defaultComposition:data?.effectiveComposition||defaultComposition;
  const recover=useCallback(async target=>{
   await dispatch('shell.recover',{clientId,target,expectedRevision:latest.current.data?.revision||0});
@@ -81,7 +89,29 @@ export function useShell(state,dispatch,clientId){
   // must not block evidence of already-rendered content.
   return request('/api/actions',{method:'POST',body:{action:'shell.report',args:{clientId,revision:current.revision,previewId:current.preview?.id||null,instances,message}}}).catch(()=>{});
  },[clientId]);
- return {data,error,composition,hostFor,recover,report,refresh,setPresentation,ready:!!data,recovery,clientId};
+ const statusFor=useCallback(instance=>{
+  const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;
+  const key=instance.id+':'+instance.package+':'+generation;
+  for(const old of statusCallbacks.current.keys())if(old.startsWith(instance.id+':')&&old!==key)statusCallbacks.current.delete(old);
+  if(!statusCallbacks.current.has(key)){
+   statuses.current[instance.id]={package:instance.package,status:'loading'};
+   statusCallbacks.current.set(key,(status,message='')=>{
+    // Late cleanup/errors from a replaced package cannot mark its replacement.
+    const current=latest.current.data;
+    if(!current?.resolvedInstances?.some(row=>row.id===instance.id&&row.package===instance.package)||(current.snapshots?.[instance.id]?.generation||0)!==generation)return;
+    statuses.current[instance.id]={package:instance.package,status};
+    clearTimeout(reportTimer.current);
+    reportTimer.current=setTimeout(()=>report(Object.fromEntries((latest.current.data?.resolvedInstances||[]).map(row=>[row.id,statuses.current[row.id]?.package===row.package?statuses.current[row.id].status:'inactive'])),message),50);
+   });
+  }
+  return statusCallbacks.current.get(key);
+ },[report]);
+ useEffect(()=>{
+  clearTimeout(reportTimer.current);
+  reportTimer.current=setTimeout(()=>report(Object.fromEntries((data?.resolvedInstances||[]).map(row=>[row.id,statuses.current[row.id]?.package===row.package?statuses.current[row.id].status:'inactive']))),80);
+  return()=>clearTimeout(reportTimer.current);
+ },[data?.revision,data?.preview?.id,report]);
+ return {data,error,composition,hostFor,recover,report,statusFor,refresh,setPresentation,ready:!!data,recovery,clientId};
 }
 
 class ModuleBoundary extends React.Component{
@@ -91,7 +121,7 @@ class ModuleBoundary extends React.Component{
  render(){return this.state.error?<p role="alert">This component could not render. {this.state.error.message}</p>:this.props.children}
 }
 function Ready({View,host,report,workspaceHost,paired}){
- useEffect(()=>{report('ready');return()=>report('loading')},[View,report]);
+ useEffect(()=>{report('ready')},[View,report]);
  return <View host={host} workspaceHost={workspaceHost} paired={paired}/>;
 }
 function ModuleInstance({instance,metadata,host,report,workspaceHost,paired}){
@@ -111,33 +141,38 @@ function ModuleInstance({instance,metadata,host,report,workspaceHost,paired}){
  const View=builtin||(loaded?.package===instance.package?loaded.View:null);
  if(error)return <p role="alert">Component unavailable: {error}</p>;
  if(!View)return <p role="status">Loading component…</p>;
- return <ModuleBoundary key={instance.package} report={report}><Ready View={View} host={host} report={report} workspaceHost={workspaceHost} paired={paired}/></ModuleBoundary>;
+ return <ModuleBoundary key={instance.package+':'+host.getSnapshot().generation} report={report}><Ready View={View} host={host} report={report} workspaceHost={workspaceHost} paired={paired}/></ModuleBoundary>;
 }
 export function ShellModules({shell}){
- const statuses=useRef({}),callbacks=useRef(new Map()),active=useRef([]),timer=useRef(null);
- active.current=shell.composition.instances.map(item=>item.id);
- const send=useRef(shell.report);send.current=shell.report;
- const reportFor=id=>{
-  if(!callbacks.current.has(id))callbacks.current.set(id,(status,message)=>{
-   statuses.current[id]=status;clearTimeout(timer.current);
-   timer.current=setTimeout(()=>send.current(Object.fromEntries(active.current.map(id=>[id,statuses.current[id]||'loading'])),message),50);
-  });
-  return callbacks.current.get(id);
- };
- useEffect(()=>{
-  clearTimeout(timer.current);
-  timer.current=setTimeout(()=>send.current(Object.fromEntries(active.current.map(id=>[id,statuses.current[id]||'loading']))),80);
-  return()=>clearTimeout(timer.current);
- },[shell.data?.revision,shell.data?.preview?.id]);
+ const instances=shell.composition.instances.filter(item=>item.slot==='navigation');
  if(!shell.ready)return <p role="status">Loading navigation…</p>;
  return <>
   {(shell.error||shell.recovery)&&<p role="alert">{shell.recovery?'Recovery mode: optional components are disabled.':shell.error}</p>}
-  <div className="a-shell-modules">{shell.composition.instances.map((instance,index)=><section className="a-shell-instance" data-shell-instance={instance.id} data-shell-package={instance.package} hidden={!!instance.hideWhen&&!shell.data?.snapshots?.[instance.id]?.view?.workspaceDraft?.mode&&shell.data?.snapshots?.[instance.hideWhen.instanceId]?.view?.navChatScope===instance.hideWhen.navChatScope} style={{order:index}} key={instance.id}>
-   <ModuleInstance instance={instance} metadata={shell.data?.packages?.[instance.package]} host={shell.hostFor(instance)} report={reportFor(instance.id)}
+  <div className="a-shell-modules">{instances.map((instance,index)=><section className="a-shell-instance" data-shell-instance={instance.id} data-shell-package={instance.package} hidden={!!instance.hideWhen&&!shell.data?.snapshots?.[instance.id]?.view?.workspaceDraft?.mode&&shell.data?.snapshots?.[instance.hideWhen.instanceId]?.view?.navChatScope===instance.hideWhen.navChatScope} style={{order:index}} key={instance.id}>
+   <ModuleInstance instance={instance} metadata={shell.data?.packages?.[instance.package]} host={shell.hostFor(instance)} report={shell.statusFor(instance)}
     paired={instance.package==='builtin.workspaces'&&shell.composition.instances.some(item=>item.id===instance.hideWhen?.instanceId&&item.package==='builtin.chats')}
     workspaceHost={instance.package==='builtin.chats'&&shell.composition.instances.some(item=>item.package==='builtin.workspaces'&&item.hideWhen?.instanceId===instance.id)?shell.hostFor(shell.composition.instances.find(item=>item.package==='builtin.workspaces'&&item.hideWhen?.instanceId===instance.id)):undefined}/>
 
   </section>)}</div>
   <details className="a-shell-recovery"><summary>Shell controls</summary><button type="button" onClick={()=>shell.recover('lastGood')}>Restore last working shell</button><button type="button" onClick={()=>shell.recover('default')}>Restore default shell</button><a href="?shell=recovery">Open recovery mode</a></details>
  </>;
+}
+
+// The built-in presentation remains a registered fallback for legacy records.
+// Contributions never own the surrounding conversation, draft or canvas nodes.
+function BuiltinSlot({children,report}){
+ useEffect(()=>{report('ready')},[report]);
+ return children;
+}
+export function ShellSlot({name,instanceId,children}){
+ const shell=useShellContext();
+ if(!shell)return children||null;
+ const instances=(shell.data?.resolvedInstances||[]).filter(row=>row.slot===name&&(!instanceId||row.id===instanceId));
+ if(!instances.length)return null;
+ const nodes=instances.map(instance=>({builtin:instance.package===shell.data?.slots?.[name]?.default,
+  element:instance.package===shell.data?.slots?.[name]?.default
+   ?<ModuleBoundary key={instance.id+':'+(shell.data?.snapshots?.[instance.id]?.generation||0)} report={shell.statusFor(instance)}><BuiltinSlot report={shell.statusFor(instance)}>{children}</BuiltinSlot></ModuleBoundary>
+   :<div className="a-shell-contribution" data-shell-component={instance.id} data-shell-slot={name} key={instance.id}><ModuleInstance instance={instance} metadata={shell.data?.packages?.[instance.package]} host={shell.hostFor(instance)} report={shell.statusFor(instance)}/></div>}));
+ if(['app.actions','app.status'].includes(name)&&nodes.some(row=>!row.builtin))return <>{nodes.filter(row=>row.builtin).map(row=>row.element)}<SlotOverflow name={name}>{nodes.filter(row=>!row.builtin).map(row=>row.element)}</SlotOverflow></>;
+ return nodes.map(row=>row.element);
 }

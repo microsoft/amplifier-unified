@@ -1,4 +1,5 @@
 import React,{useEffect,useRef} from 'react';
+import {ShellSlot,useShellContext} from './shell/runtime';
 import {SlidersHorizontal,Palette,AudioLines,Bell,Network,Layers,Plug,Download,Activity,Archive,Settings,ArrowRight,MessageSquare} from 'lucide-react';
 import {settingsSections,settingsLocation,settingsPatch,settingsUnread} from './settings-navigation';
 import {SettingsPageContext} from './settings-ui';
@@ -17,8 +18,11 @@ import {VoiceSettings,InstallAppSettings} from './settings-personal';
 
 const icons={overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
 export function SettingsExperience({state,session,act,open,appearance}){
- const {page,section}=settingsLocation(state.view),heading=useRef(null),body=useRef(null);
- const navigate=page=>act('view.update',{patch:settingsPatch(page)});
+ const shell=useShellContext();
+ const extensions=(shell?.data?.resolvedInstances||[]).filter(item=>item.slot==='settings.section');
+ const sections=[...settingsSections,...extensions.map(item=>({id:'shell:'+item.id,title:shell.data.packages[item.package]?.manifest?.label||item.id,group:'Extensions',scope:'This interface',pages:[['shell:'+item.id,shell.data.packages[item.package]?.manifest?.label||item.id]]}))];
+ const {page,section}=settingsLocation(state.view,sections),heading=useRef(null),body=useRef(null);
+ const navigate=page=>act('view.update',{patch:settingsPatch(page,sections)});
  useEffect(()=>{heading.current?.focus({preventScroll:true});if(body.current)body.current.scrollTop=0;},[page]);
  const props={state,session,act};
  // Keep visited editors mounted while the dialog is open. Private fields stay
@@ -29,7 +33,8 @@ export function SettingsExperience({state,session,act,open,appearance}){
  function renderPage(page){
  let content;
  if(page==='overview')content=<SettingsOverview {...props} navigate={navigate}/>;
- else if(page==='appearance')content=appearance;
+ else if(page==='appearance')content=<ShellSlot name="settings.appearance">{appearance}</ShellSlot>;
+ else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
  else if(page==='voice')content=<VoiceSettings {...props}/>;
  else if(page==='providers')content=<ProviderSettings {...props}/>;
  else if(page==='routing')content=<RoutingSettings {...props}/>;
@@ -45,7 +50,7 @@ export function SettingsExperience({state,session,act,open,appearance}){
  return content;
  }
  return <div className="a-settings-experience" data-part="settings-experience" data-settings-page={page}>
-  <nav className="a-settings-sidebar" aria-label="Settings sections">{settingsSections.map((item,index)=>{const Icon=icons[item.id];return <React.Fragment key={item.id}>{item.group!==settingsSections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0])}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
+  <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0])}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} className="a-settings-content" role="region" aria-label="Settings content">
    <header className="a-settings-page-heading"><div><span className="a-settings-scope">{section.scope}</span><h3 ref={heading} tabIndex={-1}>{section.title}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
    {section.pages.length>1&&<nav className="a-settings-subnav" aria-label={section.title+' sections'}>{section.pages.map(([id,title])=><button type="button" key={id} data-action="view.update" data-settings-destination={id} aria-current={id===page?'page':undefined} onClick={()=>navigate(id)}>{title}<AttentionBadge state={state} page={id}/></button>)}</nav>}

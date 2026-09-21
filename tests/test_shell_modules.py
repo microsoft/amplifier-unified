@@ -214,7 +214,8 @@ async def test_corrupt_optional_package_does_not_block_recovery_query(service):
     assert 'optional' not in state['snapshots']
     recovery = service.shell.inspect('browser-one', snapshots=True, recovery=True)
     assert recovery['effectiveComposition'] == DEFAULT
-    assert set(recovery['snapshots']) == {'workspaces', 'chats'}
+    assert set(recovery['snapshots']) == {row['id'] for row in recovery['resolvedInstances']}
+    assert all(row['package'].startswith('builtin.') for row in recovery['resolvedInstances'])
 
 @pytest.mark.asyncio
 async def test_paired_workspace_drill_in_is_shared_with_agents_and_client_scoped(service):

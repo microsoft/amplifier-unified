@@ -18,6 +18,7 @@ import time
 import uuid
 
 from jsonschema import validate, ValidationError
+from . import shell_components as components
 
 API = '1.0'
 PROFILE = 'trusted-native-navigation-v1'
@@ -39,17 +40,29 @@ RENDERER_MANIFEST['properties'].update({
     'resourceKinds': {'type': 'array', 'uniqueItems': True, 'minItems': 1, 'maxItems': 12,
         'items': {'enum': ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']}},
 })
+COMPONENT_MANIFEST = copy.deepcopy(MANIFEST)
+COMPONENT_MANIFEST['required'].extend(['label', 'slots'])
+COMPONENT_MANIFEST['properties'].update({
+    'profile': {'const': components.PROFILE},
+    'label': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+    'slots': {'type': 'array', 'minItems': 1, 'maxItems': len(components.SLOTS), 'uniqueItems': True,
+              'items': {'enum': list(components.SLOTS)}},
+    'capabilities': {'type': 'array', 'uniqueItems': True, 'maxItems': len(components.CAPABILITIES),
+                     'contains': {'const': 'shell.read'}, 'items': {'enum': components.CAPABILITIES}},
+})
 MANIFEST = {'allOf': [
-    {'type': 'object', 'properties': {'profile': {'enum': [PROFILE, 'trusted-native-renderer-v1']}}, 'required': ['profile']},
-    {'if': {'properties': {'profile': {'const': PROFILE}}}, 'then': MANIFEST, 'else': RENDERER_MANIFEST},
+    {'type': 'object', 'properties': {'profile': {'enum': [PROFILE, 'trusted-native-renderer-v1', components.PROFILE]}}, 'required': ['profile']},
+    {'if': {'properties': {'profile': {'const': PROFILE}}}, 'then': MANIFEST,
+     'else': {'if': {'properties': {'profile': {'const': 'trusted-native-renderer-v1'}}}, 'then': RENDERER_MANIFEST, 'else': COMPONENT_MANIFEST}},
 ]}
 INSTANCE = {'type': 'object', 'additionalProperties': False, 'required': ['id', 'package', 'slot'], 'properties': {
-    'id': IDENTITY, 'package': {'type': 'string', 'maxLength': 100}, 'slot': {'const': 'navigation'},
+    'id': IDENTITY, 'package': {'type': 'string', 'maxLength': 100}, 'slot': {'enum': ['navigation', *components.SLOTS]},
     'scope': {'type': 'object', 'additionalProperties': False, 'properties': {'workspaceId': IDENTITY, 'mode': {'enum': ['follow', 'pinned', 'all']}}, 'required': ['mode']},
     'hideWhen': {'type': 'object', 'additionalProperties': False, 'required': ['instanceId', 'navChatScope'], 'properties': {'instanceId': IDENTITY, 'navChatScope': {'enum': ['all', 'workspace']}}},
 }}
 COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['instances', 'presentation'], 'properties': {
-    'instances': {'type': 'array', 'maxItems': 12, 'items': INSTANCE},
+    'instances': {'type': 'array', 'maxItems': 64, 'items': INSTANCE},
+    'disabledSlots': {'type': 'array', 'uniqueItems': True, 'items': {'enum': list(components.SLOTS)}},
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
         'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
@@ -63,6 +76,7 @@ DEFAULT = {'instances': [
 ], 'presentation': {}}
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
+BUILTINS.update(components.BUILTINS)
 VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
@@ -78,20 +92,21 @@ COMMAND_CAPABILITIES = {
 
 def definitions(schema, string):
     client = {'clientId': IDENTITY}
+    generation = {'generation': {'type': 'integer', 'minimum': 0}}
     change = {**client, 'changeId': IDENTITY, 'expectedRevision': {'type': 'integer', 'minimum': 0}}
     return {
         'shell.inspect': ('Inspect client composition, package manifests, validation and browser activation evidence.', schema(client)),
-        'shell.query': ('Read one module instance\'s bounded navigation snapshot, using its own scope and filters.', schema({**client, 'instanceId': IDENTITY})),
-        'shell.packages.stage': ('Stage a trusted native navigation or artifact-renderer package; this does not execute or activate it.', schema({'manifest': MANIFEST, 'source': string(250000)})),
+        'shell.query': ('Read one module instance\'s bounded snapshot, using its declared data capabilities.', schema({**client, 'instanceId': IDENTITY})),
+        'shell.packages.stage': ('Stage a trusted native navigation, component or artifact-renderer package; this does not execute or activate it.', schema({'manifest': MANIFEST, 'source': string(250000)})),
         'shell.packages.validate': ('Run host-owned import and browser lifecycle checks of the staged digest. Requires the local validator toolchain.', schema({'digest': string(64)})),
         'shell.changes.prepare': ('Validate a proposed client composition and return a reviewable change; does not activate it.', schema({**client, 'composition': COMPOSITION, 'expectedRevision': {'type': 'integer', 'minimum': 0}})),
         'shell.changes.preview': ('Preview a prepared composition in the target client. Browser activation is separately reported.', schema(change)),
         'shell.changes.apply': ('Apply a prepared composition at its expected revision; preserve compatible instances.', schema(change)),
         'shell.changes.revert': ('Restore the composition saved before this change, checking the current revision.', schema(change)),
         'shell.recover': ('Restore the default or last successfully rendered composition for this client.', schema({**client, 'target': {'enum': ['default', 'lastGood']}, 'expectedRevision': {'type': 'integer', 'minimum': 0}})),
-        'shell.view.update': ('Update only this module instance\'s durable UI state, without changing conversation selection.', schema({**client, 'instanceId': IDENTITY, 'patch': {'type': 'object', 'maxProperties': 12}, 'dirty': {'type': 'boolean'}}, ['clientId', 'instanceId', 'patch'])),
-        'shell.command': ('Execute a declared module capability through the normal app command handler.', schema({**client, 'instanceId': IDENTITY, 'action': string(100), 'args': {'type': 'object'}})),
-        'shell.report': ('Report rendered module status from a browser; display evidence, never package validation.', schema({**client, 'revision': {'type': 'integer'}, 'previewId': {'type': ['string', 'null'], 'maxLength': 100}, 'instances': {'type': 'object', 'maxProperties': 12, 'additionalProperties': {'enum': ['ready', 'error', 'loading']}}, 'message': string(2000)}, ['clientId', 'revision', 'instances'])),
+        'shell.view.update': ('Update only this module instance\'s durable UI state, without changing conversation selection.', schema({**client, **generation, 'instanceId': IDENTITY, 'patch': {'type': 'object', 'maxProperties': 12}, 'dirty': {'type': 'boolean'}}, ['clientId', 'instanceId', 'patch'])),
+        'shell.command': ('Execute a declared module capability through the normal app command handler.', schema({**client, **generation, 'instanceId': IDENTITY, 'action': string(100), 'args': {'type': 'object'}}, ['clientId', 'instanceId', 'action', 'args'])),
+        'shell.report': ('Report rendered module status from a browser; display evidence, never package validation.', schema({**client, 'revision': {'type': 'integer'}, 'previewId': {'type': ['string', 'null'], 'maxLength': 100}, 'instances': {'type': 'object', 'maxProperties': 64, 'additionalProperties': {'enum': ['ready', 'error', 'loading', 'inactive']}}, 'message': string(2000)}, ['clientId', 'revision', 'instances'])),
     }
 
 
@@ -172,7 +187,7 @@ class ShellModules:
 
     def host_fingerprint(self):
         # Receipts expire when the actual harness/runtime or validator changes.
-        paths = [Path(__file__), Path(__file__).with_name('canvas_views.py'), Path(__file__).with_name('shell_validator.mjs'), *sorted((Path(__file__).parent / 'static').rglob('*.js')), Path(__file__).parent / 'static/shell-validation.html']
+        paths = [Path(__file__), Path(components.__file__), Path(__file__).with_name('canvas_views.py'), Path(__file__).with_name('shell_validator.mjs'), *sorted((Path(__file__).parent / 'static').rglob('*.js')), Path(__file__).parent / 'static/shell-validation.html']
         signature = [(str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in paths if path.exists()]
         if getattr(self, '_host_signature', None) != signature:
             digest = hashlib.sha256((API + PROFILE).encode())
@@ -184,28 +199,46 @@ class ShellModules:
 
     def instance(self, client, identity):
         composition = client['preview']['composition'] if client['preview'] else client['composition']
-        instance = next((item for item in composition['instances'] if item['id'] == identity), None)
+        instance = next((item for item in components.resolved(composition) if item['id'] == identity), None)
         if instance is None:
             fail('Module instance is not in this composition.', 404)
         return instance
 
     def check_composition(self, composition):
-        ids = [item['id'] for item in composition['instances']]
+        instances = components.resolved(composition)
+        ids = [item['id'] for item in instances]
         if len(set(ids)) != len(ids):
-            fail('Module instance IDs must be unique.')
-        for item in composition['instances']:
-            if self.manifest(item['package'])['profile'] != PROFILE:
-                fail('The navigation slot requires a navigation package.')
-            scope = item.get('scope', {})
-            if scope.get('mode') == 'pinned' and not scope.get('workspaceId'):
-                fail('Pinned modules require a workspaceId.')
+            fail('Module instance IDs must be unique, including inherited built-ins.')
+        slots = {'navigation': {'maximum': 12}, **components.SLOTS}
+        for name, slot in slots.items():
+            rows = [item for item in instances if item['slot'] == name]
+            if len(rows) > slot['maximum']:
+                fail('Too many components in ' + name + '.')
+            if rows and name in composition.get('disabledSlots', []):
+                fail('A disabled slot cannot also contain components.')
+        for item in instances:
+            manifest = self.manifest(item['package'])
+            if item['slot'] == 'navigation':
+                if manifest['profile'] != PROFILE:
+                    fail('The navigation slot requires a navigation package.')
+                scope = item.get('scope', {})
+                if scope.get('mode') == 'pinned' and not scope.get('workspaceId'):
+                    fail('Pinned modules require a workspaceId.')
+            elif manifest['profile'] != components.PROFILE or item['slot'] not in manifest['slots']:
+                fail('This package does not support the requested component slot.')
+            elif 'scope' in item or 'hideWhen' in item:
+                fail('Navigation bindings are only supported in navigation slots.')
 
     def transition(self, client, composition):
         """Return a deferral, never discard a live form or incompatible state."""
         self.check_composition(composition)
         previous = client['preview']['composition'] if client['preview'] else client['composition']
-        by_id = {item['id']: item for item in composition['instances']}
-        for old in previous['instances']:
+        by_id = {item['id']: item for item in components.resolved(composition)}
+        for new in by_id.values():
+            saved = client['views'].get(new['id'], {})
+            if saved.get('stateSchema') and saved['stateSchema'] != self.manifest(new['package'])['stateSchema']:
+                return {'status': 'deferred', 'instanceId': new['id'], 'reason': 'State schema migration is not supported; use a new instance ID to keep the saved state intact.'}
+        for old in components.resolved(previous):
             new = by_id.get(old['id'])
             view = client['views'].get(old['id'], {})
             changed = new != old
@@ -221,8 +254,10 @@ class ShellModules:
     def inspect(self, identity, *, snapshots=False, recovery=False):
         client = self.client(identity)
         composition = DEFAULT if recovery else client['preview']['composition'] if client['preview'] else client['composition']
-        result = {'clientId': identity, 'apiVersion': API, **client, 'effectiveComposition': composition, 'packages': {}}
-        for instance in composition['instances']:
+        result = {'clientId': identity, 'apiVersion': API, **client, 'effectiveComposition': composition, 'resolvedInstances': components.resolved(composition),
+                  'slots': {'navigation': {'label': 'Navigation', 'maximum': 12, 'defaults': ['builtin.workspaces', 'builtin.chats']}, **copy.deepcopy(components.SLOTS)},
+                  'componentCommands': components.commands(), 'packages': {}}
+        for instance in components.resolved(composition):
             package = instance['package']
             try:
                 result['packages'][package] = {'manifest': self.manifest(package), 'url': None if package in BUILTINS else f'/api/shell/packages/{package}.mjs'}
@@ -230,13 +265,17 @@ class ShellModules:
                 result['packages'][package] = {'error': str(exc)}
         if snapshots:
             result['snapshots'] = {}
-            for item in composition['instances']:
+            for item in components.resolved(composition):
                 if not result['packages'][item['package']].get('error'):
-                    result['snapshots'][item['id']] = self.navigation(client, item)
+                    result['snapshots'][item['id']] = self.snapshot(client, item)
         else:
             result['registry'] = {key: value for key, value in BUILTINS.items()}
             result['staged'] = [json.loads(row[0]) for row in self.db.execute("SELECT value FROM shell_records WHERE kind='package' ORDER BY rowid DESC LIMIT 100")]
         return result
+
+    def snapshot(self, client, instance):
+        value = self.navigation(client, instance) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
+        return {**value, 'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
 
     def scoped_state(self, client, instance):
         state = self.service.state
@@ -321,10 +360,15 @@ class ShellModules:
         identity = args.get('clientId')
         client = self.client(identity) if identity else None
         changed = False
+        if action in {'shell.command', 'shell.view.update'}:
+            instance = self.instance(client, args['instanceId'])
+            current = client['views'].get(instance['id'], {}).get('generation', 0)
+            if (instance['slot'] != 'navigation' or 'generation' in args) and args.get('generation') != current:
+                fail('This component was replaced. Read its current snapshot before acting.', 409)
         if action == 'shell.inspect':
             result = self.inspect(identity)
         elif action == 'shell.query':
-            result = self.navigation(client, self.instance(client, args['instanceId']))
+            result = self.snapshot(client, self.instance(client, args['instanceId']))
         elif action == 'shell.packages.stage':
             if args['manifest']['id'].startswith('builtin.'):
                 fail('The builtin namespace is reserved.')
@@ -347,6 +391,11 @@ class ShellModules:
             result = await asyncio.shield(self.validations[digest])
         elif action == 'shell.command':
             instance = self.instance(client, args['instanceId'])
+            if instance['slot'] != 'navigation':
+                result = await components.command(self, client, instance, args, origin, command_id)
+                if command_id:
+                    self.put('command', command_id, {'fingerprint': fingerprint, 'receipt': result})
+                return result
             capability = COMMAND_CAPABILITIES.get(args['action'])
             if not capability or capability not in self.manifest(instance['package'])['capabilities']:
                 fail('Module has not declared this capability.', 403)
@@ -373,21 +422,24 @@ class ShellModules:
         elif action == 'shell.view.update':
             instance = self.instance(client, args['instanceId'])
             patch = args['patch']
-            if set(patch) - VIEW_KEYS or len(encoded(patch)) > 16000:
-                fail('Unsupported or oversized module view state.')
-            from .chat_navigation import view_patch as chat_patch
-            from .workspace_navigation import view_patch as workspace_patch
-            try:
-                if 'workspaceDraft' in patch:
-                    validate(patch['workspaceDraft'], EDIT_STATE)
-                if 'locationPicker' in patch:
-                    validate(patch['locationPicker'], {'type': ['object', 'null'], 'additionalProperties': False, 'properties': {'controlId': {'type': 'string', 'maxLength': 200}, 'path': {'type': 'string', 'maxLength': 4000}}})
-                if 'navWorkspaceAncestorsOpen' in patch:
-                    validate(patch['navWorkspaceAncestorsOpen'], {'type': 'boolean'})
-                patch = chat_patch(workspace_patch(self.scoped_state(client, instance), patch))
-            except (ValueError, ValidationError) as exc:
-                fail(str(exc))
+            if instance['slot'] == 'navigation':
+                if set(patch) - VIEW_KEYS or len(encoded(patch)) > 16000:
+                    fail('Unsupported or oversized module view state.')
+                from .chat_navigation import view_patch as chat_patch
+                from .workspace_navigation import view_patch as workspace_patch
+                try:
+                    if 'workspaceDraft' in patch:
+                        validate(patch['workspaceDraft'], EDIT_STATE)
+                    if 'locationPicker' in patch:
+                        validate(patch['locationPicker'], {'type': ['object', 'null'], 'additionalProperties': False, 'properties': {'controlId': {'type': 'string', 'maxLength': 200}, 'path': {'type': 'string', 'maxLength': 4000}}})
+                    if 'navWorkspaceAncestorsOpen' in patch:
+                        validate(patch['navWorkspaceAncestorsOpen'], {'type': 'boolean'})
+                    patch = chat_patch(workspace_patch(self.scoped_state(client, instance), patch))
+                except (ValueError, ValidationError) as exc:
+                    fail(str(exc))
             item = client['views'].setdefault(args['instanceId'], {'view': {}, 'dirty': False})
+            if len(encoded({**item['view'], **patch})) > 16000:
+                fail('Module view state exceeds 16 KB.')
             item['view'].update(patch)
             if 'dirty' in args:
                 item['dirty'] = args['dirty']
@@ -400,7 +452,8 @@ class ShellModules:
                 result = {'status': 'stale'}
             else:
                 effective = client['preview']['composition'] if client['preview'] else client['composition']
-                ready = all(args['instances'].get(item['id']) == 'ready' for item in effective['instances'])
+                ready = (all(args['instances'].get(item['id']) == 'ready' for item in effective['instances'])
+                         and not any(value in {'error', 'loading'} for value in args['instances'].values()))
                 client['reported'] = {**args, 'at': time.time(), 'status': 'ready' if ready else 'incomplete'}
                 if ready and not client['preview']:
                     client['lastGood'] = client['composition']
@@ -426,9 +479,26 @@ class ShellModules:
                     composition = change['before'] if action == 'shell.changes.revert' else change['composition']
                 deferred = self.transition(client, composition) if action != 'shell.recover' else None
                 if deferred:
-                    return {'accepted': False, 'result': deferred}
+                    return {'accepted': False, 'result': deferred, 'error': deferred['reason'], 'status': 409, 'code': 'shell_change_deferred'}
                 if action == 'shell.recover':
                     self.check_composition(composition)
+                previous = client['preview']['composition'] if client.get('preview') else client['composition']
+                before = {item['id']: item for item in components.resolved(previous)}
+                after = {item['id']: item for item in components.resolved(composition)}
+                for instance_id in before.keys() | after.keys():
+                    if before.get(instance_id) != after.get(instance_id) or action == 'shell.recover':
+                        view = client['views'].setdefault(instance_id, {'view': {}, 'dirty': False})
+                        view['generation'] = view.get('generation', 0) + 1
+                        source = after.get(instance_id) or before.get(instance_id)
+                        manifest = BUILTINS.get(source['package']) or (self.get('package', source['package']) or {}).get('manifest', {})
+                        state_schema = manifest.get('stateSchema')
+                        if action == 'shell.recover' and view.get('stateSchema') not in {None, state_schema}:
+                            view['view'] = {}
+                        if state_schema:
+                            view['stateSchema'] = state_schema
+                        if action == 'shell.recover':
+                            view['dirty'] = False
+                            view['view'].pop('workspaceDraft', None)
                 if action == 'shell.changes.preview':
                     client['preview'] = {'id': args['changeId'], 'composition': composition}
                 else:

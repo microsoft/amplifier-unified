@@ -42,3 +42,12 @@ Native profiles run trusted same-origin code. Compatibility validation and
 capability checks are not a sandbox or a security review. Work within the
 user's authorized scope, and do not activate untrusted third-party code under
 an assumption that the host isolates it.
+
+## Header, status, composer controls, canvas tools and Settings
+
+Read [component contributions](../../docs/shell/components.md) and discover the
+running host's `shell.inspect.slots` and `componentCommands`. Use
+`trusted-native-component-v1` and `useShellComponent` for those declared slots.
+Follow the generation returned by `shell.query`; late actions from replaced
+components are rejected. Do not expose full conversation state to a summary
+widget or claim this trusted native profile isolates untrusted code.

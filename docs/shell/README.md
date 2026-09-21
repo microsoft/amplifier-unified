@@ -1,10 +1,12 @@
-# Modular shell: navigation and artifact viewers
+# Modular shell: navigation, component contributions and artifact viewers
 
 Agents and extension authors can start with the
 [repository-owned shell skill](../../skills/amplifier-shell/SKILL.md).
 See [behavior installation and app defaults](behavior.md) for discovery.
 For complete light/dark palettes, backgrounds and the decoration preference,
 see [Themes](themes.md).
+See [Component contributions](components.md) for registered header, status,
+composer-action, canvas-toolbar and Settings slots.
 
 The first milestone implemented the navigation slice of the shell plan, based on
 Unified `81f2182b6112e4162d982291151c489bdec6ef8a` (0.10.8). The workspace
