@@ -7,6 +7,39 @@ from amplifier_web.service import AppService
 from test_automatic_history import ObservedRuntime, files_snapshot, native_session
 
 
+async def test_terminal_history_follows_stream_target_until_disconnect(tmp_path):
+    path = native_session(tmp_path / 'workspace', 'terminal-chat')
+    native_session(tmp_path / 'workspace', 'saved-selection')
+    service = AppService(tmp_path / 'app', ObservedRuntime(), workspace=tmp_path)
+    queue = None
+    try:
+        await service.history.refresh()
+        ids = {row['nativeIdentity']: row['id'] for row in service.state['sessions']}
+        service._state['selectedSessionId'] = ids['saved-selection']
+        service.clients.attach('terminal', kind='tui')
+        with service.clients.bind('terminal'):
+            queue = service.subscribe(session_id=ids['terminal-chat'])
+        await service.history.refresh()
+        assert service._session(ids['terminal-chat'])['historyLoaded'] is True
+        assert service._session(ids['saved-selection'])['historyLoaded'] is False
+        service.unsubscribe(queue)
+        queue = None
+        with (path / 'transcript.jsonl').open('a') as stream:
+            stream.write(json.dumps({'role': 'assistant', 'content': 'While disconnected'}) + '\n')
+        await service.history.refresh()
+        assert len(service._session(ids['terminal-chat'])['messages']) == 2
+        with service.clients.bind('terminal'):
+            queue = service.subscribe(session_id=ids['terminal-chat'])
+        await service.history.refresh()
+        assert service._session(ids['terminal-chat'])['messages'][-1]['text'] == 'While disconnected'
+        assert service.clients.records['terminal']['selectedSessionId'] == ids['saved-selection']
+        assert service.runtime.started == service.runtime.sent == []
+    finally:
+        if queue is not None:
+            service.unsubscribe(queue)
+        await service.close()
+
+
 async def test_refresh_follows_connected_clients_not_inactive_saved_views(tmp_path):
     paths = [native_session(tmp_path / 'workspace', name) for name in ('first', 'second', 'inactive')]
     originals = [files_snapshot(path) for path in paths]

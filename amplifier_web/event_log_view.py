@@ -322,10 +322,10 @@ class EventLogView:
 
     async def loop(self):
         while not self.service.closed:
-            selected = {self.service.state.get('selectedSessionId')}
-            selected.update(row.get('selectedSessionId') for row in self.service.clients.records.values())
+            from .history_demand import subscribed_sessions
+            selected = subscribed_sessions(self.service)
             sessions = [row['id'] for row in self.service.state['sessions'] if row['id'] in selected
-                        or row.get('status') in {'working', 'starting', 'stopping'}]
+                        or row.get('status') in {'working', 'running', 'starting', 'stopping'}]
             for identity in sessions:
                 try:
                     await self.refresh(identity)
