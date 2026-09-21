@@ -17,7 +17,7 @@ test('feedback defaults to reviewed text without diagnostics or private-state at
  assert.match(html,/Canvas bug/);assert.match(html,/A preview stopped responding/);
  assert.match(html,/type="checkbox"/);assert.doesNotMatch(html,/checked=""/);
  assert.match(html,/credentials are not attached/);assert.doesNotMatch(html,/Included: app/);
- assert.match(html,/bkrabach\/amplifier-unified/);
+ assert.match(html,/microsoft\/amplifier-unified/);
 });
 
 test('a lost acknowledgement keeps the exact request and frozen text for explicit retry',async()=>{
@@ -59,7 +59,7 @@ test('durable success and uncertainty render meaningful results without allowing
  for(const status of ['submitted','unknown']){
   const requestId='fixture-123';
   const state=base();state.view.feedbackDraft.pending={...draft,requestId};
-  state.feedback.requests=[{requestId,status,message:status==='submitted'?'Feedback sent. Thank you.':'GitHub may have received this feedback.',...(status==='submitted'?{url:'https://github.com/bkrabach/amplifier-unified/issues/42'}:{})}];
+  state.feedback.requests=[{requestId,status,message:status==='submitted'?'Feedback sent. Thank you.':'GitHub may have received this feedback.',...(status==='submitted'?{url:'https://github.com/microsoft/amplifier-unified/issues/42'}:{})}];
   const html=renderToStaticMarkup(React.createElement(FeedbackPanel,{state,act:()=>{}}));
   assert.match(html,/New feedback/);assert.doesNotMatch(html,/>Check submission</);
   if(status==='submitted'){assert.match(html,/a-check-result success/);assert.match(html,/View issue/)}

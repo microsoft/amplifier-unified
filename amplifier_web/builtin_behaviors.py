@@ -1,7 +1,7 @@
 """Repository-owned behavior defaults and version-matched installed resources."""
 from pathlib import Path
 
-SHELL_BEHAVIOR_URI = "git+https://github.com/bkrabach/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml"
+SHELL_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml"
 
 
 def resource_root():

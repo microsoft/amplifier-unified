@@ -13,7 +13,7 @@ from . import __version__
 from .host.config import write_private
 from .updates import process
 
-REPOSITORY='bkrabach/amplifier-unified'
+REPOSITORY='microsoft/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
 PROBE = r'''import json,sys
 facts={"ok":False,"stage":"imports","isolated":bool(sys.flags.isolated),"pythonVersion":"%s.%s.%s"%sys.version_info[:3]}

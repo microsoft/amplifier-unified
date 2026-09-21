@@ -33,7 +33,7 @@ export function ReleaseHistory({application,state}){
  return <section className="a-release-history" aria-label="Changelog">
   <h4>Changelog</h4>
   <p className="a-caption">Application release history · installed notes are available offline.</p>
-  {application.releaseNotesWarning&&<p className="a-release-notes-warning" role="status">{application.releaseNotesWarning} {tag&&<a href={'https://github.com/bkrabach/amplifier-unified/releases/tag/'+tag} target="_blank" rel="noreferrer">View published release</a>}</p>}
+  {application.releaseNotesWarning&&<p className="a-release-notes-warning" role="status">{application.releaseNotesWarning} {tag&&<a href={'https://github.com/microsoft/amplifier-unified/releases/tag/'+tag} target="_blank" rel="noreferrer">View published release</a>}</p>}
   {!entries.length&&<p className="a-caption">No release notes are included with this installation.</p>}
   {entries.map(release=><details key={release.version} className="a-release-entry" open={release.version===application.current||newer(release.version,application.current)}>
    <summary><strong>{release.version} · {release.title}</strong><span className="a-caption">{status(release,application)}</span>{release.notices.length>0&&<span className="a-release-impact">High impact</span>}</summary>
