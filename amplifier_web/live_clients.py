@@ -90,6 +90,7 @@ def setup_routes(app, streams):
         action = payload.get("action")
         key = {
             "message.edit": "sessionId", "message.copy": "sessionId", "conversation.send": "sessionId", "conversation.stop": "sessionId",
+            "conversation.delivery": "sessionId", "conversation.retry": "sessionId",
             "worker.spawn": "sessionId", "worker.stop": "sessionId", "worker.steer": "sessionId",
             "approval.respond": "sessionId", "runtime.control": "sessionId",
             "session.takeover": "id", "session.history": "id", "session.rename": "id",

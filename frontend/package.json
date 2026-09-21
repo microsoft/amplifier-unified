@@ -53,6 +53,7 @@
     "test:settings-completeness-browser": "node tests/settings-completeness-browser.mjs",
     "test:session-health-browser": "node tests/session-health-browser.mjs",
     "test:message-outbox-browser": "node tests/message-outbox-browser.mjs",
+    "test:message-delivery-browser": "node tests/message-delivery-browser.mjs",
     "test:toolbar-browser": "node tests/app-toolbar-browser.mjs",
     "test:settings-collections-browser": "node tests/settings-collections-browser.mjs",
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",

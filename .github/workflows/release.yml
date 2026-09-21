@@ -123,7 +123,9 @@ jobs:
         run: npm run test:navigation-browser
       - name: Verify pending message delivery and editing
         working-directory: frontend
-        run: npm run test:message-outbox-browser
+        run: |
+          npm run test:message-outbox-browser
+          npm run test:message-delivery-browser
       - name: Verify canvas toolbar and app options
         if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend
