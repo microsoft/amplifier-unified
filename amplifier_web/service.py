@@ -858,8 +858,10 @@ class AppService:
                 if 'automatic' in args:
                     set_automatic(self.data_dir, session, args['automatic'])
                 if args.get('regenerate'):
+                    from .naming import directory_for, read
+                    base = read(directory_for(self.data_dir, session))
                     session['naming'] = {'status': 'working'}
-                    pending.append((self._regenerate_name, (copy.deepcopy(session),)))
+                    pending.append((self._regenerate_name, (copy.deepcopy(session), base)))
                 diagnostic_result = {'automatic': session.get('autoName'), 'status': session.get('naming', {}).get('status', 'idle')}
             elif action == "session.rename":
                 if not args["title"].strip():
@@ -1339,7 +1341,7 @@ class AppService:
                 pass
         return self.smart_tools.operation(identity) or {'id': identity, 'status': 'pending'}
 
-    async def _regenerate_name(self, source):
+    async def _regenerate_name(self, source, base):
         from .naming import accept_generated, directory_for, refresh
         identity = source['id']
         active = True
@@ -1354,7 +1356,11 @@ class AppService:
             candidate = await self.runtime.control(identity, 'session.naming', {})
             async with self.lock:
                 session = self._session(identity)
-                _, accepted = accept_generated(directory_for(self.data_dir, session), candidate, explicit=True)
+                # Preparation can be slow. Protect edits made after the click,
+                # including edits before the naming model took its snapshot.
+                same_base = all(base.get(key, 0) == candidate.get(key, 0)
+                                for key in ('name_revision', 'name_policy_revision'))
+                accepted = same_base and accept_generated(directory_for(self.data_dir, session), candidate, explicit=True)[1]
                 refresh(self.data_dir, session)
                 session['naming'] = {'status': 'ready' if accepted else 'conflict',
                     **({} if accepted else {'error': 'The name or Auto preference changed. Your newer choice was kept.'})}

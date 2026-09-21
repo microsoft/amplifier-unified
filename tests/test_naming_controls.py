@@ -178,3 +178,22 @@ async def test_auto_preference_before_first_turn_survives_native_save(tmp_path):
         assert automatic_metadata(read(directory_for(tmp_path, session)))
     finally:
         await app.close()
+
+
+async def test_edit_while_runtime_prepares_wins_over_regeneration(named):
+    app, runtime, session = named
+    preparing, prepared = asyncio.Event(), asyncio.Event()
+    original = runtime.start
+    async def delayed(source, emit):
+        preparing.set()
+        await prepared.wait()
+        await original(source, emit)
+    runtime.start = delayed
+    await app.dispatch('session.naming', {'id':session['id'], 'regenerate':True})
+    await preparing.wait()
+    await app.dispatch('session.rename', {'id':session['id'], 'title':'Chosen while preparing'})
+    prepared.set()
+    runtime.release.set()
+    await settled(app, session)
+    assert session['title'] == 'Chosen while preparing'
+    assert session['naming']['status'] == 'conflict'
