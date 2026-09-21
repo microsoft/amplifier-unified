@@ -513,7 +513,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime.observer:
             runtime.observer({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Preparing community modules (" + str(action).replace("_", " ")[:60] + ")."})
+    # Activate modules from the same generation as the bundle registry. The
+    # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
     prepared = await loaded.prepare(strict=True,
+        cache_dir=config.registry_home / "cache",
         source_resolver=lambda module, source: module_source(config, snapshot, module, source),
         progress_callback=progress)
     await materialize_bundle_providers(loaded, prepared)
