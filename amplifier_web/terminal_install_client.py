@@ -109,7 +109,9 @@ def install(profile, root, environment):
         raise ValueError('Setup expired. Download a new setup file.')
     from importlib.metadata import version
     from amplifier_tui.launcher import executable
-    if version('amplifier-app-tui') != '0.4.0rc1' or not os.access(executable(None), os.X_OK):
+    expected = profile.get('clientVersion')
+    if (not isinstance(expected, str) or not expected
+            or version('amplifier-app-tui') != expected or not os.access(executable(None), os.X_OK)):
         raise ValueError('Installed terminal client failed validation')
     context = ssl.create_default_context(cadata=profile['ca'] or None)
     data = json.dumps({'grant': profile['grant']}).encode()

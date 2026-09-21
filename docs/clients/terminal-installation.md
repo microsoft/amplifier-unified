@@ -33,8 +33,9 @@ Downloading a file is not reported as a completed installation.
 This is a shell setup file and a saved terminal command, with an optional macOS
 `.terminal` profile (`.command` launcher on Linux), **not** a signed or notarized
 desktop application. macOS security controls and terminal availability
-still apply. The current release is `microsoft/amplifier-app-tui` `0.4.0rc1`:
-Apple silicon/macOS 26+, or Linux ARM64/glibc. Intel Macs, older macOS, native
+still apply. Setup selects the newest compatible, qualified prebuilt release from
+`microsoft/amplifier-app-tui`, including prereleases. Supported builds currently
+target Apple silicon/macOS 26+, or Linux ARM64/glibc. Intel Macs, older macOS, native
 Windows and other Linux architectures need their own published builds.
 
 ## CLI and agent access
@@ -103,10 +104,29 @@ Running clients retain their own version and connection.
 
 ## Distribution and failure handling
 
-Unified obtains fixed assets through the host's GitHub release access and checks
-pinned SHA-256 digests. The host needs `gh` and access to the private Microsoft
-repository, or previously verified cached assets. Clients receive no GitHub
-credentials. The runtime bootstrap is pinned and checksum-verified too.
+Unified queries the canonical GitHub release catalog for each new setup request.
+It chooses the highest published version with a supported wheel and a verified
+qualification receipt declaring connected protocol v1. Drafts, other platforms
+and other protocols are excluded. It validates GitHub's asset SHA-256 digests and
+the receipt's exact wheel/version/platform, clean source commit, native load,
+connected-only installation and privacy checks. A malformed or incomplete newest
+candidate fails visibly; it does not silently substitute an older unverified build.
+Artifact bytes are cached by digest and verified again before use. The host needs
+`gh` and release access to check current metadata even when artifacts are cached.
+Clients receive no GitHub credentials. The third-party runtime bootstrap remains
+checksum-verified at its independently qualified version.
+
+The downloaded script records the resolved client version and exact wheel digest.
+Installation checks that version before redeeming the enrollment grant. Repeating
+a still-valid setup request returns the original script and receipt, including
+when a newer release appears or the catalog becomes unavailable. A new request
+resolves afresh; neither action upgrades an existing connection automatically.
+Existing clients, retained histories and update generations are unchanged.
+
+Publication order: publish a qualified TUI successor whose receipt contains
+`connected_protocol_version` before releasing this selector. Older receipts without
+that field do not establish protocol compatibility. Missing compatible artifacts
+produce a setup error before any enrollment grant is created.
 
 Setup stages a new environment, validates the package/native executable, enrolls
 the connection, writes its launcher, then atomically selects the default.
