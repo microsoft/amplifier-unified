@@ -158,3 +158,30 @@ async def test_cached_old_hook_cannot_replace_newer_native_rename(tmp_path, monk
     assert store.read()['unrelated'] == 'keep'
     assert events == [{'type':'session.naming', 'name':'New CLI choice',
                       'description':'New description', 'nameRevision':1}]
+
+
+@pytest.mark.parametrize('source', ['manual', None])
+async def test_custom_names_do_not_schedule_automatic_renaming(monkeypatch, tmp_path, source):
+    import sys
+    from amplifier_web.host.naming import LiveSessionNaming
+    calls = []
+    class Config:
+        initial_trigger_turn = 1
+        update_interval_turns = 1
+        max_retries = 3
+        def __init__(self, **kwargs): self.__dict__.update(kwargs)
+    class Hook:
+        def __init__(self, coordinator, config): self.config = config; self._defer_counts = {}
+        async def _generate_name(self, *args, **kwargs): calls.append('unexpected call')
+    monkeypatch.setitem(sys.modules, 'amplifier_module_hooks_session_naming',
+                        SimpleNamespace(SessionNamingHook=Hook, SessionNamingConfig=Config))
+    coordinator = SimpleNamespace(config={'project_dir':str(tmp_path), 'hooks':[{'module':'hooks-session-naming'}]},
+        session_id='custom', hooks=SimpleNamespace(register=lambda *a, **k:None), register_cleanup=lambda *a:None)
+    namer = LiveSessionNaming(coordinator, tmp_path, lambda event:None)
+    namer.store.save('custom', [], {'name':'My chosen project', **({'name_source':source} if source else {})})
+    for n in range(1, 5):
+        namer.observe({'type':'input.delivered', 'input_id':str(n), 'source':'user'})
+        namer.observe({'type':'generation.finished', 'input_ids':[str(n)]})
+        if namer.pending: await namer.pending
+    assert not calls
+    assert namer.store.load('custom')[1]['name'] == 'My chosen project'

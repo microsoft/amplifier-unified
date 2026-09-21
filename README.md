@@ -2,6 +2,36 @@
 
 A local Python host serving a bundled React interface. One conversation supports typed chat, notification-oriented text, and real-time voice. Community bundles and tools execute through AmplifierSession, Foundation and loop-live in isolated worker processes.
 
+## Optional terminal client
+
+Install the native TUI alongside Unified:
+
+```sh
+uv tool install --no-sources 'amplifier-unified[tui] @ git+https://github.com/bkrabach/amplifier-unified'
+amplifier-unified tui
+amplifier-unified tui --session HOST_CONVERSATION_ID
+```
+
+The command connects to the existing service using its configured local port,
+control-token file and app-owned CA. It does not start another service. Source
+installation builds the Ratatui frontend and needs Rust/Cargo and a C linker;
+launching an installed platform wheel does not. Omit `[tui]` to install the web
+host alone. Native builds support macOS/Linux; Windows uses WSL2.
+
+For a different host, use `amplifier-unified tui --server https://host.example:8443
+--token-file /private/host-token --ca-file /private/host-ca.crt`. Remote connections
+verify HTTPS. Tokens are never placed in command arguments. Each terminal gets an
+independent selection and private draft; web and terminal views share host-owned
+conversation work. Quit detaches without stopping it. See the
+[terminal client guide](docs/clients/tui-handoff.md) for supported operations and
+current limitations.
+
+Automatic conversation names come from the configured ecosystem naming hook on
+the service, shared by web and terminal clients. The hook controls initial naming
+and later update intervals. A custom name supplied through Rename is preserved,
+including against a late generated result; automatic naming calls are skipped
+for custom names. Canonical names remain in shared session metadata for CLI use.
+
 ## Run this checkout
 
 ```sh

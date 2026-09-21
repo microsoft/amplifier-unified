@@ -21,6 +21,9 @@ dependencies = [
     "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
 ]
 
+[project.optional-dependencies]
+tui = ["amplifier-app-tui @ git+https://github.com/bkrabach/amplifier-app-tui@fa0f319503ae178af98502c655332c856397d911"]
+
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"
 

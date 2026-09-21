@@ -56,6 +56,15 @@ def _parse() -> argparse.Namespace:
     command.add_argument("--bundle", "-B")
     command.add_argument("--resume")
     command.add_argument("--timeout", type=int, default=3600)
+    tui = subcommands.add_parser("tui", help="Attach the optional terminal client to an existing service")
+    tui.add_argument("--server", default=os.environ.get("AMPLIFIER_UNIFIED_URL"))
+    for flag in ("token-file", "ca-file", "client", "state-dir"):
+        tui.add_argument("--" + flag)
+    tui.add_argument("--workspace", dest="tui_workspace", help="Workspace path on the host")
+    selection = tui.add_mutually_exclusive_group()
+    selection.add_argument("--session", "--resume", dest="session")
+    selection.add_argument("--new", action="store_true")
+    tui.add_argument("--list-sessions", action="store_true")
     config = subcommands.add_parser("config", help="Manage server configuration")
     config_commands = config.add_subparsers(dest="config_command", required=True)
     config_commands.add_parser("list")
@@ -96,13 +105,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve run continue tool doctor config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve tui run continue tool doctor config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve run continue tool doctor config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve tui run continue tool doctor config service setup-tls)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve run continue tool doctor config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve tui run continue tool doctor config service setup-tls"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -142,7 +151,7 @@ def _doctor(data_dir: Path) -> None:
     print("Port:", config["port"])
     from .shared_state import shared_state_home
     print("Shared session state:", shared_state_home())
-    print("CLI/TUI must use the same shared state root and canonical workspace.")
+    print("Standalone hosts must share the state root and canonical workspace. Connected clients use the service API.")
 
 
 def _setup_tls(data_dir: Path, mode: str) -> None:
@@ -186,9 +195,41 @@ def _serve(args, data_dir: Path) -> None:
                 host=config["bind"], port=config["port"], ssl_context=secure, print=None)
 
 
+def _tui(args, data_dir):
+    try:
+        from amplifier_tui.connected import main as launch
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"amplifier_tui", "amplifier_tui.connected"}:
+            raise
+        raise SystemExit("Terminal client is optional. Reinstall Amplifier Unified with its [tui] extra; see the installation guide.") from None
+    options = []
+    server = args.server
+    if not server:
+        config = load_server_config(data_dir)
+        secure = config["tls"]["method"] != "none"
+        server = f"{'https' if secure else 'http'}://127.0.0.1:{config['port']}"
+        if not args.token_file and not os.environ.get("AMPLIFIER_UNIFIED_TOKEN"):
+            options += ["--token-file", str(data_dir / "config/auth/control-token")]
+        ca = data_dir / "config/tls/ca.crt"
+        if secure and not args.ca_file and ca.is_file():
+            options += ["--ca-file", str(ca)]
+    options += ["--server", server]
+    for key in ("token_file", "ca_file", "client", "state_dir", "session"):
+        if getattr(args, key):
+            options += ["--" + key.replace("_", "-"), str(getattr(args, key))]
+    if args.tui_workspace:
+        options += ["--workspace", args.tui_workspace]
+    for key in ("new", "list_sessions"):
+        if getattr(args, key):
+            options += ["--" + key.replace("_", "-")]
+    return launch(options)
+
+
 def main():
     args = _parse()
     data_dir = _data_dir(args.data_dir)
+    if args.command == "tui":
+        return _tui(args, data_dir)
     if args.command == "completion":
         _print_completion(args.shell)
         return

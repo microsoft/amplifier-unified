@@ -1,10 +1,13 @@
 # Amplifier TUI: Unified-backed live sessions
 
-Status: Ready for TUI implementation. Use Unified 0.11.9 or later.
+Status: Connected implementation is available in amplifier-app-tui's
+`feat/unified-client` candidate. This paired service change adds the optional
+`tui` install and launcher. It is not a claim that either candidate is released.
+Use Unified 0.19.5 or later; this change supplies stable streamed-response identity.
 
 ## Outcome and scope
 
-Add a connected backend to the TUI. A user can open the same Unified-hosted
+The native Ratatui TUI uses a connected backend. A user can open the same Unified-hosted
 conversation in the TUI and the web app, submit from either, and follow the same
 accepted messages, live responses, tool/worker progress and pending approvals.
 Each interface keeps its own selection and unsent drafts.
@@ -15,13 +18,41 @@ history, or move execution to the terminal's machine. Existing standalone CLI
 ownership and explicit takeover remain separate operations.
 
 This document describes the service integration; it does not prescribe a TUI
-framework or require replacing an existing standalone backend. No external
-amplifier-app-tui repository has been modified by this work.
+framework or require replacing an existing standalone backend. The connected implementation lives in `bkrabach/amplifier-app-tui`; its explicit
+standalone extra retains the previous local execution host.
+
+## Install and launch
+
+Install Unified with its `[tui]` extra, then run `amplifier-unified tui`.
+`--session ID` opens a known conversation; `--list-sessions` reads the host catalog;
+`--new` starts an empty composer. New conversation creation waits for explicit Send.
+`--workspace` on the `tui` subcommand is a path on the host, not a local-terminal cwd.
+A separately installed `amplifier-tui` can connect with `--server`, `--token-file`
+and `--ca-file` using the same contract.
+
+Each terminal gets a fresh client identity. `--client ID` deliberately recovers
+that terminal's local selection, private drafts and outbox; the state file has a
+local exclusive lock. This is unrelated to Foundation execution ownership.
+Reconnect only reads. `/deliveries` provides deliberate exact retry after an
+uncertain transport result. A definitively rejected message can be edited back
+into an empty composer. Stop remains available while send acknowledgement waits.
+
+Supported first slice: listing/creation/selection, rename, bounded history pages,
+text send and response streaming, tool/worker observations, approval decisions,
+Stop, cooperative takeover and detach. Configuration editing, voice, uploads,
+queue/steer and full canvas remain web controls. Unavailable standalone commands
+are refused, never forwarded as model instructions. This is not full UI parity.
+
+Local evidence: actual installed TUI and web SPA on one isolated HTTP/SSE host,
+two native terminals at 120×40 and 40×20, and a separate real-worker lifecycle
+check using a deterministic provider. See the TUI repository's ACCEPTANCE.md for
+commands and the unrelated standalone baseline failures. No production devices
+or paid provider are claimed qualified by those fixtures.
 
 ## Release baseline and source of truth
 
 - Protocol: version 1, HTTP commands and SSE snapshots.
-- Recommended host: [Unified 0.11.9](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.9)
+- Historical transport baseline: [Unified 0.11.9](https://github.com/bkrabach/amplifier-unified/releases/tag/v0.11.9)
   or a later compatible release, which corrects canvas resource retention across
   clients. Use the immutable release tag to resolve its commit.
 - Live-client validation baseline: Unified 0.11.7. Its exact evidence and runtime

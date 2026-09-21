@@ -161,3 +161,26 @@ survives reload and host restart; creating the first conversation carries it
 forward. A string targets that conversation; omitting the target uses the
 client's current selection. Other session commands still require string IDs
 when a target is supplied.
+
+
+## Stream display identity and shared names
+
+This additive v1 extension supplies `session.streamingId` with `session.streaming`.
+The corresponding final assistant message carries the same `streamId`; replace
+that partial display item instead of appending a second copy. These are display
+identities, not command/input provenance. Never infer an input ID from the most
+recent user message. Older compatible hosts may omit them; clients can show a
+receiving indicator until the identified final message arrives.
+
+Stop, error, yield and host recovery settle interrupted partial text as explicitly
+labelled partial display evidence and clear the active identity. Historical editing
+clears it too. A subsequent response receives a new identity. Settling display
+text does not claim model completion or replay any tool action.
+
+Automatic naming runs on the execution host through its configured ecosystem hook.
+The host controls scheduling while the hook supplies context sampling, prompting,
+model routing and parsing. `session.rename` is an explicit manual choice stored
+through Foundation's shared metadata API. Custom names, including legacy names
+with unspecified source, skip automated renaming; compare-and-set storage also
+protects against an already-running naming call completing after a manual rename.
+Clients display the resulting shared title instead of running their own naming model.
