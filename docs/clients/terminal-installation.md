@@ -16,7 +16,8 @@ conversation behavior after connection.
 4. Download the file. Open Terminal, paste the displayed command, and run it.
    If your browser saves outside Downloads, use that location instead.
 5. Wait for **Ready**. Use the generated Amplifier Terminal launcher in your home
-   Applications folder for future visits. It remembers Spark and its trust
+   Applications folder for future visits. The Mac launcher is a `.terminal`
+   profile that starts the client directly, without your login-shell startup prompts. It remembers Spark and its trust
    configuration. Each launch has its own conversation selection and draft.
 
 The Mac needs internet access but no existing Python, Rust, compiler or personal
@@ -25,7 +26,8 @@ the prebuilt TUI. It preserves existing TUI launchers and development checkouts.
 Conversations and tools keep running on Spark after closing the terminal.
 Downloading a file is not reported as a completed installation.
 
-This is a shell setup file followed by a `.command` launcher, **not** a signed or
+This is a shell setup file followed by a macOS `.terminal` profile (a `.command`
+launcher on Linux), **not** a signed or
 notarized desktop application. macOS security controls and terminal availability
 still apply. The current release is `microsoft/amplifier-app-tui` `0.4.0rc1`:
 Apple silicon/macOS 26+, or Linux ARM64/glibc. Intel Macs, older macOS, native
@@ -101,8 +103,12 @@ succeeds and local saving fails, remove the unused connection from the setup
 page and prepare another file. Delete downloaded setup files after use.
 
 Browser reload does not resume a local installer. A setup file can be redeemed
-only once. **Refresh connections** shows authorized installations after setup,
-not proof that their terminals are currently online.
+only once. **Registered terminals** refreshes automatically while the page is visible and
+when you return to it; **Refresh connections** remains available. A matching
+registration disables reuse of that setup file and survives a page reload. The
+page reports registration, not proof that local installation completed or a
+terminal is currently online. Wait for the installer's **Ready** message before
+opening the launcher. Existing enrollments without setup correlation remain listed.
 
 Unified owns distribution/enrollment policy. Foundation keeps shared session
 storage/ownership. The TUI repository owns client protocol and builds. This
@@ -119,3 +125,14 @@ Removing a client must preserve host conversations and other windows' drafts.
 
 See [terminal setup validation](../validation/terminal-setup.md) for evidence and
 what this milestone does not yet prove.
+
+## Existing Mac launchers
+
+Older `.command` launchers can fail when an interactive shell startup prompt
+consumes part of Terminal's injected command. The `.terminal` launcher starts
+`/bin/sh` with the saved connection script as its command, independently of the
+user's login shell; it does not edit shell configuration or Terminal defaults.
+An existing saved connection can use a newly generated launcher without another
+enrollment or reinstall. Preserve the old launcher until the replacement has
+been checked. Actual Finder/Terminal acceptance is separate from generating and
+validating the profile; see the qualification record.

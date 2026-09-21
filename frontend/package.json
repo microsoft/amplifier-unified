@@ -61,7 +61,8 @@
     "test:themes-browser": "node tests/theme-definitions-browser.mjs",
     "test:appearance-startup-browser": "node tests/appearance-startup-browser.mjs",
     "test:mobile-navigation-browser": "node tests/mobile-navigation-browser.mjs",
-    "test:settings-mobile-browser": "node tests/settings-mobile-browser.mjs"
+    "test:settings-mobile-browser": "node tests/settings-mobile-browser.mjs",
+    "test:terminal-setup-browser": "node tests/terminal-setup-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
