@@ -23,10 +23,9 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@v6
-      # Public SDK and host libraries only; no provider accounts or private repos.
-      - run: uv venv .venv
-      - run: uv pip install --python .venv/bin/python pytest pytest-asyncio pytest-aiohttp aiohttp cryptography python-pam six jsonschema tinycss2 pyyaml filelock 'mcp>=2.2,<3' 'httpx>=0.28,<1' 'amplifier-core>=1.6.1' 'amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main'
-      - run: PYTHONPATH=. .venv/bin/python -m pytest tests/test_connector_lifecycle.py tests/test_smart_tools.py tests/test_smart_canvas.py tests/test_auth.py tests/test_server_auth.py -q
+      # Install the declared host and development dependencies from the lock.
+      - run: uv sync --locked --group dev
+      - run: uv run --no-sync pytest tests/test_connector_lifecycle.py tests/test_smart_tools.py tests/test_smart_canvas.py tests/test_auth.py tests/test_server_auth.py -q
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
