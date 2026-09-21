@@ -122,7 +122,7 @@ async def install_native(loop, coordinator, providers):
         return providers
     try:
         from amplifier_module_provider_openai import OpenAIProvider
-        from amplifier_module_provider_openai.native import NativeResponsesProvider
+        from amplifier_module_provider_openai.native import NativeResponsesProvider, NATIVE_REQUEST as PROVIDER_REQUEST
     except ImportError:
         host.reason = "The installed provider does not include its optional native transport."
         return providers
@@ -138,13 +138,35 @@ async def install_native(loop, coordinator, providers):
     if "complete" in original.__dict__:
         host.reason = "The provider already has an instance wrapper; native transport must be installed before it."
         return providers
-    from amplifier_module_loop_live.scope import LIVE_OWNER
+    from amplifier_module_loop_live.scope import LIVE_OWNER, NATIVE_REQUEST as LOOP_REQUEST
+
+    class LoopNativeProvider(NativeResponsesProvider):
+        """Bridge provider-owned native calls to the loop's recovery ledger."""
+
+        async def complete(self, request, **kwargs):
+            # Utility/ordinary requests must not inherit a caller's native job
+            # attribution. The provider still owns all transport eligibility.
+            token = LOOP_REQUEST.set(None)
+            try:
+                return await super().complete(request, **kwargs)
+            finally:
+                LOOP_REQUEST.reset(token)
+
+        async def _native_response(self, params):
+            # Async jobs are dispatched inside this boundary. Bind only when
+            # the provider has actually admitted its own native request.
+            token = LOOP_REQUEST.set(self if PROVIDER_REQUEST.get() is self else None)
+            try:
+                return await super()._native_response(params)
+            finally:
+                LOOP_REQUEST.reset(token)
+
     def owned_loop():
         owner = LIVE_OWNER.get()
         return owner if (getattr(owner, "coordinator", None) is coordinator
                          and host.selected_identity() == host.identity) else None
     host.identity = identity
-    host.provider = NativeResponsesProvider.wrap(original, owner_getter=owned_loop, lifecycle=host.lifecycle)
+    host.provider = LoopNativeProvider.wrap(original, owner_getter=owned_loop, lifecycle=host.lifecycle)
     if host.state.get("outcome") in {"unknown", "pending"}:
         host.provider.request_uncertain = True
     if host.checkpoint_path.exists():
