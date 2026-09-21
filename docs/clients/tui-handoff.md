@@ -5,6 +5,10 @@ Unified 0.19.12 introduced the optional `tui` install and launcher. The canonica
 TUI repository is `microsoft/amplifier-app-tui`.
 Use Unified 0.19.5 or later; this change supplies stable streamed-response identity.
 
+For proposed cross-client experience, state scope and parallel-development rules,
+see the [shared-client direction packet](direction.md). Those contracts are DRAFT;
+this guide continues to describe the existing transport, not full product parity.
+
 ## Outcome and scope
 
 The native Ratatui TUI uses a connected backend. A user can open the same Unified-hosted
