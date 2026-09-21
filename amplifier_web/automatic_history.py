@@ -425,8 +425,14 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         self.service._publish()
-                selected = next((s for s in self.service.state['sessions'] if s['id'] == self.service.state.get('selectedSessionId')), None)
-                if selected and selected.get('nativeProject') and selected.get('status') not in BUSY and not selected.get('configurationBusy'):
+                # Browsers have independent selections. Refresh only connected
+                # views, not every historical client record retained on disk.
+                selected_ids = {self.service.state.get('selectedSessionId')}
+                selected_ids.update(self.service.clients.records.get(client, {}).get('selectedSessionId')
+                                    for client in self.service.queue_clients.values())
+                for selected in [row for row in self.service.state['sessions'] if row['id'] in selected_ids]:
+                    if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
+                        continue
                     current = await asyncio.to_thread(revision, selected)
                     if not selected.get('historyLoaded', True) or current != selected.get('nativeRevision'):
                         await self.load(selected['id'])
