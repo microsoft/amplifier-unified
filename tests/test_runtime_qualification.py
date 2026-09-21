@@ -101,3 +101,28 @@ async def test_host_forwards_fresh_policy_but_ordinary_preparation_keeps_default
     policy = h.loaded.prepare.call_args.kwargs
     assert 'refresh_dependencies' not in policy and 'install_overrides' not in policy
     h.session.execute.assert_not_called()
+
+
+def test_active_generation_uses_qualified_policy_without_overriding_user_choice(tmp_path, monkeypatch):
+    release = '6' * 32
+    receipt = runtime_environment.receipt_directory(tmp_path, release)
+    receipt.mkdir(parents=True)
+    (tmp_path / 'updates/active.json').write_text(json.dumps({'current': release}))
+    (receipt / 'runtime-installed.json').write_text('[]')
+    target = receipt / 'runtime-install-overrides.txt'
+    target.write_text('amplifier-core==1.6.1\n')
+    calls = []
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda project, directory: calls.append((project, directory)))
+    assert runtime_qualification.active_install_overrides(tmp_path) == target
+    assert runtime_qualification.active_install_overrides(tmp_path, str(target)) == target
+    assert len(calls) == 2
+    assert runtime_qualification.active_install_overrides(tmp_path, '/user/explicit-overrides.txt') is None
+    assert len(calls) == 2
+    target.unlink()
+    with pytest.raises(ValueError, match='policy is missing'):
+        runtime_qualification.active_install_overrides(tmp_path)
+
+
+def test_legacy_worker_generation_has_no_new_install_policy(tmp_path):
+    assert runtime_qualification.active_install_overrides(tmp_path) is None
+    assert not (tmp_path / 'updates').exists()

@@ -232,6 +232,10 @@ class Worker:
             from amplifier_web.shared_state import ActivationGate, configuration_stamp
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
+            from amplifier_web.runtime_qualification import active_install_overrides
+            install_overrides = active_install_overrides(self.home, os.environ.get("UV_OVERRIDE"))
+            if install_overrides is not None:
+                os.environ["UV_OVERRIDE"] = str(install_overrides)
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -264,7 +268,7 @@ class Worker:
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
-                execution_workspace=config.get("workingDirectory"))
+                execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)

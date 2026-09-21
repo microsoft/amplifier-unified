@@ -173,6 +173,7 @@ async def freeze(manager, generation, project):
     shutil.copy2(final / 'uv.lock', receipt / 'runtime.lock')
     receipt.joinpath('runtime-sources.json').write_text(json.dumps(policies, indent=2) + '\n')
     receipt.joinpath('runtime-installed.json').write_text(json.dumps(actual, indent=2) + '\n')
+    lock_overrides(final, receipt / 'runtime-install-overrides.txt')
     return final
 
 
@@ -180,3 +181,24 @@ def verify_recorded(project, receipt):
     evidence = Path(receipt) / 'runtime-installed.json'
     if evidence.exists() and installed_graph(project) != json.loads(evidence.read_text()):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
+
+
+def active_install_overrides(home, current_override=None):
+    """Use a recorded generation's ordinary installer policy, never refresh.
+
+    An explicit user override remains authoritative. Legacy generations have no
+    new policy. Validate an existing graph before mounting another conversation.
+    """
+    from .updates import active_release
+    generation = active_release(home).get('current')
+    receipt = environments.receipt_directory(home, generation)
+    if not (receipt / 'runtime-installed.json').exists():
+        return None
+    target = receipt / 'runtime-install-overrides.txt'
+    compatibility = Path(__file__).parent / 'runtime_deps/compatibility.txt'
+    if current_override and current_override not in {str(target), str(compatibility)}:
+        return None
+    if not target.is_file():
+        raise ValueError('The recorded worker installation policy is missing; its generation was preserved.')
+    verify_recorded(environments.project_path(home, generation), receipt)
+    return target
