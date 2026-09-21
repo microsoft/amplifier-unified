@@ -21,11 +21,12 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
     monkeypatch.chdir(outside)
     (workspace / 'escape').symlink_to(outside, target_is_directory=True)
     declaration = {'module': 'tool-filesystem' if writer == 'filesystem' else 'tool-apply-patch',
-                   'config': {} if writer == 'filesystem' else {'engine': writer}}
+                   'config': {'denied_write_paths': ['private'],
+                              **({} if writer == 'filesystem' else {'engine': writer})}}
     bundle = SimpleNamespace(tools=[] if child else [declaration],
         agents={'worker': {'tools': [declaration]}} if child else {})
     settings = {'modules': {'tools': [{'module': 'tool-filesystem', 'config': {
-        'allowed_write_paths': [str(extra)], 'denied_write_paths': ['private']}}]}}
+        'allowed_write_paths': [str(extra)], 'denied_write_paths': ['shared-private']}}]}}
     _apply_host_policy(bundle, SimpleNamespace(workspace=workspace, settings=settings))
     tools, capabilities = {}, {'session.working_dir': str(workspace)}
 
@@ -47,9 +48,10 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
         result = await write(target)
         assert result.success, result.error
     assert (workspace / 'checkout/frontend/example.txt').read_text().rstrip('\n') == 'fixture'
-    for target in ('private/denied.txt', 'escape/denied.txt', outside / 'denied.txt'):
+    for target in ('private/denied.txt', 'shared-private/denied.txt', 'escape/denied.txt', outside / 'denied.txt'):
         result = await write(target)
         assert not result.success
         assert 'Access denied' in str(result.error)
     assert not (workspace / 'private/denied.txt').exists()
+    assert not (workspace / 'shared-private/denied.txt').exists()
     assert not (outside / 'denied.txt').exists()

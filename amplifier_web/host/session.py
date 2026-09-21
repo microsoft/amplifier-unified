@@ -318,7 +318,10 @@ def _apply_host_policy(bundle, config):
                 row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
                     *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
                 if "denied_write_paths" in row["config"]:
-                    row["config"]["denied_write_paths"] = [str(path) for path in paths(row["config"]["denied_write_paths"])]
+                    # Shared settings may add restrictions, but must not erase
+                    # the declaration's explicitly denied directories.
+                    row["config"]["denied_write_paths"] = list(dict.fromkeys(str(path) for path in
+                        paths(current.get("denied_write_paths", [])) + paths(policy.get("denied_write_paths", []))))
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.
