@@ -171,6 +171,14 @@ def apply_provider_environment(plan):
 
 def _apply_settings(bundle, config):
     settings = config.settings
+    # Generic list merging replaces config arrays. Keep the bundle's explicit
+    # filesystem denials across that merge so host policy can enforce them.
+    filesystem_denials = {
+        row.get("id") or row.get("instance_id") or row["module"]:
+            copy.deepcopy(row["config"]["denied_write_paths"])
+        for row in bundle.tools
+        if row.get("module") == "tool-filesystem" and "denied_write_paths" in row.get("config", {})
+    }
     bundle.providers = merge(bundle.providers, config.providers)
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
@@ -197,6 +205,14 @@ def _apply_settings(bundle, config):
             if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
+            identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == "tools" and row.get("module") == "tool-filesystem" and identity in filesystem_denials:
+                original = filesystem_denials[identity]
+                effective = row.get("config", {}).get("denied_write_paths", [])
+                if any(not isinstance(paths, list) or any(not isinstance(path, str) for path in paths)
+                       for paths in (original, effective)):
+                    raise ValueError('File-access paths must be lists of strings.')
+                row.setdefault("config", {})["denied_write_paths"] = list(dict.fromkeys(original + effective))
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
                 row["instance_id"] = row["id"]
             if kind == "providers":

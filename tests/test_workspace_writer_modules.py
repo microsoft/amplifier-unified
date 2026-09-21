@@ -4,12 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from amplifier_web.host.session import _apply_host_policy
+from amplifier_web.bundles import SNAPSHOT_VERSION
+from amplifier_web.host.session import compose_configured_bundle
 
 
 @pytest.mark.parametrize('writer', ['filesystem', 'native', 'function'])
 @pytest.mark.parametrize('child', [False, True])
-async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_path, monkeypatch, writer, child):
+@pytest.mark.parametrize('snapshot', [False, True])
+@pytest.mark.parametrize('section', ['modules', 'config', 'overrides'])
+async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_path, monkeypatch, writer, child, snapshot, section):
     filesystem = pytest.importorskip('amplifier_module_tool_filesystem')
     patch = pytest.importorskip('amplifier_module_tool_apply_patch')
     workspace = tmp_path / 'project'
@@ -24,10 +27,15 @@ async def test_project_writes_survive_global_extras_with_denials_enforced(tmp_pa
                    'config': {'denied_write_paths': ['private'],
                               **({} if writer == 'filesystem' else {'engine': writer})}}
     bundle = SimpleNamespace(tools=[] if child else [declaration],
-        agents={'worker': {'tools': [declaration]}} if child else {})
-    settings = {'modules': {'tools': [{'module': 'tool-filesystem', 'config': {
-        'allowed_write_paths': [str(extra)], 'denied_write_paths': ['shared-private']}}]}}
-    _apply_host_policy(bundle, SimpleNamespace(workspace=workspace, settings=settings))
+        agents={'worker': {'tools': [declaration]}} if child else {},
+        version=SNAPSHOT_VERSION if snapshot else '1.0.0', providers=[], session={},
+        hooks=[{'module': 'hook-context-intelligence'}])
+    shared = {'allowed_write_paths': [str(extra)], 'denied_write_paths': ['shared-private']}
+    settings = ({'overrides': {'tool-filesystem': {'config': shared}}} if section == 'overrides'
+                else {section: {'tools': [{'module': 'tool-filesystem', 'config': shared}]}})
+    await compose_configured_bundle(None, bundle, SimpleNamespace(
+        workspace=workspace, settings=settings, app_bundles=[], providers=[]))
+    declaration = bundle.agents['worker']['tools'][0] if child else bundle.tools[0]
     tools, capabilities = {}, {'session.working_dir': str(workspace)}
 
     async def mount(kind, tool, name):
