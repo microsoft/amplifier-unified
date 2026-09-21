@@ -53,6 +53,7 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
         'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
+        'decorations': {'type': 'boolean'},
         'density': {'enum': ['comfortable', 'compact']}, 'accent': {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'},
     }},
 }}
@@ -70,7 +71,7 @@ EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
 COMMAND_CAPABILITIES = {
     'session.select': 'navigation.select', 'workspace.select': 'navigation.select',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
-    'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.delete': 'chats.manage', 'session.pin': 'chats.manage',
+    'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.pin': 'chats.manage',
     'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
 

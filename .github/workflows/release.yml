@@ -103,6 +103,11 @@ jobs:
           npm run test:settings-completeness-browser
           npm run test:settings-collections-browser
           npm run test:settings-mobile-browser
+      - name: Verify complete themes and saved appearance startup
+        working-directory: frontend
+        run: |
+          npm run test:themes-browser
+          npm run test:appearance-startup-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend

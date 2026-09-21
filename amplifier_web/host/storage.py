@@ -126,10 +126,18 @@ class SessionStore:
         from ..naming import adopt, initial_name
         previous = history.load_metadata()
         saved_metadata = _metadata({**previous, **copy.deepcopy(metadata or {})})
+        # Runtime checkpoints may carry an old naming policy. Exclude it from
+        # the incoming patch so Foundation merges the latest fields under its
+        # metadata lock, including changes from another host during this save.
+        for key in ('name_auto', 'name_auto_revision', 'name_policy_revision', 'naming_completed_inputs'):
+            saved_metadata.pop(key, None)
+        initial_policy = None
         if not previous.get('name'):
             title, source, legacy, view = initial_name(history.session_dir)
             if isinstance(title, str) and title.strip():
                 saved_metadata.update(name=title.strip()[:200], name_source=source)
+                if 'autoName' in view:
+                    initial_policy = bool(view['autoName'])
                 description = legacy.get('description') or view.get('description')
                 if isinstance(description, str) and description.strip():
                     saved_metadata.setdefault('description', description)
@@ -153,10 +161,24 @@ class SessionStore:
             if unchanged and not any(item.source == 'transcript' or item.code == 'changed_during_read' for item in current.diagnostics):
                 history.save_metadata(saved_metadata, merge_metadata=True)
                 adopt(history.session_dir)
+                self._initial_naming_policy(history.session_dir, initial_policy)
                 return
         history.save(rows, saved_metadata,
                      preserve_system=keep_system, merge_metadata=True)
         adopt(history.session_dir)
+        self._initial_naming_policy(history.session_dir, initial_policy)
+
+    @staticmethod
+    def _initial_naming_policy(directory, enabled):
+        if enabled is None:
+            return
+        from amplifier_foundation.session.metadata import SessionMetadataStore, metadata_lock
+        store = SessionMetadataStore(directory)
+        with metadata_lock(directory):
+            current = store.read()
+            if 'name_auto' not in current:
+                current.update(name_auto=enabled, name_auto_revision=current.get('name_revision', 0), name_policy_revision=1)
+                store.history._save_metadata_unlocked(current)
 
     def load(self, session_id):
         """Read native history first, without migrating or writing while browsing."""

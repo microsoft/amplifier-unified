@@ -1,7 +1,9 @@
 """Release identity and package checks, with only isolated local Git repositories."""
 import importlib.util
+import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import zipfile
@@ -75,6 +77,51 @@ def test_release_distribution_verification_checks_source_assets_and_references(r
     (repository/'amplifier_web/static/index.html').write_text('<script src="/assets/missing.js"></script>')
     distributions(repository)
     with pytest.raises(ValueError,match='missing asset'):release.verify_dist(repository,dist,'1.2.3')
+
+
+@pytest.mark.parametrize('kind', ['wheel', 'source'])
+def test_release_rejects_ci_checkout_files_before_checksumming(repository, kind):
+    dist = distributions(repository)
+    name = '.ci/recipes/README.md'
+    if kind == 'wheel':
+        with zipfile.ZipFile(next(dist.glob('*.whl')), 'a') as archive:
+            archive.writestr(name, 'CI dependency fixture')
+    else:
+        target = next(dist.glob('*.tar.gz'))
+        with tarfile.open(target) as archive:
+            members = [(entry, archive.extractfile(entry).read()) for entry in archive.getmembers()]
+        with tarfile.open(target, 'w:gz') as archive:
+            for entry, data in members:
+                archive.addfile(entry, io.BytesIO(data))
+            entry = tarfile.TarInfo('amplifier_unified-1.2.3/' + name)
+            data = b'CI dependency fixture'
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
+    with pytest.raises(ValueError, match='CI checkout'):
+        release.verify_dist(repository, dist, '1.2.3')
+    assert not (dist / 'SHA256SUMS').exists()
+
+
+def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
+    """Reproduce release checkout contamination with the actual build policy."""
+    uv = shutil.which('uv')
+    if not uv:
+        pytest.skip('uv is required for the real source-distribution build')
+    project = Path(__file__).parents[1]
+    for name in ('pyproject.toml', '.gitignore'):
+        shutil.copyfile(project / name, repository / name)
+    (repository / 'README.md').write_text('Package build fixture')
+    for dependency in ('loop-live', 'recipes'):
+        checkout = repository / '.ci' / dependency
+        checkout.mkdir(parents=True)
+        (checkout / 'README.md').write_text('Untracked CI dependency fixture')
+    dist = repository / 'built'
+    subprocess.run([uv, 'build', '--sdist', '--out-dir', str(dist)], cwd=repository,
+                   check=True, capture_output=True, text=True, timeout=120)
+    with tarfile.open(next(dist.glob('*.tar.gz'))) as archive:
+        names = archive.getnames()
+    assert any(name.endswith('/amplifier_web/__init__.py') for name in names)
+    assert not any('/.ci/' in name for name in names), names
 
 
 @pytest.mark.parametrize('published',[True,False])

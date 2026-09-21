@@ -5,6 +5,8 @@ Agents and extension authors can start with the
 See [behavior installation and app defaults](behavior.md) for discovery.
 See the [customization status and proposed next milestones](customization-roadmap.md)
 for the boundary between today's extension contracts and the remaining shell work.
+For complete light/dark palettes, backgrounds and the decoration preference,
+see [Themes](themes.md).
 
 The first milestone implemented the navigation slice of the shell plan, based on
 Unified `81f2182b6112e4162d982291151c489bdec6ef8a` (0.10.8). The workspace

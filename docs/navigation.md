@@ -1,9 +1,11 @@
 # Workspace and chat navigation
 
 The header keeps the chat title visible at every width. At 760 px and below,
-chat uses the full screen width; the navigation icon opens a modal drawer with a
-scrim, Close, Escape, and trapped keyboard focus. Selecting a chat or New chat
-returns to the conversation. Desktop pin/width preferences survive resizing.
+chat uses the full screen width; the navigation icon opens a full-screen modal
+with Close, Escape, and trapped keyboard focus. Navigation fills the viewport,
+including narrow folded-phone displays, and respects display safe areas.
+Selecting a chat or New chat returns to the conversation. Desktop pin/width
+preferences survive resizing.
 Workspace browsing stays in the drawer. Tap **…** for a details sheet with the
 full title, canonical session ID, path, and actions.
 

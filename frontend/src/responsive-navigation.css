@@ -21,8 +21,8 @@
  #amp-one.a-chat-shell .a-layout[data-pane-layout]{gap:0;position:relative}
  #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-conversation{min-width:0;width:100%;border-radius:0;border-left:0;border-right:0}
  #amp-one.a-chat-shell .a-layout[data-narrow="true"][data-canvas-open="true"]>.a-conversation{visibility:hidden;pointer-events:none}
- #amp-one.a-chat-shell .a-layout[data-pane-layout][data-narrow="true"] .a-nav-slot[data-docked]{position:fixed;inset:0 auto 0 0;z-index:90;width:min(360px,calc(100vw - 24px));height:100dvh;flex:none;transform:none}
- #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot .a-nav-rail{position:relative;width:100%;max-width:100%;height:100%;max-height:100%;border-radius:0;box-shadow:12px 0 40px #0003;transition:none;padding:12px 10px calc(12px + env(safe-area-inset-bottom));overflow:visible}
+ #amp-one.a-chat-shell .a-layout[data-pane-layout][data-narrow="true"] .a-nav-slot[data-docked]{position:fixed;inset:0;z-index:90;width:100%;height:100dvh;flex:none;transform:none}
+ #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot .a-nav-rail{position:relative;width:100%;max-width:100%;height:100%;max-height:100%;border:0;border-radius:0;box-shadow:none;transition:none;padding:calc(12px + env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));overflow:visible}
  #amp-one.a-chat-shell .a-nav-slot .a-nav-reveal{visibility:visible;opacity:1;pointer-events:auto}
  #amp-one.a-chat-shell .a-nav-slot .a-nav-head{flex-direction:row-reverse;justify-content:space-between;flex:none}
  #amp-one.a-chat-shell .a-nav-slot .a-nav-head .a-icon{width:44px;height:44px}

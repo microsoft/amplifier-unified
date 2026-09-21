@@ -116,6 +116,7 @@ summary {{ cursor: pointer; font-weight: 700; }} .download {{ font-size: 1.1rem;
 </style></head><body><main>
 <h1>Trust this host’s local certificate authority</h1>
 <p>Use this page to read the setup instructions for the configured HTTPS host. Certificate installation is never performed here.</p>
+<p>Already connected securely? <a href="/setup/terminal">Install the Terminal app on your computer</a> and connect to this service.</p>
 <h2>Before browser use</h2>
 {_BOOTSTRAP}
 {certificate_status}

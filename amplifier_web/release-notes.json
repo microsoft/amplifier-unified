@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.18",
+      "title": "Guided terminal setup, complete themes, and full-screen phone navigation",
+      "changes": [
+        "Guided terminal setup installs the client and saves a secure connection to your Unified host. Device access can be reviewed and revoked.",
+        "Themes can provide complete light and dark palettes, backgrounds, and optional decoration. Saved appearance loads before the conversation interface, preserving restored Settings and composer controls.",
+        "Chat details groups naming and diagnostics controls, and naming changes use the shared user and agent actions.",
+        "Workspace navigation fills the screen on phones and other narrow windows, including folded-phone widths, while preserving unsent drafts.",
+        "Release packages exclude temporary build dependencies and are checked for accidental inclusion before publication."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.17",
       "title": "Mobile navigation, retained Canvas, and project access",
       "changes": [

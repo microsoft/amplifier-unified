@@ -7,7 +7,7 @@ from email.parser import Parser
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tarfile
@@ -67,6 +67,7 @@ def verify_dist(root, dist, expected):
         raise ValueError("Release requires exactly one wheel and one source archive")
     with zipfile.ZipFile(wheels[0]) as archive:
         names = archive.namelist()
+        reject_ci_checkouts(names)
         metadata = [name for name in names if name.endswith(".dist-info/METADATA")]
         info = Parser().parsestr(archive.read(metadata[0]).decode()) if len(metadata) == 1 else {}
         if info.get("Name") != "amplifier-unified" or info.get("Version") != expected:
@@ -86,6 +87,7 @@ def verify_dist(root, dist, expected):
                 raise ValueError("Packaged frontend references a missing asset")
     with tarfile.open(sources[0]) as archive:
         names = archive.getnames()
+        reject_ci_checkouts(names)
         prefix = names[0].split("/", 1)[0] + "/"
         project = archive.extractfile(prefix + "pyproject.toml").read().decode()
         module = archive.extractfile(prefix + "amplifier_web/__init__.py").read().decode()
@@ -95,6 +97,13 @@ def verify_dist(root, dist, expected):
             raise ValueError('Source archive does not contain validated release notes')
     (dist / "SHA256SUMS").write_text("".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in [*wheels, *sources]))
+
+
+def reject_ci_checkouts(names):
+    """CI dependencies are test inputs, never application distribution files."""
+    for name in names:
+        if '.ci' in PurePosixPath(name.replace('\\', '/')).parts:
+            raise ValueError('Distribution contains a CI checkout: ' + name)
 
 
 def release_notes(root, expected):
