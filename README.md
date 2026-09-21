@@ -86,7 +86,7 @@ End users need no Node installation: compiled React assets ship in the Python pa
 
 ## Persistent work controls
 
-The [Work capability guide](docs/WORK-ALIGNMENT.md) connects the new task, question, operation, scheduling, computation, output, connector and usage controls with their setup and acceptance boundaries. [Delivery issue128](https://github.com/bkrabach/amplifier-unified/issues/128) tracks the integration and release.
+The [Work capability guide](docs/WORK-ALIGNMENT.md) connects the new task, question, operation, scheduling, computation, output, connector and usage controls with their setup and acceptance boundaries. [Delivery issue31](https://github.com/microsoft/amplifier-unified/issues/31) tracks the integration and release.
 
 ## Shell customization and agent guidance
 
@@ -103,8 +103,10 @@ cd frontend
 npm install
 npm run build
 cd ..
-uv sync --group dev
-uv run pytest
+python3 scripts/resolve_amplifier_latest.py --mode latest \
+  --project . --evidence /absolute/private/new-unified-resolution
+uv sync --locked --group dev
+uv run --no-sync pytest
 uv build
 ```
 
