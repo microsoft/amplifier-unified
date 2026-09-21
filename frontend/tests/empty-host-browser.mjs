@@ -55,6 +55,9 @@ try{
  await page.route('**/api/actions',async route=>{
   const action=route.request().method()==='POST'&&route.request().postDataJSON()?.action;
   if(action==='session.create'&&firstCreate){firstCreate=false;createSeen();await heldCreate;if(process.argv.includes('--lost-create')){await route.fetch();return route.fulfill({status:503,json:{error:'Creation acknowledgement lost'}})}if(process.argv.includes('--fail-create'))return route.fulfill({status:503,json:{error:'Synthetic creation failure'}})}
+  // Selection arrives before the queued draft save. Keep that interval visible
+  // so reload acceptance must observe durable state rather than win a race.
+  if(action==='view.update'&&route.request().postDataJSON()?.args?.patch?.draft==='Next draft while the first delivery is pending'&&process.argv.includes('--lost-create'))await new Promise(resolve=>setTimeout(resolve,500));
   if(action==='conversation.send')await held;
   await route.continue();
  });
@@ -79,6 +82,7 @@ try{
  if(process.argv.includes('--lost-create')){
   await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId);
   const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  await persistedDraft('Next draft while the first delivery is pending');
   await page.reload();await composer.waitFor();
   const check=page.getByRole('button',{name:'Check delivery',exact:true});
   if(await check.count())await check.click();
