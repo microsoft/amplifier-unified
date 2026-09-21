@@ -613,8 +613,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         await checkpoint()
         failures = getattr(loop, "load_failures", [])
         if failures:
-            write_private(directory / "module-load-failures.json", json.dumps(redact(failures), indent=2, default=str))
-            raise RuntimeError("Configured modules failed to mount: " + ", ".join(str(row.get("module_id", row.get("module", "unknown"))) for row in failures))
+            from ..module_failures import persist_failures
+            raise persist_failures(directory, failures)
+        from ..module_failures import clear_failures
+        clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
         # mount. Registry caches and reports are intentionally excluded because
         # they are rewritten by normal preparation.

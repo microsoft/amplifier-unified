@@ -143,10 +143,44 @@ async def worker(workspace, bundle, resumed, expected):
             instance.shared_handle.release()
 
 
+async def failed_worker(workspace, bundle, valid):
+    from amplifier_web import runtime_worker
+    from amplifier_web.module_failures import read_failures
+    (valid / "amplifier_module_hook_context_intelligence/__init__.py").write_text(
+        "__amplifier_module_type__ = 'hooks'\n")
+    events = []
+    runtime_worker.publish = events.append
+    instance = runtime_worker.Worker()
+    try:
+        await instance.start({"id": "cache-fixture", "workspace": str(workspace), "bundle": str(bundle)})
+        error = next(event for event in events if event["type"] == "runtime.error")
+        assert error["code"] == "module_load_failed", error
+        failures = error["moduleFailures"]
+        assert len(failures) == 1, failures
+        assert failures[0]["module"] == "hook-context-intelligence", failures
+        assert failures[0]["reason_code"] == "invalid_module_metadata", failures
+        assert "declared module type" in failures[0]["guidance"]
+        assert str(workspace.parent) not in json.dumps(error)
+        assert set(failures[0]) == {"module", "type", "reason_code", "guidance"}
+        home = Path(os.environ["AMPLIFIER_WEB_HOME"])
+        assert read_failures(home / "runtime-reports/cache-fixture") == failures
+        from amplifier_web.session_health import inspect_session
+        report = inspect_session(home, {"id": "cache-fixture", "workspace": str(workspace), "status": "error"})
+        assert report["moduleFailures"] == failures, report
+        assert not any(event["type"] in {"generation.started", "runtime.ready"} for event in events)
+    finally:
+        if instance.session:
+            await instance.session.cleanup()
+        if instance.shared_handle:
+            instance.shared_handle.release()
+
+
 mode = sys.argv[1]
 with tempfile.TemporaryDirectory() as tmp:
     shared, app, workspace, bundle, old, old_head, old_content, valid = asyncio.run(setup(Path(tmp).resolve()))
-    if mode == "probe":
+    if mode == "failed-worker":
+        asyncio.run(failed_worker(workspace, bundle, valid))
+    elif mode == "probe":
         sys.path.insert(0, str(REPO / "amplifier_web"))
         sys.argv = [str(REPO / "amplifier_web/update_probe.py"), str(workspace), str(bundle)]
         runpy.run_path(sys.argv[0], run_name="__main__")
