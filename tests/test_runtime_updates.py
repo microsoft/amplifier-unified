@@ -171,3 +171,154 @@ async def test_update_manager_installs_runtime_only_and_manifest_updates(environ
         assert any(r['kind'] == 'runtime environment' for r in environments.inventory(manager.home))
     finally:
         await app.close()
+
+
+@pytest.fixture
+def installed_transitive(environment):
+    manager, current, row, old, new, repo = environment
+    remote = manager.home.parent / 'modules'
+    remote.mkdir()
+    git(remote, 'init', '-b', 'main')
+    git(remote, 'config', 'user.name', 'Fixture')
+    git(remote, 'config', 'user.email', 'fixture@example.invalid')
+    child = remote / 'child'
+    child.mkdir()
+    build = '\n[build-system]\nrequires=["setuptools"]\nbuild-backend="setuptools.build_meta"\n[tool.setuptools]\npackages=[]\n'
+    (child / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-child"\nversion="0.1.0"\n' + build)
+    git(remote, 'add', '.')
+    git(remote, 'commit', '-m', 'child')
+    parent = manager.home.parent / 'parent'
+    parent.mkdir()
+    git(parent, 'init', '-b', 'main')
+    git(parent, 'config', 'user.name', 'Fixture')
+    git(parent, 'config', 'user.email', 'fixture@example.invalid')
+    (parent / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-parent"\nversion="0.1.0"\ndependencies=[' + json.dumps('amplifier-fixture-child @ git+' + remote.as_uri() + '@main#subdirectory=child') + ']\n' + build)
+    git(parent, 'add', '.')
+    git(parent, 'commit', '-m', 'parent')
+    uv = shutil.which('uv')
+    subprocess.run([uv, 'sync', '--project', str(current)], check=True, capture_output=True)
+    subprocess.run([uv, 'pip', 'install', '--python', str(current / '.venv/bin/python'), 'git+' + parent.as_uri() + '@main'], check=True, capture_output=True)
+    initial = git(remote, 'rev-parse', 'HEAD')
+    (child / 'marker.txt').write_text('new child')
+    git(remote, 'add', '.')
+    git(remote, 'commit', '-m', 'new child')
+    latest = git(remote, 'rev-parse', 'HEAD')
+    child_row = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    return manager, current, {**child_row, 'status': 'update', 'latest': latest}, initial, latest, remote
+
+
+async def test_actual_transitive_git_distribution_survives_staging_and_frozen_replay(installed_transitive):
+    manager, current, row, old, new, repo = installed_transitive
+    before = (current / 'uv.lock').read_bytes()
+    assert row['current'] == old and row['ref'] == 'main' and row['subdirectory'] == 'child'
+    assert row['provenance'] == 'installed Git distribution' and row['eligible']
+    assert 'amplifier-fixture-child' not in environments.locked_sources(current)
+    generation = 'd' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    project = await environments.stage(manager, generation, [row])
+    assert environments.locked_sources(project)['amplifier-fixture-child'].fragment == new
+    assert 'amplifier-fixture-parent' in environments.locked_sources(project)
+    assert '@main#subdirectory=child' in (project / 'pyproject.toml').read_text()
+    assert (current / 'uv.lock').read_bytes() == before
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    assert environments.project_path(manager.home, generation) == project
+    assert not any(row['kind'] == 'runtime environment' for row in environments.inventory(manager.home))
+    frozen = {name: (receipt / name).read_bytes() for name in ('runtime.toml', 'runtime.lock', 'runtime-base.toml')}
+    (repo / 'child/marker.txt').write_text('drift after qualification')
+    git(repo, 'commit', '-am', 'later')
+    await environments.stage(manager, generation, [row])
+    assert {name: (receipt / name).read_bytes() for name in frozen} == frozen
+
+
+async def test_installed_transitive_branch_drift_rejected(installed_transitive):
+    manager, current, row, old, new, repo = installed_transitive
+    generation = 'e' * 32
+    environments.receipt_directory(manager.home, generation).mkdir(parents=True)
+    (repo / 'child/marker.txt').write_text('moved since check')
+    git(repo, 'commit', '-am', 'drift')
+    with pytest.raises(ValueError, match='branch moved'):
+        await environments.stage(manager, generation, [row])
+    assert not active_release(manager.home)
+    assert not (environments.receipt_directory(manager.home, generation) / 'runtime.lock').exists()
+
+
+async def test_installed_provenance_changed_since_check_rejected(installed_transitive):
+    manager, current, row, old, new, repo = installed_transitive
+    direct = next((current / '.venv').glob('lib/python*/site-packages/amplifier_fixture_child-*.dist-info/direct_url.json'))
+    metadata = json.loads(direct.read_text())
+    metadata['vcs_info']['commit_id'] = new
+    direct.write_text(json.dumps(metadata))
+    generation = 'f' * 32
+    environments.receipt_directory(manager.home, generation).mkdir(parents=True)
+    with pytest.raises(ValueError, match='changed since checking'):
+        await environments.stage(manager, generation, [row])
+    assert not active_release(manager.home)
+
+
+def test_local_override_conceals_no_locked_git_source_and_is_never_rewritten(environment):
+    manager, current, row, old, new, repo = environment
+    metadata = current / '.venv/lib/python3.13/site-packages/amplifier_local-1.0.dist-info'
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text('Name: amplifier-local\nVersion: 1.0\n')
+    (metadata / 'direct_url.json').write_text(json.dumps({'url': 'file:///private/user-worktree', 'dir_info': {'editable': True}}))
+    local = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-local')
+    assert not local['eligible'] and local['override'] and local['status'] == 'local'
+    before = environments.manifest_path().read_bytes()
+    assert environments.augmented_manifest(before, [local]) == before
+    assert '/private/' not in json.dumps(local)
+
+
+async def test_freeze_captures_post_preparation_graph_and_preserves_future_branch_policy(installed_transitive):
+    from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
+    manager, current, row, old, new, repo = installed_transitive
+    generation = '1' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    # The installed environment is the synthetic result of module preparation.
+    before = installed_graph(current)
+    final = await freeze(manager, generation, current)
+    verify_recorded(final, receipt)
+    assert json.loads((receipt / 'runtime-installed.json').read_text()) == installed_graph(final)
+    assert before and final != current
+    (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    child = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    assert child['current'] == old and child['ref'] == 'main' and child['eligible']
+    assert not any(row['kind'] == 'runtime environment' for row in environments.inventory(manager.home))
+    frozen = (receipt / 'runtime.lock').read_bytes()
+    await environments.stage(manager, generation, [{**child, 'latest': new}])
+    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    with pytest.raises(ValueError, match='cannot be refreshed'):
+        await freeze(manager, generation, final)
+    # Frozen constraints are receipts, never the next update's branch policy.
+    next_generation = '4' * 32
+    environments.receipt_directory(manager.home, next_generation).mkdir(parents=True)
+    refreshed = await environments.stage(manager, next_generation, [{**child, 'latest': new}])
+    assert environments.locked_sources(refreshed)['amplifier-fixture-child'].fragment == new
+    assert (receipt / 'runtime.lock').read_bytes() == frozen
+    shutil.rmtree(final / '.venv')
+    cold = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    assert cold['ref'] == 'main' and cold['current'] == old and cold['eligible']
+
+
+async def test_editable_foundation_cache_has_real_source_evidence_and_freezes(installed_transitive):
+    from amplifier_web.runtime_qualification import freeze, installed_graph, verify_recorded
+    manager, current, row, old, new, repo = installed_transitive
+    (repo / '.amplifier_cache_meta.json').write_text(json.dumps({'git_url': repo.as_uri(), 'ref': 'main', 'commit': new}))
+    subprocess.run([shutil.which('uv'), 'pip', 'install', '--python', str(current / '.venv/bin/python'), '--editable', str(repo / 'child')], check=True, capture_output=True)
+    cached = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    assert cached['cacheManaged'] and cached['ref'] == 'main' and cached['current'] == new
+    assert cached['eligible'] and cached['subdirectory'] == 'child'
+    generation = '5' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    final = await freeze(manager, generation, current)
+    verify_recorded(final, receipt)
+    child = next(row for row in installed_graph(final) if row['name'] == 'amplifier-fixture-child')
+    assert child['directUrl']['dir_info']['editable'] and child['cacheSource']['revision'] == new
+    # Mutation of a cached source after qualification is detected without
+    # resetting the user's source or replacing its checked generation.
+    (repo / 'child/marker.txt').write_text('changed after qualification')
+    with pytest.raises(ValueError, match='changed after qualification'):
+        verify_recorded(final, receipt)
+    assert (repo / 'child/marker.txt').read_text() == 'changed after qualification'
