@@ -139,6 +139,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:toolbar-browser
+      - name: Verify embedded tool visibility acknowledgements
+        working-directory: frontend
+        run: npm run test:smart-tools-browser
       - name: Verify validated shell component controls
         working-directory: frontend
         run: npm run test:shell-components-browser
