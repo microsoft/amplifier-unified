@@ -1,5 +1,6 @@
 import {NavigationOpen,useModalFocus} from './responsive-navigation';
 import {CanvasWorkspace} from './canvas-workspace';
+import {McpAppVisibilityProvider} from './mcp-app-lifecycle';
 import {ShellModules,ShellSlot} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
@@ -97,7 +98,7 @@ export function AgentCanvas({state,act,dispatch=act}){
    </div>
   </div>
   <div className="a-canvas-body">
-   {!!state.canvasWorkspace?.views?.length&&<CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/>}
+   {!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!!canvas.open&&!draft.library}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
    {draft.library||(!state.canvasWorkspace?.views?.length&&canvas.placeholder)?<SavedArtifacts state={state} act={act}/>:!state.canvasWorkspace?.views?.length&&<div className="a-canvas-empty"><PanelRight/><h2>A little more room to work</h2><p>Preview a workspace file here, or ask your agent to display a document or interactive view.</p><button type="button" className="a-soft" data-action="view.update" onClick={()=>changeDraft({open:true})}><FolderOpen/>Open a file</button></div>}
   </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}

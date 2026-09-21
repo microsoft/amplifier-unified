@@ -69,6 +69,15 @@ checks flush pending view updates; a crash preserves completed receipts and mark
 unfinished work interrupted rather than replaying it.
 Routine tool interaction does not toggle the host's rendering indicator; the
 tool owns its progress controls, while errors remain visible in the host.
+MCP App frames stay mounted while the canvas or Library hides them, preserving
+local input. The host sends the optional boolean host-context extension
+`com.microsoft.amplifier/visibility`, combining canvas and document visibility,
+so supporting tools can pause automatic reads and resume one refresh. This is a
+namespaced host extension, not a standard MCP field. Explicitly read-only,
+non-destructive tool calls share identical in-flight reads and use a bounded
+per-view lane (two running, four queued). Hidden or overloaded reads fail before
+submission. Unknown tools and mutations retain distinct request IDs and do not
+enter that lane; accepted work is never replayed or cancelled by hiding a frame.
 Small operation receipts persist in SQLite. Full results are retained for at most
 30 days, 200 completed operations and 32 MB (whichever limit comes first), in
 pageable artifact files. Expiry keeps the execution receipt and never replays work.

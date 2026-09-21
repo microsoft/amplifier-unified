@@ -125,6 +125,7 @@ class SelectedProvider:
     def __init__(self, provider, selection, execution_adapter=None):
         self.original, self.selection = provider, selection
         self.execution_adapter = execution_adapter
+        self._selected_requests = []
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
@@ -134,15 +135,31 @@ class SelectedProvider:
             # raise AttributeError, while streaming providers receive the same
             # root-only overrides as complete().
             def selected_stream(request, **kwargs):
-                request, kwargs = self._selected_request(request, kwargs)
-                return method(request, **kwargs)
+                selected, kwargs = self._selected_request(request, kwargs, consume=name == "stream")
+                try:
+                    result = method(selected, **kwargs)
+                except BaseException:
+                    self._forget_request(request)
+                    raise
+                if name == "request_budget" and inspect.isawaitable(result):
+                    async def budget():
+                        try:
+                            return await result
+                        except BaseException:
+                            self._forget_request(request)
+                            raise
+                    return budget()
+                return result
             return selected_stream
         return method
     def get_info(self):
         info = self.original.get_info()
         return info.model_copy(update={"defaults": {**info.defaults, **{key:self.selection[key]
             for key in ("model", "max_output_tokens") if key in self.selection}}})
-    def _selected_request(self, request, kwargs):
+    def _forget_request(self, request):
+        self._selected_requests = [row for row in self._selected_requests if row[0] is not request]
+
+    def _selected_request(self, request, kwargs, *, consume=False):
         updates = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
         # Community providers may read the model keyword rather than the
         # portable request field. Supply both without changing worker defaults.
@@ -151,10 +168,24 @@ class SelectedProvider:
         if self.selection.get("effort") is not None:
             updates["reasoning_effort"] = self.selection["effort"]
             kwargs["reasoning_effort"] = self.selection["effort"]
-        return request.model_copy(update=updates), kwargs
+        # Budget and dispatch must share one selected request so the host's
+        # surface adapter can reuse its prepared observation. Retain a bounded
+        # snapshot to reject in-place input/selection changes, then consume the
+        # identity on dispatch; retries and later calls prepare afresh.
+        selected = next((value for source, snapshot, choices, value in self._selected_requests
+                         if source is request and choices == updates and snapshot == request), None)
+        if selected is None:
+            selected = request.model_copy(update=updates)
+            self._forget_request(request)
+            if not consume:
+                self._selected_requests = (self._selected_requests + [
+                    (request, copy.deepcopy(request), dict(updates), selected)])[-4:]
+        if consume:
+            self._forget_request(request)
+        return selected, kwargs
 
     async def complete(self, request, **kwargs):
-        request, kwargs = self._selected_request(request, kwargs)
+        request, kwargs = self._selected_request(request, kwargs, consume=True)
         return await self._execution_provider().complete(request, **kwargs)
 
 

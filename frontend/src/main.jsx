@@ -28,6 +28,7 @@ import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,Square,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
 import {createPendingView} from './pending-view';
+import {createViewReporter} from './view-reporter';
 import {createConversationNavigation} from './conversation-navigation';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
@@ -157,7 +158,9 @@ function App(){
  const shell=useShell(state,dispatch,clientId);
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
- const publishView=useCallback(()=>{if(latest.current)request('/api/view',{method:'POST',body:{...visibleView(root.current,clientId),voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'}}).catch(()=>{});},[]);
+ const viewReporter=useRef(null);
+ if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));
+ const publishView=useCallback(()=>{if(latest.current)viewReporter.current({...visibleView(root.current,clientId),voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);
  useEffect(()=>{
   let alive=true,source;const controller=new AbortController();setError('');
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
