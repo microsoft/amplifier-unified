@@ -245,6 +245,7 @@ def _expand_module_configuration(node, in_provider=False):
 def _apply_host_policy(bundle, config):
     """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
+    workspace = str(Path(config.workspace).resolve())
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -275,7 +276,13 @@ def _apply_host_policy(bundle, config):
         values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
         if identity != "tool-filesystem":
             values = merge(values, overrides.get(identity, {}).get("config", {}))
-        policies[identity] = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        # Match the CLI's _ensure_cwd_in_write_paths policy. Shared allowed
+        # directories extend project access; they must not replace it. Use an
+        # absolute session workspace, never the server process's directory.
+        if "allowed_write_paths" in policy:
+            policy["allowed_write_paths"] = list(dict.fromkeys([workspace, *(str(path) for path in paths(policy["allowed_write_paths"]))]))
+        policies[identity] = policy
 
     def restrict(current, policy):
         policy = copy.deepcopy(policy)
@@ -308,6 +315,8 @@ def _apply_host_policy(bundle, config):
                 specific = overrides.get(identity, {}).get("config", {})
                 policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
                 row["config"] = merge(current, policy)
+                row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
+                    *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.

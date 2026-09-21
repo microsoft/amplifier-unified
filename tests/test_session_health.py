@@ -9,11 +9,18 @@ from amplifier_web.execution_events import ExecutionEvents
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.runtime import normalize_event
 from amplifier_web.service import AppService, AppError
-from amplifier_web.session_health import inspect_session, exception_details
+from amplifier_web.session_health import inspect_session, exception_details, failure_details
 from amplifier_web.session_store import fork_session
 
 
 BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded data URL, but got an invalid base64-encoded value."
+
+
+def test_typed_context_error_is_recognized_without_sdk_message_wording():
+    detail = failure_details('OpenAI request exceeds the local input allowance before dispatch.', 'ContextLengthError')
+    assert detail['category'] == 'context_limit'
+    assert detail['errorType'] == 'ContextLengthError'
+    assert 'cause is not available' not in detail['summary']
 
 
 def rows():
