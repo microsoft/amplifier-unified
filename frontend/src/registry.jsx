@@ -16,7 +16,7 @@ export function RegistrySettings({state,act}){
  const [shownModules,moduleFilter]=useListFilter(state,act,'registry-modules',modules,row=>[row.id,row.module,row.section,row.source],'Filter registered modules');
  const [shownSources,sourceFilter]=useListFilter(state,act,'registry-sources',sources,row=>[row.name,row.kind,row.source],'Filter source overrides');
  let config={},error='';try{config=providerConfig(configText)}catch(caught){error=caught.message}
- const sourceResult=registry.sourceValidation?.name===draft.sourceName.trim()&&registry.sourceValidation?.source===draft.sourceUri.trim()&&registry.sourceValidation?.scope===draft.scope&&registry.sourceValidation?.section===draft.sourceSection?registry.sourceValidation:null;
+ const sourceResult=registry.sourceValidation?.kind===draft.sourceKind&&registry.sourceValidation?.name===draft.sourceName.trim()&&registry.sourceValidation?.submittedSource===draft.sourceUri.trim()&&registry.sourceValidation?.scope===draft.scope&&registry.sourceValidation?.section===draft.sourceSection?registry.sourceValidation:null;
  const sourceArgs={kind:draft.sourceKind,name:draft.sourceName.trim(),source:draft.sourceUri.trim(),scope:draft.scope,...(draft.sourceKind==='module'?{section:draft.sourceSection}:{})};
  const sourceBusy=['sources.validate','sources.save'].some(action=>['queued','working'].includes(state.actionStatus?.[action]?.phase));
  const selectModule=row=>{const text=JSON.stringify(row.config||{},null,2);setConfigText(text);edit({section:row.section,id:row.id,module:row.module,source:row.source||'',config:text,enabled:row.enabled!==false})};

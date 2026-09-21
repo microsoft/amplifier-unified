@@ -118,6 +118,7 @@ async def test_candidate_validation_never_saves_failure_or_trusts_stale_success(
     marker.unlink()
     rejected=await mgr.perform('sources.save',{**args,'validate':True})
     assert not rejected['sourceValidation']['passed'] and not rejected['sourceValidation']['saved']
+    assert {key:rejected['sourceValidation'][key] for key in ('kind','submittedSource','source')}=={'kind':'module','submittedSource':str(candidate),'source':str(candidate)}
     assert settings_path.read_bytes()==before and 'takesEffect' not in rejected
     marker.touch()
     saved=await mgr.perform('sources.save',{**args,'validate':True})
@@ -125,6 +126,42 @@ async def test_candidate_validation_never_saves_failure_or_trusts_stale_success(
     assert mgr.store.read(workspace,'project')['sources']['modules']['tool-fixture']==str(candidate)
     with pytest.raises(ValueError,match='module type'):
         await mgr.perform('sources.save',{**args,'section':'unknown','validate':True})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source_form',['relative','file'])
+async def test_candidate_receipt_binds_submitted_local_draft_and_resolved_source(manager,tmp_path,source_form):
+    import sys
+    mgr,workspace=manager
+    candidate=workspace/'candidate';candidate.mkdir()
+    submitted='./candidate' if source_form=='relative' else candidate.as_uri()
+    selected=tmp_path/'selected.json'
+    helper=tmp_path/'validator.py'
+    # Validator output cannot replace the host's candidate identity fields.
+    helper.write_text('import sys,json\nfrom pathlib import Path\na=json.loads(sys.stdin.readline())\nPath('+repr(str(selected))+').write_text(json.dumps(a))\nprint(json.dumps({"type":"module.validation","id":a["id"],"passed":True,"checks":[],"kind":"bundle","submittedSource":"https://user:fixture-private-value@example.org/source","source":"other","scope":"global","section":"hooks","name":"other"}))\n')
+    mgr.validation_command=[sys.executable,str(helper)]
+    args={'workspace':str(workspace),'kind':'module','name':'tool-fixture','section':'tools','source':'  '+submitted+'  ','scope':'project'}
+    for action in ('sources.validate','sources.save'):
+        result=await mgr.perform(action,{**args,'validate':True})
+        receipt=result['sourceValidation']
+        assert {key:receipt[key] for key in ('kind','name','submittedSource','source','scope','section','saved')}=={
+            'kind':'module','name':'tool-fixture','submittedSource':submitted,'source':str(candidate.resolve()),'scope':'project','section':'tools','saved':action=='sources.save'}
+        assert receipt['passed'] is True
+        assert 'fixture-private-value' not in json.dumps(result)
+        assert json.loads(selected.read_text())['source']==str(candidate.resolve())
+        saved=mgr.store.read(workspace,'project').get('sources',{}).get('modules',{})
+        assert saved==({'tool-fixture':str(candidate.resolve())} if action=='sources.save' else {})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source',['https://user:fixture-private-value@example.org/source','git+https://example.org/source?token=fixture-private-value'])
+async def test_candidate_receipt_rejects_private_remote_source_before_validation(manager,monkeypatch,source):
+    mgr,workspace=manager
+    async def unexpected(*args):
+        pytest.fail('Private URL must be rejected before invoking the validator.')
+    monkeypatch.setattr(mgr,'_validate_row',unexpected)
+    with pytest.raises(ValueError) as error:
+        await mgr.perform('sources.validate',{'workspace':str(workspace),'kind':'module','name':'tool-fixture','section':'tools','source':source,'scope':'project'})
+    assert 'fixture-private-value' not in str(error.value)
+    assert not mgr.store.read(workspace,'project').get('sources')
 
 @pytest.mark.asyncio
 async def test_validation_matches_provider_source_policy(manager,tmp_path):
