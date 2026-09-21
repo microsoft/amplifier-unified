@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,8 @@ class ReconciliationService:
         self.lock = asyncio.Lock()
         self.closed = False
         self.publications = 0
+        self.queue_clients = {}
+        self.clients = SimpleNamespace(records={})
 
     def _publish(self):
         self.publications += 1
