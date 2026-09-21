@@ -21,18 +21,18 @@ try{
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const more=page.getByRole('button',{name:'More app options',exact:true}),menu=page.getByRole('group',{name:'More app options'});
+ const more=page.getByRole('button',{name:'More app options',exact:true}),menu=page.locator('#app-toolbar-menu');
  const toggle=page.locator('.a-top .a-canvas-toggle'),canvas=page.getByRole('complementary',{name:'Agent canvas'});
  await expect(page.getByRole('button',{name:'Open workspace canvas'})).toHaveCount(0);
  await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('');await expect(toggle).toHaveAttribute('aria-pressed','false');
  const initialBox=await toggle.boundingBox();await toggle.click();await expect(canvas).toBeVisible();
  await expect(toggle).toHaveAccessibleName('Close canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
- await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await expect(canvas).toHaveCount(0);await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await expect(page.locator('#workspace-canvas')).toBeHidden();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await action('session.create');const session=(await state()).selectedSessionId;
  await action('view.update',{patch:{draft:'Keep this unsent message',navPinned:true}});
  await action('canvas.show',{kind:'markdown',title:'Workspace notes',content:'# Workspace notes\n\nA saved artifact beside the conversation.'});
  const artifact=(await state()).canvas.id;
- await expect(toggle).toHaveAttribute('aria-pressed','true');await toggle.click();await expect(canvas).toHaveCount(0);await toggle.click();await expect(canvas).toBeVisible();
+ await expect(toggle).toHaveAttribute('aria-pressed','true');await toggle.click();await expect(page.locator('#workspace-canvas')).toBeHidden();await toggle.click();await expect(canvas).toBeVisible();
  assert.equal((await state()).canvas.id,artifact);assert.equal((await state()).selectedSessionId,session);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent message');
  await action('canvas.close');await expect(toggle).toHaveAttribute('aria-pressed','false');await action('canvas.reopen');await expect(toggle).toHaveAttribute('aria-pressed','true');
  await page.screenshot({path:out+'/canvas-open.png'});
@@ -57,8 +57,8 @@ try{
   }
  }
  const touch=await browser.newPage({viewport:{width:320,height:844},hasTouch:true,isMobile:true,extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});await touch.goto(url);await touch.locator('.a-canvas-toggle').waitFor();
- assert.ok(await touch.locator('.a-top-end>button,.a-toolbar-more>button').evaluateAll(buttons=>buttons.every(button=>{const r=button.getBoundingClientRect();return r.width>=44&&r.height>=44})));assert.ok(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- await touch.getByRole('button',{name:'More app options'}).tap();await expect(touch.getByRole('group',{name:'More app options'})).toBeVisible();
+ assert.ok(await touch.locator('.a-top-end>button,.a-toolbar-more>button').evaluateAll(buttons=>buttons.filter(button=>button.getClientRects().length).every(button=>{const r=button.getBoundingClientRect();return r.width>=44&&r.height>=44})));assert.ok(await touch.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await touch.getByRole('button',{name:'More app options'}).tap();await expect(touch.getByRole('dialog',{name:'More app options'})).toBeVisible();
  assert.equal(calls.some(call=>['conversation.send','runtime.start','feedback.submit'].includes(call.action)),false);assert.deepEqual((await (await page.request.get(url+'/fixture')).json()).sent,[]);assert.deepEqual(errors,[]);
  console.log('Toolbar passed: stable toggle geometry, saved artifact/draft preservation, shared actions, More destinations, keyboard/focus/outside dismissal, both canvas sides, light/dark 320–1280px, touch targets; no model or feedback submissions.');
 }finally{await browser?.close();fixture.kill()}

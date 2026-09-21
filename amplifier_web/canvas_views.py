@@ -66,7 +66,7 @@ class CanvasViews:
         from .service import AppError
 
         def check(client, view_ids):
-            if not client or not client.get('canvas', {}).get('open'):
+            if not client or not (client.get('canvas', {}).get('open') or client.get('canvasViews', {}).get('retained')):
                 return
             views = client.get('canvasViews', {})
             for view_id in view_ids:
@@ -129,7 +129,9 @@ class CanvasViews:
             fail('Unknown canvas view.')
         row = self.artifact(identity)
         preference = self.preference(view_id, row)
-        binding = [identity, self.revision(row), bool(current.get('open'))]
+        previous_binding = record.get(view_id + 'Binding')
+        visible_binding = previous_binding[2] if record.get('retained') and previous_binding else bool(current.get('open'))
+        binding = [identity, self.revision(row), visible_binding]
         if record.get(view_id + 'Binding') != binding:
             record[view_id + 'Binding'] = binding
             preference['generation'] += 1

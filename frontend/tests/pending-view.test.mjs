@@ -60,3 +60,15 @@ test('matching server values do not acknowledge a still-queued later request',()
  assert.equal(pending.apply({view:{panel:null}}).view.panel,'settings');
  pending.settle(later);assert.equal(pending.apply({view:{panel:null}}).view.panel,null);
 });
+
+test('Canvas visibility stays immediate, ordered, and bound to its chat and artifact',()=>{
+ const pending=createPendingView(),state={selectedSessionId:'a',client:{hostInstanceId:'host'},canvas:{id:'artifact',open:false},view:{canvasFocused:false}};
+ const open=pending.addCanvas(state,true),close=pending.addCanvas(state,false),reopen=pending.addCanvas(state,true);
+ assert.equal(pending.apply(state).canvas.open,true);
+ pending.settle(open);pending.settle(close);
+ assert.equal(pending.apply({...state,canvas:{...state.canvas,open:false}}).canvas.open,true);
+ assert.equal(pending.apply({...state,selectedSessionId:'b'}).canvas.open,false);
+ assert.equal(pending.apply({...state,canvas:{id:'new',open:false}}).canvas.open,false);
+ assert.equal(pending.apply({...state,client:{hostInstanceId:'restarted'}}).canvas.open,false);
+ pending.settle(reopen);assert.equal(pending.apply(state).canvas.open,false);
+});

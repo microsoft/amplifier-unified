@@ -1,5 +1,5 @@
-import React,{useEffect,useRef} from 'react';
-import {SlidersHorizontal,Palette,AudioLines,Bell,Network,Layers,Plug,Download,Activity,Archive,Settings,ArrowRight,MessageSquare} from 'lucide-react';
+import React,{useEffect,useRef,useState} from 'react';
+import {SlidersHorizontal,Palette,AudioLines,Bell,Network,Layers,Plug,Download,Activity,Archive,Settings,ArrowRight,MessageSquare,ArrowLeft,X} from 'lucide-react';
 import {settingsSections,settingsLocation,settingsPatch,settingsUnread} from './settings-navigation';
 import {SettingsPageContext} from './settings-ui';
 import {AttentionBadge,AttentionReview} from './attention';
@@ -14,18 +14,23 @@ import {RuntimeSettings} from './runtime-settings';
 import {ConversationName} from './conversation-controls';
 import {ConversationExport} from './conversation-export.jsx';
 import {VoiceSettings,InstallAppSettings} from './settings-personal';
+import {SettingsLayoutContext,useSettingsCompact,useSettingsHistory,useSettingsViewport} from './settings-layout';
+import {settingsTrail,settingsBaseNavigation,mergeSettingsNavigation} from './settings-mobile';
 
 const icons={overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
-export function SettingsExperience({state,session,act,open,appearance}){
- const {page,section}=settingsLocation(state.view),heading=useRef(null),body=useRef(null);
- const navigate=page=>act('view.update',{patch:settingsPatch(page)});
- useEffect(()=>{heading.current?.focus({preventScroll:true});if(body.current)body.current.scrollTop=0;},[page]);
+export function SettingsExperience({state,session,act,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
+ const {page,section}=settingsLocation(state.view),heading=useRef(null),body=useRef(null),root=useRef(null),[footer,setFooter]=useState(null);
+ const compact=useSettingsCompact(root),trail=settingsTrail(state.view,state),route=trail.at(-1),index=compact&&route.key==='index',detail=compact&&trail.length>2;
+ useSettingsViewport(root,compact);
+ const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef});
+ const navigate=page=>{navigation.rememberScroll();act('view.update',{patch:compact?mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page)):settingsPatch(page)});};
+ useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
  const props={state,session,act};
  // Keep visited editors mounted while the dialog is open. Private fields stay
  // in component memory, never in shared view state, when changing sections.
  const editors=useRef(new Map());
  const family=page=>['app-bundles','add-bundles','loaded-modules','share-bundle','registries'].includes(page)?'bundles':['notifications','diagnostics','history','permissions','automation','repair','reset'].includes(page)?'maintenance':page;
- const active=family(page);editors.current.set(active,page);
+ const active=family(page);if(!index)editors.current.set(active,page);
  function renderPage(page){
  let content;
  if(page==='overview')content=<SettingsOverview {...props} navigate={navigate}/>;
@@ -44,15 +49,21 @@ export function SettingsExperience({state,session,act,open,appearance}){
  else content=<MaintenanceSettings {...props}/>;
  return content;
  }
- return <div className="a-settings-experience" data-part="settings-experience" data-settings-page={page}>
+ return <div ref={root} className="a-settings-experience" data-part="settings-experience" data-settings-page={page} data-compact={compact} data-settings-index={index} data-settings-detail={detail} data-settings-route={route.key}>
+  <header className="a-settings-mobile-head">
+   {index?<span/>:<button type="button" className="a-link" data-action="view.update" aria-label={'Back to '+(trail.at(-2)?.title||'Settings')} onClick={navigation.back}><ArrowLeft/><span>{trail.length>2?'Back':'Settings'}</span></button>}
+   <h3 ref={compact?heading:undefined} tabIndex={-1}>{route.title}</h3>
+   <button type="button" className="a-icon" data-action="view.update" aria-label="Close settings" onClick={navigation.dismiss}><X/></button>
+  </header>
   <nav className="a-settings-sidebar" aria-label="Settings sections">{settingsSections.map((item,index)=>{const Icon=icons[item.id];return <React.Fragment key={item.id}>{item.group!==settingsSections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0])}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
-  <div ref={body} className="a-settings-content" role="region" aria-label="Settings content">
-   <header className="a-settings-page-heading"><div><span className="a-settings-scope">{section.scope}</span><h3 ref={heading} tabIndex={-1}>{section.title}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
-   {section.pages.length>1&&<nav className="a-settings-subnav" aria-label={section.title+' sections'}>{section.pages.map(([id,title])=><button type="button" key={id} data-action="view.update" data-settings-destination={id} aria-current={id===page?'page':undefined} onClick={()=>navigate(id)}>{title}<AttentionBadge state={state} page={id}/></button>)}</nav>}
+  <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
+   <header className="a-settings-page-heading"><div><span className="a-settings-scope">{section.scope}</span><h3 ref={!compact?heading:undefined} tabIndex={-1}>{section.title}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
+   {section.pages.length>1&&(!compact||!detail)&&(compact&&section.pages.length>2?<label className="a-settings-section-picker">Section<select aria-label={section.title+' section'} value={page} data-action="view.update" onChange={event=>navigate(event.target.value)}>{section.pages.map(([id,title])=><option key={id} value={id}>{title}{settingsUnread(state,{pages:[[id,title]]})?' · Needs attention':''}</option>)}</select></label>:<nav className="a-settings-subnav" aria-label={section.title+' sections'}>{section.pages.map(([id,title])=><button type="button" key={id} data-action="view.update" data-settings-destination={id} aria-current={id===page?'page':undefined} onClick={()=>navigate(id)}>{title}<AttentionBadge state={state} page={id}/></button>)}</nav>)}
    <AttentionReview state={state} act={act} page={page}/>
    {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}
-   <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsPageContext.Provider>)}</>
+   <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
   </div>
+  <div ref={setFooter} className="a-settings-mobile-actions"/>
  </div>;
 }
 function SettingsOverview({state,session,navigate}){

@@ -1,19 +1,40 @@
 # Workspace and chat navigation
 
-**Canvas** lives at the far right of the top toolbar. Its label and position stay
-fixed while its pressed state reflects whether the panel is open. On narrow
-screens it becomes an accessible icon button; the icon follows the selected
-canvas side. Closing the panel and using the toolbar both use `canvas.close`;
-opening uses `canvas.reopen`, retaining the existing artifact and dirty-edit
-protections. Artifact links continue to open the selected item directly.
+The header keeps the chat title visible at every width. At 760 px and below,
+chat uses the full screen width; the navigation icon opens a modal drawer with a
+scrim, Close, Escape, and trapped keyboard focus. Selecting a chat or New chat
+returns to the conversation. Desktop pin/width preferences survive resizing.
+Workspace browsing stays in the drawer. Tap **…** for a details sheet with the
+full title, canonical session ID, path, and actions.
 
-The toolbar's **More app options** disclosure holds Customize appearance, What
-the agent sees, and Send feedback. Keyboard users can tab through its controls;
-Escape restores focus to the trigger, and outside clicks or focus dismiss it.
-Feedback attention appears on the More trigger as well as the feedback entry.
-Agents can show or hide it through `view.update {patch:{toolbarMenuOpen:true}}`
-(or false), or open each destination directly through the existing `panel` field.
-Opening a dialog closes the disclosure. This is per-client presentation state.
+**Canvas** is an icon beside More in the top toolbar. On phones, it fills the
+content area and offers **Back to chat**; the chat's scroll and draft stay intact.
+On larger screens it docks when the chat and panel have usable widths.
+Visibility paints immediately through `canvas.visibility {open,sessionId,canvasId}`;
+it has its own ordered queue and no busy spinner. The host persists only client
+presentation, using cached catalog projections when available. It does not scan
+workspaces or rewrite chat history and artifact catalogs. Cold source recovery
+can still load inside the already-open panel.
+
+Hiding retains the current viewer slots, including local edits and iframe state.
+It does not initialize newly selected hidden artifacts. Dirty editors still block
+replacement, tab closure, or navigation that would discard their input, including
+while hidden. Legacy `canvas.close`/`canvas.reopen` retain their previous lifecycle
+semantics for older clients. Agents use the same visibility action, optionally
+with an explicit attached `clientId`; session and artifact bindings reject stale
+targets. Hidden content is excluded from visible-control observations.
+
+Below 1025 px, **More app options** includes chat details/export, Activity, and
+Settings, alongside appearance, agent view, and feedback. On phones it is a modal
+sheet. Escape, Close, and outside clicks dismiss it and return focus. Attention
+appears on More and the relevant destination. Agents can control the disclosure
+with `view.update {patch:{toolbarMenuOpen:true}}`, or open a destination via `panel`.
+
+Default UI typography uses 14 px normal text, 12–13 px supporting labels, and
+16 px larger text. Mobile editable fields are at least 16 px. The tokens
+`--a-text-xs`, `--a-text-sm`, `--a-text-base`, and `--a-text-lg` let skins adjust this
+scale without zooming layouts or icons. Only exact unmodified historical default
+skins upgrade automatically; edited or renamed skins retain their saved CSS.
 
 The default sidebar keeps one list in focus. **All chats** shows pinned and recent
 conversations across available workspaces. **Workspaces** opens a recent-workspace
@@ -23,7 +44,7 @@ Browsing folders, searching, filtering, and opening details never mount a runtim
 send a message, change recency, or acknowledge an unread response.
 
 Rows reserve their action and activity space. Names and parent labels truncate
-within a fixed 54 px row (46 px with the existing compact shell density). Hovering
+within a fixed 60 px row (52 px with the existing compact shell density). Hovering
 for 550 ms opens details without changing the row geometry. The full title,
 selectable/copyable path, session ID, and pin/rename/remove actions are also
 available through the keyboard- and touch-accessible **…** button. Escape and

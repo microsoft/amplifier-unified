@@ -171,6 +171,14 @@ def apply_provider_environment(plan):
 
 def _apply_settings(bundle, config):
     settings = config.settings
+    # Generic list merging replaces config arrays. Keep the bundle's explicit
+    # filesystem denials across that merge so host policy can enforce them.
+    filesystem_denials = {
+        row.get("id") or row.get("instance_id") or row["module"]:
+            copy.deepcopy(row["config"]["denied_write_paths"])
+        for row in bundle.tools
+        if row.get("module") == "tool-filesystem" and "denied_write_paths" in row.get("config", {})
+    }
     bundle.providers = merge(bundle.providers, config.providers)
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
@@ -197,6 +205,14 @@ def _apply_settings(bundle, config):
             if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
+            identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == "tools" and row.get("module") == "tool-filesystem" and identity in filesystem_denials:
+                original = filesystem_denials[identity]
+                effective = row.get("config", {}).get("denied_write_paths", [])
+                if any(not isinstance(paths, list) or any(not isinstance(path, str) for path in paths)
+                       for paths in (original, effective)):
+                    raise ValueError('File-access paths must be lists of strings.')
+                row.setdefault("config", {})["denied_write_paths"] = list(dict.fromkeys(original + effective))
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
                 row["instance_id"] = row["id"]
             if kind == "providers":
@@ -245,6 +261,7 @@ def _expand_module_configuration(node, in_provider=False):
 def _apply_host_policy(bundle, config):
     """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
+    workspace = str(Path(config.workspace).resolve())
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -275,7 +292,13 @@ def _apply_host_policy(bundle, config):
         values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
         if identity != "tool-filesystem":
             values = merge(values, overrides.get(identity, {}).get("config", {}))
-        policies[identity] = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        # Match the CLI's _ensure_cwd_in_write_paths policy. Shared allowed
+        # directories extend project access; they must not replace it. Use an
+        # absolute session workspace, never the server process's directory.
+        if "allowed_write_paths" in policy:
+            policy["allowed_write_paths"] = list(dict.fromkeys([workspace, *(str(path) for path in paths(policy["allowed_write_paths"]))]))
+        policies[identity] = policy
 
     def restrict(current, policy):
         policy = copy.deepcopy(policy)
@@ -308,6 +331,13 @@ def _apply_host_policy(bundle, config):
                 specific = overrides.get(identity, {}).get("config", {})
                 policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
                 row["config"] = merge(current, policy)
+                row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
+                    *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
+                if "denied_write_paths" in row["config"]:
+                    # Shared settings may add restrictions, but must not erase
+                    # the declaration's explicitly denied directories.
+                    row["config"]["denied_write_paths"] = list(dict.fromkeys(str(path) for path in
+                        paths(current.get("denied_write_paths", [])) + paths(policy.get("denied_write_paths", []))))
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.

@@ -28,11 +28,11 @@ export function completionToRead(state){
 }
 export function useReadCompletion(state,act,pane,ready=true){
  const item=completionToRead(state);
- const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused;
+ const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused||!!state?.view?.navExpanded&&matchMedia('(max-width:760px)').matches||!!state?.canvas?.open&&matchMedia('(max-width:760px)').matches;
  React.useEffect(()=>{
   if(!ready||!item||blocked||!pane.current)return;
   const element=pane.current;let timer;
-  const visible=()=>!document.hidden&&document.hasFocus()&&element.clientHeight>0&&element.scrollHeight-element.scrollTop-element.clientHeight<40;
+  const visible=()=>!document.hidden&&document.hasFocus()&&element.clientHeight>0&&getComputedStyle(element).visibility!=='hidden'&&!element.closest('[inert]')&&element.scrollHeight-element.scrollTop-element.clientHeight<40;
   const check=()=>{clearTimeout(timer);if(visible())timer=setTimeout(()=>{if(visible())readItems(act,[item])},900)};
   element.addEventListener('scroll',check,{passive:true});document.addEventListener('visibilitychange',check);window.addEventListener('focus',check);window.addEventListener('blur',check);
   const resize=new ResizeObserver(check);resize.observe(element);for(const child of element.children)resize.observe(child);

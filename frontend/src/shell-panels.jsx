@@ -1,9 +1,10 @@
+import {NavigationOpen,useModalFocus} from './responsive-navigation';
 import {CanvasWorkspace} from './canvas-workspace';
 import {ShellModules} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,SlidersHorizontal,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -12,29 +13,33 @@ import {PathField} from './settings-ui';
 
 const patch=(act,value)=>act('view.update',{patch:value});
 export function reopenCanvas(state,act){
- return act('canvas.reopen',{});
+ return act('canvas.visibility',{open:true});
 }
 export function CanvasToggle({state,act,layout}){
  const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight;
- return <button type="button" className="a-icon a-canvas-toggle" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><Icon/></button>;
+ return <button type="button" className="a-icon a-canvas-toggle" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:!state.canvas?.open})}><Icon/></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell}){
  const layout=usePanelLayout(state,act);
- const view=state.view||{},pinned=!!view.navPinned,expanded=pinned||!!view.navExpanded,draft=view.workspaceDraft||{};
+ const view=state.view||{},pinned=!layout.narrow&&!!view.navPinned,expanded=(pinned||!!view.navExpanded)&&(!layout.narrow||!view.canvasFocused&&!view.panel&&!view.toolbarMenuOpen),draft=view.workspaceDraft||{};
+ const nav=useRef(null),wasNarrow=useRef(layout.narrow),close=()=>patch(act,{navExpanded:false});
+ useEffect(()=>{if(layout.narrow&&!wasNarrow.current&&view.navExpanded)close();wasNarrow.current=layout.narrow},[layout.narrow]);
+ useModalFocus(nav,layout.narrow&&expanded,close);
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const expand=value=>{if(!pinned&&!!view.navExpanded!==value)patch(act,{navExpanded:value})};
  const manager=shell.composition.instances.find(item=>item.package==='builtin.workspaces');
  const addWorkspace=()=>{expand(true);const host=shell.hostFor(manager);const draft=host.getSnapshot().view.workspaceDraft||{};return host.dispatch('view.update',{patch:{workspaceDraft:draft.mode==='add'?{}:{mode:'add',path:'',name:''}}})};
  const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
- return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!e.currentTarget.contains(document.activeElement))expand(false)}}>
+ return <NavigationOpen.Provider value={expanded}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
+ <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} hidden={layout.narrow&&!expanded} inert={layout.narrow&&!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}} onPointerEnter={e=>{if(!layout.narrow&&e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(!layout.narrow&&e.pointerType!=='touch'&&!e.currentTarget.contains(document.activeElement))expand(false)}}>
   <div className="a-nav-rail">
-   <div className="a-nav-head"><button className="a-icon" type="button" aria-label={pinned?'Unpin navigation':'Pin navigation open'} title={pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>patch(act,{navPinned:!pinned,navExpanded:!pinned})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button><strong className="a-nav-reveal">Your work</strong></div>
+   <div className="a-nav-head"><button className="a-icon" type="button" aria-label={layout.narrow?'Close navigation':pinned?'Unpin navigation':'Pin navigation open'} title={layout.narrow?'Close navigation':pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>layout.narrow?close():patch(act,{navPinned:!pinned,navExpanded:!pinned})}>{layout.narrow?<X/>:<PanelLeft/>}{!layout.narrow&&<AttentionBadge state={state} section="chats"/>}</button><strong className="a-nav-reveal">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
    {manager&&<button className="a-nav-main" type="button" onClick={addWorkspace} data-action="view.update" aria-label="New workspace" title="New workspace"><FolderPlus/><span className="a-nav-reveal">New workspace</span></button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>
   </div>
   {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
- </aside>;
+ </aside></NavigationOpen.Provider>;
 }
 
 export function SessionHistoryControls({session,act,onLoadEarlier}){
@@ -59,35 +64,29 @@ export {A2UISurface} from './a2ui';
 export function AgentCanvas({state,act,dispatch=act}){
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
+ useEffect(()=>{
+  if(!canvas.open&&panel.current?.contains(document.activeElement))document.querySelector('.a-canvas-toggle')?.focus({preventScroll:true});
+ },[canvas.open]);
+ const mounted=useRef(false);
+ if(canvas.open)mounted.current=true;
  const focused=!!canvas.open&&!!view.canvasFocused,controls=!!view.canvasControlsPinned||!!view.canvasControlsExpanded;
  const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},canvasControlsExpanded:true});
  const controlRegions='.a-canvas-chrome,.a-canvas-toolbar,.a-canvas-result.success,.a-browser-note';
  const inControls=target=>!!target?.closest?.(controlRegions)&&!!panel.current?.contains(target);
  const collapseControls=()=>{if(controls&&!view.canvasControlsPinned&&!draft.open&&!draft.browser)patch(act,{canvasControlsExpanded:false})};
- useEffect(()=>{
-  if(!focused||!panel.current)return;
-  const previous=document.activeElement,el=panel.current,app=el.closest('#amp-one'),hidden=[];
-  // Keep the live viewer mounted. Only the surrounding app becomes inert.
-  for(const child of [...(app?.children||[]),...(el.parentElement?.children||[])]){
-   if(child===el||child.contains(el)||child.matches('style,.a-overlay,[role="dialog"]'))continue;
-   hidden.push([child,child.inert]);child.inert=true;
-  }
-  el.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true});
-  const escape=e=>{if(e.key==='Escape'&&!document.querySelector('.a-overlay')){e.preventDefault();patch(actRef.current,{canvasFocused:false})}};
-  document.addEventListener('keydown',escape);
-  return()=>{document.removeEventListener('keydown',escape);for(const [child,inert] of hidden)child.inert=inert;if(previous?.isConnected)previous.focus?.({preventScroll:true})};
- },[focused]);
- if(!canvas.open)return null;
+ useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}));
+ useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
+ if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
- return <aside ref={panel} id="workspace-canvas" className="a-canvas-panel" data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
+ return <aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={!canvas.open} inert={!canvas.open} aria-hidden={!canvas.open||undefined} data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
   onPointerOut={e=>{if(e.pointerType!=='touch'&&inControls(e.target)&&!inControls(e.relatedTarget)&&!inControls(document.activeElement))collapseControls()}}
   onBlur={e=>{if(inControls(e.target)&&!inControls(e.relatedTarget)&&!panel.current?.querySelector(controlRegions.split(',').map(selector=>selector+':hover').join(',')))collapseControls()}}>
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome" onPointerEnter={e=>{if(e.pointerType!=='touch'&&!controls)patch(act,{canvasControlsExpanded:true})}}>
-   <header className="a-canvas-head"><FileText/><strong title={canvas.title||'Canvas'}>{canvas.title||'Canvas'}</strong>
+   <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<FileText/><strong title={canvas.title||'Canvas'}>{canvas.title||'Canvas'}</strong>
     <button type="button" className="a-icon" aria-label="Canvas controls" aria-expanded={controls} data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls,canvasControlsPinned:false,canvasDraft:{...draft,open:false,browser:false}})}><SlidersHorizontal/></button>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
-    <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.close" onClick={()=>act('canvas.close',{})}><X/></button>
+    <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X/></button>
    </header>
    <div className="a-canvas-controls" inert={!controls}>
     <div className="a-canvas-actions"><button type="button" className="a-soft" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Library</button><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/>File</button><button type="button" className="a-icon" aria-label={view.canvasControlsPinned?'Unpin canvas controls':'Pin canvas controls'} aria-pressed={!!view.canvasControlsPinned} data-action="view.update" onClick={()=>patch(act,{canvasControlsPinned:!view.canvasControlsPinned,canvasControlsExpanded:!view.canvasControlsPinned})}><Pin/></button></div>

@@ -185,7 +185,11 @@ which carries a `contentResource` reference instead; the agent overview
 contains a bounded current-chat index. `get_state` can page a saved body, for
 example `/canvasArtifacts/0/body/content`. `canvas.select {id}` reopens a saved
 item, `canvas.tabClose {id}` closes only its tab, and `canvas.reopen` opens the
-panel. Selection and file reads are scoped to the chat and workspace. Agent
+panel. The current shell uses `canvas.visibility {open, sessionId, canvasId}`
+on an attached client to hide/show retained viewers immediately. This keeps edits
+and iframe state while hidden, without changing artifact identity or scanning
+workspaces. `clientId` can explicitly target an attached client for agent use.
+The legacy close/reopen lifecycle remains available. Selection and file reads are scoped to the chat and workspace. Agent
 publications default to the calling session even when the user views another
 chat. Background publications do not replace the user's active preview.
 
