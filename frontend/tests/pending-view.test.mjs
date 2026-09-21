@@ -65,10 +65,16 @@ test('Canvas visibility stays immediate, ordered, and bound to its chat and arti
  const pending=createPendingView(),state={selectedSessionId:'a',client:{hostInstanceId:'host'},canvas:{id:'artifact',open:false},view:{canvasFocused:false}};
  const open=pending.addCanvas(state,true),close=pending.addCanvas(state,false),reopen=pending.addCanvas(state,true);
  assert.equal(pending.apply(state).canvas.open,true);
+ assert.equal(pending.apply(state).canvas.visibilityPending,true);
  pending.settle(open);pending.settle(close);
  assert.equal(pending.apply({...state,canvas:{...state.canvas,open:false}}).canvas.open,true);
+ assert.equal(pending.apply({...state,canvas:{...state.canvas,open:true}}).canvas.visibilityPending,true,'An SSE value cannot settle a queued visibility action');
  assert.equal(pending.apply({...state,selectedSessionId:'b'}).canvas.open,false);
+ assert.equal(pending.apply({...state,selectedSessionId:'b'}).canvas.visibilityPending,undefined);
  assert.equal(pending.apply({...state,canvas:{id:'new',open:false}}).canvas.open,false);
+ assert.equal(pending.apply({...state,canvas:{id:'new',open:false}}).canvas.visibilityPending,undefined);
  assert.equal(pending.apply({...state,client:{hostInstanceId:'restarted'}}).canvas.open,false);
+ assert.equal(pending.apply({...state,client:{hostInstanceId:'restarted'}}).canvas.visibilityPending,undefined);
  pending.settle(reopen);assert.equal(pending.apply(state).canvas.open,false);
+ assert.equal(pending.apply(state).canvas.visibilityPending,undefined);
 });

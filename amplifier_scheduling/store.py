@@ -51,6 +51,27 @@ class ScheduleStore:
         rows = self.db.execute('SELECT value FROM schedules' + (' WHERE session_id=?' if session_id else ''), (session_id,) if session_id else ())
         return [json.loads(row[0]) for row in rows]
 
+    def projection(self):
+        """Fresh display rows with the latest ten runs, in one read snapshot.
+
+        Query schedules rather than every catalog session. The existing due
+        index bounds each schedule's history read; commands and admission still
+        use the authoritative get/run methods and their revision checks.
+        """
+        rows = self.db.execute('''
+            SELECT s.session_id, s.value, (
+                SELECT json_group_array(value) FROM (
+                    SELECT value FROM schedule_runs
+                    WHERE session_id=s.session_id AND schedule_id=s.id
+                    ORDER BY due DESC LIMIT 10
+                )
+            ) FROM schedules AS s ORDER BY s.rowid
+        ''')
+        result = {}
+        for session_id, value, runs in rows:
+            result.setdefault(session_id, []).append({**json.loads(value), 'runs': [json.loads(run) for run in json.loads(runs)]})
+        return result
+
     def get(self, session_id, identity):
         row = self.db.execute('SELECT value FROM schedules WHERE id=? AND session_id=?', (identity, session_id)).fetchone()
         if row is None: raise ValueError('This schedule does not belong to the conversation')

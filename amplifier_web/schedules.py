@@ -60,8 +60,9 @@ class Schedules:
             await asyncio.sleep(2)
 
     def sync(self):
+        schedules = self.store.projection()
         for session in self.app.state['sessions']:
-            session['schedules'] = [{**record, 'runs': self.store.runs(session['id'], record['id'])[:10]} for record in self.store.list(session['id'])]
+            session['schedules'] = schedules.get(session['id'], [])
 
     def changed(self):
         self.sync()

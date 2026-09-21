@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.4",
+      "title": "Keep the app responsive while preparing conversations",
+      "changes": [
+        "Preparation updates are grouped so loading a conversation does not hold up controls or worker replies. Delivery, approvals, usage and failures remain durably recorded.",
+        "Schedule displays use one shared database read instead of a separate query for every saved conversation.",
+        "Embedded tool views wait for visibility acknowledgement before resuming reads, preventing a false error when reopening a hidden panel."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.3",
       "title": "Responsive conversations with multiple connected clients",
       "changes": [

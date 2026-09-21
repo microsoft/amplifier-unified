@@ -54,7 +54,7 @@ function useHostTheme(scheme){
 export function McpAppViewer({canvas,act}){
  const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
  const theme=useHostTheme(useMcpAppTheme());
- const visible=useMcpAppVisibility(canvas.open),visibleRef=useRef(visible);
+ const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
  visibleRef.current=visible;
  current.current=canvas;
  themeRef.current=theme;

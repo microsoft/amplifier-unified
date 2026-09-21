@@ -279,7 +279,8 @@ class RuntimeManager:
     async def _emit_progress(self, sid, row):
         await row["emit"]("runtime.status", {"sessionId": sid, "status": "starting",
             "phase": row["phase"], "detail": row["detail"],
-            "elapsedSeconds": int(time.monotonic() - row["started_at"])})
+            "elapsedSeconds": int(time.monotonic() - row["started_at"]),
+            "preparationProgress": True})
 
     async def _drain_stderr(self, row):
         while line := await row["process"].stderr.readline():
@@ -310,6 +311,10 @@ class RuntimeManager:
         reported_error = None
         try:
             while line := await row["process"].stdout.readline():
+                # readline and event callbacks can both finish synchronously
+                # while stdout is buffered. Let pending replies, bridge calls,
+                # HTTP requests and stop commands run between ordered events.
+                await asyncio.sleep(0)
                 try:
                     data = json.loads(line)
                 except (ValueError, UnicodeDecodeError):
