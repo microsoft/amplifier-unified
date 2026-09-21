@@ -40,6 +40,17 @@
       ]
     },
     {
+      "version": "0.19.19",
+      "title": "Reliable runtime updates and clearer conversation diagnostics",
+      "changes": [
+        "Conversations use the same module cache validated by the ecosystem updater, including reopened conversations.",
+        "Chat details shows actionable module loading failures and clears older failure reports after a successful preparation.",
+        "Update controls are easier to find in Settings, and older activity is grouped for easier scanning.",
+        "Saved terminal connections open in your preferred terminal, with corrected Mac shortcuts and clearer setup feedback."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.18",
       "title": "Guided terminal setup, complete themes, and full-screen phone navigation",
       "changes": [

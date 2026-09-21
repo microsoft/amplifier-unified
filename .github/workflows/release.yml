@@ -82,7 +82,7 @@ jobs:
           uv add --project "$RUNNER_TEMP/surface-runtime" --no-sync --editable "$GITHUB_WORKSPACE/.ci/loop-live"
           uv sync --project "$RUNNER_TEMP/surface-runtime"
           uv pip install --python "$RUNNER_TEMP/surface-runtime/.venv/bin/python" pytest pytest-asyncio 'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py -q
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_runtime_module_cache.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
@@ -161,7 +161,9 @@ jobs:
       - name: Verify conversation diagnosis and recovery
         if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
         working-directory: frontend
-        run: npm run test:session-health-browser
+        run: |
+          npm run test:session-health-browser
+          node tests/session-health-browser.mjs --module-failure
       - name: Verify activity feedback and dismissal
         if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
         working-directory: frontend
