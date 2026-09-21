@@ -34,6 +34,14 @@ try:
  facts["stage"]="login"
  facts["loginAvailable"]=callable(pam.authenticate)
  assert facts["loginAvailable"]
+ if "tui" in sys.argv[1:]:
+  import os
+  from amplifier_tui.connected import main
+  from amplifier_tui.launcher import executable
+  facts["stage"]="terminal"
+  binary=executable(None)
+  assert callable(main) and binary.is_relative_to(Path(sys.prefix).resolve())
+  assert binary.is_file() and os.access(binary,os.X_OK)
  facts.update(ok=True,stage="complete")
 except Exception as error:
  name=type(error).__name__
@@ -68,6 +76,16 @@ def git_environment():
         count=int(env.get('GIT_CONFIG_COUNT','0'))
         env.update({f'GIT_CONFIG_KEY_{count}':'credential.https://github.com.helper',f'GIT_CONFIG_VALUE_{count}':'!gh auth git-credential','GIT_CONFIG_COUNT':str(count+1)})
     return env
+
+def installed_extras():
+    """Retain the optional client already installed in this host environment."""
+    try:metadata.distribution('amplifier-app-tui')
+    except metadata.PackageNotFoundError:return []
+    return ['tui']
+
+def install_requirement(revision,extras):
+    source='git+'+SOURCE+'@'+revision
+    return 'amplifier-unified[tui] @ '+source if extras==['tui'] else source
 
 def application_state():
     from .release_notes import history
@@ -128,12 +146,13 @@ async def _stage(manager):
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
+    extras=installed_extras()
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
-    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force','git+'+SOURCE+'@'+revision,env=env,timeout=900)
+    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force',install_requirement(revision,extras),env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
-    output=await manager.diagnostics.run('candidate-probe',process,python,'-I','-c',PROBE,timeout=30)
+    output=await manager.diagnostics.run('candidate-probe',process,python,'-I','-c',PROBE,*extras,timeout=30)
     installed=verified_version(manager,output,release['latest'],'candidate-version')
-    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId']}))
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId']},detail='Application release validated. Waiting for work to finish before restarting.')
@@ -192,6 +211,15 @@ async def _activate(manager):
         raise ValueError('App release must pass isolated validation before activation')
     if version_tuple(validated.get('version'))!=version_tuple(release.get('latest')):
         raise ValueError('The pending release does not match its validated package')
+    extras=validated.get('extras',[])
+    if extras not in ([],['tui']) or extras!=installed_extras():
+        message='Optional clients changed after validation. Install the update again to validate the current selection.'
+        manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
+        manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
+        # Removing the pending pointer lets the normal install command stage a
+        # fresh candidate. Keep its receipt on disk for diagnosis, never reuse it.
+        await manager.publish(phase='error',pendingApp=None,appAvailable=True,error=message,detail=message)
+        raise ValueError(message)
     async with manager.service.lock:
         if manager.busy():return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
@@ -206,8 +234,8 @@ async def _activate(manager):
     try:
         if manager.service.runtime:await manager.diagnostics.run('runtime-close',manager.service.runtime.close)
         manager.diagnostics.sync('recovery-record',write_private,manager.directory/'previous-app.json',json.dumps(previous))
-        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force','git+'+SOURCE+'@'+release['revision'],env=git_environment(),timeout=900)
-        output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,timeout=30)
+        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
+        output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,*extras,timeout=30)
         installed=verified_version(manager,output,validated['version'],'replacement-version')
     except asyncio.CancelledError:
         await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')

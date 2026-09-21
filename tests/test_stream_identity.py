@@ -1,0 +1,33 @@
+"""Stable display identity is independent of command provenance."""
+import pytest
+from amplifier_web.service import AppService
+
+
+@pytest.mark.parametrize('event,payload', [
+    ('runtime.error', {'error': 'fixture interrupted'}),
+    ('runtime.status', {'status': 'stopped'}),
+    ('runtime.status', {'status': 'idle'}),
+    ('runtime.ownership', {'status': 'yielded'}),
+    ('runtime.ended', {'status': 'interrupted'}),
+])
+async def test_interrupted_partial_never_becomes_the_next_answer(tmp_path, event, payload):
+    service = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {})
+        sid = service._session()['id']
+        await service.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'incomplete'})
+        identity = service._session()['streamingId']
+        await service.on_runtime_event(event, {'sessionId': sid, **payload})
+        assert 'streamingId' not in service._session()
+        partial = service._session()['messages'][-1]
+        assert partial['streamId'] == identity and partial['partial']
+        assert 'inputId' not in partial
+        await service.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'new answer'})
+        assert service._session()['streamingId'] != identity
+        next_id = service._session()['streamingId']
+        await service.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'new answer', 'inputId': 'new'})
+        final = service._session()['messages'][-1]
+        assert final['streamId'] == next_id and not final.get('partial')
+        assert final['inputId'] == 'new'
+    finally:
+        await service.close()
