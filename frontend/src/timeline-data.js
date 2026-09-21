@@ -1,4 +1,3 @@
-import {actionContent,textValue} from './execution-content.js';
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
  if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[]}}
@@ -95,18 +94,6 @@ export function detailLinks(text){
  visit(value);return [...urls];
 }
 
-// Size is the content a person would skim, including field labels. Small work
-// groups stay open; fences have their own 15-line / 10-line preview policy.
-export function workSize(nodes){
- const lines=value=>value==null||value===''?0:1+Math.min(16,textValue(value).split('\n').length);
- return nodes.reduce((total,node)=>{
-  if(['input','output','error'].some(key=>node[key+'Detail']))return total+17;
-  if(node.kind!=='tool')return total+1+lines(node.summary);
-  const a=actionContent(node,node.input,node.output);
-  const fields=a.kind==='command'?[a.command,a.out.stdout??a.output,a.out.stderr]:a.kind==='read'?[a.content||a.output]:a.kind==='patch'?[a.diff,a.output]:[node.input,node.output];
-  return total+1+fields.reduce((sum,value)=>sum+lines(value),0)+lines(node.error);
- },0);
-}
 export function segmentUsage(nodes){
  const calls=nodes.filter(node=>node.kind==='llm'),value={calls:calls.length,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0,costUsd:0};
  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])value[key]=0;

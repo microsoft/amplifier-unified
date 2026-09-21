@@ -24,8 +24,14 @@ logger = logging.getLogger(__name__)
 
 def same_model_call(observed, native):
     """Identify duplicate telemetry, allowing admission time before dispatch."""
-    if observed.get('model') != native.get('model'):
+    if observed.get('model') != native.get('model') or (observed.get('provider') and native.get('provider') and observed['provider'] != native['provider']):
         return False
+    if not observed.get('endedAt') and not native.get('endedAt'):
+        return (observed.get('phase') in LIVE_PHASES and native.get('phase') in LIVE_PHASES
+                and observed.get('provider') in (None, native.get('provider'))
+                and isinstance(observed.get('startedAt'), (int, float))
+                and isinstance(native.get('startedAt'), (int, float))
+                and observed['startedAt'] <= native['startedAt'])
     if not all(isinstance(row.get(key), (int, float)) for row in (observed, native) for key in ('startedAt', 'endedAt')):
         return False
     return (observed['startedAt'] <= native['startedAt'] + 1
@@ -132,15 +138,17 @@ class EventIndex:
         self.revision = revision
         return True
 
-    def field(self, node, field, data, keys, reference):
+    def field(self, node, field, data, keys, reference, *, preview=True):
         key = next((key for key in keys if key in data), None)
         if key is None:
             return
         value = text(data[key])
-        node[field] = value[:512]
+        if preview:
+            node[field] = value[:512]
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
         node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
-                                 'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if len(value) > 512 else None
+                                 'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
+        if field == 'request':node[field + 'Detail']['lines'] = value.count('\n') + 1
 
     def ingest(self, event, reference):
         name, data = event.get('event'), event['data']
@@ -208,6 +216,21 @@ class EventIndex:
             node = {'id': key, 'kind': 'llm', 'sessionId': sid, 'label': 'Model call',
                 'provider': data.get('provider'), 'model': data.get('model'), 'startedAt': at,
                 'phase': 'running', 'canonicalHistory': True, 'eventOrder': reference['offset']}
+            raw = data.get('raw')
+            options = raw if isinstance(raw, dict) else {}
+            keys = ('message_count', 'has_instructions', 'has_system', 'reasoning_enabled', 'thinking_enabled',
+                    'thinking_budget', 'background_mode', 'stream', 'max_tokens', 'max_output_tokens',
+                    'temperature', 'top_p', 'parallel_tool_calls', 'tool_choice', 'purpose')
+            node['requestInfo'] = {key: value for key in keys
+                if isinstance(value := data.get(key, options.get(key)), (str, int, float, bool))
+                and (not isinstance(value, str) or len(value) <= 512)}
+            messages = options.get('messages', options.get('input'))
+            if isinstance(messages, list):node['requestInfo'].setdefault('message_count', len(messages))
+            if isinstance(options.get('tools'), list):node['requestInfo']['tool_count'] = len(options['tools'])
+            if isinstance(options.get('reasoning'), dict) and isinstance(options['reasoning'].get('effort'), str):
+                node['requestInfo']['reasoning_effort'] = options['reasoning']['effort'][:100]
+            if raw is not None:
+                self.field(node, 'request', data, ('raw',), reference, preview=False)
             self.pending.setdefault(scope, []).append(node)
             if request:
                 self.nodes[key] = node
@@ -234,6 +257,7 @@ class EventIndex:
         node.update(provider=data.get('provider'), model=data.get('model'), endedAt=at,
                     phase='error' if name == 'llm:error' or data.get('status') == 'error' else 'completed',
                     usage=public_usage(data.get('usage')))
+        self.field(node, 'error', data, ('error', 'error_message'), reference)
 
     def associations(self, directory):
         """Use Foundation's exact transcript associations for undated history."""
@@ -262,20 +286,23 @@ class EventIndex:
         return result
 
     def rows(self):
-        rows = list(self.nodes.values())
+        pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
+        rows = copy.deepcopy([*self.nodes.values(), *pending])
         app = [row for row in rows if row.get('_appModel')]
-        matched = set()
-        def duplicate(row):
+        matched, omitted = set(), set()
+        for row in rows:
             if row['kind'] != 'llm' or row.get('_appModel'):
-                return False
+                continue
             matches = [other for other in app if other['id'] not in matched and
                        other.get('sessionId') == row.get('sessionId') and same_model_call(other, row)]
-            if matches:
-                closest = min(matches, key=lambda other: abs(other['endedAt'] - row['endedAt']))
-                matched.add(closest['id'])
-                return True
-            return False
-        return [copy.deepcopy(row) for row in rows if not duplicate(row)]
+            if matches and (row.get('endedAt') is not None or len(matches) == 1):
+                closest = min(matches, key=lambda other: abs((other.get('endedAt') or other.get('startedAt') or 0) - (row.get('endedAt') or row.get('startedAt') or 0)))
+                matched.add(closest['id']);omitted.add(row['id'])
+                # Preserve the stable lifecycle ID and the native request source.
+                for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+                    if field in row:closest[field] = row[field]
+                if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+        return [row for row in rows if row['id'] not in omitted]
 
 
 class EventLogView:
@@ -402,7 +429,7 @@ class EventLogView:
                     node['anchorMessageId'] = None  # Undated, unassociated evidence stays before the page.
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
-            for field in ('input', 'output', 'error'):
+            for field in ('input', 'output', 'error', 'request'):
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])
         by_id = {row['id']: row for row in nodes}

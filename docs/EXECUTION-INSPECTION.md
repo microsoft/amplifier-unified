@@ -22,8 +22,12 @@ individual action rows are paged. The shared shell presentation setting
 or those details plus tool/model counts (`detailed`). Skins can also control the
 call-count display with `--a-work-counts`.
 
-Short groups and action rows have no disclosure controls. Substantial groups can
-be collapsed. Code fences show all content through 15 lines, then preview the
+Each action starts as a collapsed one-line summary, including model calls.
+Every work group has a collapse control, regardless of action count. Groups start
+collapsed unless explicitly expanded; their saved state survives reloads and
+collapsing a group preserves the individual action expansion choices inside it.
+Group size is measured from the skimmed rows, not the size of unopened payloads.
+Code fences show all content through 15 lines, then preview the
 first 10 lines with a single expand control. Exceptionally long unbroken text is
 also previewed. Commands, output and exit status, file contents, patches, task
 lists and delegated actions have typed presentations. Additional recorded
@@ -31,7 +35,7 @@ arguments and result fields remain visible without a duplicate raw-input/result
 expander. Copy uses the complete loaded field, including text outside the preview.
 
 The browser initially receives bounded history and 512-character action previews.
-Opening a substantial group reads each referenced tool field from its original
+Expanding an action reads each referenced tool field from its original
 log record, verifies its digest, and returns that complete field in one request.
 Parsing and file reads run off the server event loop. A replaced log invalidates
 old references; failed reads retain the preview and offer retry. Partial final
@@ -47,3 +51,21 @@ Model details show provider/model, timing and reported usage. Native provider
 receipts and matching app lifecycle receipts are counted once. Missing usage is
 pending during a live call and unavailable after completion. Reported, estimated
 and partial cost stay distinct; missing cost is not shown as measured zero.
+
+Expanded model calls show provider/model, timing, token accounting and recorded
+request options such as message/tool counts, limits and reasoning effort. A
+Load raw request control reads large recorded `data.raw` fields from the
+existing event log only when requested. Short requests load with the expanded
+action and appear inline, without a second disclosure. No request body enters initial browser
+state or a saved execution projection; only a digest/length reference and bounded
+metadata are indexed. This view does not enable or change provider capture. If a
+request was not recorded, or parallel requests lack enough identity to associate
+one safely, the call reports that no raw request is available.
+
+Native request details are retained when native and app lifecycle telemetry are
+combined under one stable call ID, including unambiguous calls still in progress.
+Provider identities are checked before merging, and ambiguous parallel calls are
+never assigned another call's raw request. Raw requests use the same 15/10-line
+preview and full-copy behavior as tools, with cancellation, retry and source
+replacement checks. Row and raw-request expansion use the shared `view.update`
+path and survive reload.
