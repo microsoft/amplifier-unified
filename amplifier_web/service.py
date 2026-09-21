@@ -463,7 +463,15 @@ class AppService:
             fallbackVoice=voice.get("fallback_model", "gpt-realtime-2.1"))
         self._shared_preferences_stamp = stamp_value
         self._browser_snapshot = None
-        self._client_snapshots.clear()
+        # A different client can select a different workspace. Its preferences
+        # do not change shared navigation or invalidate other clients' snapshots.
+
+    @property
+    def projections(self):
+        from .state_projections import StateProjections
+        if getattr(self, '_projections', None) is None:
+            self._projections = StateProjections()
+        return self._projections
 
     def state_context(self):
         """Read-only full catalog with derived, bounded navigation projections."""
@@ -472,8 +480,8 @@ class AppService:
         from .browser_state import navigation
         self._refresh_shared_preferences()
         result = dict(self.state)
-        result.update(navigation(self.state))
         result["attention"] = snapshot(self.state)
+        result.update(navigation(result))
         result["workspaceExplorer"] = workspace_snapshot(result)
         result.pop("attentionRead", None)
         return self.clients.project(result)
@@ -488,24 +496,25 @@ class AppService:
         if client_id is not None:
             self.clients.reconcile(client_id)
             cached = self._client_snapshots.get(client_id)
-            if cached is None or cached['revision'] != self.state['revision'] or session_id is not None:
+            if (cached is None or cached['revision'] != self.state['revision'] or session_id is not None
+                    or self._client_snapshot_preferences.get(client_id) != self._shared_preferences_stamp):
                 from .browser_state import snapshot
-                context = self.state_context()
-                derived = {key: context[key] for key in ('attention', 'workspaceExplorer',
-                    'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
+                derived = self.projections.browser(self.state)
                 if session_id is not None:
                     self._session(session_id)
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id))
+                cached['shellDataKey'] = self.projections.shell_key(self.state)
+                cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
                     self._client_snapshots[client_id] = cached
+                    self._client_snapshot_preferences[client_id] = self._shared_preferences_stamp
             return cached
         cached = getattr(self, '_browser_snapshot', None)
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
-            context = self.state_context()
-            derived = {key: context[key] for key in ('attention', 'workspaceExplorer',
-                'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
+            derived = self.projections.browser(self.state)
             self._browser_snapshot = snapshot(self.state, derived)
+            self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
         if session_id is not None:
             self._session(session_id)
             from .browser_state import snapshot
@@ -513,6 +522,23 @@ class AppService:
                 'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
             return snapshot(self.state, derived, session_id=session_id)
         return self._browser_snapshot
+
+    def session_state(self, session_id):
+        """Single-session transport projection, independent of browser navigation."""
+        row = next((row for row in self.state['sessions'] if row['id'] == session_id), None)
+        if row is None:
+            return {'revision': self.state['revision'], 'sessions': []}
+        session = copy.deepcopy(row)
+        if session_id == self.state.get('selectedSessionId'):
+            from .browser_state import direct_child
+            session['subagentCount'] = sum(direct_child(child, row) for child in self.state['sessions'])
+        session['workers'] = [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+                              for worker in session.get('workers', [])]
+        record = self.clients.record()
+        if record is not None:
+            session['draft'] = record.get('drafts', {}).get(session_id, '')
+            session['draftAttachments'] = copy.deepcopy(record.get('attachments', {}).get(session_id, []))
+        return {'revision': self.state['revision'], 'sessions': [session]}
 
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
@@ -525,6 +551,8 @@ class AppService:
         sync(self)
         self._browser_snapshot = None
         self._client_snapshots.clear()
+        self._client_snapshot_preferences = {}
+        self._projections = None
         from .state_storage import normalize_state
         normalize_state(self.state, self.db)
         from .session_projection import persist
@@ -548,12 +576,13 @@ class AppService:
             self.state["revision"] = previous
             self._browser_snapshot = None
             raise
+        published = {}
         for queue in self.queues:
-            with self.clients.bind(self.queue_clients.get(queue)):
-                session_id = self.queue_sessions.get(queue)
-                if session_id and not any(row['id'] == session_id for row in self.state['sessions']):
-                    session_id = None
-                snapshot = self.browser_state(session_id=session_id)
+            key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
+            if key not in published:
+                with self.clients.bind(key[0]):
+                    published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
+            snapshot = published[key]
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
@@ -2330,9 +2359,8 @@ class AppService:
             raise AppError('Device report belongs to another client.')
         client_id = bound or str(payload.get("clientId") or "browser")[:100]
         self.state["devices"][client_id] = {**payload, "updatedAt": time.time()}
-        self._browser_snapshot = None
-        # View snapshots are observational and don't invalidate command revisions.
-        self._save()
+        # Rendered controls are live observations, reset on startup. Agents read
+        # them directly; no durable command or browser projection changed.
 
     async def record_voice_transcript(self, role, text, *, voice_id, item_id, append=False, session_id=None):
         async with self.lock:

@@ -6,6 +6,7 @@ workspace registry, and only folders leading to top-level chats are included.
 from __future__ import annotations
 
 from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import PurePosixPath, PureWindowsPath
 import re
 
@@ -20,6 +21,11 @@ NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWo
 def _path(value):
     if not isinstance(value, str) or not value or len(value) > 4000 or '\0' in value:
         return None
+    return _parsed_path(value)
+
+
+@lru_cache(maxsize=8192)
+def _parsed_path(value):
     kind = PureWindowsPath if re.match(r'^[a-zA-Z]:', value) or value.startswith('\\\\') else PurePosixPath
     path = kind(value)
     return path if path.is_absolute() and '..' not in path.parts else None
@@ -77,9 +83,8 @@ def _index(state):
         if workspace is None:
             continue
         path = _path(workspace['path'])
-        entry = chats.setdefault(path, {'workspace': workspace, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)})
-        if workspace['id'] == state.get('selectedWorkspaceId'):
-            entry['workspace'] = workspace
+        entry = chats.setdefault(path, {'workspace': workspace, 'workspaceSelections': {}, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)})
+        entry['workspaceSelections'][workspace['id']] = workspace
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
         entry['recentActivityAt'] = max(entry['recentActivityAt'], recent_activity(session))
@@ -89,7 +94,7 @@ def _index(state):
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}
     for path, entry in chats.items():
         node = nodes.setdefault(path, {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0})
-        node.update(workspace=entry['workspace'], chatCount=entry['chatCount'], recentActivityAt=entry['recentActivityAt'], activityCounts=entry['activityCounts'])
+        node.update(workspace=entry['workspace'], workspaceSelections=entry['workspaceSelections'], chatCount=entry['chatCount'], recentActivityAt=entry['recentActivityAt'], activityCounts=entry['activityCounts'])
         node['unread'] += entry['unread']
         child = path
         for parent in _ancestors(path, root):
@@ -131,8 +136,8 @@ def _location(state, root, nodes):
     return location, query, page
 
 
-def _row(path, node):
-    workspace = node.get('workspace', {})
+def _row(path, node, selected=None):
+    workspace = node.get('workspaceSelections', {}).get(selected, node.get('workspace', {}))
     name = path.name or str(path)
     result = {'path': str(path), 'parentPath': _text(path.parent if path != path.parent else None), 'name': name, 'workspaceId': workspace.get('id'),
               'chatCount': node.get('chatCount', 0),
@@ -154,13 +159,14 @@ def _matches(row, query):
     return any(query in term.casefold() for term in terms)
 
 
-def snapshot(state):
+def snapshot(state, *, index=None):
     """Return the same bounded explorer shown to users and agents."""
-    root, nodes, total = _index(state)
+    root, nodes, total = _index(state) if index is None else index
     location, query, requested_page = _location(state, root, nodes)
     mode = state.get('view', {}).get('navWorkspaceMode', 'folders')
     paths = [path for path, node in nodes.items() if node.get('workspace')] if query or mode == 'recent' else nodes[location]['children']
-    rows = [_row(path, nodes[path]) for path in paths]
+    selected = state.get('selectedWorkspaceId')
+    rows = [_row(path, nodes[path], selected) for path in paths]
     if query:
         rows = [row for row in rows if _matches(row, query)]
     labels = path_labels([str(path) for path, node in nodes.items() if node.get('workspace')])
@@ -177,7 +183,7 @@ def snapshot(state):
     return {'path': _text(location), 'parentPath': parent, 'rootPath': _text(root),
             'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode,
             'rows': rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
-            'selected': next((_row(path, node) for path, node in nodes.items() if node.get('workspace') and node['workspace'].get('id') == state.get('selectedWorkspaceId')), None),
+            'selected': next((_row(path, node, selected) for path, node in nodes.items() if selected in node.get('workspaceSelections', {})), None),
             'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages}
 
 

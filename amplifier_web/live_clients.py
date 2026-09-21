@@ -50,7 +50,7 @@ def setup_routes(app, streams):
                     "transports": ["http", "sse"], "state": service.browser_state()})
 
     def session_snapshot(identity, snapshot=None):
-        snapshot = snapshot or service.browser_state(session_id=identity)
+        snapshot = snapshot or service.session_state(identity)
         session = next((row for row in snapshot["sessions"] if row["id"] == identity), None)
         if session is None:
             return {"protocolVersion": 1, "revision": snapshot["revision"],
@@ -117,7 +117,7 @@ def setup_routes(app, streams):
         task = asyncio.current_task()
         streams.add(task)
         queue = service.subscribe(session_id=identity)
-        snapshot = service.browser_state(session_id=identity)
+        snapshot = service.session_state(identity)
         try:
             while True:
                 data = session_snapshot(identity, snapshot)

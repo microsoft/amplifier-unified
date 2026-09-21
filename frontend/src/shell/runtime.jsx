@@ -3,6 +3,7 @@ import {request} from '../api';
 import {WorkspaceManager,ConversationList} from './navigation-components';
 import './shell.css';
 import {SlotOverflow} from './slot-overflow';
+import {shellRefreshKey} from './refresh-key';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -41,7 +42,8 @@ export function useShell(state,dispatch,clientId){
   }).catch(e=>setError(e.message)).finally(()=>{inflight.current=null;if(again.current){again.current=false;refresh()}});
   return inflight.current;
  },[clientId]);
- useEffect(()=>{if(state)refresh()},[state?.revision,refresh]);
+ const refreshKey=shellRefreshKey(state);
+ useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
   const onShell=e=>{if(e.detail.shellClientId===clientId)refresh()};
   window.addEventListener('amplifier-shell',onShell);

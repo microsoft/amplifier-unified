@@ -33,16 +33,16 @@ def direct_child(row, parent):
             else row.get('workspace') == parent.get('workspace'))
 
 
-def navigation(state):
-    chat = chat_snapshot(state)
+def navigation(state, *, chats=chat_snapshot):
+    chat = chats(state)
     header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': '', 'navArchive': 'active', 'navCollection': None}
     scope = {'mode': 'workspace', 'workspaceId': state.get('selectedWorkspaceId'),
              'filter': '', 'selectedSessionId': state.get('selectedSessionId')}
     header_view['navChatPage'] = {**scope, 'index': 0}
-    header = chat_snapshot({**state, 'view': header_view})
+    header = chats({**state, 'view': header_view})
     selected = next((row for row in state.get('sessions', []) if row['id'] == state.get('selectedSessionId')), None)
     if selected and is_top_level(selected) and selected.get('workspaceId') == scope['workspaceId'] and all(row['id'] != selected['id'] for row in header['items']):
-        header['items'] = header['items'][:99] + [{**summary(selected), 'pinned': selected['id'] in state.get('pinnedSessionIds', [])}]
+        header = {**header, 'items': header['items'][:99] + [{**summary(selected), 'pinned': selected['id'] in state.get('pinnedSessionIds', [])}]}
     requested = state.get('view', {}).get('subagentHistory', {})
     requested = requested if isinstance(requested, dict) else {}
     parent = requested.get('sessionId') or state.get('selectedSessionId')

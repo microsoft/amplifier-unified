@@ -109,12 +109,26 @@ def _matches(terms, query):
     return any(query in str(term).casefold() for term in terms)
 
 
-def snapshot(state):
+def registry(state):
+    """Shared workspace resolution and root grouping for navigation queries."""
     workspaces = [row for row in state.get('workspaces', [])
                   if row.get('available') is True and isinstance(row.get('path'), str) and row['path']]
     by_id = {row['id']: row for row in workspaces}
     by_path = {row['path']: row for row in workspaces}
     labels = path_labels(by_path)
+    roots, grouped = [], {}
+    for row in state.get('sessions', []):
+        if is_top_level(row):
+            roots.append(row)
+            workspace = by_id.get(row.get('workspaceId')) or by_path.get(row.get('workspace'))
+            if workspace is not None:
+                grouped.setdefault(workspace['id'], []).append(row)
+    return by_id, by_path, labels, roots, grouped
+
+
+def catalog(state, *, indexed=None):
+    """Filter/sort once; selected chat and pagination belong to each client."""
+    by_id, by_path, labels, roots, grouped = registry(state) if indexed is None else indexed
     selected = by_id.get(state.get('selectedWorkspaceId'))
     view = state.get('view', {})
     mode = 'all' if view.get('navChatScope') == 'all' else 'workspace'
@@ -141,9 +155,7 @@ def snapshot(state):
         scope['collectionId'] = collection_id
     memberships = {sid: row['id'] for row in organization.get('collections', []) for sid in row['sessionIds']}
     rows = []
-    for session in state.get('sessions', []):
-        if not is_top_level(session):
-            continue
+    for session in roots if mode == 'all' else grouped.get(selected['id'], []) if selected else []:
         is_archived = session['id'] in archived
         if (archive_filter == 'active' and is_archived) or (archive_filter == 'archived' and not is_archived):
             continue
@@ -174,6 +186,14 @@ def snapshot(state):
     rows.sort(key=lambda row: (not row['pinned'],
         pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
         else collection_order.get(row['id'], 0) if collection_id and not row['pinned'] else -row['recentActivityAt']))
+    return rows, scope, counts
+
+
+def snapshot(state, *, indexed=None):
+    rows, scope, counts = catalog(state) if indexed is None else indexed
+    scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
+    mode = scope['mode']
+    view = state.get('view', {})
     saved = view.get('navChatPage')
     matched = isinstance(saved, dict) and all(saved.get(key) == value for key, value in scope.items())
     inferred = next((i // PAGE_SIZE for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0

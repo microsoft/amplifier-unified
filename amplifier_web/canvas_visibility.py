@@ -65,7 +65,7 @@ def update(service, args, command_id, fingerprint, *, include_state):
         if service.queue_clients.get(queue) != identity:
             continue
         session_id = service.queue_sessions.get(queue)
-        current = service.browser_state(session_id=session_id)
+        current = service.session_state(session_id) if session_id is not None else service.browser_state()
         if session_id is None:
             snapshot = current
         if queue.full():

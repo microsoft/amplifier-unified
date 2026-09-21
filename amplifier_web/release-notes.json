@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.3",
+      "title": "Responsive conversations with multiple connected clients",
+      "changes": [
+        "Browser observations avoid full-library saves, and connected views share bounded presentation work while keeping separate selections and drafts.",
+        "Canvas tool reads are bounded and visibility-aware, preventing automatic refreshes from accumulating behind slow requests.",
+        "Pinned model choices reuse prepared app context between request budgeting and dispatch."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.2",
       "title": "Refresh history only for connected views",
       "changes": [
