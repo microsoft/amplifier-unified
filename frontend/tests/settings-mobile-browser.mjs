@@ -57,10 +57,17 @@ try{
  await expect(footer.getByRole('button',{name:'Install selected (3)',exact:true})).toBeVisible();await expect(footer.getByText('1 outside this view',{exact:true})).toBeVisible();
  await page.locator('[data-collection-id=tool-1]>button').click();await route('tools/catalog/detail');await expect(page.locator('#filter-smart-tool-catalog')).toBeHidden();await expect(footer.getByRole('button',{name:'Install selected (3)',exact:true})).toBeVisible();await back();await route('tools/catalog');assert.equal(await page.locator('#filter-smart-tool-catalog').inputValue(),'Research');
 
- // List scroll is restored after inspecting an item.
- const body=page.locator('.a-settings-content'),row=page.locator('[data-collection-id=tool-8]>button');await row.scrollIntoViewIfNeeded();
- const scrollBefore=await body.evaluate(el=>el.scrollTop);await row.click();await route('tools/catalog/detail');await back();
- await expect.poll(()=>body.evaluate(el=>el.scrollTop)).toBeCloseTo(scrollBefore,0);
+ // Back must restore against the list, even when rendering spans browser frames.
+ // A passive editor sync briefly left detail-sized content under the list route
+ // and clamped the saved scroll position before the list appeared.
+ const body=page.locator('.a-settings-content'),row=page.locator('[data-collection-id=tool-8]>button');
+ await cdp.send('Emulation.setCPUThrottlingRate',{rate:12});
+ for(let attempt=0;attempt<3;attempt++){
+  await row.scrollIntoViewIfNeeded();
+  const scrollBefore=await body.evaluate(el=>el.scrollTop);await row.click();await route('tools/catalog/detail');await back();
+  await expect.poll(()=>body.evaluate(el=>el.scrollTop)).toBeCloseTo(scrollBefore,0);
+ }
+ await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
  // Native touch on a row scrolls normally rather than starting a reorder.
  const box=await row.boundingBox();await touch('touchStart',box.x+80,Math.min(box.y+20,650));await touch('touchMove',box.x+80,250);await touch('touchEnd');
  await expect(page.locator('.a-order-floating')).toHaveCount(0);
