@@ -23,6 +23,36 @@ def test_typed_context_error_is_recognized_without_sdk_message_wording():
     assert 'cause is not available' not in detail['summary']
 
 
+async def test_runtime_context_limit_materializes_safe_failure_projection(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    await app.on_runtime_event('runtime.error', {
+        'sessionId': session['id'], 'errorType': 'ContextLengthError',
+        'error': 'provider request includes secret=[REDACTED:SECRET]',
+    })
+    assert session['status'] == 'error'
+    assert session['failure']['category'] == 'context_limit'
+    assert session['failure']['errorType'] == 'ContextLengthError'
+    assert 'secret' not in json.dumps(session['failure'])
+    assert 'provider request' not in session['error']
+    await app.close()
+
+
+async def test_verified_generation_start_clears_stale_failure(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    await app.on_runtime_event('runtime.error', {
+        'sessionId': session['id'], 'errorType': 'ContextLengthError', 'error': 'context limit',
+    })
+    await app.on_runtime_event('runtime.generation', {
+        'sessionId': session['id'], 'event': 'generation.started', 'generation_id': 'retry',
+    })
+    assert 'error' not in session and 'failure' not in session
+    await app.close()
+
+
 def rows():
     return [
         {'role': 'system', 'content': 'Old bundle system instructions'},

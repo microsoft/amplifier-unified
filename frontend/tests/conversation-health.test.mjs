@@ -38,3 +38,15 @@ test('error banner has no details or copy buttons',async()=>{
  assert.equal(root.root.findAllByType('button').length,0);assert.equal(root.toJSON().props.className,'a-alert');
  await renderAct(async()=>root.unmount());
 });
+
+test('context-limit recovery alert shares active-work guard and cannot invoke recovery',async()=>{
+ const calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const session={id:'chat',status:'error',error:'context limit',workers:[{status:'working'}],
+  failure:{category:'context_limit',summary:'Context limit',guidance:'Create a recovery copy.'}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,act,state:{attention:{items:[]}}}))});
+ const recovery=root.root.findByProps({'data-action':'session.recover'});
+ assert.equal(recovery.props.disabled,true);
+ await renderAct(async()=>recovery.props.onClick());
+ assert.deepEqual(calls,[]);
+ await renderAct(async()=>root.unmount());
+});

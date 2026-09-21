@@ -24,6 +24,8 @@ for line in sys.stdin:
             print(json.dumps({'type':'runtime.progress','phase':'bundle-preparation','detail':'Loading configured modules.'}),flush=True)
         else:
             print(json.dumps({'type':'runtime.ready','report':{'resumed':True,'session_id':root}}),flush=True)
+            if root=='native-root':
+                print(json.dumps({'type':'generation.started','session_id':'child','root_session_id':root}),flush=True)
     elif op=='send':
         print(json.dumps({'type':'input.delivered','input_id':data['input_id']}),flush=True)
         for identity in (root,root+'-child'):
@@ -53,6 +55,12 @@ class NormalizationTests(unittest.TestCase):
 
     def test_assistant_retains_input_identity(self):
         self.assertEqual(normalize_event({'type':'assistant.message','text':'hello'},'p','turn')[1]['inputId'],'turn')
+
+    def test_child_generation_retains_identity_and_root_provenance(self):
+        kind, payload = normalize_event({'type': 'generation.started', 'session_id': 'child',
+            'root_session_id': 'root'}, 'root')
+        self.assertEqual(kind, 'runtime.generation')
+        self.assertEqual((payload['sessionId'], payload['rootSessionId']), ('child', 'root'))
 
     def test_background_activity_reports_waiting_without_exposing_extra_fields(self):
         kind, payload = normalize_event({'type':'runtime.activity','phase':'waiting-workers',
@@ -159,6 +167,119 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     with pytest.raises(RuntimeError, match="released or superseded"):
         worker.activation_gate.check(first)
     worker.shared_handle.release()
+
+
+@pytest.mark.parametrize(('event', 'status'), [
+    ('generation.finished', 'completed'),
+    ('generation.failed', 'error'),
+    ('generation.detached', 'interrupted'),
+])
+async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_path, event, status):
+    shared = pytest.importorskip("amplifier_foundation.session.shared_state")
+    worker = Worker()
+    worker.workspace, worker.home = tmp_path / "workspace", tmp_path / "home"
+    worker.workspace.mkdir()
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id="outcome-session", queued_inputs=0,
+                                     inbox=asyncio.Queue(), generation=None)
+    worker.shared_store = shared.SharedSessionStore(worker.workspace, "outcome-session", root=tmp_path / "shared")
+    worker.shared_store_stamp = shared.file_stamp
+    worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    worker.config_inputs = ()
+    worker.parked_history_stamp = worker.history_stamp()
+    worker.parked_config_stamp = None
+    checkpoint_calls = []
+    async def checkpoint(outcome):
+        checkpoint_calls.append(outcome)
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(
+        get=lambda name: None,
+        get_capability=lambda name: checkpoint if name == "live.checkpoint" else None))
+    try:
+        with patch("amplifier_web.runtime_worker.publish"):
+            worker.observe({'type': event})
+            await worker.park(activation=worker.activation)
+        assert checkpoint_calls == [status]
+    finally:
+        if worker.shared_handle:
+            worker.shared_handle.release()
+
+
+def test_child_generation_does_not_change_root_checkpoint_outcome():
+    worker = Worker()
+    worker.runtime = SimpleNamespace(session_id='root')
+    with patch('amplifier_web.runtime_worker.publish'):
+        worker.observe({'type': 'generation.finished', 'session_id': 'root'})
+        worker.observe({'type': 'generation.failed', 'session_id': 'child', 'root_session_id': 'root'})
+    assert worker.root_generation_outcome == 'completed'
+
+
+@pytest.mark.parametrize(('event', 'expected'), [
+    ('generation.failed', 'error'),
+    ('generation.detached', 'interrupted'),
+])
+async def test_terminal_root_execution_checkpoints_observed_outcome_during_worker_cleanup(event, expected):
+    worker = Worker()
+    worker.runtime = SimpleNamespace(session_id='root')
+    worker.workspace = Path.cwd()
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    worker.shared_handle = SimpleNamespace(release=lambda: None)
+    checkpoint_calls = []
+    async def checkpoint(status):
+        checkpoint_calls.append(status)
+    async def cleanup():
+        return None
+    async def close():
+        return None
+    async def read():
+        await asyncio.Event().wait()
+    worker.session = SimpleNamespace(
+        coordinator=SimpleNamespace(get=lambda name: None,
+            get_capability=lambda name: checkpoint if name == 'live.checkpoint' else None),
+        cleanup=cleanup)
+    worker.read = read
+    with patch('amplifier_web.runtime_worker.publish'):
+        worker.observe({'type': event, 'session_id': 'root'})
+    worker.controls = SimpleNamespace(close=close)
+    async def fail():
+        raise RuntimeError('ContextLengthError: terminal root failure')
+    worker.execution = asyncio.create_task(fail())
+    await asyncio.gather(worker.execution, return_exceptions=True)
+    with patch('amplifier_web.runtime_worker.publish'):
+        worker.executed(worker.execution)
+        await worker.run()
+    assert checkpoint_calls == [expected]
+    assert worker.shared_handle is None
+
+
+async def test_terminal_cleanup_does_not_checkpoint_completed_or_yielding_outcomes():
+    async def run(outcome, yielding=False):
+        worker = Worker()
+        worker.runtime = SimpleNamespace(session_id='root')
+        worker.workspace = Path.cwd()
+        worker.activation_gate = ActivationGate()
+        worker.activation = worker.activation_gate.activate()
+        worker.shared_handle = SimpleNamespace(release=lambda: None)
+        worker.ownership = SimpleNamespace(yielding=yielding, registration=None)
+        calls = []
+        async def checkpoint(status):
+            calls.append(status)
+        async def cleanup():
+            return None
+        async def read():
+            await asyncio.Event().wait()
+        worker.session = SimpleNamespace(
+            coordinator=SimpleNamespace(get_capability=lambda name: checkpoint if name == 'live.checkpoint' else None),
+            cleanup=cleanup)
+        worker.read = read
+        worker.root_generation_outcome = outcome
+        worker.shutdown.set()
+        await worker.run()
+        return calls
+    assert await run('completed') == []
+    assert await run('interrupted', yielding=True) == []
 
 
 @pytest.mark.asyncio
@@ -296,6 +417,13 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((child['sessionId'], child['rootSessionId']), ('native-root-child', 'fixture-session'))
         message = next(p for k,p in self.events if k == 'assistant.message')
         self.assertEqual(message['sessionId'], 'fixture-session')
+
+    async def test_child_generation_keeps_its_identity_while_root_is_mapped_to_app_alias(self):
+        self.session['runtimeSessionId'] = 'native-root'
+        await self.manager.start(self.session, self.emit)
+        await asyncio.sleep(0)
+        generation = next(payload for kind, payload in self.events if kind == 'runtime.generation')
+        self.assertEqual((generation['sessionId'], generation['rootSessionId']), ('child', 'fixture-session'))
 
     async def test_native_identity_alias_is_used_when_runtime_id_is_not_set(self):
         self.session['nativeIdentity'] = 'native-root'
