@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 
-@pytest.mark.parametrize("entrypoint", ["probe", "fresh-worker", "resumed-worker"])
+@pytest.mark.parametrize("entrypoint", ["probe", "fresh-worker", "resumed-worker", "failed-worker"])
 def test_real_runtime_uses_active_module_cache(entrypoint):
     python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
     if not python:
