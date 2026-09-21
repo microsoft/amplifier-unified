@@ -116,7 +116,7 @@ try{
  // Recovery startup must skip the optional renderer, preserving its saved
  // selection until the user explicitly restores the standard viewer.
  await page.goto(url+'/?shell=recovery');
- await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor({state:'attached'});
+ await page.locator('[aria-label="Message Amplifier"]').waitFor({state:'attached'});
  await expect(side.getByText('Recovery mode uses standard viewers.')).toBeVisible();
  assert.equal(await page.getByRole('article',{name:'Reading view'}).count(),0);
  await expect.poll(async()=>(await view('secondary')).activation?.status).toBe('error');

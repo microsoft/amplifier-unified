@@ -190,8 +190,8 @@ class ClientViews:
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
         return snapshot
 
-    def save(self):
-        pending = set(self.dirty)
+    def save(self, identity=None):
+        pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
         for identity in pending:
             value = copy.deepcopy(self.records[identity])
             # The artifact store already owns large bodies. A presentation

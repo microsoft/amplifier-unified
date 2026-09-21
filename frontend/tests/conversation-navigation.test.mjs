@@ -46,3 +46,9 @@ test('display cache is bounded independently of the saved library',()=>{
  const nav=createConversationNavigation(1);nav.remember(state('a'));nav.remember(state('b'));
  nav.begin(state('b'),'a');assert.equal(nav.apply(state('b')).sessions.find(row=>row.id==='a').historyLoading,true);
 });
+
+test('a retained hidden dirty viewer blocks speculative navigation too',()=>{
+ const navigation=createConversationNavigation(),state={selectedSessionId:'one',sessions:[{id:'one'},{id:'two'}],canvas:{open:false},canvasWorkspace:{views:[{viewId:'secondary',dirty:true}]},view:{}};
+ assert.equal(navigation.begin(state,'two'),null);
+ assert.equal(navigation.apply(state),state);
+});

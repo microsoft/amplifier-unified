@@ -43,3 +43,13 @@ export function providerFields(metadata,config={}){
   });
  });
 }
+
+// Candidate positions are meaningful only for the exact choices that opened
+// the order draft. Refresh a stale draft before allowing it to be applied.
+export function currentRoutingOrder(candidates,role,order){
+ return !!order&&order.role===role&&order.source===JSON.stringify(candidates)&&Array.isArray(order.ids)&&order.ids.length===candidates.length&&new Set(order.ids).size===candidates.length&&order.ids.every(id=>candidates.some((_,index)=>String(index)===id));
+}
+export function routingOrderDraft(candidates,role,previous){
+ if(currentRoutingOrder(candidates,role,previous))return previous;
+ return {role,ids:candidates.map((_,index)=>String(index)),source:JSON.stringify(candidates),notice:previous?.role===role?'The choices changed. Review the current order before saving.':''};
+}

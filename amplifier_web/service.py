@@ -59,6 +59,7 @@ ACTION_DEFINITIONS = {
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
     "canvas.select": ("Reopen a saved artifact by ID from canvasArtifacts", schema({"id":string(100)})),
+    "canvas.visibility": ("Show or hide this client's retained Canvas viewer without discarding edits. Bind sessionId and canvasId from the current state; optionally address an attached clientId.", schema({"open":{"type":"boolean"},"sessionId":{"type":["string","null"]},"canvasId":{"type":["string","null"]},"clientId":string(200)},["open","sessionId","canvasId"])),
     "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
@@ -279,6 +280,8 @@ class AppService:
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        from .default_typography import upgrade_default
+        upgrade_default(self.state, self.default_theme())
         from .settings_migration import migrate_settings
         migrate_settings(self.data_dir, {self.default_workspace, *[s["workspace"] for s in self.state["sessions"] if not s.get("historyManaged") and s.get("workspace")]})
         if row and not self.state.get("sharedVoiceMigration"):
@@ -605,7 +608,7 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
-        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
@@ -687,8 +690,16 @@ class AppService:
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+            if action == 'canvas.visibility':
+                from .canvas_visibility import update
+                return update(self, args, command_id, fingerprint, include_state=include_state)
             from .canvas_library import remember, restore, fork_artifacts
             self.canvas_views.guard_transition(action, args)
+            if action == 'canvas.close' and client_id is not None:
+                views = self.canvas_views.record()
+                views.pop('retained', None)
+                views.pop('primaryBinding', None)
+                views.pop('secondaryBinding', None)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
