@@ -455,7 +455,8 @@ class RuntimeControls:
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":
             self.require_idle()
-            return await self.invoke(args)
+            return await self.invoke(args, generic=True,
+                provenance={"source": "tool.invoke", "actor": args.get("actor", "ui")})
         raise ValueError(f"Unsupported runtime control: {operation}")
 
     async def provider_control(self, operation, args):
@@ -654,11 +655,14 @@ class RuntimeControls:
         await self.checkpoint()
         return await self.mode("mode.list", {})
 
-    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None):
+    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False):
         coordinator = coordinator or self.coordinator
         bound_arguments = copy.deepcopy(bound_arguments)
         import jsonschema
         name, arguments = args.get("name"), args.get("arguments", {})
+        if generic:
+            from .tool_authority import require_generic_tool
+            require_generic_tool(name, arguments)
         tool = (coordinator.get("tools") or {}).get(name)
         if tool is None:
             raise ValueError("Tool is not mounted")
@@ -675,6 +679,14 @@ class RuntimeControls:
             arguments = pre.data["tool_input"]
             jsonschema.validate(arguments,getattr(tool,"input_schema",{}))
             data = {**data,"tool_input":arguments}
+        if generic:
+            # Approval may modify an otherwise valid ordinary call. Recheck the
+            # actual arguments before execution, including in-place changes.
+            try:
+                require_generic_tool(name, arguments)
+            except ValueError:
+                await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
+                raise
         if bound_arguments is not None and arguments != bound_arguments:
             await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
             raise ValueError("A policy modification cannot redirect an identity-bound operation")

@@ -15,6 +15,14 @@ handle is authorized by its conversation, runtime session and mounted owner; an
 OS PID or tool-supplied session identifier is not authority. Child runtimes stay
 bound to the owning conversation while cancellation targets their exact mount.
 
+Generic `runtime.control` / `tool.invoke` remains available for ordinary tools,
+legacy Bash runs and passive process observations. Managed Bash mutations and
+the computation tool require the shared operation/computation actions instead.
+Agent invocation is bound to its calling conversation, and the host supplies the
+actor to the normal approval hooks. A hook cannot redirect an ordinary Bash call
+into a managed mutation. This restriction does not change direct model tool calls
+inside their existing mounted-session tool dispatcher.
+
 Managed process production requires a tool implementation that supports the
 optional `operations.observe` capability and trusted `managed_processes: true`
 configuration. This change does not enable it in default bundles. The host

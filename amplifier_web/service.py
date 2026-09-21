@@ -644,6 +644,17 @@ class AppService:
                 raise AppError('Select a chat first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
             raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
+        if action == 'runtime.control' and args.get('operation') == 'tool.invoke':
+            if origin == 'agent' and (not caller_session_id or args.get('sessionId') != caller_session_id):
+                raise AppError('Tool invocation must target the calling conversation.', 409)
+            from .tool_authority import require_generic_tool
+            invocation = dict(args.get('args') or {})
+            try:
+                require_generic_tool(invocation.get('name'), invocation.get('arguments', {}))
+            except ValueError as exc:
+                raise AppError(str(exc), 403) from None
+            # Actor is host provenance, never a claim from the request body.
+            args['args'] = {**invocation, 'actor': origin}
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
@@ -1946,6 +1957,10 @@ class AppService:
             if args['action'] == 'runtime.control' and str(action_args.get('operation', '')).startswith('native.'):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Native provider actions belong to the calling conversation.', 409)
+                action_args['sessionId'] = session_id
+            if args['action'] == 'runtime.control' and action_args.get('operation') == 'tool.invoke':
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Tool invocation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'] == 'bundle.default' and action_args.get('scope') == 'workspace':
                 action_args.setdefault('workspace', self._session(session_id)['workspace'])
