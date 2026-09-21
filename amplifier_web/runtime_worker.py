@@ -10,8 +10,10 @@ import uuid
 
 try:
     from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+    from .message_delivery import contains_input
 except ImportError:  # Executed directly inside the isolated runtime.
     from runtime_protocol import MAX_MESSAGE_BYTES, encode_message
+    from message_delivery import contains_input
 
 # Reserve a dedicated protocol descriptor before module imports. CLI displays and
 # provider logs are routed to stderr, never mistaken for model/app events.
@@ -457,7 +459,7 @@ class Worker:
                 if settled:
                     self.shutdown.set()
             return
-        if op not in {"send", "resume", "control", "worker.steer", "worker.stop", "approval"}:
+        if op not in {"send", "retry", "resume", "control", "worker.steer", "worker.stop", "approval"}:
             await self._command_serial(data)
             return
         try:
@@ -471,8 +473,8 @@ class Worker:
                     await self._command_serial(data)
                 finally:
                     self.activation_gate.reset(token)
-            if op == "control":
-                # A control-only action does not wake the live loop's inbox.
+            if op in {"control", "retry"}:
+                # A control-only action or duplicate retry does not wake the inbox.
                 # It must therefore schedule its own settled release.
                 await self.park(activation=self.activation)
         except Exception as exc:
@@ -519,7 +521,15 @@ class Worker:
                 return
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
-            elif op == "send":
+            elif op in {"delivery", "retry"} and (
+                data['input_id'] in self.runtime.accepted or
+                contains_input(
+                    await self.session.coordinator.get('context').get_messages(), data['input_id'])
+            ):
+                result = {"accepted": True, "delivery": "accepted", "duplicate": True}
+            elif op == "delivery":
+                result = {"delivery": "unknown"}
+            elif op in {"send", "retry"}:
                 from amplifier_module_loop_live.runtime import Input
                 self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
                 self.context_bindings = dict(list(self.context_bindings.items())[-64:])

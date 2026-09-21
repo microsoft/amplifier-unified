@@ -92,6 +92,8 @@ ACTION_DEFINITIONS = {
     "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(12000000)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
+    "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
+    "conversation.retry": ("Explicitly resend an unconfirmed latest message, preserving its input identity and attachments. Unknown delivery requires confirmUncertain after the user accepts that prior effects might repeat. Never call as a passive check.", schema({"sessionId": string(200), "inputId": string(200), "confirmUncertain": {"type": "boolean"}}, ["sessionId", "inputId"])),
     "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
     "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
@@ -638,7 +640,7 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+        if action in {'conversation.send', 'conversation.retry', 'conversation.delivery', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
@@ -693,7 +695,7 @@ class AppService:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
                 checked = self._session(checked_session)
-                if action not in {'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
+                if action not in {'conversation.delivery', 'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
                     raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
                 if checked.get('nativeProject') and action != 'session.inspect':
                     reason = checked.get('historyReadOnlyReason') or checked.get('historyError')
@@ -703,9 +705,9 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action == 'session.naming' and args.get('regenerate')) or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action == 'session.naming' and args.get('regenerate')) or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
-            if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
+            if action in {"conversation.send","conversation.retry","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             if action == 'canvas.visibility':
@@ -1084,6 +1086,40 @@ class AppService:
                 session.pop("error", None)
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
+            elif action == "conversation.delivery":
+                session = self._session(args['sessionId'])
+                pending.append((self._check_delivery, (session['id'], args['inputId'])))
+            elif action == "conversation.retry":
+                from .message_delivery import find_message
+                session = self._session(args['sessionId'])
+                message = find_message(session, args['inputId'])
+                if message is None:
+                    raise AppError('This message is not saved in this conversation.', 404)
+                if message.get('delivery', {}).get('status') == 'accepted':
+                    diagnostic_result = {'delivery': 'accepted', 'resent': False}
+                else:
+                    if message.get('delivery', {}).get('status') not in {'unknown', 'failed', 'sending'}:
+                        raise AppError('This message is not awaiting delivery recovery.', 409)
+                    if message is not next((m for m in reversed(session['messages']) if m.get('role') == 'user'), None):
+                        raise AppError('Only the latest unconfirmed message can be resent. Review later messages first.', 409)
+                    if session['status'] in {'working', 'starting', 'running', 'stopping'} or message.get('delivery', {}).get('status') == 'sending':
+                        raise AppError('Wait for the current delivery or work to settle before resending.', 409)
+                    if not args.get('confirmUncertain'):
+                        raise AppError('Delivery is uncertain. Confirm that sending again may repeat earlier work.', 409, code='delivery_uncertain')
+                    if not self.runtime or not hasattr(self.runtime, 'retry'):
+                        raise AppError('This runtime does not support message recovery.', 409)
+                    original_status = session['status']
+                    original_turn = copy.deepcopy(next((t for t in session.get('execution', {}).get('turns', []) if t['id'] == args['inputId']), {}))
+                    self._delivery(session, args['inputId'], 'sending')
+                    self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
+                    session['status'] = 'working'
+                    session.pop('error', None)
+                    tree = ensure_turn(session, args['inputId'], message['text'])
+                    turn = next(t for t in tree['turns'] if t['id'] == args['inputId'])
+                    turn['phase'] = 'running'
+                    turn['retriedAt'] = time.time()
+                    turn.pop('endedAt', None)
+                    pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
                 session["status"] = "stopping"
@@ -1320,6 +1356,7 @@ class AppService:
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
             if action == 'session.create':receipt['sessionId']=session['id']
             if action == 'conversation.send':receipt['delivery']='sending'
+            if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
@@ -1338,10 +1375,25 @@ class AppService:
             self._publish_smart_tool_update(defer_publish=defer_publish)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
-            if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current:
+            if (action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"conversation.delivery", "conversation.retry"}):
                 # Runtime progress callbacks acquire self.lock. Admission must
                 # run outside it, and the HTTP receipt waits for the actual ack.
-                await fn(*values)
+                try:
+                    value = await fn(*values)
+                except Exception:
+                    if action == 'conversation.retry' and command_id:
+                        async with self.lock:
+                            receipt['result'] = {'delivery': 'unknown', 'message': 'Delivery could not be confirmed. Check delivery before trying again.'}
+                            self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
+                            self.db.commit()
+                    raise
+                if action in {'conversation.delivery', 'conversation.retry'}:
+                    result['result'] = value
+                    async with self.lock:
+                        if command_id:
+                            receipt['result'] = value
+                            self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
+                            self.db.commit()
             else:
                 kwargs = {'defer_publish': True} if defer_publish else {}
                 task = self._task(self._guard(fn, values, kwargs))
@@ -1465,6 +1517,51 @@ class AppService:
                 self._publish()
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
+    async def _check_delivery(self, sid, input_id):
+        from .message_delivery import find_message
+        async with self.lock:
+            session = copy.deepcopy(self._session(sid))
+        message = find_message(session, input_id)
+        if message is None:
+            return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
+        status = message.get('delivery', {}).get('status', 'unknown')
+        if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
+            try:
+                evidence = await self.runtime.delivery(session, input_id)
+                if evidence == 'accepted':
+                    status = 'accepted'
+            except Exception:
+                pass  # A failed probe cannot prove that the input was not delivered.
+        async with self.lock:
+            current = self._session(sid)
+            current_message = find_message(current, input_id)
+            if current_message and current_message.get('delivery', {}).get('status') == 'accepted':
+                status = 'accepted'
+            if status == 'accepted':
+                self._delivery(current, input_id, status)
+                self._publish()
+        return {'delivery': status, 'message': {
+            'accepted': 'Amplifier received this message. It was not sent again.',
+            'sending': 'The original send is still in progress. Nothing was sent again.',
+        }.get(status, 'Delivery is still uncertain. Checking does not resend it. Sending again may repeat work if the earlier attempt ran.')}
+
+    async def _retry_message(self, session, text, input_id, original_status, original_turn):
+        result = await self._send(session, text, input_id, preserve_draft=True, retry=True)
+        if isinstance(result, dict) and result.get('duplicate'):
+            async with self.lock:
+                current = self._session(session['id'])
+                if current['status'] == 'working' and current.get('execution', {}).get('currentTurnId') == input_id:
+                    current['status'] = original_status
+                    self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
+                    turn = next(t for t in current['execution']['turns'] if t['id'] == input_id)
+                    for key in ('phase', 'endedAt', 'retriedAt'):
+                        if key in original_turn:
+                            turn[key] = original_turn[key]
+                        else:
+                            turn.pop(key, None)
+                    self._publish()
+        return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
+
     def _delivery(self, session, input_id, status):
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row.get('role') == 'user'), None)
         row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
@@ -1483,13 +1580,14 @@ class AppService:
         if row:
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
 
-    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False):
+    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .runtime import RuntimeOperationPending, SessionInUseError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
-            await self.runtime.send(session, text, input_id, self.on_runtime_event)
+            sender = self.runtime.retry if retry else self.runtime.send
+            send_result = await sender(session, text, input_id, self.on_runtime_event)
         except RuntimeOperationPending:
             async with self.lock:
                 self._delivery(self._session(session['id']), input_id, 'unknown')
@@ -1498,6 +1596,17 @@ class AppService:
             # input and live work; the exact late receipt can reconcile delivery.
             raise
         except SessionInUseError as exc:
+            if retry:
+                async with self.lock:
+                    current = self._session(session['id'])
+                    self._delivery(current, input_id, 'unknown')
+                    from .session_ownership import blocked
+                    from .execution import finish
+                    blocked(current, exc.owner)
+                    finish(current, 'stopped')
+                    self._activity(current, 'stopped', 'Resend was not admitted. This conversation is owned elsewhere.')
+                    self._publish()
+                raise AppError('This conversation is owned elsewhere. Continue here before resending.', 409, code='session_busy') from exc
             async with self.lock:
                 current = self._session(session["id"])
                 current["messages"] = [
@@ -1549,6 +1658,7 @@ class AppService:
                 current['draft'] = ''
             current.pop("lockOwner", None)
             self._publish()
+        return send_result
 
     async def _end_call(self):
         try:
