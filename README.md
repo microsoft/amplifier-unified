@@ -108,6 +108,11 @@ uv run pytest
 uv build
 ```
 
+For a new qualification against current Amplifier branches, use the
+[explicit latest-component resolution workflow](docs/latest-component-qualification.md).
+Existing locks remain available for reproducing earlier results.
+
+
 For authentication changes, also run the real Chromium login smoke:
 `uv run --with playwright pytest tests/test_browser_auth.py`
 (install Chromium once with `uv run --with playwright playwright install chromium`).

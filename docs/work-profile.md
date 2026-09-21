@@ -34,6 +34,11 @@ bundle rather than using the small standalone root.
 
 ## Run acceptance
 
+The commands below reproduce the committed Python resolution. Before a new
+current-main qualification, use the [latest-component resolution workflow](latest-component-qualification.md)
+for `scripts/work_profile` and retain its new lock and source evidence. This
+resolution step makes no model calls.
+
 From this repository root:
 
 ```sh
