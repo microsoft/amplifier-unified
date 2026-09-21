@@ -1,6 +1,6 @@
 # Settings experience
 
-Settings now has a persistent sidebar with 24 destinations in 11 sections. Appearance, Voice, Notifications and Updates are first-class sections. The navigation is a new presentation of the existing forms and public actions. No configuration migration is required.
+Settings has 24 destinations in 11 sections. Wide windows use a persistent sidebar; windows narrower than 960 pixels use a full-screen index and one navigation level at a time. Appearance, Voice, Notifications and Updates are first-class sections. The navigation is a new presentation of the existing forms and public actions. No configuration migration is required.
 
 ## Completeness contract
 
@@ -41,7 +41,7 @@ The [inventory](settings-inventory.csv) tracks all 321 requirements from the set
 - `settingsSection` and `settingsExpanded` stay the public navigation contract. Old saved pages and agent actions resolve into the new structure. `panel: appearance` remains supported.
 - Visited editors remain mounted until the dialog closes. Ordinary drafts use the existing shared view state; private provider keys and notification credentials stay only in component memory until explicitly saved. Closing a dialog never saves a draft.
 - The shared activity and outside-dismissal contracts remain in effect. Pending receipts are distinct from completed background work, and navigation remains usable during independent operations.
-- Existing skin tokens control color and typography. Structural layout supports mobile widths down to 320 pixels, independently scrolling navigation/content, and keyboard access.
+- Existing skin tokens control color and typography. Structural layout supports widths down to 320 pixels and keyboard access. Compact Settings has one content scroll area between its Back/Close header and contextual actions.
 
 ## Release validation
 
@@ -57,7 +57,7 @@ Browser acceptance runs against isolated app instances with synthetic configurat
 
 ## Collections and ordering
 
-Models, bundles, and Smart Tools use a compact collection with a focused detail panel. The full row, including its chevron and padding, is clickable; a checkbox remains a separate action. Narrow screens use a list/detail back button. Provider access is disclosed below the model and provider options. Nonsecret provider drafts survive switching selections, while unsaved private keys remain only in component memory.
+Models, bundles, and Smart Tools use a compact collection with a focused detail panel. The full row, including its chevron and padding, is clickable; a checkbox remains a separate action. Narrow screens use the shared Settings Back header for collection details. Provider access is disclosed below the model and provider options. Nonsecret provider drafts survive switching selections, while unsaved private keys remain only in component memory.
 
 Routing profiles display all task roles in a searchable collection, with only one role and candidate editor open. Provider family names and named connections remain distinct; catalog suggestions never restrict explicit model IDs or patterns. Unknown role, candidate, and profile fields survive ordinary edits and are available through JSON. Saving still affects future preparation, not a running session.
 
@@ -74,3 +74,16 @@ All matching entries are shown up to 50; larger results use pages of 40. Filteri
 `providers.reorder` and `bundles.reorder` accept `ids` and `expectedIds`; the existing single-item move actions remain compatible. Ordering and catalog draft selections use the existing nonsecret editor view state.
 
 The additional `test:settings-collections-browser` gate covers 13 routing roles, unknown fields, provider refresh during editing, drag insertion/preview/cancel/drop/save, private drafts across selection, independent checkboxes, composition exclusions, 51 catalog entries, filtering, cross-page selection, partial installation and retry, and narrow layouts. Its temporary fixture uses an OS-assigned port and performs no external package or account calls.
+
+
+## Narrow screens and mobile
+
+Below 960 pixels, opening Settings starts at its section index. A section replaces the index; details, routing choices and preference ordering replace their parent list. The header and browser Back follow the same hierarchy. Two local tabs remain visible; longer tab groups become a labelled section picker. Existing agent links still open their requested destination directly, with the complete parent path available through Back.
+
+Visited editors stay mounted. Back restores list scroll and keeps filters, catalog selections, ordinary drafts and private provider/notification fields. Unfinished order drafts remain available on returning to the order screen; Cancel discards them and Save applies them through the existing action. Browser history stores only an opaque Settings token and depth, never form contents, credentials or configuration. Reload reuses those navigation entries without adding another history stack; private unsaved credentials remain memory-only and do not survive reload or closing Settings.
+
+Primary provider, routing, module, catalog, connection, notification, permissions, diagnostics, registry, readiness and bundle-default actions move to a bottom action region. The actual controls are moved, with explicit form association for native submit buttons. Inactive editors cannot contribute footer actions. Safe-area padding and visual-viewport resizing keep that region above a soft keyboard; normal pinch zoom remains browser-controlled. Mobile inputs use 16px text, regular copy 14px, and controls provide 44–48px or larger touch targets.
+
+The dedicated order screen retains the lifted drag preview, moving rows and between-item insertion line. Dragging starts only from the handle, so ordinary list touches scroll. A large position selector supplies a non-drag alternative. Catalog selection persists across details, filtering and pagination; the footer reports the total and the count outside the current page/filter. The existing all-through-50 / pages-of-40 behavior and per-package retry lifecycle are unchanged.
+
+`test:settings-mobile-browser` exercises the built app against temporary synthetic storage on an OS-assigned port. It covers all 24 destinations at 320/390/736/960/1280 pixels, browser Back/Forward/reload, private draft isolation, nested routing, touch dragging, unfinished order navigation, saved order, list scroll restoration, cross-page catalog selection, form-associated footer submission, a simulated keyboard viewport reduction, and short landscape layout. The existing completeness gate also covers 192 light/dark layouts. These checks do not substitute for physical iOS/Android keyboard or screen-reader acceptance.

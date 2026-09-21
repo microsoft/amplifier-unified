@@ -1,4 +1,5 @@
-import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {SettingsActions,SettingsLayoutContext} from './settings-layout';
+import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {ArrowLeft,ArrowUp,ArrowDown,ChevronRight,GripVertical} from 'lucide-react';
 import './settings-collections.css';
 
@@ -9,11 +10,11 @@ export function CollectionRow({id,label,description,selected,onSelect,checked,on
  </div>;
 }
 export function Collection({list,children,detailOpen=true,onBack,label='items'}){
- const listRef=useRef(null),detailRef=useRef(null);
- useEffect(()=>{if(detailOpen&&typeof window!=='undefined'&&window.matchMedia('(max-width:959px)').matches){detailRef.current?.focus({preventScroll:true});detailRef.current?.scrollIntoView({block:'start'});}},[detailOpen]);
+ const listRef=useRef(null),detailRef=useRef(null),layout=useContext(SettingsLayoutContext);
+ useEffect(()=>{if(detailOpen&&layout.compact){detailRef.current?.focus({preventScroll:true});}},[detailOpen,layout.compact]);
  const back=()=>{onBack?.();requestAnimationFrame(()=>listRef.current?.querySelector('button[aria-current=true],button')?.focus({preventScroll:true}));};
  return <div className={'a-collection'+(detailOpen?' detail-open':'')}><div className="a-collection-list" ref={listRef}>{list}</div><div className="a-collection-detail" ref={detailRef} tabIndex={-1}>
- {onBack&&<button type="button" className="a-link a-collection-back" data-action="view.update" onClick={back}><ArrowLeft/>Back to {label}</button>}{children}</div></div>;
+ {onBack&&!layout.compact&&<button type="button" className="a-link a-collection-back" data-action="view.update" onClick={back}><ArrowLeft/>Back to {label}</button>}{children}</div></div>;
 }
 export function moveItem(ids,id,to){const next=ids.filter(key=>key!==id);next.splice(Math.max(0,Math.min(to,next.length)),0,id);return next;}
 
@@ -68,6 +69,6 @@ export function OrderEditor({title,description,items,ids,onChange,onSave,onCance
   </div>;})}</div>
   {floating&&<div className="a-order-floating" aria-hidden="true" style={{left:floating.left,top:floating.top,width:floating.width}}><GripVertical/><strong>{rows.get(floating.id)?.label}</strong><small>{rows.get(floating.id)?.description}</small></div>}
   <span className="a-sr-only" role="status" aria-live="polite">{announcement}</span>{error&&<p role="alert" className="a-danger">{error}</p>}
-  <div className="a-dialog-actions"><button type="button" className="a-primary" disabled={busy||!!floating} data-action={action} onClick={onSave}>{busy?'Saving order…':'Save order'}</button><button type="button" className="a-soft" disabled={busy} data-action="view.update" onClick={onCancel}>Cancel</button></div>
+  <SettingsActions><button type="button" className="a-primary" disabled={busy||!!floating} data-action={action} onClick={onSave}>{busy?'Saving order…':'Save order'}</button><button type="button" className="a-soft" disabled={busy} data-action="view.update" onClick={onCancel}>Cancel</button></SettingsActions>
  </section>;
 }
