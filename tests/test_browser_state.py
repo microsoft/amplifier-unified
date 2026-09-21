@@ -115,6 +115,34 @@ async def test_offpage_error_and_approval_still_produce_attention(app_factory):
     assert app._session(rows[4500]['id'])['title'] == 'Renamed off page'
 
 
+async def test_selected_worker_count_reuses_unfiltered_navigation_and_keeps_other_parent_fallback(app_factory, monkeypatch):
+    app = app_factory()
+    rows = catalog(app, count=3, workers=60, workspaces=2)
+    selected, other = rows[0]['id'], rows[1]['id']
+    original = browser_state.direct_child
+    calls = []
+
+    def counted(*args):
+        calls.append(1)
+        return original(*args)
+
+    for history, expected_scans in [
+        ({'sessionId': selected, 'filter': '', 'index': 1}, 0),
+        ({'sessionId': selected, 'filter': 'no matching workers', 'index': 0}, 0),
+        ({'sessionId': other, 'filter': '', 'index': 0}, len(rows)),
+    ]:
+        monkeypatch.setattr(browser_state, 'direct_child', original)
+        app.state['view']['subagentHistory'] = history
+        derived = app.projections.browser(app.state)
+        calls.clear()
+        monkeypatch.setattr(browser_state, 'direct_child', counted)
+        # An explicit off-page detail target must not change selected counts.
+        public = browser_state.snapshot(app.state, derived, session_id=other)
+        assert next(row for row in public['sessions'] if row['id'] == selected)['subagentCount'] == 60
+        assert public['selectedSessionId'] == selected
+        assert len(calls) == expected_scans
+
+
 async def test_native_overrides_survive_restart_without_persisting_the_catalog(tmp_path, app_factory):
     directories = [native_session(tmp_path/'native', f'root-{index}') for index in range(8)]
     app = app_factory(); await app.history.refresh()

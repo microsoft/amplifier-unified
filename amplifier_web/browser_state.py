@@ -77,8 +77,11 @@ def snapshot(state, derived, *, session_id=None):
             full.add(row['id'])
     visible.update(full)
     visible.add(derived['subagentNavigation']['scope']['sessionId'])
+    workers = derived['subagentNavigation']
+    selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
+                         else sum(direct_child(child, selected_row) for child in state.get('sessions', []))) if selected_row else 0
     result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
-                           **({'subagentCount': sum(direct_child(child, row) for child in state.get('sessions', []))} if row['id'] == selected else {})}
+                           **({'subagentCount': selected_children} if row['id'] == selected else {})}
                           for row in state.get('sessions', []) if row['id'] in visible]
     from .conversation_library import projection as organization_projection
     result['conversationOrganization'] = organization_projection(state, visible)

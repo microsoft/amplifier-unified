@@ -25,16 +25,26 @@ class StateProjections:
         return self.get(('attention',), lambda: snapshot(state))
 
     @staticmethod
-    def scope(state):
-        view = {key: value for key, value in state.get('view', {}).items()
-                if key.startswith('nav') or key == 'subagentHistory'}
+    def view_scope(state, keys):
+        view = state.get('view', {})
+        return json.dumps({key: view[key] for key in keys if key in view}, sort_keys=True)
+
+    @classmethod
+    def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
-                json.dumps(view, sort_keys=True))
+                cls.view_scope(state, ('navChatScope', 'navFilter', 'navStatusFilter',
+                                      'navArchive', 'navCollection', 'navChatPage')))
+
+    @classmethod
+    def workspace_scope(cls, state):
+        return (state.get('selectedWorkspaceId'),
+                cls.view_scope(state, ('navWorkspaceBrowseFor', 'navWorkspacePath',
+                                      'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode')))
 
     def workspaces(self, state):
         from .workspace_navigation import _index, snapshot
         index = self.get(('workspace-index',), lambda: _index(state))
-        return self.get(('workspaces', *self.scope(state)), lambda: snapshot(state, index=index))
+        return self.get(('workspaces', *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
     def chats(self, state):
         from .chat_navigation import catalog, registry, snapshot
@@ -43,13 +53,16 @@ class StateProjections:
         filters = {key: view.get(key) for key in ('navChatScope', 'navFilter', 'navStatusFilter', 'navArchive', 'navCollection')}
         registrations = self.get(('chat-registry',), lambda: registry(state))
         index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(state, indexed=registrations))
-        return self.get(('chats', *self.scope(state)), lambda: snapshot(state, indexed=index))
+        return self.get(('chats', *self.chat_scope(state)), lambda: snapshot(state, indexed=index))
 
     def browser(self, state):
         from .browser_state import navigation
         attention = self.attention(state)
         scoped = {**state, 'attention': attention}
-        navigation_state = self.get(('browser-navigation', *self.scope(state)), lambda: navigation(scoped, chats=self.chats))
+        # Layout/drafts do not affect navigation. Workspace controls belong to
+        # their own explorer query, while worker history only affects this one.
+        key = ('browser-navigation', *self.chat_scope(state), self.view_scope(state, ('subagentHistory',)))
+        navigation_state = self.get(key, lambda: navigation(scoped, chats=self.chats))
         return {**navigation_state, 'attention': attention, 'workspaceExplorer': self.workspaces(scoped)}
 
     def shell_key(self, state):

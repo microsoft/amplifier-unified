@@ -47,6 +47,15 @@ def _within(path, parent):
 
 def _root(paths):
     """Leave each workspace selectable, including filesystem-root workspaces."""
+    return _common_root(tuple((type(path), str(path)) for path in paths))
+
+
+@lru_cache(maxsize=4)
+def _common_root(paths):
+    # Folder geometry depends only on immutable paths, not chat activity or
+    # client selection. Include exact spelling: Windows path equality folds
+    # case, while navigation must retain the current registry's spelling.
+    paths = [kind(value) for kind, value in paths]
     parents = [path.parent for path in paths]
     if not parents or any(path == path.parent for path in paths):
         return None
@@ -60,12 +69,28 @@ def _root(paths):
 
 
 def _ancestors(path, root):
+    yield from _ancestor_paths((type(path), str(path)), (type(root), str(root)) if root is not None else None)
+
+
+@lru_cache(maxsize=8192)
+def _ancestor_paths(path, root):
+    path = path[0](path[1])
+    root = root[0](root[1]) if root is not None else None
+    result = []
     while path != root:
         if path == path.parent:
-            yield None
-            return
+            result.append(None)
+            break
         path = path.parent
-        yield path
+        result.append(path)
+    return tuple(result)
+
+
+@lru_cache(maxsize=4)
+def _registry_labels(paths):
+    # Labels depend on the full set of paths. Availability or registration
+    # changes naturally select a different key; callers only read this map.
+    return path_labels(paths)
 
 
 def _index(state):
@@ -169,7 +194,7 @@ def snapshot(state, *, index=None):
     rows = [_row(path, nodes[path], selected) for path in paths]
     if query:
         rows = [row for row in rows if _matches(row, query)]
-    labels = path_labels([str(path) for path, node in nodes.items() if node.get('workspace')])
+    labels = _registry_labels(frozenset(str(path) for path, node in nodes.items() if node.get('workspace')))
     for row in rows:
         row['pathLabel'] = labels.get(row['path'], row['path'])
     rows.sort(key=lambda row: ((-row['recentActivityAt'] if mode == 'recent' and not query else 0), row['name'].casefold(), row['path'].casefold(), row['path']))
