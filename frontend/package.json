@@ -57,7 +57,8 @@
     "test:settings-collections-browser": "node tests/settings-collections-browser.mjs",
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
-    "test:registry-browser": "node tests/registry-validation-browser.mjs"
+    "test:registry-browser": "node tests/registry-validation-browser.mjs",
+    "test:themes-browser": "node tests/theme-definitions-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

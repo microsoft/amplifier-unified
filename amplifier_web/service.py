@@ -74,6 +74,7 @@ ACTION_DEFINITIONS = {
             "prewarm_on_select": {"type": "boolean"}}, "additionalProperties": False}}, ["patch"])),
     "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
+    "session.naming": ("Enable or disable future automatic naming, or generate a name once without sending a chat turn. Regeneration preserves the Auto preference and rejects late results after a newer edit.", schema({"id": string(100), "automatic": {"type": "boolean"}, "regenerate": {"const": True}}, ["id"])),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
     "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
@@ -220,12 +221,16 @@ ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
+    ACTION_DEFINITIONS[theme_action] = (("Apply a complete theme definition or CSS skin, or patch the current palette." if theme_action == 'theme.apply' else "Preview a complete theme definition or CSS skin, or a palette patch, on an attached client."), ACTION_DEFINITIONS[theme_action][1])
     theme_spec = ACTION_DEFINITIONS[theme_action][1]
     theme_spec['properties']['tokens'] = {'type': 'object', 'minProperties': 1, 'additionalProperties': False,
         'properties': {key: {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'} for key in THEME_TOKENS}}
+    from .themes import DEFINITION
+    theme_spec['properties']['definition'] = DEFINITION
     theme_spec['required'] = ['name']
-    theme_spec['oneOf'] = [{'required': ['css'], 'not': {'required': ['tokens']}},
-                           {'required': ['tokens'], 'not': {'required': ['css']}}]
+    theme_spec['oneOf'] = [{'required': [key], 'not': {'anyOf': [{'required': [other]} for other in ('css', 'tokens', 'definition') if other != key]}}
+                           for key in ('css', 'tokens', 'definition')]
+
 
 
 
@@ -325,6 +330,8 @@ class AppService:
         recover_legacy(self.state,self.db,self.data_dir)
         from .naming import automatic,refresh
         for session in self.state['sessions']:
+            if session.get('naming', {}).get('status') == 'working':
+                session['naming'] = {'status': 'error', 'error': 'Name generation was interrupted. You can try again.'}
             session.setdefault('titleSource','automatic' if automatic(session) else 'manual')
             try:
                 refresh(self.data_dir,session,migrate=True)
@@ -617,11 +624,11 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
-        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
-            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
+        if action in {'conversation.send', 'worker.spawn', 'call.start', 'message.edit', 'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'runtime.control', 'configuration.inspect', 'configuration.apply', 'bundle.save', 'bundle.export', 'bundle.preview', 'bundle.switch', 'bundle.fork'}:
+            sid = args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None) or self.state.get('selectedSessionId')
             if sid:
                 checked_session = sid
-                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'configuration.inspect', 'configuration.apply'} else None))
+                implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
@@ -682,7 +689,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"conversation.send","session.takeover","worker.spawn","worker.steer","call.start","feedback.submit","feedback.comment","feedback.get"} or (action == 'session.naming' and args.get('regenerate')) or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"conversation.send","worker.spawn","worker.steer","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -834,14 +841,35 @@ class AppService:
                 self.runtime.configure_retention(policy)
                 self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
                 self.state['runtime']['retention'] = dict(policy)
+            elif action == "session.naming":
+                from .naming import set_automatic
+                session = self._session(args['id'])
+                if 'automatic' not in args and not args.get('regenerate'):
+                    raise AppError('Choose automatic naming or regeneration.')
+                if args.get('regenerate'):
+                    if not self.runtime or not callable(getattr(self.runtime, 'control', None)):
+                        raise AppError('The naming runtime is unavailable.', 503)
+                    if session.get('naming', {}).get('status') == 'working':
+                        raise AppError('A chat name is already being generated.', 409)
+                    if session.get('status') in {'starting', 'working', 'running', 'stopping'} or session.get('configurationBusy'):
+                        raise AppError('Wait for the current work to finish before regenerating its name.', 409)
+                    if not session.get('messages'):
+                        raise AppError('Send a message before generating a chat name.')
+                if 'automatic' in args:
+                    set_automatic(self.data_dir, session, args['automatic'])
+                if args.get('regenerate'):
+                    session['naming'] = {'status': 'working'}
+                    pending.append((self._regenerate_name, (copy.deepcopy(session),)))
+                diagnostic_result = {'automatic': session.get('autoName'), 'status': session.get('naming', {}).get('status', 'idle')}
             elif action == "session.rename":
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
                 session=self._session(args['id'])
-                from .naming import persist
-                renamed = {**session, 'title':args['title'].strip(), 'titleSource':'manual'}
+                from .naming import persist, set_automatic
+                renamed = {**session, 'title':args['title'].strip(), 'titleSource':'manual','autoName':False}
+                set_automatic(self.data_dir, renamed, False)
                 persist(self.data_dir,renamed,shared_rename=True)
-                session.update({key:renamed[key] for key in ('title','titleSource','nativeNameSource','description') if key in renamed})
+                session.update({key:renamed[key] for key in ('title','titleSource','nativeNameSource','description','autoName') if key in renamed})
             elif action == 'session.takeover':
                 session = self._session(args['id'])
                 if not self.runtime:
@@ -1310,6 +1338,33 @@ class AppService:
             except TimeoutError:
                 pass
         return self.smart_tools.operation(identity) or {'id': identity, 'status': 'pending'}
+
+    async def _regenerate_name(self, source):
+        from .naming import accept_generated, directory_for, refresh
+        identity = source['id']
+        active = True
+        async def emit(kind, payload):
+            # Naming preparation cannot turn a saved error into a new failed or
+            # active conversation. Actual naming telemetry remains observable.
+            if active and kind in {'runtime.status', 'runtime.error', 'session.naming'}:
+                return
+            await self.on_runtime_event(kind, payload)
+        try:
+            await self.runtime.start(source, emit)
+            candidate = await self.runtime.control(identity, 'session.naming', {})
+            async with self.lock:
+                session = self._session(identity)
+                _, accepted = accept_generated(directory_for(self.data_dir, session), candidate, explicit=True)
+                refresh(self.data_dir, session)
+                session['naming'] = {'status': 'ready' if accepted else 'conflict',
+                    **({} if accepted else {'error': 'The name or Auto preference changed. Your newer choice was kept.'})}
+                self._publish()
+        except Exception as exc:
+            async with self.lock:
+                self._session(identity)['naming'] = {'status': 'error', 'error': str(exc)}
+                self._publish()
+        finally:
+            active = False
 
     async def _guard(self, fn, args, kwargs=None):
         try:

@@ -81,7 +81,7 @@ export function useShell(state,dispatch,clientId){
   // must not block evidence of already-rendered content.
   return request('/api/actions',{method:'POST',body:{action:'shell.report',args:{clientId,revision:current.revision,previewId:current.preview?.id||null,instances,message}}}).catch(()=>{});
  },[clientId]);
- return {data,error,composition,hostFor,recover,report,setPresentation,ready:!!data,recovery,clientId};
+ return {data,error,composition,hostFor,recover,report,refresh,setPresentation,ready:!!data,recovery,clientId};
 }
 
 class ModuleBoundary extends React.Component{

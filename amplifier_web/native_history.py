@@ -8,6 +8,7 @@ Call ``scan`` from a worker thread: older CLI metadata can contain large configs
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from .naming import automatic_metadata
 import copy
 import json
 import math
@@ -279,7 +280,7 @@ class NativeHistory:
                 'createdAt': created, 'updatedAt': updated, 'recentActivityAt': recent, 'turnCount': turns,
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
-                'nameSource': _text(meta.get('name_source')),
+                'nameSource': _text(meta.get('name_source')), 'autoName': automatic_metadata(meta),
             })
         # A matching slug is necessary, but not sufficient when distinct paths
         # collide (e.g. /a-b/c and /a/b-c). Never silently choose one.

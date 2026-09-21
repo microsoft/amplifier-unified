@@ -4,12 +4,64 @@ from pathlib import Path
 
 from amplifier_foundation.session.metadata import NAMING_FIELDS, SessionMetadataStore
 
-FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs')
+FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs', 'name_auto', 'name_auto_revision', 'name_policy_revision')
 PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled conversation'}
 
 
 def automatic(session):
+    if 'autoName' in session:
+        return bool(session['autoName'])
     return session.get('titleSource') != 'manual' and session.get('nativeNameSource') != 'manual'
+
+
+def automatic_metadata(metadata):
+    if 'name_auto' in metadata:
+        # An explicit rename by another host takes precedence over a previous
+        # opt-in. Generated writes advance this marker with the name revision.
+        return bool(metadata['name_auto']) and not (metadata.get('name_source') == 'manual'
+            and metadata.get('name_revision', 0) != metadata.get('name_auto_revision', 0))
+    return not metadata.get('name') or metadata.get('name_source') in {'fallback', 'generated'}
+
+
+def set_automatic(home, session, enabled):
+    from amplifier_foundation.session.metadata import metadata_lock
+    store = SessionMetadataStore(directory_for(home, session))
+    if store.history.exists():
+        with metadata_lock(store.history.session_dir):
+            current = store.read()
+            current.update(name_auto=enabled, name_auto_revision=current.get('name_revision', 0),
+                           name_policy_revision=current.get('name_policy_revision', 0) + 1)
+            # Foundation's lock and existing atomic metadata writer are shared
+            # with its name writer; no separate name store or transcript write.
+            store.history._save_metadata_unlocked(current)
+    session['autoName'] = enabled
+
+
+def accept_generated(directory, candidate, *, explicit=False):
+    """CAS both the name and its policy; a late result never wins over edits."""
+    from amplifier_foundation.session.metadata import metadata_lock
+    from datetime import datetime, UTC
+    store = SessionMetadataStore(directory)
+    with metadata_lock(store.history.session_dir):
+        current = store.read()
+        revision = current.get('name_revision', 0)
+        if candidate.get('name_revision', 0) != revision or candidate.get('name_policy_revision', 0) != current.get('name_policy_revision', 0):
+            return current, False
+        enabled = automatic_metadata(current)
+        if not explicit and not enabled:
+            return current, False
+        title = candidate.get('name')
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError('The naming model did not return a chat name.')
+        now = datetime.now(UTC).isoformat()
+        current.update(name=title.strip()[:200], name_source='generated' if enabled else 'manual',
+                       name_revision=revision + 1, name_updated_at=now, name_generated_at=now)
+        if 'name_auto' in current:
+            current['name_auto_revision'] = revision + 1
+        if isinstance(candidate.get('description'), str):
+            current.update(description=candidate['description'][:1000], description_updated_at=now)
+        store.history._save_metadata_unlocked(current)
+        return current, True
 
 
 def legacy(directory):
@@ -74,6 +126,7 @@ def refresh(home, session, *, migrate=False):
         source = metadata.get('name_source', 'manual')
         display_source = ('manual' if session.get('titleSource') == 'manual' else 'native') if session.get('historyManaged') else source
         session.update(title=metadata['name'], titleSource=display_source, nativeNameSource=source)
+        session['autoName'] = automatic_metadata(metadata)
     if 'description' in metadata:
         session['description'] = metadata['description']
     return metadata

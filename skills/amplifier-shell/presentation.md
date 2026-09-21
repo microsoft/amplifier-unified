@@ -31,3 +31,16 @@ changing viewers, dirty state, or recovery.
 Do not promise arbitrary new slots, replacement chat composers, or full
 conversation decomposition: those need host implementation unless the current
 action schemas and SDK explicitly expose them.
+
+## Themes
+
+Use `definition` for a new complete theme, `tokens` for an intentional partial
+palette edit, or `css` for a full legacy-compatible skin. Do not apply only a
+palette and claim the old theme's decorative background has been replaced.
+Read [the theme contract](../../docs/shell/themes.md) for both palettes,
+background values, preview scope, the separate `presentation.decorations`
+preference, and verification. Discover the installed action schemas first.
+
+A theme chooser is an agent-created conversation surface demonstration, not a
+required shipped app. Reuse its surface ID while refining it and preserve its
+state. Use host preview/apply actions for both user and agent selections.
