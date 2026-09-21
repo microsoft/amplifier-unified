@@ -16,7 +16,8 @@ The command connects to the existing service using its configured local port,
 control-token file and app-owned CA. It does not start another service. Source
 installation builds the Ratatui frontend and needs Rust/Cargo and a C linker;
 launching an installed platform wheel does not. Omit `[tui]` to install the web
-host alone. Native builds support macOS/Linux; Windows uses WSL2.
+host alone. Application updates retain and validate an installed optional TUI.
+Native builds support macOS/Linux; Windows uses WSL2.
 
 For a different host, use `amplifier-unified tui --server https://host.example:8443
 --token-file /private/host-token --ca-file /private/host-ca.crt`. Remote connections

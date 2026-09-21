@@ -109,6 +109,14 @@ wheels = [
 ]
 
 [[package]]
+name = "amplifier-app-tui"
+version = "0.4.0rc1"
+source = { git = "https://github.com/bkrabach/amplifier-app-tui?rev=2b31b415a5bde1bac669e2f28e97569b8c061753#2b31b415a5bde1bac669e2f28e97569b8c061753" }
+dependencies = [
+    { name = "aiohttp" },
+]
+
+[[package]]
 name = "amplifier-bundle-context-intelligence"
 version = "0.2.0"
 source = { git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main#9d9759d6357ffc99fdbfb9e040136996b6c4ca9c" }
@@ -171,6 +179,11 @@ dependencies = [
     { name = "tinycss2" },
 ]
 
+[package.optional-dependencies]
+tui = [
+    { name = "amplifier-app-tui" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -181,6 +194,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12,<4" },
+    { name = "amplifier-app-tui", marker = "extra == 'tui'", git = "https://github.com/bkrabach/amplifier-app-tui?rev=2b31b415a5bde1bac669e2f28e97569b8c061753" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "amplifier-core", specifier = ">=1.6.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
@@ -194,6 +208,7 @@ requires-dist = [
     { name = "six", specifier = ">=1.16,<2" },
     { name = "tinycss2", specifier = ">=1.4,<2" },
 ]
+provides-extras = ["tui"]
 
 [package.metadata.requires-dev]
 dev = [
