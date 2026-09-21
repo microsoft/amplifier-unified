@@ -31,7 +31,8 @@ export function ReleaseHistory({application,state}){
  // Construct URLs from stable versions, never from release-authored text.
  const tag=/^v?\d+\.\d+\.\d+$/.test(application.latest||'')?application.latest:null;
  return <section className="a-release-history" aria-label="Changelog">
-  <h4>Changelog</h4>
+  <details className="a-update-disclosure"><summary>Changelog</summary>
+  <div className="a-update-disclosure-body">
   <p className="a-caption">Application release history · installed notes are available offline.</p>
   {application.releaseNotesWarning&&<p className="a-release-notes-warning" role="status">{application.releaseNotesWarning} {tag&&<a href={'https://github.com/microsoft/amplifier-unified/releases/tag/'+tag} target="_blank" rel="noreferrer">View published release</a>}</p>}
   {!entries.length&&<p className="a-caption">No release notes are included with this installation.</p>}
@@ -40,5 +41,6 @@ export function ReleaseHistory({application,state}){
    <ul>{release.changes.map((change,i)=><li key={i}>{change}</li>)}</ul>
    {release.notices.map(notice=><div key={notice.id} className="a-release-notice archived"><Notice notice={notice}/>{reviewed.has(identity(release,notice))&&<span className="a-release-reviewed"><Check aria-hidden="true"/>Reviewed</span>}</div>)}
   </details>)}
+  </div></details>
  </section>;
 }

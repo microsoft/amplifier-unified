@@ -51,5 +51,5 @@ echo '2/4 Installing the prebuilt terminal client…'
   --index-url https://pypi.org/simple "$work/__WHEEL_NAME__"
 echo '3/4 Connecting to your Unified service…'
 "$candidate/bin/python" "$work/install.py" "$work/profile.json" "$root" "$candidate"
-echo '4/4 Ready. Open the launcher shown above whenever you want to return.'
+echo '4/4 Ready. Run the terminal command shown above whenever you want to return.'
 echo 'Your conversations and tools continue running on the connected service.'

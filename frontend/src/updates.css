@@ -12,7 +12,8 @@
 .a-app-update-versions dd{margin:0;font-size:var(--a-text-base,14px);font-weight:600;overflow-wrap:anywhere}
 #amp-one .a-app-update .a-app-update-channel,#amp-one .a-app-update .a-app-update-detail{margin:7px 0 0}
 .a-app-update .a-check-result{margin-bottom:0}
-.a-updates>.a-dialog-actions{flex-wrap:wrap;gap:8px}
+.a-update-controls>.a-dialog-actions{flex-wrap:wrap;gap:8px}
+.a-update-controls>.a-update-options{margin-top:16px}
 @media(max-width:440px){.a-app-update{padding:12px}.a-app-update-heading{align-items:flex-start}.a-app-update-versions{gap:9px 18px}}
 
 .a-update-diagnostics{margin:14px 0;min-width:0}
@@ -46,3 +47,10 @@
 .a-release-notice.archived{border-left-width:1px;background:transparent}
 .a-release-reviewed{display:inline-flex;align-items:center;gap:5px;color:var(--a-muted,#5c6475);font-size:var(--a-text-base,14px)}
 .a-release-notes-warning{font-size:var(--a-text-base,14px);line-height:1.55}
+
+.a-update-disclosure{margin:18px 0;min-width:0;border:1px solid var(--a-line,#dce3ef);border-radius:10px;overflow-wrap:anywhere}
+.a-update-disclosure>summary{box-sizing:border-box;min-height:44px;padding:12px;cursor:pointer;font-size:var(--a-text-base,14px);font-weight:600;border-radius:9px;color:var(--a-ink)}
+.a-update-disclosure>summary:hover{background:var(--a-tint,#f3f1fc)}
+.a-update-disclosure>summary:focus-visible{outline:2px solid var(--a-accent,#6556bd);outline-offset:2px}
+.a-update-disclosure-body{padding:0 12px 12px;min-width:0}
+.a-release-history>.a-update-disclosure{margin:0}

@@ -42,15 +42,10 @@ export function UpdateSettings({state,act}){
    <p className="a-caption a-app-update-channel">Published GitHub releases · app updates restart the local server.</p>
    {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-app-update-detail">{appDetail}</p>)}
   </div>
-  <ReleaseNotices application={application} state={state} act={act}/>
-  <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4><p className="a-caption">Bundles, modules, and libraries load on the next resumed turn after activation.</p>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?(issues.length?'No installable updates found; unresolved source conditions are listed below.':'No updates available from the last check.'):'Check for updates to see what’s new.'}</p>}</div>
-  {!!configuredIssues.length&&<div><h4>Needs attention</h4><SourceList items={configuredIssues} state={state} act={act} id="update-issues"/></div>}
-  {items.some(item=>item.kind==='history')&&<SourceList items={items.filter(item=>item.kind==='history')} state={state} act={act} id="historical-source-settings"/>}
-  {!!unknown.length&&<div><h4>Other cached sources</h4><p className="a-caption">{unknown.length} {unknown.length===1?'source':'sources'}: {unknownSummary}.</p><p className="a-caption">Usage is unknown. These sources may still be needed by your bundles. Checks and updates continue; cached files are kept.</p>{!!unknownIssues.length&&<SourceList items={unknownIssues} state={state} act={act} id="unknown-source-issues"/>}</div>}
+  <div className="a-update-controls" data-part="update-controls">
   <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!!updates.pendingRestart||(!available.length&&!appAvailable&&!pending)} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>{installLabel}</button>{updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}</div>
   {(appAvailable||updates.pendingApp)&&available.length>0&&<p className="a-caption">The app updates first and restarts the server. Ecosystem updates can be installed afterward.</p>}
   <ResultNotice phase={resultPhase} message={resultMessage}/>
-  <ReleaseHistory application={application} state={state}/>
   <UpdateDiagnostics state={state} act={act}/>
   {updates.lastCheck&&<p className="a-caption a-check-inline"><Check/>Last checked {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
   <div className="a-update-options">
@@ -59,6 +54,13 @@ export function UpdateSettings({state,act}){
    <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
   </div>
   <p className="a-caption">Checks include the app and ecosystem while the local server is running. Updates activate when work and calls are idle. Automatic app installation includes a server restart. Pins and local edits stay unchanged.</p>
+  </div>
+  <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4><p className="a-caption">Bundles, modules, and libraries load on the next resumed turn after activation.</p>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?(issues.length?'No installable updates found; unresolved source conditions are listed below.':'No updates available from the last check.'):'Check for updates to see what’s new.'}</p>}</div>
+  {!!configuredIssues.length&&<div><h4>Needs attention</h4><SourceList items={configuredIssues} state={state} act={act} id="update-issues"/></div>}
+  {!!unknown.length&&<div><h4>Other cached sources</h4><p className="a-caption">{unknown.length} {unknown.length===1?'source':'sources'}: {unknownSummary}.</p><p className="a-caption">Usage is unknown. These sources may still be needed by your bundles. Checks and updates continue; cached files are kept.</p>{!!unknownIssues.length&&<SourceList items={unknownIssues} state={state} act={act} id="unknown-source-issues"/>}</div>}
   {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<><p className="a-caption">Source inventory for troubleshooting version pins and checks.</p><SourceList items={items} state={state} act={act} id="update-sources"/></>}</div>}
+  <ReleaseNotices application={application} state={state} act={act}/>
+  {items.some(item=>item.kind==='history')&&<details className="a-update-disclosure" data-part="historical-source-settings"><summary>Older conversation settings</summary><div className="a-update-disclosure-body"><SourceList items={items.filter(item=>item.kind==='history')} state={state} act={act} id="historical-source-settings"/></div></details>}
+  <ReleaseHistory application={application} state={state}/>
  </ActivityRegion>;
 }

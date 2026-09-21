@@ -5,8 +5,10 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shlex
+import shutil
 import ssl
 import sys
 import tempfile
@@ -28,6 +30,72 @@ def write(path, contents, mode=0o600):
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+COMMAND_MARKER = '# Amplifier Terminal managed command v1'
+COMMAND_SOURCE = """
+import json, os, re, sys
+from pathlib import Path
+try:
+    root = Path(sys.argv[1])
+    identity = json.loads((root / 'default.json').read_text())['id']
+    if not isinstance(identity, str) or not re.fullmatch('[a-f0-9]{32}', identity):
+        raise ValueError()
+    launch = root / 'connections' / identity / 'launch'
+    if not launch.is_file() or not os.access(launch, os.X_OK):
+        raise ValueError()
+except (OSError, ValueError, KeyError, TypeError):
+    print('Terminal setup is incomplete. Finish setup from your Unified service before launching.', file=sys.stderr)
+    raise SystemExit(1)
+os.execv(str(launch), [str(launch), *sys.argv[2:]])
+"""
+
+
+def create_terminal_command(root, environment):
+    """Provide an emulator-independent command without editing the user's shell."""
+    command = root / 'launch'
+    if command.exists() and COMMAND_MARKER not in command.read_text().splitlines()[:2]:
+        raise ValueError('The terminal command location is already in use.')
+    # Use the managed base interpreter, not the candidate venv: a failed install
+    # removes its candidate, while the command must still open the old default.
+    python = (environment / 'bin/python').resolve(strict=True)
+    write(command, '#!/bin/sh\n' + COMMAND_MARKER + '\nexec ' +
+          shlex.join([str(python), '-I', '-c', COMMAND_SOURCE, str(root)]) + ' "$@"\n', 0o700)
+    directory = Path.home() / '.local/bin' if root == Path.home() / '.local/share/amplifier-terminal' else root / 'bin'
+    alias = directory / 'amplifier-terminal'
+    try:
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        alias.symlink_to(command)
+    except FileExistsError:
+        if not alias.is_symlink() or alias.readlink() != command:
+            return command, None
+    except OSError:
+        return command, None
+    return command, alias
+
+
+def create_shortcut(root, connection, server, identity):
+    """Launch directly in Terminal, without typing into an interactive login shell."""
+    label = re.sub('[^A-Za-z0-9.-]', '-', urllib.parse.urlsplit(server).hostname or '')[:60] or 'Unified'
+    if sys.platform == 'darwin':
+        directory = Path.home() / 'Applications' if root == Path.home() / '.local/share/amplifier-terminal' else root
+        shortcut = directory / f'Amplifier Terminal - {label} - {identity[:8]}.terminal'
+        # RunCommandAsShell means use CommandString as the shell itself. No
+        # login shell, startup prompts or input injection precede the client.
+        contents = plistlib.dumps({
+            'type': 'Window Settings', 'name': f'Amplifier Terminal - {label} - {identity[:8]}',
+            'CommandString': shlex.join(['/bin/sh', str(connection / 'launch')]),
+            'RunCommandAsShell': True, 'shellExitAction': 1,
+        }).decode()
+        mode = 0o600
+    else:
+        shortcut = root / f'Amplifier-Terminal-{label}-{identity[:8]}.command'
+        contents = '#!/bin/sh\nexec ' + shlex.quote(str(connection / 'launch')) + ' "$@"\n'
+        mode = 0o700
+    if shortcut.exists():
+        raise ValueError('A launcher already exists at the new connection location.')
+    write(shortcut, contents, mode)
+    return shortcut
 
 
 def install(profile, root, environment):
@@ -86,22 +154,27 @@ exec ''' + shlex.join([str(python), '-m', 'amplifier_tui.connected', *options]) 
               'environment': str(environment), 'tokenFile': str(connection / 'token'),
               'caFile': str(connection / 'ca.crt') if profile['ca'] else None}
     write(connection / 'connection.json', json.dumps(record))
-    label = re.sub('[^A-Za-z0-9.-]', '-', parsed.hostname)[:60] or 'Unified'
-    if sys.platform == 'darwin' and root == Path.home() / '.local/share/amplifier-terminal':
-        shortcut = Path.home() / 'Applications' / f'Amplifier Terminal - {label} - {identity[:8]}.command'
-    else:
-        shortcut = root / f'Amplifier-Terminal-{label}-{identity[:8]}.command'
-    if shortcut.exists():
-        raise ValueError('A launcher already exists at the new connection location.')
-    write(shortcut, '#!/bin/sh\nexec ' + shlex.quote(str(connection / 'launch')) + ' "$@"\n', 0o700)
+    command, alias = create_terminal_command(root, environment)
+    try:
+        shortcut = create_shortcut(root, connection, server, identity)
+    except (OSError, ValueError):
+        shortcut = None
     with (root / '.selection.lock').open('a') as lock:
         os.chmod(root / '.selection.lock', 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         write(environment / '.activated', identity + '\n')
         write(root / 'default.json', json.dumps({'id': identity}))
     print('Connected to ' + server)
-    print('Launcher: ' + str(shortcut))
-    print('Terminal command: ' + shlex.quote(str(connection / 'launch')))
+    found = shutil.which('amplifier-terminal')
+    on_path = alias and found and Path(found).resolve() == command.resolve()
+    print('Run in this terminal: ' + ('amplifier-terminal' if on_path else shlex.quote(str(alias or command))))
+    print('You can use the same command in WezTerm, iTerm2, Terminal, or another terminal app.')
+    if not alias:
+        print('An existing amplifier-terminal command was preserved. Use the full command above.')
+    if shortcut:
+        print('Optional window launcher: ' + str(shortcut))
+    else:
+        print('The optional window launcher was not created. Use the terminal command above.')
     print('Remove this connection from the service setup page to revoke its access.')
     return record
 
