@@ -75,10 +75,13 @@ async def test_changed_extras_can_restage_through_normal_app_command(tmp_path, m
         close.assert_not_awaited()
         monkeypatch.setattr(manager, 'busy', lambda: False)
         await manager.app()
-        close.assert_awaited_once()
+        # Keep the retained host usable until actual shutdown; an installation
+        # or restart failure must not strand it with a terminally closed runtime.
+        close.assert_not_awaited()
         assert service.state['updates']['pendingRestart']['version'] == '99.0.0'
     finally:
         await service.close()
+    close.assert_awaited_once()
 
 
 @pytest.mark.parametrize('present', [False, True])

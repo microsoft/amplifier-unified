@@ -3,6 +3,8 @@ import pytest
 from amplifier_web.service import AppService
 from amplifier_web.management import Management
 from amplifier_web.updates import UpdateManager
+from amplifier_web.runtime import RuntimeManager
+from amplifier_web.runtime_retention import DEFAULT_RETENTION
 from test_service import Runtime
 
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
@@ -23,6 +25,23 @@ async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_pat
     assert not (config/'settings.yaml').exists()
     assert (Path(service.state['maintenance']['retained'])/'config/fixture.txt').read_text()=='private fixture'
     assert len(service.state['sessions'])==1
+    await service.close()
+
+
+async def test_settings_reset_restores_default_runtime_retention(tmp_path):
+    original = RuntimeManager(retention={**DEFAULT_RETENTION, 'max_warm_workers': 0,
+                                         'idle_timeout_hours': 0, 'prewarm_on_select': False})
+    service = AppService(tmp_path/'app', original, workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+
+    await manager.perform('maintenance.reset', {'parts': ['settings'], 'apply': True,
+                                                 'confirmation': 'RESET'})
+
+    assert original._closed
+    assert service.runtime is not original
+    assert service.runtime.retention.settings == DEFAULT_RETENTION
     await service.close()
 
 

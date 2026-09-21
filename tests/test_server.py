@@ -7,6 +7,17 @@ from amplifier_web.server import create_app
 from test_service import Runtime
 
 
+async def test_runtime_alias_tracks_service_replacement(tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service = app['service']
+    replacement = Runtime()
+    await service.install_runtime(replacement)
+    assert service.runtime is replacement
+    assert app['runtime'] is replacement
+    await service.close()
+
+
 async def test_api_rejects_cross_origin_and_serves_state(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False)
     client = await authenticated_client(app)

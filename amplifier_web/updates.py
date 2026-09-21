@@ -28,7 +28,10 @@ def work_paused(state):
 
 def active_release(home):
     path = Path(home) / 'updates' / 'active.json'
-    value = json.loads(path.read_text()) if path.exists() else {}
+    try:
+        value = json.loads(path.read_text())
+    except FileNotFoundError:
+        value = {}
     for field in ('current','previous'):
         identity = value.get(field)
         if identity is not None and (not isinstance(identity,str) or not re.fullmatch(r'[a-f0-9]{32}', identity)):
@@ -683,14 +686,20 @@ class UpdateManager:
             await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,env=env,timeout=900)
 
     async def activate(self, rollback=False):
+        async with self.service.runtime_lifecycle():
+            await self._activate(rollback)
+
+    async def _activate(self, rollback=False):
         if self.lock.locked() or self.awaiting_restart(): return
         async with self.lock:
             if self.closed: return
             pointer=active_release(self.home)
-            target=pointer.get('previous') if rollback else self.service.state['updates'].get('pendingRelease')
+            state=self.service.state['updates']
+            retrying_rollback=rollback and 'pendingRollback' in state
+            target=state.get('pendingRollback') if retrying_rollback else pointer.get('previous') if rollback else state.get('pendingRelease')
             if target is not None and (not isinstance(target,str) or not re.fullmatch(r'[a-f0-9]{32}',target)):
                 raise ValueError('Invalid ecosystem release identity')
-            if rollback and 'previous' not in pointer: return
+            if rollback and not retrying_rollback and 'previous' not in pointer: return
             if not rollback and not target: return
             if target and not (self.directory/'releases'/target/'validated.json').exists():
                 raise ValueError('This ecosystem release has not passed validation')
@@ -701,28 +710,65 @@ class UpdateManager:
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
             async with self.service.lock:
+                if self.service.closed:
+                    return
                 if self.busy():
                     self.service.state['updates'].update(detail='Waiting for active work and calls to finish. Try rollback again when idle.' if rollback else 'Update ready; it will activate when work and calls finish.')
                     self.service._publish()
                     return
+                if rollback:
+                    # Persist the requested target before promotion.  A retry
+                    # after committing active.json must not reinterpret the
+                    # swapped pointer and roll forward again.
+                    self.service.state['updates']['pendingRollback'] = target
                 self.service.state['updates'].update(phase='activating',detail='Switching ecosystem version…')
                 self.service._publish()
+            candidate = None
             try:
                 # New work is gated during this short phase. Old sessions remain
-                # durable; only idle worker processes are closed, then resumed normally.
-                if self.service.runtime: await self.service.runtime.reset()
-                write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
+                # durable.  The pointer is committed only after replacement
+                # construction succeeds, and the live manager is replaced before
+                # its terminal close can leave this host unable to admit work.
+                candidate = self.service.runtime_candidate()
+                # A promotion may have committed before a runtime replacement
+                # or state publication failed.  Its durable pointer already
+                # retains the rollback identity, so finish it without
+                # rewriting previous to the target itself.
+                if pointer.get('current') != target:
+                    write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
+                    if not rollback and 'pendingRollback' in self.service.state['updates']:
+                        # The pointer is now the durable rollback authority for
+                        # this normal promotion.  Discard an older failed
+                        # rollback intent before any later publication can fail.
+                        async with self.service.lock:
+                            self.service.state['updates'].pop('pendingRollback', None)
+                            self.service._publish()
+                await self.service.replace_runtime(candidate)
                 if rollback:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
                 items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' else {})} for row in self.service.state['updates'].get('items',[])]
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
                     available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
+                if rollback or 'pendingRollback' in self.service.state['updates']:
+                    async with self.service.lock:
+                        self.service.state['updates'].pop('pendingRollback', None)
+                        self.service._publish()
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-activation','succeeded')
                 self.inventory=[]
-                write_private(self.directory/'inventory.json','[]')
+                # The release is live and the replacement runtime installed.
+                # A stale inventory is recoverable; it must not rewrite this
+                # successful activation as an installation failure.
+                try:
+                    write_private(self.directory/'inventory.json','[]')
+                except OSError:
+                    pass
+            except asyncio.CancelledError:
+                await self.service.discard_runtime(candidate)
+                raise
             except Exception as error:
+                await self.service.discard_runtime(candidate)
                 from .update_diagnostics import exception_type
                 self.diagnostics.record('ecosystem-activation','failed',errorType=exception_type(error))
                 await self.publish(phase='error',error='Could not activate the ecosystem update; review its diagnostic receipt before retrying.')
