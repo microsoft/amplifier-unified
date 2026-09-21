@@ -75,6 +75,6 @@ export function ModelContent({node,request,error,requestOpen,requestInline,toggl
   <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
   {node.requestDetail?<>{!requestInline&&<button type="button" className="a-link a-execution-request-toggle" data-action="view.update" aria-expanded={requestOpen} onClick={toggleRequest}>{requestOpen?'Hide raw request':'Load raw request'}{!requestOpen&&` · ${node.requestDetail.length.toLocaleString()} characters`}</button>}
    {(requestInline||requestOpen)&&<><ExecutionBlock label="Raw request" text={request.value} loading={request.incomplete}/><FieldStatus label="Request" field={request}/></>}
-  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'The event log does not contain a raw request for this call.'}</small>}
+  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'No recorded raw request is available for this call.'}</small>}
  </>;
 }
