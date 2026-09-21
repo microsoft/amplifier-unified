@@ -39,6 +39,30 @@ async def test_disconnect_keeps_previously_admitted_request_receipt(interactive)
     assert service.smart_tools.operation('accepted') == original
 
 
+async def test_connected_denial_retains_failed_receipt_without_transport(interactive, monkeypatch):
+    service = interactive
+    calls = []
+
+    async def unexpected_transport(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('Ungranted tool must never reach transport')
+
+    monkeypatch.setattr(service.smart_tools, 'execute', unexpected_transport)
+    args = {**arguments(service), 'name': 'ungranted'}
+    accepted = await service.dispatch('smartTools.appCall', args,
+                                      command_id='denied', include_state=False)
+    receipt = await service.wait_smart_tool(accepted['operationId'])
+    assert receipt['status'] == 'failed'
+    assert 'not granted' in receipt['error']
+    assert service.db.execute('SELECT COUNT(*) FROM smart_tool_operations').fetchone()[0] == 1
+    service.state['smartTools']['servers'][0]['status'] = 'disconnected'
+    duplicate = await service.dispatch('smartTools.appCall', args,
+                                       command_id='denied', include_state=False)
+    assert duplicate['duplicate']
+    assert await service.wait_smart_tool('denied') == receipt
+    assert not calls
+
+
 async def test_connection_loss_after_admission_retains_not_sent_receipt(interactive, monkeypatch):
     from amplifier_web.smart_tool_lifecycle import ConnectionUnavailable, CONNECTION_UNAVAILABLE
     service = interactive

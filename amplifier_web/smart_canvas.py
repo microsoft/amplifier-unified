@@ -70,8 +70,6 @@ class SmartCanvas:
 
     def admit_call(self, args):
         canvas, binding = self.binding(args['canvasId'])
-        if args['name'] not in binding['allowedTools']:
-            raise api.AppError('This tool was not granted to this canvas view.', 403)
         server = next(s for s in self.service.state['smartTools']['servers']
                       if s['id'] == binding['serverId'])
         if server.get('status') not in {None, 'connected'}:
