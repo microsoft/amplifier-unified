@@ -404,7 +404,7 @@ def installed_loop_source():
     from urllib.parse import unquote, urlsplit
     distribution = importlib.metadata.distribution('amplifier-module-loop-live')
     direct = json.loads(distribution.read_text('direct_url.json') or '{}')
-    if direct.get('dir_info') is not None:
+    if direct.get('dir_info', {}).get('editable') is True:
         parsed = urlsplit(direct.get('url', ''))
         if parsed.scheme != 'file':
             raise ValueError('The installed loop runtime has unsupported local source metadata.')

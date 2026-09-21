@@ -188,15 +188,18 @@ async def test_refresh_preparation_never_imports_or_mounts_live_runtime(mounted_
     assert not h.path.exists() and not h.writes
 
 
-@pytest.mark.parametrize('editable', [False, True])
-def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatch, editable):
+@pytest.mark.parametrize('source_kind', ['git-wheel', 'editable', 'local-wheel'])
+def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatch, source_kind):
     import importlib.metadata
     import importlib.util
     from amplifier_web.host.session import installed_loop_source, module_source
+    editable = source_kind == 'editable'
     package = tmp_path / ('src/amplifier_module_loop_live' if editable else 'amplifier_module_loop_live')
     package.mkdir(parents=True)
     (package / '__init__.py').write_text('raise AssertionError("Do not import source while locating it")\n')
     direct = {'url': tmp_path.as_uri(), 'dir_info': {'editable': True}} if editable else {'url':'https://example.invalid/loop','vcs_info':{'vcs':'git','commit_id':'a'*40}}
+    if source_kind == 'local-wheel':
+        direct = {'url': (tmp_path / 'local-build-source').as_uri(), 'dir_info': {}}
     distribution = SimpleNamespace(read_text=lambda _: json.dumps(direct), locate_file=lambda path: tmp_path / path)
     monkeypatch.setattr(importlib.metadata, 'distribution', lambda name: distribution)
     monkeypatch.setattr(importlib.util, 'find_spec', lambda name: SimpleNamespace(origin=str(package / '__init__.py')))
