@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.12",
+      "title": "An optional terminal client for shared conversations",
+      "changes": [
+        "Install the optional terminal client and use amplifier-unified tui to join the same conversations as the web app. Each terminal keeps its own selection and draft while messages, results and pending decisions stay shared.",
+        "The terminal supports reconnecting, history browsing, rename, approvals, Stop and cooperative takeover. Closing it leaves work running on the service.",
+        "Automatic naming uses the shared session naming hook and preserves custom names, including against late generated results.",
+        "Application updates retain the optional terminal client. If the installed selection changes after validation, retrying the update validates it again without interrupting active work."
+      ],
+      "notices": [
+        "The terminal client is early access. Voice, uploads, rich canvas, full settings editing and queue/steer remain available through the web app."
+      ]
+    },
+    {
       "version": "0.19.10",
       "title": "Collapse every work section",
       "changes": [

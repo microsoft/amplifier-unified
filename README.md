@@ -7,7 +7,7 @@ A local Python host serving a bundled React interface. One conversation supports
 Install the native TUI alongside Unified:
 
 ```sh
-uv tool install --no-sources 'amplifier-unified[tui] @ git+https://github.com/bkrabach/amplifier-unified'
+uv tool install --no-sources 'amplifier-unified[tui] @ git+https://github.com/microsoft/amplifier-unified'
 amplifier-unified tui
 amplifier-unified tui --session HOST_CONVERSATION_ID
 ```
