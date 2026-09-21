@@ -68,13 +68,20 @@ jobs:
         if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:registry-browser
-      - name: Verify typed surface context through Core and loop-live
+      - name: Check out the community recipe contract
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-bundle-recipes
+          ref: main
+          path: .ci/recipes
+          persist-credentials: false
+      - name: Verify surface context and recipe children through Core and loop-live
         run: |
           mkdir -p "$RUNNER_TEMP/surface-runtime"
           cp amplifier_web/runtime_deps/pyproject.toml "$RUNNER_TEMP/surface-runtime/pyproject.toml"
           uv add --project "$RUNNER_TEMP/surface-runtime" --no-sync --editable "$GITHUB_WORKSPACE/.ci/loop-live"
           uv sync --project "$RUNNER_TEMP/surface-runtime"
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" uv run --no-sync pytest tests/test_app_guidance.py -q
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" uv run --no-sync pytest tests/test_app_guidance.py tests/test_host_children.py::test_real_community_recipe_completes_its_report_step -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend

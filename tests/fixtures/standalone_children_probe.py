@@ -70,7 +70,8 @@ async def run():
         store=SessionStore(Path(tmp)/'sessions')
         runtime=Runtime('parent-session')
         registry=await install_children(parent,prepared,runtime,store,approvals)
-        result=await registry.spawn(agent_name='worker',instruction='first task',parent_session=parent,agent_configs=plan['agents'],sub_session_id='child-session',parent_messages=[{'role':'user','content':'Inherited context'}])
+        # Recipes explicitly pass False even for ordinary in-process steps.
+        result=await registry.spawn(agent_name='worker',instruction='first task',parent_session=parent,agent_configs=plan['agents'],sub_session_id='child-session',parent_messages=[{'role':'user','content':'Inherited context'}],use_subprocess=False)
         assert result['session_id']=='child-session'
         assert result['output']=='Finished **first task**'
         assert created[-1]['id']=='child-session' and created[-1]['parent']=='parent-session'
@@ -126,6 +127,30 @@ async def run():
         assert [r['instance_id'] for r in composed['providers']]==['one','two']
         assert composed['providers'][1]['config']['model']=='selected'
         assert [h['module'] for h in composed['hooks']]==['hooks-approval']
+        count = len(created)
+        for options, message in (
+            ({'use_subprocess': True}, 'Subprocess child sessions are not supported'),
+            ({'use_subprocess': 'false'}, 'use_subprocess must be a boolean'),
+            ({'unexpected_option': False}, 'Unsupported child session options: unexpected_option'),
+            ({'agent_configs': {'worker': {'spawn_mode': 'subprocess'}}}, 'Subprocess child sessions are not supported'),
+        ):
+            try:
+                await registry.spawn('worker', 'must not execute', parent, **options)
+            except ValueError as exc:
+                assert message in str(exc), exc
+            else:
+                raise AssertionError('Unsupported child options were silently ignored')
+        parent.coordinator.config['spawn_mode'] = 'subprocess'
+        try:
+            try:
+                await registry.spawn('worker', 'must not execute', parent)
+            except ValueError as exc:
+                assert 'Subprocess child sessions are not supported' in str(exc), exc
+            else:
+                raise AssertionError('Inherited subprocess mode was silently ignored')
+        finally:
+            parent.coordinator.config.pop('spawn_mode')
+        assert len(created) == count
     await parent.cleanup()
     assert not any(name.startswith(('amplifier_app_cli','amplifier_loop_live_cli')) for name in sys.modules)
     print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'cli_imports':False}))

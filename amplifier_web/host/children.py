@@ -15,6 +15,10 @@ from amplifier_module_loop_live.runtime import Input, Runtime
 from amplifier_module_loop_live.scope import JOB_CALL
 
 _PERSISTENT = contextvars.ContextVar("amplifier_unified_persistent_child", default=False)
+_SUBPROCESS_UNSUPPORTED = (
+    "Subprocess child sessions are not supported by Unified yet. "
+    "Use an in-process recipe step (omit spawn_mode: subprocess) or run this recipe in amplifier-app-cli."
+)
 
 
 def _module_id(row):
@@ -156,9 +160,15 @@ class Children:
     async def spawn(self, agent_name, instruction, parent_session, agent_configs=None, sub_session_id=None,
                     tool_inheritance=None, hook_inheritance=None, orchestrator_config=None,
                     parent_messages=None, provider_preferences=None, self_delegation_depth=0,
-                    session_metadata=None, **kwargs):
+                    session_metadata=None, use_subprocess=False, **kwargs):
         if kwargs:
             raise ValueError("Unsupported child session options: " + ", ".join(kwargs))
+        # Community recipes always supply this flag, including False. Keep
+        # ordinary children on the existing approval/checkpoint/live-host path.
+        if not isinstance(use_subprocess, bool):
+            raise ValueError("use_subprocess must be a boolean")
+        if use_subprocess:
+            raise ValueError(_SUBPROCESS_UNSUPPORTED)
         configs = agent_configs or parent_session.coordinator.config.get("agents", {})
         if agent_name == "self":
             overlay = {}
@@ -207,6 +217,9 @@ class Children:
         if prepared is None:
             raise RuntimeError("Parent bundle is not attached to the standalone host")
         plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance, hook_inheritance=hook_inheritance)
+        # Never silently run an agent requesting process isolation in-process.
+        if plan.get("spawn_mode") == "subprocess":
+            raise ValueError(_SUBPROCESS_UNSUPPORTED)
         if orchestrator_config:
             session_config = plan.setdefault("session", {})
             orchestrator = session_config.setdefault("orchestrator", {})
