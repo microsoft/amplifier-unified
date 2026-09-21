@@ -111,13 +111,12 @@ class ClientViews:
         sync(self.service)
         record = self.records[identity]
         self.dirty.add(identity)
-        sessions = {row["id"]: row for row in self.service._state.get("sessions", [])}
         sid = record.get("selectedSessionId")
-        if sid is not None and sid not in sessions:
+        if sid is not None and not any(row["id"] == sid for row in self.service._state.get("sessions", [])):
             record["selectedSessionId"] = None
             record["canvas"] = {}
-        workspaces = {row["id"] for row in self.service._state.get("workspaces", [])}
-        if record.get("selectedWorkspaceId") not in workspaces:
+        workspace = record.get("selectedWorkspaceId")
+        if not any(row["id"] == workspace for row in self.service._state.get("workspaces", [])):
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
         from .canvas_library import restore_body
         restore_body(record.get("canvas", {}), self.service.db)
