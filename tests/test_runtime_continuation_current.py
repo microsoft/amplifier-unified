@@ -45,3 +45,26 @@ async def test_failed_app_probe_keeps_actual_runtime_available(tmp_path,monkeypa
         assert service.state['updates']['phase']=='error'
         assert not service.runtime._closed
     finally:await service.close()
+
+
+@pytest.mark.parametrize('restriction', ['pending', 'unknown', 'foreign-host'])
+async def test_runtime_replacement_preserves_execution_handoff_authority(tmp_path, restriction):
+    service = AppService(tmp_path / 'app', RuntimeManager(), workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {})
+        session = service._session()
+        if restriction == 'foreign-host':
+            session['executionHost'] = {'scope': 'local', 'id': 'different-host'}
+            message = 'execution host differs'
+        else:
+            session['worktreeHandoffs'] = [{'phase': restriction}]
+            message = 'handoff is pending or unknown'
+        with pytest.raises(ValueError, match=message):
+            service.runtime._check_execution(session['id'])
+        candidate = service.runtime_candidate()
+        async with service.runtime_lifecycle():
+            await service.replace_runtime(candidate)
+        with pytest.raises(ValueError, match=message):
+            candidate._check_execution(session['id'])
+    finally:
+        await service.close()

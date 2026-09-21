@@ -718,6 +718,7 @@ class AppService:
                 await runtime.close()
             raise RuntimeError("The runtime host is closing.")
         self.runtime = runtime
+        self.worktrees.bind_runtime()
         self.state["runtime"]["available"] = runtime is not None
         if hasattr(runtime, "retention"):
             self.state["runtime"]["retention"] = dict(runtime.retention.settings)
