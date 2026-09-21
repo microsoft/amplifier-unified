@@ -179,6 +179,9 @@ def test_local_owned_namespace_rebases_sibling_source_and_concrete_resources(tmp
     assert result.tools[1]['source'] == str(tmp_path / 'unrelated/modules/tool-other')
     assert result.context['owned:notes.md'] == chosen / 'notes.md'
     assert result.source_base_paths['owned'] == chosen
+    from amplifier_web.host.session import module_source
+    config = SimpleNamespace(module_sources={'tool-sibling': '/unrelated/override'})
+    assert module_source(config, False, 'tool-sibling', result.tools[0]['source'], policy) == result.tools[0]['source']
 
 
 def test_resolver_cannot_reintroduce_an_override_for_an_owned_sibling():

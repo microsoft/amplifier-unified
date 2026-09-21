@@ -143,7 +143,14 @@ class HostComponents:
 
     def owns(self, module, source):
         git = git_source(source)
-        return module in self.sources or bool(git and git[0] in self.repositories) or self.source(module, source) != source
+        if module in self.sources or module in self.installed or (git and git[0] in self.repositories):
+            return True
+        if isinstance(source, str):
+            parsed = urlsplit(source)
+            path = Path(unquote(parsed.path)) if parsed.scheme == 'file' else Path(source)
+            if parsed.scheme in ('', 'file') and path.is_absolute():
+                return any(path.is_relative_to(root) for root in [*self.path_roots, *self.roots.values()])
+        return False
 
     def normalize(self, plan):
         result = copy.deepcopy(plan)
