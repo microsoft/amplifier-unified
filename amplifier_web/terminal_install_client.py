@@ -1,0 +1,121 @@
+"""Standalone stdlib installer tail embedded in a downloaded setup script."""
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import ssl
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+def write(path, contents, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def install(profile, root, environment):
+    server = profile['server']
+    parsed = urllib.parse.urlsplit(server)
+    if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment or not parsed.hostname:
+        raise ValueError('Invalid service address')
+    if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'localhost', '127.0.0.1', '::1'}):
+        raise ValueError('A remote service requires verified HTTPS')
+    if profile['expiresAt'] <= time.time():
+        raise ValueError('Setup expired. Download a new setup file.')
+    from importlib.metadata import version
+    from amplifier_tui.launcher import executable
+    if version('amplifier-app-tui') != '0.4.0rc1' or not os.access(executable(None), os.X_OK):
+        raise ValueError('Installed terminal client failed validation')
+    context = ssl.create_default_context(cadata=profile['ca'] or None)
+    data = json.dumps({'grant': profile['grant']}).encode()
+    request = urllib.request.Request(server + '/api/terminal/redeem', data=data,
+                                     headers={'Content-Type': 'application/json'})
+    # Reject redirects: an enrollment secret or device token must never be
+    # forwarded to a different origin or login page.
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), NoRedirect())
+    try:
+        with opener.open(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise ValueError('Setup expired or was already used. Download a new setup file.') from None
+        raise ValueError('The service could not connect this terminal. Download a new setup file and retry.') from None
+    identity, token = result['id'], result['token']
+    if not re.fullmatch('[a-f0-9]{32}', identity) or not re.fullmatch(r'amt_[a-f0-9]{32}\.[A-Za-z0-9_-]{64}', token):
+        raise ValueError('The service returned an invalid connection credential')
+    connection = root / 'connections' / identity
+    write(connection / 'token', token + '\n')
+    write(connection / 'ca.crt', profile['ca'])
+    options = ['--server', server, '--token-file', str(connection / 'token')]
+    if profile['ca']:
+        options += ['--ca-file', str(connection / 'ca.crt')]
+    python = environment / 'bin/python'
+    # argv forwards only view/workspace choices; credential/server overrides
+    # belong to a separate explicit connection, never this saved launcher.
+    launcher = '''#!/bin/sh
+for argument in "$@"; do
+  case "$argument" in
+    --session|--session=*|--resume|--resume=*|--workspace|--workspace=*|--client|--client=*|--state-dir|--state-dir=*|--new|--list-sessions|--version|--help|-h) ;;
+    -*) echo 'This launcher accepts conversation options only. Prepare another connection to change servers.' >&2; exit 2;;
+  esac
+done
+unset AMPLIFIER_UNIFIED_TOKEN AMPLIFIER_UNIFIED_URL
+exec ''' + shlex.join([str(python), '-m', 'amplifier_tui.connected', *options]) + ' "$@"\n'
+    write(connection / 'launch', launcher, 0o700)
+    record = {'id': identity, 'server': server, 'name': profile['name'],
+              'environment': str(environment), 'tokenFile': str(connection / 'token'),
+              'caFile': str(connection / 'ca.crt') if profile['ca'] else None}
+    write(connection / 'connection.json', json.dumps(record))
+    label = re.sub('[^A-Za-z0-9.-]', '-', parsed.hostname)[:60] or 'Unified'
+    if sys.platform == 'darwin' and root == Path.home() / '.local/share/amplifier-terminal':
+        shortcut = Path.home() / 'Applications' / f'Amplifier Terminal - {label} - {identity[:8]}.command'
+    else:
+        shortcut = root / f'Amplifier-Terminal-{label}-{identity[:8]}.command'
+    if shortcut.exists():
+        raise ValueError('A launcher already exists at the new connection location.')
+    write(shortcut, '#!/bin/sh\nexec ' + shlex.quote(str(connection / 'launch')) + ' "$@"\n', 0o700)
+    with (root / '.selection.lock').open('a') as lock:
+        os.chmod(root / '.selection.lock', 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        write(environment / '.activated', identity + '\n')
+        write(root / 'default.json', json.dumps({'id': identity}))
+    print('Connected to ' + server)
+    print('Launcher: ' + str(shortcut))
+    print('Terminal command: ' + shlex.quote(str(connection / 'launch')))
+    print('Remove this connection from the service setup page to revoke its access.')
+    return record
+
+
+def main():
+    try:
+        profile = json.loads(Path(sys.argv[1]).read_text())
+        install(profile, Path(sys.argv[2]).expanduser().resolve(), Path(sys.argv[3]).resolve())
+    except (OSError, ValueError, KeyError, urllib.error.URLError):
+        # HTTP errors and file paths can include private information. Keep the
+        # install failure helpful without printing credentials or response bodies.
+        print('Connection setup failed. Check connectivity and download a fresh setup file. An unused connection can be removed on the setup page.', file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()

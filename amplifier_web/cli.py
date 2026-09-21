@@ -57,6 +57,8 @@ def _parse() -> argparse.Namespace:
     command.add_argument("--resume")
     command.add_argument("--timeout", type=int, default=3600)
     tui = subcommands.add_parser("tui", help="Attach the optional terminal client to an existing service")
+    tui.add_argument('tui_command', nargs='?', choices=['open', 'install', 'status'], default='open')
+    tui.add_argument('--setup-file', help='Install a private setup file downloaded from the service setup page')
     tui.add_argument("--server", default=os.environ.get("AMPLIFIER_UNIFIED_URL"))
     for flag in ("token-file", "ca-file", "client", "state-dir"):
         tui.add_argument("--" + flag)
@@ -196,12 +198,38 @@ def _serve(args, data_dir: Path) -> None:
 
 
 def _tui(args, data_dir):
+    from .terminal_cli import install, saved
+    if args.tui_command == 'install':
+        return install(args, data_dir)
+    if args.setup_file:
+        raise ValueError('--setup-file is only valid with tui install.')
+    managed = saved()
+    if args.tui_command == 'status':
+        print('Terminal connected to ' + managed['server'] if managed else 'No managed terminal installation. Run amplifier-unified tui install.')
+        return
+    if managed:
+        import subprocess
+        options = []
+        if not args.server:
+            args.server = managed['server']
+            args.token_file = args.token_file or managed['tokenFile']
+            args.ca_file = args.ca_file or managed.get('caFile')
+        for key in ('server', 'token_file', 'ca_file', 'client', 'state_dir', 'session'):
+            if getattr(args, key):
+                options += ['--' + key.replace('_', '-'), str(getattr(args, key))]
+        if args.tui_workspace:
+            options += ['--workspace', args.tui_workspace]
+        for key in ('new', 'list_sessions'):
+            if getattr(args, key):
+                options += ['--' + key.replace('_', '-')]
+        print('Connecting to ' + args.server, flush=True)
+        raise SystemExit(subprocess.call([str(Path(managed['environment']) / 'bin/python'), '-m', 'amplifier_tui.connected', *options]))
     try:
         from amplifier_tui.connected import main as launch
     except ModuleNotFoundError as exc:
         if exc.name not in {"amplifier_tui", "amplifier_tui.connected"}:
             raise
-        raise SystemExit("Terminal client is optional. Reinstall Amplifier Unified with its [tui] extra; see the installation guide.") from None
+        raise SystemExit("Terminal client is optional. Run amplifier-unified tui install, or open /setup/terminal on your Unified service.") from None
     options = []
     server = args.server
     if not server:
@@ -229,7 +257,10 @@ def main():
     args = _parse()
     data_dir = _data_dir(args.data_dir)
     if args.command == "tui":
-        return _tui(args, data_dir)
+        try:
+            return _tui(args, data_dir)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(str(exc)) from None
     if args.command == "completion":
         _print_completion(args.shell)
         return

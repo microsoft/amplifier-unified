@@ -4,28 +4,42 @@ A local Python host serving a bundled React interface. One conversation supports
 
 ## Optional terminal client
 
-Install the native TUI alongside Unified:
+On the computer where you want the terminal, open your Unified service's
+**Settings → Advanced → Install app** and choose **Install the Terminal app on
+this computer**, or visit `/setup` and follow its terminal installation link. Download the prepared setup file and run the command shown on that page.
+It installs a prebuilt client, saves a secure connection to that service, and
+creates a launcher. Your workspaces and tools stay on the service host.
+
+For example, open Spark's setup page in your Mac browser: the terminal installs
+on the Mac and connects to Spark. No existing Python, Rust, or personal GitHub
+login is needed on the Mac. Internet access is required during installation.
+This first managed release supports Apple silicon Macs with macOS 26 or later,
+and ARM64 Linux with glibc. It is a guided terminal installer, not a signed native
+desktop installer. See the [installation guide](docs/clients/terminal-installation.md)
+for supported platforms, trust, credentials, and remaining desktop work.
+
+If Unified is already installed on this computer:
 
 ```sh
-uv tool install --no-sources 'amplifier-unified[tui] @ git+https://github.com/microsoft/amplifier-unified'
+amplifier-unified tui install
+amplifier-unified tui status
 amplifier-unified tui
 amplifier-unified tui --session HOST_CONVERSATION_ID
 ```
 
-The command connects to the existing service using its configured local port,
-control-token file and app-owned CA. It does not start another service. Source
-installation builds the Ratatui frontend and needs Rust/Cargo and a C linker;
-launching an installed platform wheel does not. Omit `[tui]` to install the web
-host alone. Application updates retain and validate an installed optional TUI.
-Native builds support macOS/Linux; Windows uses WSL2.
+Installation uses the saved connection when present, otherwise the configured
+local service. To connect another computer without copying credentials, run
+`amplifier-unified tui install --server https://YOUR-SERVICE` and finish through
+the browser. You can also pass a downloaded file with `tui install --setup-file
+/path/to/Amplifier-Terminal-….sh`. These commands always install on the computer
+where they run. They do not start or restart the service.
 
-For a different host, use `amplifier-unified tui --server https://host.example:8443
---token-file /private/host-token --ca-file /private/host-ca.crt`. Remote connections
-verify HTTPS. Tokens are never placed in command arguments. Each terminal gets an
-independent selection and private draft; web and terminal views share host-owned
-conversation work. Quit detaches without stopping it. See the
-[terminal client guide](docs/clients/tui-handoff.md) for supported operations and
-current limitations.
+The existing `[tui]` extra remains available for developer installations; source
+builds need Rust/Cargo and a C linker. Managed installations have a separate,
+versioned environment and preserve existing TUI launchers and development trees.
+Each terminal has its own selection and draft. Quitting detaches without stopping
+host work. The [terminal client guide](docs/clients/tui-handoff.md) describes the
+supported conversation operations.
 
 Automatic conversation names come from the configured ecosystem naming hook on
 the service, shared by web and terminal clients. The hook controls initial naming
