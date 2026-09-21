@@ -18,6 +18,7 @@ try{
  assert.equal(await answer.getByRole('button',{name:'Show full text'}).count(),0);
  assert.equal(detailReads.filter(url=>url.searchParams.get('id')==='long-answer').length,2);
  assert.equal(detailReads.filter(url=>url.searchParams.get('part')==='nodes').length,0);
+ for(const group of await page.locator('button.a-execution-turn-line').all())await group.click();
  const model=page.locator('[data-kind="llm"]'),modelLine=model.locator('.a-execution-line');
  assert.match(await modelLine.innerText(),/pending/);
  assert.equal(await model.locator('button.a-execution-action-line').count(),1);

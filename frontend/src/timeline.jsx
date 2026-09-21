@@ -2,7 +2,7 @@ import {DetailText} from './conversation-detail';
 import {hostNow} from './api';
 import React,{useEffect,useState} from 'react';
 import {ChevronRight,GitBranch,Wrench,MessageCircle,Check,Circle,Square,AlertCircle,Terminal,FileText,FilePenLine,ListChecks} from 'lucide-react';
-import {treeForTurn,usageLabel,isRunning,elapsedLabel,workSize} from './timeline-data';
+import {treeForTurn,usageLabel,isRunning,elapsedLabel} from './timeline-data';
 import {actionContent,cleanSummary} from './execution-content.js';
 import {useExecutionField,ToolContent,ModelContent} from './execution-content.jsx';
 import './execution-content.css';
@@ -41,10 +41,9 @@ export function TurnTimeline({data,turnId,state,act}){
  useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
  if(!tree.roots.length&&!turn.startedAt)return null;
  const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`turn:${turnId}`;
- const collapsible=workSize(nodes)>15||(turn.nodeCounts?.tools||0)+(turn.nodeCounts?.models||0)>15,open=!collapsible||expanded.has(summaryId);
+ const open=expanded.has(summaryId);
  const toggle=id=>{const next=new Set(expanded);next.has(id)?next.delete(id):next.add(id);act('view.update',{patch:{executionExpanded:[...next]}})};
  const tools=turn.nodeCounts?.tools??nodes.filter(node=>node.kind==='tool').length,models=turn.nodeCounts?.models??nodes.filter(node=>node.kind==='llm').length;
  const elapsed=elapsedLabel(turn,now),label=isRunning(turn)?`Working${elapsed?` · ${elapsed}`:'…'}`:elapsed?`Worked for ${elapsed}`:'Work details';
- const Header=collapsible?'button':'div';
- return <section className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><Header className="a-execution-line a-execution-turn-line" {...(collapsible?{'data-action':'view.update','aria-expanded':open,onClick:()=>toggle(summaryId)}:{})}>{collapsible&&<ChevronRight className={`a-execution-chevron ${open?'open':''}`}/>}<span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></Header>{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
+ return <section className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></button>{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
 }
