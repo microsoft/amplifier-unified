@@ -104,6 +104,7 @@ async def test_collector_receives_only_structured_event_and_owns_durable_sink(tm
 
 
 async def test_candidate_install_failure_cannot_replace_host_or_become_generic(tmp_path,monkeypatch):
+    monkeypatch.setattr(app_updates.components,'installed_graph',lambda:[{'name':'amplifier-core','version':'1.6.1'}])
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     manager=UpdateManager(service);service.update_manager=manager
     service.state['updates']['application']={'status':'update','revision':'a'*40,'latest':'99.0.0'}

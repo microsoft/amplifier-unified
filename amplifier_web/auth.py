@@ -7,6 +7,7 @@ import html
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import time
@@ -152,7 +153,7 @@ def is_entry_navigation(request: web.Request) -> bool:
     """
     return (
         request.method in {"GET", "HEAD"}
-        and request.path in {"/", "/login", "/setup"}
+        and request.path in {"/", "/login", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete"}
         and "Origin" not in request.headers
         and request.headers.get("Sec-Fetch-Mode") == "navigate"
         and request.headers.get("Sec-Fetch-Dest") == "document"
@@ -166,12 +167,17 @@ async def auth_required(request: web.Request, handler):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
     # Public, immutable UI resources only. Authentication still gates the SPA,
     # every API, and all user-authored files/canvas documents.
-    public = {"/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
+    public = {"/oauth/mcp/callback", "/oauth/mcp/complete", "/login", "/setup", "/api/ca", "/ca.crt", "/api/health",
               "/manifest.webmanifest", "/sw.js", "/pwa.js", "/offline.html", "/app-pages.css", "/favicon.ico",
               "/branding/favicons/favicon.ico", "/branding/favicons/favicon-32.png",
               "/branding/favicons/apple-touch-icon.png", "/branding/icons/amplifier-icon-128.png",
               "/branding/pwa/pwa-192.png", "/branding/pwa/pwa-512.png"}
     if request.path in public and request.method in {"GET", "HEAD"}:
+        return await handler(request)
+    # Deliberately published snapshots have their own unguessable bearer link.
+    # This exemption grants no app/API/file authority; the handler checks expiry
+    # and revocation on every request and serves escaped inert snapshot content.
+    if request.method in {'GET', 'HEAD'} and re.fullmatch(r'/share/[A-Za-z0-9_-]{43}', request.path):
         return await handler(request)
     if request.path == '/api/terminal/redeem' and request.method == 'POST':
         # This narrowly scoped endpoint verifies a short-lived, single-use setup

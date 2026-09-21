@@ -193,8 +193,9 @@ def _serve(args, data_dir: Path) -> None:
         timer = threading.Timer(1.5, lambda: webbrowser.open(url))
         timer.daemon = True
         timer.start()
+    from .mcp_oauth import SafeAccessLogger
     web.run_app(create_app(data_dir, workspace=args.workspace, server_config=config),
-                host=config["bind"], port=config["port"], ssl_context=secure, print=None)
+                host=config["bind"], port=config["port"], ssl_context=secure, print=None, access_log_class=SafeAccessLogger, access_log_format='%a %t "%r" %s %b')
 
 
 def _tui(args, data_dir):

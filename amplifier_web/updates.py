@@ -400,7 +400,7 @@ class UpdateManager:
         state['application']=application
         latest=version_tuple(application.get('latest'))
         current=version_tuple(__import__('amplifier_web').__version__)
-        if latest and current and latest<=current:
+        if latest and current and latest<=current and not (latest==current and application.get('componentUpdates')):
             application={**application,'current':__import__('amplifier_web').__version__,'status':'current','releaseBehind':latest<current,
                          'detail':'This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if latest<current else 'The latest published application release is installed.'}
             state.update(application=application,appAvailable=False)
@@ -669,21 +669,38 @@ class UpdateManager:
         await self.activate()
 
     async def validate(self,stage,release):
-        from .runtime_environment import stage as stage_runtime
-        await stage_runtime(self, release, [row for row in self.inventory if row.get('status') == 'update' and row.get('eligible')])
-        from .runtime import RuntimeManager
-        command=RuntimeManager()._command(release=release, home=self.home)
-        command[-1]=str(Path(__file__).with_name('update_probe.py'))
+        from .runtime_environment import stage as stage_runtime, receipt_directory
+        from .runtime_qualification import freeze, lock_overrides, verify_recorded
+        receipt=receipt_directory(self.home,release)
+        fresh=not (receipt/'runtime.lock').exists()
+        project=await stage_runtime(self, release, [row for row in self.inventory if row.get('eligible') and (row.get('status') == 'update' or
+            (row.get('kind') == 'runtime dependency' and row.get('status') == 'current'))], finalize=not fresh)
         state=self.service.get_state()
         # Browsing historical CLI projects does not opt their old bundles into
         # this application's update validation or mount missing workspaces.
         configs={(s['workspace'],s['bundle']) for s in state['sessions']
                  if not s.get('historyManaged') and s.get('workspace') and s.get('bundle')}
         configs.add((state['settings']['workspace'],state['settings']['bundle']))
-        env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'',
-            'UV_OVERRIDE':str(Path(__file__).parent/'runtime_deps/compatibility.txt')}
-        for workspace,bundle in sorted(configs):
-            await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,env=env,timeout=900)
+        env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':''}
+        async def probe(project, *, refresh=False):
+            qualified=fresh or (receipt/'runtime-installed.json').exists()
+            overrides=lock_overrides(project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
+            command=[shutil.which('uv'),'run','--locked','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
+            flags=['--install-overrides',str(overrides)] if qualified else []
+            if refresh:flags.append('--refresh-dependencies')
+            for workspace,bundle in sorted(configs):
+                await self.diagnostics.run('ecosystem-probe',process,*command,workspace,bundle,*flags,
+                    env={**env,'UV_OVERRIDE':str(overrides)},timeout=900)
+        if fresh:
+            # The refresh activator dies with each short-lived probe process.
+            # Capture after dynamic module installation, then recreate an
+            # ordinary resolver against the frozen graph before activation.
+            await probe(project,refresh=True)
+            project=await freeze(self,release,project)
+        if (project/'.venv').exists():
+            verify_recorded(project,receipt)
+        await probe(project)
+        verify_recorded(project,receipt)
 
     async def activate(self, rollback=False):
         async with self.service.runtime_lifecycle():

@@ -8,7 +8,7 @@ from .browser_detail import project
 from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
 
-SUMMARY_FIELDS = ('id', 'title', 'titleSource', 'description', 'status', 'workspace',
+SUMMARY_FIELDS = ('id', 'title', 'titleSource', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt',
     'sessionKind', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
     'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
@@ -35,7 +35,7 @@ def direct_child(row, parent):
 
 def navigation(state):
     chat = chat_snapshot(state)
-    header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': ''}
+    header_view = {**state.get('view', {}), 'navChatScope': 'workspace', 'navFilter': '', 'navArchive': 'active', 'navCollection': None}
     scope = {'mode': 'workspace', 'workspaceId': state.get('selectedWorkspaceId'),
              'filter': '', 'selectedSessionId': state.get('selectedSessionId')}
     header_view['navChatPage'] = {**scope, 'index': 0}
@@ -80,6 +80,12 @@ def snapshot(state, derived, *, session_id=None):
     result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': sum(direct_child(child, row) for child in state.get('sessions', []))} if row['id'] == selected else {})}
                           for row in state.get('sessions', []) if row['id'] in visible]
+    from .conversation_library import projection as organization_projection
+    result['conversationOrganization'] = organization_projection(state, visible)
+    # Report history is read through bounded coordination cursors, never copied
+    # into every browser progress snapshot. The worker's latest report remains.
+    result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+                           for worker in row.get('workers', [])]} for row in result['sessions']]
     workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
@@ -94,6 +100,7 @@ def snapshot(state, derived, *, session_id=None):
                       **({'text': message.get('text', '')[:500]} if state.get('notificationSettings', {}).get('preview', True) else {})}
                      for row in state.get('sessions', []) for message in row.get('messages', [])
                      if message.get('role') == 'assistant' and message.get('via') == 'text']
+    notifications.extend({key: value for key, value in row.items() if key != 'text' or state.get('notificationSettings', {}).get('preview', True)} for row in state.get('scheduleNotifications', []))
     notifications.sort(key=lambda row: row.get('createdAt', 0))
     result['notificationMessages'] = notifications[-100:]
     roots = (row for row in state.get('sessions', []) if is_top_level(row))

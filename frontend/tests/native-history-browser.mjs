@@ -89,7 +89,7 @@ try{
  assert.equal(await page.getByRole('button',{name:'Load earlier messages',exact:true}).count(),0);
  await page.getByRole('button',{name:'Refresh workspaces and chats',exact:true}).click();
  assert.ok(calls.some(call=>call.action==='history.refresh'));
- await page.getByRole('button',{name:'Session details',exact:true}).click();
+ await page.getByRole('button',{name:'Chat details',exact:true}).click();
  await page.getByRole('button',{name:'Subagent history (1)',exact:true}).click();
  await page.getByRole('heading',{name:'Subagent history',exact:true}).waitFor();
  await page.getByRole('button',{name:'Saved worker',exact:true}).click();

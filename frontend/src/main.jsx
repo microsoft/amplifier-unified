@@ -3,6 +3,8 @@ import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
+import {OperationsPanel} from './operations';
+import {ComputationPanel} from './computation';
 import {trackAction} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect,ConversationName} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
@@ -18,6 +20,7 @@ import {ConversationExport} from './conversation-export.jsx';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,ModelControl,readAttachment} from './chat-controls';
 import {BundleControl} from './bundle-controls';
+import {CoordinationPanel} from './coordination';
 import {AttentionBadge,ActivityPanel,useReadCompletion} from './attention';
 import {FileDrop,PathField,BundlePicker} from './settings-ui';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
@@ -29,6 +32,8 @@ import {createConversationNavigation} from './conversation-navigation';
 import {messageTextForCopy} from './message-copy';
 import {deliverConversationExport} from './conversation-export.js';
 import {VoiceClient} from './voice';
+import {VoiceVisualClient} from './voice-visual';
+import {VoiceVisualControls} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
 import {Markdown} from './markdown';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
@@ -39,6 +44,7 @@ import {executionData,turnPlacements,splitWork} from './timeline-data';
 import {liveActivity} from './activity';
 import {resizeComposer} from './composer';
 import {ComposerOwnership} from './composer-ownership';
+import {Questions} from './questions';
 import {createActionFeedback} from './action-feedback';
 import './action-feedback.css';
 import {createChatScroll} from './chat-scroll';
@@ -61,6 +67,7 @@ function App(){
  const narrow=useNarrowScreen();
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
+ const visualClient=useRef(null);const [visual,setVisual]=useState({status:'idle'});
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const handleEffects=useCallback(effects=>{
@@ -85,6 +92,7 @@ function App(){
     }
     if(effect.type==='call.start'){try{await voiceClient.current.start(effect.args||{})}catch(error){await request('/api/voice/end',{method:'POST',body:{id:null}}).catch(()=>{});throw error}}
     if(effect.type==='canvas.checkpoint')await checkpointSurfaces(effect.sessionId,effect.id);
+    if(effect.type==='voice.visual.capture')await visualClient.current?.capture(effect);
     if(effect.type==='call.end')await voiceClient.current.end();
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
@@ -120,7 +128,7 @@ function App(){
   const execute=async()=>{
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
-   const result=await request('/api/actions',{method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+   const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(pending)pendingView.current.settle(pending);
    if(navigationToken)conversationNavigation.current.settle(navigationToken);
    if(result.state)acceptState(result.state);
@@ -130,7 +138,7 @@ function App(){
   const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
-  const queue=action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit'].includes(action)?sendQueue:commandQueue;
+  const queue=action.startsWith('coordination.')?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:commandQueue;
   const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
@@ -205,7 +213,8 @@ function App(){
    }
   }
  },[state,connected,act]);
- useEffect(()=>{voiceClient.current=new VoiceClient({request,onState:setVoice,onError:e=>setError(e.message||String(e))});return()=>{voiceClient.current?.dispose()}},[]);
+ useEffect(()=>{voiceClient.current=new VoiceClient({request,onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:e=>setError(e.message||String(e))});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});return()=>{visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
+ useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false,...(p==='settings'&&window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}})};
  const dismissPanel=()=>{setPreview(false);act('view.update',{patch:{panel:null}})};
@@ -309,9 +318,12 @@ function App(){
   <ConversationError state={state} session={session} act={act}/>{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <WorkspaceLayout state={state} act={act} presentation={presentation}><WorkspaceRail shell={shell} state={state} session={session} act={act} selectSession={id=>{stickToBottom.current=true;act('session.select',{id})}} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation">
    {callActive&&<div className="a-call-strip" data-part="voice"><AudioLines/><span>{voice.model||'Voice'} · {voice.status}</span><button className="a-icon" aria-label={voice.muted?'Unmute microphone':'Mute microphone'} data-action="call.mute" onClick={()=>act('call.mute',{muted:!voice.muted})}>{voice.muted?<MicOff/>:<Mic/>}</button><button className="a-soft" data-action="call.end" onClick={()=>act('call.end')}>End call</button>{voice.fallbackReason&&<small>{voice.fallbackReason}</small>}</div>}
+   <ComputationPanel sessionId={session?.id}/><OperationsPanel sessionId={session?.id}/>
+   <VoiceVisualControls voice={{...voice,sessionId:state.voice?.sessionId}} visual={visual} client={visualClient} dispatch={dispatch} onError={e=>setError(e.message||String(e))}/>
    <div className="a-messages" ref={messagesPane} data-part="messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={!!session?.historyLoading}><div className="a-session-history">{detail.controls}</div><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} onLoadEarlier={()=>{stickToBottom.current=false}}/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{workPlacement.before.map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}{!session&&<NewChatSetup state={state} act={act}/>} {messages.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:messages.map(m=><React.Fragment key={m.id}><MessageEntry message={m} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(m.id)} retry={retryMessage} dispatch={dispatch}/>{(workPlacement.after.get(m.id)||[]).map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}<ArtifactLinks state={state} message={m} act={act}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-msg-meta"><strong>Amplifier</strong><span>Working…</span></div><Markdown text={session.streaming}/></article>}<div ref={messagesEnd}/></div>
    {live&&<div className="a-live-activity" data-part="activity" role="status" aria-live="polite"><span className="a-activity-pulse" aria-hidden="true"><b/><b/><b/></span><div><strong>{live.label}</strong>{(live.toolLabels.length>0||live.lastTool||live.workerCount>0)&&<small>{live.toolLabels.join(' · ')}{live.lastTool&&`Last tool: ${live.lastTool}`}{live.workerCount>0&&live.phase!=='workers'?`${live.toolLabels.length||live.lastTool?' · ':''}${live.workerCount} active ${live.workerCount===1?'worker':'workers'}`:''}</small>}</div>{live.elapsed&&<span className="a-activity-elapsed" role="timer" aria-live="off" aria-label={`Elapsed ${live.elapsed}`}>{live.elapsed}</span>}</div>}
-   {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><div key={a.id}><strong>{a.title||a.tool||'Approval requested'}</strong><p>{a.prompt||a.message||a.description}</p>{a.details&&<pre>{typeof a.details==='string'?a.details:pretty(a.details)}</pre>}<div className="a-dialog-actions"><button className="a-primary" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'approve'})}><Check/>Allow</button><button className="a-soft" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'deny'})}>Deny</button></div></div>)}</section>}
+   {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><div key={a.id} data-approval-id={a.id}><strong>{a.title||a.tool||'Approval requested'}</strong><p>{a.prompt||a.message||a.description}</p>{a.details&&<pre>{typeof a.details==='string'?a.details:pretty(a.details)}</pre>}<div className="a-dialog-actions"><button className="a-primary" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'approve'})}><Check/>Allow</button><button className="a-soft" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'deny'})}>Deny</button></div></div>)}</section>}
+   <Questions session={session} dispatch={dispatch}/>
    <form className={`a-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}} onPaste={e=>{if(executionUnavailable){e.preventDefault();return}const files=[...e.clipboardData.items].filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter(Boolean);if(files.length){e.preventDefault();const text=e.clipboardData.getData('text/plain');if(text){const input=composerRef.current,start=input?.selectionStart??draft.length,end=input?.selectionEnd??start;editDraft(draft.slice(0,start)+text+draft.slice(end))}addFiles(files)}}}>
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
@@ -322,9 +334,10 @@ function App(){
    </form>
   </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas state={state} act={act} dispatch={dispatch}/></McpAppThemeProvider></WorkspaceLayout>
   <FeedbackNotice state={state} act={act}/>
-  {panel&&<div className={`a-overlay ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Remove chat?',runtime:'Chat controls','session-details':'Chat details','subagent-history':'Subagent history'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
+  {panel&&<div className={`a-overlay ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Remove chat?',runtime:'Chat controls','session-details':'Chat details','subagent-history':'Subagent history',coordination:'Tasks and workers'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
    {error&&<div className="a-alert" role="alert"><span>{error}</span></div>}
-   {panel==='session-details'&&session&&<><ConversationName key={session.id} session={session} act={dispatch}/><h3>Export chat</h3><ConversationExport session={session} state={state} act={act}/><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button type="button" className="a-soft" data-action="view.update" onClick={()=>open('worker')}><GitBranch/>Delegate work</button></div></>}
+   {panel==='session-details'&&session&&<><ConversationName key={session.id} session={session} act={dispatch}/><h3>Export chat</h3><ConversationExport session={session} state={state} act={act}/><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button className="a-soft" data-action="view.update" onClick={()=>open('coordination')}><GitBranch/>Tasks and workers</button><button type="button" className="a-soft" data-action="view.update" onClick={()=>open('worker')}><GitBranch/>Delegate work</button></div></>}
+    {panel==='coordination'&&<CoordinationPanel dispatch={dispatch}/>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
    {panel==='activity'&&<ActivityPanel state={state} act={act}/>}
    {panel==='feedback'&&<FeedbackPanel state={state} act={dispatch}/>}

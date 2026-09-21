@@ -43,6 +43,8 @@ jobs:
           python -m pip install uv
           uv sync --locked --group dev
           npm ci --prefix frontend
+      - name: Resolve current installed host dependencies
+        run: uv run --no-sync python scripts/qualify_host_dependencies.py --evidence "$RUNNER_TEMP/host-resolution"
       - name: Validate Python and frontend
         run: |
           uv run --no-sync pytest -q
@@ -177,10 +179,11 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
           uv build
           python "$RUNNER_TEMP/release.py" verify --version "$RELEASE_VERSION"
           uv venv "$RUNNER_TEMP/release-smoke"
-          uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" dist/*.whl
+          uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" dist/*.whl
           cd "$RUNNER_TEMP"
           env -u PYTHONPATH "$RUNNER_TEMP/release-smoke/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
       - name: Publish immutable tag and release
@@ -190,3 +193,10 @@ jobs:
           RELEASE_REVISION: ${{ steps.release.outputs.revision }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: python "$RUNNER_TEMP/release.py" publish --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION" --repository "$RELEASE_REPOSITORY"
+      - name: Retain qualified host dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-source-resolution
+          path: ${{ runner.temp }}/host-resolution
+          if-no-files-found: ignore

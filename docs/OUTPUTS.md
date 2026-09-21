@@ -1,0 +1,33 @@
+# Output relationships and local review
+
+`outputs.attach/list/read/unlink/relink` share the same host actions in UI and agent tools. Supported kinds are file, dataset, saved canvas, pull request and external document; `outputs.write` saves reusable writing, and `outputs.review` snapshots a local Git diff. Records retain originating conversation and optional original message, content hash, exact immutable resource, parent version and evidence relationships. Only explicit message identity establishes turn origin; it is never guessed. Attachment does not publish or invoke a model.
+
+Files are copied into the existing private content-addressed resource store (up to8MB), with regular-file checks, traversal/symlink boundaries and change detection. Original files remain independent. Saved canvas bodies are copied from their existing exact resources. External HTTP(S) links are references only: contents are not fetched; absent version is unknown and a supplied version is labelled user-supplied evidence. A remote PR URL does not prove its HEAD or current state.
+
+Read actions return at most4000content characters and5review notes by default (maximum10), with independent pagination; binary contents have an authenticated exact-byte download. Downloads use attachment disposition and restrictive CSP; saved HTML never becomes an executable preview. All output records are resource-retention roots, including unlinked records. Unlink changes only relationship state, and restore-link uses revision comparison. Existing backup captures the primary database and resources. Removing a conversation does not delete underlying outputs; registered conversation scope is required to read through the action surface.
+
+Writing blocks in assistant Markdown support the documented `:::writing{variant="document" id="12345"}` syntax, email metadata, safe Markdown, copy and local editing. Saving makes an immutable writing output; editing never changes the original message or sends an email. A subsequent saved version records its parent. Raw HTML and unsafe links retain the normal Markdown protections. Truncated/unknown blocks and fenced examples stay ordinary text. Registered forms support equivalent shared `outputs.write` behavior without special Markdown.
+
+Git review uses bounded read-only argument arrays with external diff/text conversion disabled. Modes are unstaged tracked changes, staged changes and exact base-commit-to-HEAD. The snapshot records resolved commits and its digest; worktree/index output is read twice to reject observed changes. Untracked files and binary contents are excluded. It is not a transactional repository snapshot or a remote PR reviewer. `outputs.comment` stores local notes with optional exact displayed hunk path/side/line. It validates the saved snapshot and never posts comments externally or applies changes. Each snapshot accepts up to200notes.
+
+Forks copy only linked outputs anchored to retained message IDs, reuse immutable resource bytes and record original output identity. Unanchored/future outputs remain with the original conversation. Comments and evidence are local; no tools or downloads are replayed. Ten thousand relationships bound the registry; source and snapshot retention are deliberate, not deletion of underlying work.
+
+`amplifier_outputs` owns portable relationship storage and read-only Git evidence. Unified owns authorization, workspace/source access, private resources and presentation. No provider-specific artifact library is required.
+
+Validation:30 backend checks across output, resource-retention, server and canvas behavior;210 frontend checks including safe Markdown writing blocks. Actual service/Chromium validates edited writing vs original message, exact file download after source edits, real local Git review/line notes, unlink/restore/reload, mobile bounds, selected chat/draft preservation and zero model calls. This does not establish rendered document fidelity or remote provider/account acceptance.
+
+## Explicit visual inspection
+
+Attach a rendered PNG as a file, then call `outputs.image` directly through `app_control` with that output ID and exact SHA-256. Do not nest this read inside `tool_exec`: its outer result does not retain the required direct app-control receipt. UI and agent use the same action. UI opens an authenticated preview without sending a message or changing the draft. An agent call keeps the exact tool receipt and supplies typed PNG pixels to the next supported provider request, through the existing surface-delivery boundary. Only the latest explicitly requested image is carried, within the current input; compaction, a changed input, or a missing exact tool result requires another explicit read. Cached request-budget pixels are revalidated before transport. A text receipt or successful canvas render is not visual QA.
+
+Images must be complete, noninterlaced8-bit RGB/RGBA PNGs, at most8MB and4096pixels per side. CRCs, bounded decompression and scanlines are validated before delivery. Convert unsupported image formats in the approved computation environment deliberately; this action does not reinterpret safety text as pixels. Original files are not reread: the exact immutable snapshot is used even if the source later changes. No-vision providers and missing/corrupt resources receive a clear no-pixels notice. This provides generated-page inspection without pretending to capture a native screen.
+
+
+Managed Git review also disables every configured clean, smudge and process filter
+for each invocation, without changing repository/global settings. Evidence compares
+raw Git and worktree bytes; it does not download or materialize LFS objects. A local
+materialized LFS file can therefore appear different from its saved pointer. Quoted
+UTF-8 paths (including accented names, tabs and quotes) retain exact review anchors;
+lines resembling file headers inside a hunk remain ordinary content.
+
+Image support uses the selected provider model catalog when available, with a bounded cached read; provider-level tags are a fallback when no model catalog exists. An unavailable/failed lookup remains unconfirmed and sends no pixels. No model is substituted.

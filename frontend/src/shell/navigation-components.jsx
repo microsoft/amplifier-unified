@@ -4,6 +4,7 @@ import {chatPage,visibleWorkspaces} from '../chat-navigation';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {WorkspaceExplorer} from '../workspace-explorer';
+import {LibraryFilters} from '../conversation-library';
 import {AttentionBadge} from '../attention';
 import {PathField} from '../settings-ui';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
@@ -95,6 +96,7 @@ export function ChatDetails({chat,model,now,close}){
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
+   <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
    <button type="button" className="a-danger" aria-label={'Remove '+title+' from list'} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Remove</button>
   </div>}
  </>;
@@ -119,6 +121,7 @@ export function ConversationList({host,workspaceHost}){
     <NavigationRow className="a-navigation-workspace" label={workspace.name} details={({close})=><WorkspaceDetails row={selectedWorkspace||{...workspace,chatCount:chats.total}} now={now} actions={<><button type="button" data-action="view.update" onClick={()=>{close();workspaceHost.dispatch('view.update',{patch:{workspaceDraft:{mode:'rename',id:workspace.id,name:workspace.name}}})}}><Pencil/>Rename</button><button type="button" className="a-danger" disabled={workspaceState.library?.workspaceCount<2} data-action="view.update" onClick={()=>{close();workspaceHost.dispatch('view.update',{patch:{workspaceDraft:{mode:'remove',id:workspace.id,name:workspace.name}}})}}><Trash2/>Remove registration</button></>}/>}><Folder/><div><strong>{workspace.name}</strong><small title={workspace.path}>{compactParent(workspace.path)}</small></div></NavigationRow>
    </>}
    <NavigationEditor model={model}/>
+   <LibraryFilters state={state} act={act}/>
    <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder={allChats?'Find chats or paths · * ?':'Find chats · * ? patterns'} data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
    <div className="a-navigation-filters" role="group" aria-label="Conversation activity filters">
     <button type="button" aria-pressed={view.navStatusFilter==='attention'} data-action="view.update" onClick={()=>patch(act,{navStatusFilter:view.navStatusFilter==='attention'?'all':'attention'})}><AlertCircle/>{counts.attention??0} need attention</button>

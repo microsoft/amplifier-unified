@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "source_run": "amplifier-live-controls-budget-20260920-i",
+  "provider_calls": 0,
+  "execution": "disabled; no execution host constructed",
+  "projection": "shared capacity.usage_snapshot/evaluate over copied persisted receipts",
+  "checks": {
+    "baseline_real_admitted_call": true,
+    "budget_policy_persisted": true,
+    "rejection_receipt_persisted": true,
+    "no_second_provider_call": true,
+    "limit_visibly_blocks_admission": true,
+    "failure_publicly_observed": true,
+    "no_fabricated_model_reply": true,
+    "original_reported_counters_preserved": true,
+    "cache_writes_counted_once_reads_not_added_again": true,
+    "budget_consumes_inclusive_total": true,
+    "original_evidence_unchanged": true
+  },
+  "provider_reported_usage": {
+    "inputTokens": 3,
+    "outputTokens": 7,
+    "totalTokens": 10,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 12635,
+    "reasoningTokens": 0,
+    "costUsd": 0.0316775,
+    "costType": "reported"
+  },
+  "inclusive_usage": {
+    "grossInputTokens": 12638,
+    "grossTotalTokens": 12645
+  },
+  "original_evidence_files": 10,
+  "usage_provenance": "Provider-adapter normalized counters; raw API payload was not collected.",
+  "accounting_audit": "Resolved: inclusive budget adds reported cache writes once; normalized counters and original live reports remain unchanged.",
+  "validation_boundary": "Passive saved-receipt projection only; browser and execution-boundary regressions are separate evidence.",
+  "passed": true
+}

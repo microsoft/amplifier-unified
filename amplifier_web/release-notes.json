@@ -2,6 +2,44 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.0",
+      "title": "Persistent work, shared controls and reusable outputs",
+      "changes": [
+        "Start managed commands, follow their output, answer pending questions and coordinate workers while keeping conversation drafts and saved history intact.",
+        "Save task objectives and corrections across compaction and restart, schedule later continuation, and move execution into an isolated Git worktree with a recorded handoff.",
+        "Search saved work, manage scoped memory, organize and archive conversations, and deliberately publish fixed conversation snapshots.",
+        "Keep Python or Node variables across computation cells, attach and review saved outputs, and discover installed artifact runtimes.",
+        "Use approved tools from bounded programs, connect supported MCP services, fetch attributable web sources, and explicitly share browser-selected visual context during voice.",
+        "Inspect attributed usage and enforce supported model-call budgets, with optional native provider direction and compaction where available."
+      ],
+      "notices": [
+        {
+          "id": "work-module-requirements",
+          "title": "Review Work modules and execution settings",
+          "detail": "Work features require their corresponding updated modules. Persistent computation requires a trusted execution configuration; creating a runtime does not relax tool permissions.",
+          "action": "Update the corresponding Work modules and review trusted execution settings before using these features."
+        },
+        {
+          "id": "schedule-and-budget-limits",
+          "title": "Keep scheduling and budget limits in view",
+          "detail": "Schedules require an available capable host. Budgets cover recorded supported model-call boundaries, not all account spending or already-started work.",
+          "action": "Keep the host available for scheduled work and inspect recorded usage alongside account usage."
+        },
+        {
+          "id": "provider-and-visual-support",
+          "title": "Check provider and visual-context support",
+          "detail": "Native provider features depend on model and account support. Foreground desktop capture requires the optional native desktop component and an explicit active voice grant for that host.",
+          "action": "Check model support and choose the intended browser screen or desktop host before granting visual access."
+        },
+        {
+          "id": "interrupted-work-results",
+          "title": "Inspect interrupted work before retrying",
+          "detail": "Interrupted work with an unknown result is retained for inspection. Restart does not automatically rerun commands or computation cells.",
+          "action": "Inspect the saved operation state and any external effects before deciding whether to retry."
+        }
+      ]
+    },
+    {
       "version": "0.19.19",
       "title": "Reliable conversation recovery, runtime updates, and Settings navigation",
       "changes": [

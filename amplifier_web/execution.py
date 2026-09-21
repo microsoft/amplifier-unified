@@ -62,12 +62,15 @@ def ingest(session,event):
     tree=ensure_turn(session,None)
     identity=event.get('id')
     if not identity:return
-    allowed={'id','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
+    allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)
     node=next((n for n in tree['nodes'] if n['id']==identity),None)
     if node:
+        if safe.get('revision', 0) < node.get('revision', 0): return
+        if node.get('phase') == 'outcome_unknown' and safe.get('phase') in LIVE_PHASES and safe.get('revision', 0) <= node.get('revision', 0): return
+        if node.get('kind') == 'llm' and node.get('endedAt') and not safe.get('endedAt') and safe.get('revision', 0) <= node.get('revision', 0): return
         if event.get('liveObservation') and event.get('phase') == 'running':
             for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields'):
                 node.pop(field, None)

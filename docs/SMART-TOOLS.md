@@ -14,11 +14,13 @@ The host contains no imports, routes, or special cases for individual Smart Tool
    optional package extras such as `mcp` can be supplied. Each commit/extras combination
    gets its own environment. Other runtimes can be installed with their documented
    setup and then registered as MCP connections.
-4. Add an MCP connection using the tool's documented executable and argument array.
+4. Add a local MCP connection using the tool's documented executable and argument array,
+   or choose a remote Streamable HTTP endpoint.
    Each argument occupies one line. Set its retained-data directory explicitly.
    Environment entries map child variable names to existing host variable names,
    for example `OPENAI_API_KEY=MY_TOOL_KEY`; the form never takes key values.
-5. Connect. Unified discovers the server's schemas and optional views. A catalog
+5. Connect. Unified discovers compact tool descriptions and optional views. Full schemas
+   load only when a user opens a tool or an agent requests named schemas. A catalog
    entry, an installed package, and a connected server are different states.
 6. Run a tool through its schema-derived form, or ask the conversation agent to do it.
    For a tool advertising an MCP App, **Open interactive view** sends the latest
@@ -34,8 +36,8 @@ export need not invoke a model.
 
 The UI, `window.amplifier`, and agent `app_control` use the same actions:
 
-- `smartTools.catalog`, `inspect`, `install`, `configure`, `connect`, `disconnect`, `remove`.
-- `smartTools.call {id,name,arguments,sessionId?}` returns an `operationId` receipt.
+- `smartTools.catalog`, `inspect`, `install`, `configure`, `connect`, `reconnect`, `disconnect`, `remove`, `uninstall`.
+- `smartTools.call {id,name,arguments,catalogRevision?,sessionId?}` returns an `operationId` receipt.
 - `smartTools.resources {id,kind?,cursor?}` lists resources or templates one page
   at a time; `smartTools.readResource {id,uri}` reads through that server.
 - `smartTools.open {id,tool,operationId?,sessionId?}` attaches a standard view.
@@ -46,7 +48,17 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
 - `smartTools.context` records bounded view context. It is observation, not an instruction
   or permission to generate, and does not automatically start a conversation turn.
 
-Server instructions and tool schemas are discoverable under `/smartTools/servers`.
+Server instructions, compact tool summaries and lifecycle state are under `/smartTools/servers`.
+Use `smartTools.discover {id,query?,limit?,offset?,refresh?}` for relevant summaries, then
+`smartTools.schemas {id,names,catalogRevision}` for one to five exact callable definitions
+(up to 64 KB). Pass that revision to the subsequent call. Canonical schemas remain
+private to the connection; `loadedSchemas` contains only the most recently requested
+bounded selection. Discovery returns at most 25 summaries and 16 KB, with `nextOffset`.
+Server tool-list notifications, reconnect and reconfiguration invalidate loaded schemas;
+a stale catalog blocks calls until explicit refresh. Revision checks run again when a
+queued call reaches the transport. Legacy calls without a revision remain supported
+against the current canonical catalog, with the same input and visibility validation.
+The UI and agent schema requests do not connect a server or start a model turn.
 Interactive views use a scoped HTTP wait for their normal `smartTools.appCall`
 action, so completed calls return immediately without a browser polling delay.
 The same admission, tool visibility, retained receipt and request-ID deduplication
@@ -89,7 +101,9 @@ resource. UI permission/CSP requests are read from the resource's metadata.
 
 This initial host profile supports:
 
-- Local stdio MCP servers with typed tool discovery, calls, and UI resource reads.
+- Local stdio and remote Streamable HTTP MCP servers with typed discovery, calls and UI resource reads.
+- SDK OAuth authorization-code flow with PKCE, resource/issuer validation and token refresh; see [connector lifecycle](CONNECTORS.md).
+- Legacy tool-list notifications and modern SDK `subscriptions/listen` invalidate cached definitions.
 - Self-contained MCP App HTML; scripts/styles are inline, images/media are embedded,
   and nested generated previews may use isolated blob frames.
 - Scoped `tools/list`, `tools/call`, and text/structured `ui/update-model-context`.
@@ -104,19 +118,19 @@ This initial host profile supports:
 - User-clicked downloads from tool views. Other device permissions and network/asset
   domains are denied and the granted sandbox profile is advertised to the view.
 
-Remote Streamable HTTP/SSE servers, host sampling, elicitation, MCP Tasks,
+Legacy SSE transports, host sampling, elicitation, MCP Tasks,
 resource subscriptions, and external UI asset/network grants are not implemented.
 A server's native operation handle is not claimed to be an MCP Task. Model costs
 remain server-provided data; missing usage is unknown, not zero, and is not rolled
 into chat spending as if independently metered by Unified.
 
 The installer executes a package build only on an explicit install action. Connecting
-executes a configured process. The app scopes iframe access; it is not an OS sandbox
+executes a configured local process or contacts the configured remote endpoint. The app scopes iframe access; it is not an OS sandbox
 for installed code. Tool metadata and rendered content remain untrusted data.
 
 ## Validation
 
-`pytest tests/test_smart_tools.py tests/test_smart_canvas.py` covers real SDK subprocess
+`pytest tests/test_smart_tools.py tests/test_smart_canvas.py tests/test_connector_lifecycle.py` covers real SDK subprocess
 calls, visibility, environment isolation, schema/resource validation, timeouts,
 configuration races, restart and duplicate receipts, durable paging, and canvas bindings.
 `npm --prefix frontend run test:smart-tools-browser` uses an unfamiliar independent

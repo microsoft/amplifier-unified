@@ -84,6 +84,10 @@ End users need no Node installation: compiled React assets ship in the Python pa
 
 **Settings → Smart Tools** browses the community catalog, inspects Git sources, installs Python tools into isolated environments, and connects standard MCP stdio servers. Tools advertising MCP Apps can open a durable canvas tab. Users and agents call the same tool APIs through the shared action surface; there are no tool-specific dependencies in the host. See [supported capabilities and setup](docs/SMART-TOOLS.md).
 
+## Persistent work controls
+
+The [Work capability guide](docs/WORK-ALIGNMENT.md) connects the new task, question, operation, scheduling, computation, output, connector and usage controls with their setup and acceptance boundaries. [Delivery issue31](https://github.com/microsoft/amplifier-unified/issues/31) tracks the integration and release.
+
 ## Shell customization and agent guidance
 
 The [Unified shell behavior](behaviors/unified-shell.yaml) provides the
@@ -99,10 +103,17 @@ cd frontend
 npm install
 npm run build
 cd ..
-uv sync --group dev
-uv run pytest
+python3 scripts/resolve_amplifier_latest.py --mode latest \
+  --project . --evidence /absolute/private/new-unified-resolution
+uv sync --locked --group dev
+uv run --no-sync pytest
 uv build
 ```
+
+For a new qualification against current Amplifier branches, use the
+[explicit latest-component resolution workflow](docs/latest-component-qualification.md).
+Existing locks remain available for reproducing earlier results.
+
 
 For authentication changes, also run the real Chromium login smoke:
 `uv run --with playwright pytest tests/test_browser_auth.py`

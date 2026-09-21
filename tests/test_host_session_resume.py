@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -9,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from amplifier_web.host import session as host
+from amplifier_web.host.session import compose_configured_bundle
 from amplifier_web.host.storage import SessionStore
 
 
@@ -70,7 +72,7 @@ def mounted_host(tmp_path, monkeypatch):
             shared_handle=held, shared_snapshot=snapshot, **kwargs)
     return SimpleNamespace(prepare=prepare, store=store, held=held, checkpoint=checkpoint,
         writes=writes, runtime=runtime, session=session, prepared=prepared, registry=registry,
-        context=context, capabilities=capabilities, home=home, loaded=loaded, config=config,
+        context=context, capabilities=capabilities, home=home, config=config, loaded=loaded,
         path=store.directory(runtime.session_id) / "transcript.jsonl")
 
 
@@ -238,3 +240,63 @@ async def test_manual_rename_during_active_turn_survives_next_native_save(mounte
     assert h.store.load('native-root')[1]['name'] == 'Manual name during work'
     assert h.store.load('native-root')[1]['name_source'] == 'manual'
     assert h.writes == []
+
+
+async def test_execution_checkout_keeps_native_history_home(mounted_host, tmp_path):
+    h = mounted_host
+    checkout = tmp_path / 'execution-checkout'; checkout.mkdir()
+    messages = [{'role': 'user', 'content': 'Retain my saved source'}, {'role': 'assistant', 'content': 'Original evidence'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    original = h.path.read_bytes()
+    _, _, report = await h.prepare(execution_workspace=checkout)
+    assert h.prepared.create_session.call_args.kwargs['session_cwd'] == checkout
+    assert Path.cwd() == checkout
+    assert h.path.read_bytes() == original
+    assert h.context.messages == messages
+    assert report['execution_workspace'] == str(checkout)
+    assert report['workspace'] != str(checkout)
+    assert h.capabilities['web.history_workspace'] == report['workspace']
+    h.session.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('route', ['direct', 'resolved', 'override'])
+async def test_execution_write_policy_follows_checkout_on_all_prepare_routes(mounted_host, tmp_path, monkeypatch, route):
+    h = mounted_host
+    checkout = tmp_path / 'execution-checkout'; checkout.mkdir()
+    h.config.providers = []
+    h.config.settings = {'overrides': {'tool-filesystem': {'config': {'denied_write_paths': ['private']}}}}
+    h.loaded.providers = [{'module': 'provider-fixture'}]
+    h.loaded.tools = [{'module': 'tool-filesystem'}]
+    h.loaded.hooks = [{'module': 'hook-context-intelligence'}]
+    h.loaded.agents = {}
+    h.loaded.session = {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}
+    h.loaded.to_mount_plan = lambda: copy.deepcopy({key: getattr(h.loaded, key)
+        for key in ('providers', 'tools', 'hooks', 'agents', 'session')})
+    monkeypatch.setattr(host, 'compose_configured_bundle', compose_configured_bundle)
+    kwargs = {}
+    if route == 'resolved':
+        root = await host.load_root_bundle(h.config, 'anchors', execution_workspace=checkout)
+        kwargs['resolved_root'] = host.ResolvedRoot(h.config, 'anchors', root, execution_workspace=checkout)
+        h.registry.load.reset_mock()
+    if route == 'override':
+        from amplifier_web.runtime_controls import override_path
+        path = override_path(h.runtime.session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        edited = h.loaded.to_mount_plan()
+        edited['tools'][0]['config'] = {'denied_write_paths': ['edited-private']}
+        path.write_text(json.dumps(edited))
+    messages = [{'role': 'user', 'content': 'Preserve original history'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    original = h.path.read_bytes()
+    _, _, report = await h.prepare(execution_workspace=checkout, **kwargs)
+    policy = h.loaded.tools[0]['config']
+    assert policy['allowed_write_paths'] == [str(checkout)]
+    assert str(checkout / 'private') in policy['denied_write_paths']
+    if route == 'override':
+        assert str(checkout / 'edited-private') in policy['denied_write_paths']
+    if route == 'resolved':
+        h.registry.load.assert_not_called()
+    assert report['workspace'] == str(h.config.workspace) != str(checkout)
+    assert report['execution_workspace'] == str(checkout)
+    assert h.path.read_bytes() == original
+    h.session.execute.assert_not_called()

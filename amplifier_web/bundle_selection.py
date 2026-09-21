@@ -63,7 +63,8 @@ async def inspect_bundle(controls, workspace, bundle):
     from .host.session import load_root_bundle, live_plan, ResolvedRoot
     from .runtime_controls import public_config, validate_plan, identity
     config = load_config(workspace, session_id=controls.session.session_id)
-    root = await load_root_bundle(config, bundle)
+    execution_workspace = Path(controls.session.coordinator.get_capability('session.working_dir') or config.workspace).expanduser().resolve()
+    root = await load_root_bundle(config, bundle, execution_workspace=execution_workspace)
     _, loaded, resolved = root
     plan, _ = live_plan(loaded.to_mount_plan())
     validate_plan(plan)
@@ -90,7 +91,7 @@ async def inspect_bundle(controls, workspace, bundle):
             'changes': changes, 'modelCompatible': compatible,
             'selection': public_config(selection), 'instructionsChange': True,
             'overridesReset': controls.state_path().with_name('configuration.json').exists(),
-            'appCapabilities': list(config.app_bundles)}, ResolvedRoot(config, bundle, root)
+            'appCapabilities': list(config.app_bundles)}, ResolvedRoot(config, bundle, root, execution_workspace=execution_workspace)
 
 
 class BundleTransaction:

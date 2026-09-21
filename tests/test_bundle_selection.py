@@ -272,3 +272,33 @@ def test_resolved_root_is_one_use_and_rejects_changed_settings(tmp_path):
     with pytest.raises(ValueError,match='changed'):candidate.take(config,'other')
     assert candidate.take(config,'work') is root
     with pytest.raises(ValueError,match='changed'):candidate.take(config,'work')
+
+
+@pytest.mark.parametrize('separate_checkout', [False, True])
+async def test_inspected_bundle_binds_effective_execution_checkout(tmp_path, monkeypatch, separate_checkout):
+    from unittest.mock import AsyncMock
+    from amplifier_web.bundle_selection import inspect_bundle
+    from amplifier_web.host.config import HostConfig
+    history = tmp_path / 'history'; history.mkdir()
+    checkout = tmp_path / 'checkout'; checkout.mkdir()
+    effective = checkout if separate_checkout else history
+    capabilities = {'session.working_dir': str(checkout)} if separate_checkout else {}
+    config = HostConfig(tmp_path, history, {}, tmp_path / 'cache')
+    plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+            'providers': [{'module': 'provider-fixture'}]}
+    root = (object(), SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(plan)), 'resolved')
+    load = AsyncMock(return_value=root)
+    monkeypatch.setattr('amplifier_web.host.config.load_config', lambda *a, **kw: config)
+    monkeypatch.setattr('amplifier_web.host.session.load_root_bundle', load)
+    controls = SimpleNamespace(session=SimpleNamespace(session_id='fixture',
+        coordinator=SimpleNamespace(get_capability=capabilities.get)), selection=None,
+        configuration=lambda: {'plan': plan}, state_path=lambda: tmp_path / 'control-state.json')
+    _, receipt = await inspect_bundle(controls, history, 'work')
+    load.assert_awaited_once_with(config, 'work', execution_workspace=effective)
+    assert config.workspace == history
+    with pytest.raises(ValueError, match='changed'):
+        receipt.take(config, 'work', execution_workspace=tmp_path / 'different-checkout')
+    assert receipt.root is root  # A failed comparison cannot consume the reviewed plan.
+    assert receipt.take(config, 'work', execution_workspace=effective / '.') is root
+    with pytest.raises(ValueError, match='changed'):
+        receipt.take(config, 'work', execution_workspace=effective)

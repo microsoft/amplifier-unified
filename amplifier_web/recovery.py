@@ -26,6 +26,22 @@ def _backup_files(data_dir, session_paths):
     archive=folder/'private-state.tar.gz'
     with tarfile.open(archive,'w:gz') as output:
         output.add(database,arcname='app.sqlite3')
+        operations=data_dir/'operations.sqlite3'
+        if operations.exists():
+            snapshot=folder/'operations.sqlite3'
+            with sqlite3.connect(f"file:{operations}?mode=ro",uri=True) as source, sqlite3.connect(snapshot) as target:
+                source.execute('BEGIN')
+                source.execute('SELECT id FROM operations LIMIT 1').fetchone()
+                source.backup(target,pages=256)
+            snapshot.chmod(0o600)
+            output.add(snapshot,arcname='operations.sqlite3')
+        original=data_dir/'recall.sqlite3'
+        if original.exists():
+            snapshot=folder/'recall.sqlite3'
+            with sqlite3.connect(f"file:{original}?mode=ro",uri=True) as source, sqlite3.connect(snapshot) as target:
+                source.backup(target,pages=256)
+            snapshot.chmod(0o600)
+            output.add(snapshot,arcname='recall.sqlite3')
         for name in ('config','routing','bundles','sessions','artifacts','smart-tools/work'):
             path=data_dir/name
             if path.exists():output.add(path,arcname=name,recursive=True)

@@ -80,6 +80,9 @@ class StandaloneHostAdapter(HostAdapter):
     async def prepare_execution(self, loop, coordinator, providers):
         if coordinator and coordinator.get_capability("live.child_mode") == "finite":
             return None, providers, coordinator.session_id
+        if coordinator:
+            from ..native_provider import install_native
+            providers = await install_native(loop, coordinator, providers)
         return coordinator.get_capability("live.runtime") if coordinator else None, providers, None
 
     def finite_finished(self, scope, coordinator, status, result=""):
@@ -116,7 +119,10 @@ class Children:
         row = self.rows.get(identity)
         if not row:
             return
-        row.update(status=status, report=str(result)[-20000:], reports=int(status == "completed"))
+        report = str(result)[-20000:]
+        if report and (report != row.get("report") or not row.get("reportId")):
+            row.update(report=report, reportId=str(uuid.uuid4()), reports=row.get("reports", 0) + 1, reportSourceChars=len(str(result)), reportTruncated=len(str(result)) > 20000, reportWindow="tail")
+        row["status"] = status
         if row.get("runtime"):
             row["runtime"].closed = True
         # Finite delegate results already return through the original tool/job
@@ -132,7 +138,7 @@ class Children:
             elif kind == "input.delivered":
                 row["status"] = "running"
             elif kind == "session.idle":
-                row.update(status="idle", report=event.get("text", "")[-20000:], reports=row["reports"] + 1)
+                row.update(status="idle", report=event.get("text", "")[-20000:], reportId=str(uuid.uuid4()), reports=row["reports"] + 1, reportSourceChars=len(event.get("text", "")), reportTruncated=len(event.get("text", "")) > 20000, reportWindow="tail")
                 self.root.inbox.put_nowait(("child_report", self._public(row)))
             elif kind == "session.closed":
                 row["status"] = event.get("status", "interrupted")
@@ -238,7 +244,7 @@ class Children:
         cwd = Path(parent.coordinator.get_capability("session.working_dir") or Path.cwd())
         persistent = _PERSISTENT.get()
         call_id = (session_metadata or {}).get("tool_call_id") or JOB_CALL.get()
-        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id,
+        row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),
                "agent": agent, "status": "starting", "persistent": persistent, "report": "", "reports": 0,
                "task": asyncio.current_task()}
         self.rows[identity] = row
@@ -251,12 +257,15 @@ class Children:
                     "provider_preferences": [p.to_dict() for p in preferences], "mount_plan": plan}
         if selection:
             metadata["effective_selection"] = selection
+        continuity = None
         async def checkpoint(status=None):
             if not child:
                 return
             context = child.coordinator.get("context")
             messages = await context.get_messages() if context else []
             self.store.save(identity, messages, {**metadata, "status": status or row["status"]})
+            if continuity:
+                continuity.save()
         completion = {}
         async def completed(event, data):
             completion.update(data)
@@ -280,6 +289,13 @@ class Children:
             coordinator.register_capability("live.child_mode", "persistent" if persistent else "finite")
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)
             coordinator.register_capability("live.checkpoint", checkpoint)
+            from ..context_continuity import install as install_continuity
+            from ..runtime_controls import override_path
+            continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
+            async def compacted(event, data):
+                await checkpoint()
+                return HookResult()
+            coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
                 if value is not None:

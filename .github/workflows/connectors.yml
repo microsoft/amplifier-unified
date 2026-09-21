@@ -1,0 +1,35 @@
+name: MCP connector lifecycle
+on:
+  pull_request:
+    paths:
+      - 'amplifier_web/smart*'
+      - 'amplifier_web/mcp_*'
+      - 'amplifier_web/auth.py'
+      - 'amplifier_web/server.py'
+      - 'tests/test_connector_lifecycle.py'
+      - 'tests/fixtures/mcp*'
+      - 'tests/fixtures/connectors_ui_server.py'
+      - 'frontend/src/smart-tools*'
+      - 'frontend/tests/connectors-browser.mjs'
+      - '.github/workflows/connectors.yml'
+permissions:
+  contents: read
+jobs:
+  connectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      # Install the declared host and development dependencies from the lock.
+      - run: uv sync --locked --group dev
+      - run: uv run --no-sync pytest tests/test_connector_lifecycle.py tests/test_smart_tools.py tests/test_smart_canvas.py tests/test_auth.py tests/test_server_auth.py -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: cd frontend && npx playwright install --with-deps chromium
+      - run: npm --prefix frontend run test:connectors-browser

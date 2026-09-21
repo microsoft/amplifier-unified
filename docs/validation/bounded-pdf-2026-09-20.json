@@ -1,0 +1,37 @@
+{
+  "source_revision": "46e229c",
+  "mode": "actual HTTPS tool download, no model calls",
+  "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+  "elapsed_seconds": 0.119,
+  "checks": {
+    "small_cap_refused": true,
+    "original_preserved": true,
+    "complete_download_success": true,
+    "pdf_magic": true,
+    "body_file_hash_exact": true,
+    "bytes_exact": true,
+    "source_attributed": true,
+    "no_temp_residue": true
+  },
+  "refusal": {
+    "code": "download_too_large",
+    "message": "The response exceeds the download cap; the destination was not changed",
+    "max_download_bytes": 128
+  },
+  "download": {
+    "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+    "requested_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+    "source_url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+    "source_id": "web-c712e96563e8f8b0",
+    "retrieved_at": "2026-09-20T23:36:19.630767+00:00",
+    "status_code": 200,
+    "content_type": "application/pdf",
+    "truncated": false,
+    "total_bytes": 13264,
+    "saved_bytes": 13264,
+    "download_limit": 1048576,
+    "content_sha256": "3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4",
+    "saved_sha256": "3df79d34abbca99308e79cb94461c1893582604d68329a41fd4bec1885e6adb4"
+  },
+  "limitations": "Binary retrieval only; no PDF text extraction, OCR or visual-inspection claim."
+}

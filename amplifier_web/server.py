@@ -24,7 +24,7 @@ def _set_response_headers(response: web.StreamResponse, path: str) -> web.Stream
     # document. Keep the login form same-origin without leaking referrers to
     # other sites; do not weaken the Origin check to accept opaque origins.
     response.headers["Referrer-Policy"] = "same-origin" if path == "/login" else "no-referrer"
-    response.headers["Cache-Control"] = "no-store" if path.startswith("/api/") or path == "/login" else "no-cache"
+    response.headers["Cache-Control"] = "no-store" if path.startswith(("/api/", "/share/")) or path in {"/login", "/oauth/mcp/callback", "/oauth/mcp/complete"} else "no-cache"
     response.headers.setdefault("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; frame-src 'self' http: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://api.openai.com wss://api.openai.com; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'")
     return response
 
@@ -86,7 +86,19 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+
+    async def mcp_oauth_callback(request):
+        await service.smart_tools.oauth.callback(request.query, validate_origin(f"{request.scheme}://{request.host}"))
+        raise web.HTTPSeeOther("/oauth/mcp/complete", headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+
+    async def mcp_oauth_complete(request):
+        return web.Response(text="Authorization response received. Return to Amplifier Unified to check the connection.")
+
+    app.router.add_get("/oauth/mcp/callback", mcp_oauth_callback, allow_head=False)
+    app.router.add_get("/oauth/mcp/complete", mcp_oauth_complete)
     service.bind_runtime_alias(lambda current: app.__setitem__("runtime", current))
+    from .voice_visual import setup_routes as visual_routes
+    visual_routes(app)
     from .terminal_setup import setup_routes as setup_terminal
     setup_terminal(app)
     from .smart_tools import SmartToolsManager
@@ -97,6 +109,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service._publish()
     from .management import Management
     service.management = Management(service)
+    service.schedules.start()
+    service.worktrees.start()
     service.history.start()
     service.event_log_view.start()
     if preload_providers:
@@ -138,6 +152,27 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.json_response({'content': service.state_resource(snapshot['content']['$resource']),
                                   'filename': snapshot['filename'], 'mimeType': snapshot['mimeType']},
                                  headers={'Cache-Control': 'no-store'})
+
+    async def output_content(request):
+        from urllib.parse import quote
+        record=service.outputs.store.read(request.match_info['identity'])
+        data=service.outputs.content(record)
+        if data is None:
+            raise AppError('This output is an external reference without saved content.',404)
+        filename=Path(record.get('filename','output')).name
+        return web.Response(body=data,content_type='application/octet-stream',headers={
+            'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
+            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+
+    async def output_image(request):
+        import base64
+        record=service.outputs.store.read(request.match_info['identity'])
+        try:
+            value=service.outputs.image(record['sessionId'],record['id'],record.get('sha256'))
+        except ValueError as exc:
+            raise AppError(str(exc),409) from None
+        return web.Response(body=base64.b64decode(value['_image']),content_type='image/png',headers={
+            'Content-Security-Policy': "default-src 'none'; frame-ancestors 'self'; sandbox"})
 
     async def actions(request):
         if request.method == "GET":
@@ -297,7 +332,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def smart_canvas_tools(request):
         _, binding = service.smart_canvas.binding(request.match_info['identity'])
         server = next(s for s in service.state['smartTools']['servers'] if s['id'] == binding['serverId'])
-        tools = [t for t in server.get('tools',[]) if t['name'] in binding['allowedTools']]
+        tools = [t for t in await service.smart_tools.list_tools(server['id'], origin='app') if t['name'] in binding['allowedTools']]
         return web.json_response({'tools':tools})
 
     app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)
@@ -343,6 +378,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.json_response(operation)
 
     app.router.add_get('/api/smart-tools/operations/{identity}', smart_operation)
+    async def shared_conversation(request):
+        async with service.lock:
+            content = service.conversation_library.public_snapshot(request.match_info['token'])
+        if content is None:
+            raise web.HTTPNotFound(text='This snapshot link is unavailable.')
+        return web.Response(text=content, content_type='text/html', headers={
+            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            'X-Robots-Tag': 'noindex, nofollow, noarchive'})
+    app.router.add_get('/share/{token}', shared_conversation)
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", post_login)
     app.router.add_get("/setup", setup)
@@ -352,6 +396,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/canvas/{identity}/document", canvas_document)
     app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
+    app.router.add_get("/api/outputs/{identity}/content", output_content)
+    app.router.add_get("/api/outputs/{identity}/image", output_image)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)

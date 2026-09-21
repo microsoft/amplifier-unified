@@ -35,6 +35,8 @@ class Worker:
     def __init__(self):
         self.session = self.runtime = self.execution = None
         self.approvals = {}
+        self.operation_ids = set()
+        self.operation_controls = 0
         self.bridges = {}
         self.start_task = None
         self.tasks = set()
@@ -92,6 +94,9 @@ class Worker:
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
+        if self.controls:
+            from amplifier_web.scheduled_input import finish as finish_scheduled_input
+            finish_scheduled_input(self.controls, event)
         if event.get('type') == 'generation.started':
             self.context_inputs = []
         if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
@@ -118,18 +123,47 @@ class Worker:
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
         if coordinator.get_capability("web.activity"):
+            # Live provider edits may mount a new immutable instance after the
+            # hooks were installed. Preserve its admission wrapper as well.
+            if self.telemetry:
+                providers = coordinator.get("providers") or {}
+                for name, provider in list(providers.items()):
+                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
+        async def observe_operation(event):
+            identity = (coordinator.session_id, event.get("operationId"))
+            if event.get("phase") == "started":
+                self.operation_ids.add(identity)
+            try:
+                from amplifier_web.computation import KERNEL_TRANSPORT
+                if event.get("source") == "tool-bash" and KERNEL_TRANSPORT.get():
+                    return {"capturedBy": "computation"}
+                return await self.bridge("operations.observe", {
+                    "runtimeSessionId": coordinator.session_id, "event": event})
+            finally:
+                if event.get("phase") == "finished":
+                    self.operation_ids.discard(identity)
+                    task = asyncio.create_task(self.park())
+                    self.tasks.add(task)
+                    task.add_done_callback(self.tasks.discard)
+        coordinator.register_capability("operations.observe", observe_operation)
+        async def admit_questions(question_ids):
+            return await self.bridge("questions.admit", {"questionIds": question_ids})
+        coordinator.register_capability("questions.admit", admit_questions)
         def public_stream():
             from amplifier_web.execution_events import CALL_PURPOSE
             return not CALL_PURPOSE.get()
         coordinator.register_capability("live.public_stream", public_stream)
         if self.telemetry:
+            coordinator.register_capability('web.provider_observe', lambda provider: self.telemetry.instrument_provider(coordinator.session_id,provider))
+            coordinator.register_capability('web.provider_call', lambda provider, request, invoke, **kwargs: self.telemetry.provider_call(coordinator.session_id, provider, request, invoke, **kwargs))
             registry = coordinator.get_capability("live.children")
             if registry and coordinator.session_id in registry.rows:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
-            for provider in (coordinator.get("providers") or {}).values():
-                self.telemetry.instrument_provider(coordinator.session_id, provider)
+            providers = coordinator.get("providers") or {}
+            for name, provider in list(providers.items()):
+                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -200,6 +234,10 @@ class Worker:
             from amplifier_web.shared_state import ActivationGate, configuration_stamp
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
+            from amplifier_web.runtime_qualification import active_install_overrides
+            install_overrides = active_install_overrides(self.home, os.environ.get("UV_OVERRIDE"))
+            if install_overrides is not None:
+                os.environ["UV_OVERRIDE"] = str(install_overrides)
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -231,11 +269,16 @@ class Worker:
                 resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
-                write_guard=self.activation_gate.check_current, resolved_root=resolved_root)
+                write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
+                execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
+            if install_overrides is not None:
+                active_install_overrides(self.home, str(install_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
             self.controls = RuntimeControls(self.session, self.runtime, self.telemetry)
+            self.controls.capacity.admit = lambda row: self.bridge("capacity.admit", {"call": row})
+            self.telemetry.admission_guard = self.controls.capacity.guard
             # Preserve app controls on native mounts. A legacy common snapshot
             # retains its previous restoration policy during one-time recovery.
             if report.get("history_source") != "legacy-checkpoint":
@@ -283,10 +326,12 @@ class Worker:
                     if coordinator:
                         host.install_activity(coordinator)
                         await install_app_access(coordinator, surface_bridge(coordinator))
-                        from amplifier_web.surface_delivery import SurfaceProvider
-                        delivery = coordinator.get_capability('web.surface_delivery')
+                        from amplifier_web.host.session import SelectedProvider
+                        transform = coordinator.get_capability('web.provider_transform')
+                        if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
+                            loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
-                        return runtime, {name: SurfaceProvider(value, delivery) for name, value in selected.items()}, scope
+                        return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing
@@ -340,7 +385,7 @@ class Worker:
             if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
             loop = self.session.coordinator.get("orchestrator")
-            if (self.approvals or self.bridges or self.runtime.queued_inputs
+            if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
                     or not self.runtime.inbox.empty() or self.runtime.generation
                     or (loop and (loop.pending or loop._active_jobs()))):
                 return
@@ -450,7 +495,7 @@ class Worker:
             async with self.command_lock:
                 loop = self.session.coordinator.get("orchestrator") if self.session else None
                 settled = bool(self.parked and not self.ownership.yielding
-                    and not self.approvals and not self.bridges and not self.remounting
+                    and not self.approvals and not self.bridges and not self.operation_ids and not self.operation_controls and not self.remounting
                     and not self.runtime.queued_inputs and self.runtime.inbox.empty()
                     and not self.runtime.generation
                     and not (self.naming and self.naming.pending and not self.naming.pending.done())
@@ -459,7 +504,7 @@ class Worker:
                 if settled:
                     self.shutdown.set()
             return
-        if op not in {"send", "retry", "resume", "control", "worker.steer", "worker.stop", "approval"}:
+        if op not in {"send", "retry", "resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
             await self._command_serial(data)
             return
         try:
@@ -469,9 +514,19 @@ class Worker:
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
+                detached_cancel = op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
+                if detached_cancel:
+                    self.operation_controls += 1
+                else:
+                    try:
+                        await self._command_serial(data)
+                    finally:
+                        self.activation_gate.reset(token)
+            if detached_cancel:
                 try:
                     await self._command_serial(data)
                 finally:
+                    self.operation_controls -= 1
                     self.activation_gate.reset(token)
             if op in {"control", "retry"}:
                 # A control-only action or duplicate retry does not wake the inbox.
@@ -519,6 +574,12 @@ class Worker:
                 else:
                     self.shutdown.set()
                 return
+            elif op == "dependencies":
+                if __package__:
+                    from .artifact_runtime import discover
+                else:
+                    from artifact_runtime import discover
+                result = await discover('worker')
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
             elif op in {"delivery", "retry"} and (
@@ -540,7 +601,10 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data["operation"] == "session.naming":
+                if data["operation"] == "schedule.submit":
+                    from amplifier_web.scheduled_input import admit
+                    result = await admit(self.controls, self.runtime, arguments, self.activation)
+                elif data["operation"] == "session.naming":
                     self.controls.require_idle()
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')
@@ -565,11 +629,11 @@ class Worker:
                     result = await switch(self, arguments)
                 else:
                     result = await self.controls.perform(data["operation"], arguments)
-            elif op in {"worker.steer", "worker.stop"}:
+            elif op in {"worker.steer", "worker.stop", "worker.message"}:
                 children = self.session.coordinator.get_capability("live.children")
                 wid = data["worker_id"]
                 if children and wid in children.rows:
-                    result = await children.control(wid, "steer" if op == "worker.steer" else "cancel", data.get("text", ""))
+                    result = await children.control(wid, "steer" if op == "worker.steer" else "message" if op == "worker.message" else "cancel", data.get("text", ""), input_id=data.get("input_id"))
                 elif op == "worker.stop":
                     from amplifier_module_loop_live.runtime import Input
                     loop = self.session.coordinator.get("orchestrator")

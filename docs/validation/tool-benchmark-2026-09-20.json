@@ -1,0 +1,518 @@
+{
+  "schemaVersion": 1,
+  "evidence": "Two explicitly authorized matched live pairs, each one direct and one programmatic input on fresh sessions. Original failed pair retained; second pair only after correction of a proven Work instruction defect. No model/provider switch.",
+  "beforeFixFailure": "Work context incorrectly advertised Bash exit_code. Generated JS followed that field, printed Tool failure despite three successful Bash receipts, and returned an incorrect empty aggregate. This was misleading bundled guidance, not failed provider/tool execution.",
+  "scope": "Synthetic data only. Same15-tool catalog in both arms. All observed provider receipts include prompts/schemas/discovery. Gross input adds cache writes once to Core input (which already contains cache reads); gross total also includes output. Costs provider-reported, no host estimates.",
+  "limits": "Single serial pair per instruction revision. Second arm may benefit from shared provider cache; startup and service noise differ. No universal efficiency/speedup claim. Model-visible tool bytes are canonical content bytes, not exact wire or tokenizer units. Original run A report double-encoded its inventory byte count; this passive summary recomputes that optional byte metric from preserved history without changing original reports.",
+  "runs": [
+    {
+      "run": "a",
+      "reportSha256": "df6f71cb1243846b011ec1ee7148ca37a2138b59e04ac0f1529f02346f3fc187",
+      "providerInstance": "terra",
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "passed": false,
+      "sameCatalog": true,
+      "fixturesUnchanged": true,
+      "fixture": {
+        "fixture-a.json": {
+          "sha256": "275d32d27a1580c66780df434c552874c45b0c33b5aba6210a398e54c6848bbf",
+          "bytes": 5560
+        },
+        "fixture-b.json": {
+          "sha256": "5f32409ba37734902c4ae5edfb8bae2837561c71088d7b0b69f0889af7d25294",
+          "bytes": 5560
+        },
+        "fixture-c.json": {
+          "sha256": "bacfb87417dffd1ad9b8176efb2a697113699c2926d73c04c691f1e658a763a1",
+          "bytes": 5560
+        }
+      },
+      "credentialCleanup": {
+        "scannedFiles": 39,
+        "redactedFiles": 3,
+        "remainingMatches": 0,
+        "sqliteMatches": 0
+      },
+      "guidance": null,
+      "sources": null,
+      "arms": [
+        {
+          "mode": "direct",
+          "passed": true,
+          "correctOutput": true,
+          "matchesRequestedMode": true,
+          "topLevelCallCount": 3,
+          "nestedCallCount": 0,
+          "elapsedInputToResultSeconds": 10.5375,
+          "startupAndCatalogSeconds": 30.4079,
+          "elapsedIncludingStartupSeconds": 40.9454,
+          "finalResponse": "{\"ids\":[\"a\",\"b\",\"c\"],\"sum\":51}\nBENCHMARK_DONE",
+          "catalog": {
+            "count": 15,
+            "jsonBytes": 24846,
+            "sha256": "1f1865e5f980958ca1eefc91667fab2f84090c041760f2b7743f25570e0041f3",
+            "passiveHarnessReads": 1
+          },
+          "modelCalls": 4,
+          "metrics": {
+            "inputTokens": {
+              "value": 42209,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "outputTokens": {
+              "value": 110,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "totalTokens": {
+              "value": 42319,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "grossInputTokens": {
+              "value": 58292,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once"
+            },
+            "grossTotalTokens": {
+              "value": 58402,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once and output"
+            },
+            "reasoningTokens": {
+              "value": 23,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheReadTokens": {
+              "value": 42197,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheWriteTokens": {
+              "value": 16083,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "costUsd": {
+              "value": 0.0499909,
+              "unit": "USD",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "estimatedValue": 0,
+              "estimatedCalls": 0,
+              "source": "provider-reported or explicitly attributed estimate; no host price table"
+            }
+          },
+          "canonicalToolResultContentBytes": 16980
+        },
+        {
+          "mode": "programmatic",
+          "passed": false,
+          "correctOutput": false,
+          "matchesRequestedMode": true,
+          "topLevelCallCount": 1,
+          "nestedCallCount": 3,
+          "elapsedInputToResultSeconds": 11.4333,
+          "startupAndCatalogSeconds": 11.1042,
+          "elapsedIncludingStartupSeconds": 22.5375,
+          "finalResponse": "{\"ids\":[],\"sum\":null}\nBENCHMARK_DONE",
+          "catalog": {
+            "count": 15,
+            "jsonBytes": 24846,
+            "sha256": "1f1865e5f980958ca1eefc91667fab2f84090c041760f2b7743f25570e0041f3",
+            "passiveHarnessReads": 1
+          },
+          "modelCalls": 2,
+          "metrics": {
+            "inputTokens": {
+              "value": 20483,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "outputTokens": {
+              "value": 520,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "totalTokens": {
+              "value": 21003,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "grossInputTokens": {
+              "value": 27308,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once"
+            },
+            "grossTotalTokens": {
+              "value": 27828,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once and output"
+            },
+            "reasoningTokens": {
+              "value": 325,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheReadTokens": {
+              "value": 20477,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheWriteTokens": {
+              "value": 6825,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "costUsd": {
+              "value": 0.0274099,
+              "unit": "USD",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "estimatedValue": 0,
+              "estimatedCalls": 0,
+              "source": "provider-reported or explicitly attributed estimate; no host price table"
+            }
+          },
+          "canonicalToolResultContentBytes": 1829
+        }
+      ]
+    },
+    {
+      "run": "b",
+      "reportSha256": "6058450db49ac2f9afc2fa137ade16528f200c4a31272e6d65a3c0948b4f0b13",
+      "providerInstance": "terra",
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "passed": true,
+      "sameCatalog": true,
+      "fixturesUnchanged": true,
+      "fixture": {
+        "fixture-a.json": {
+          "sha256": "275d32d27a1580c66780df434c552874c45b0c33b5aba6210a398e54c6848bbf",
+          "bytes": 5560
+        },
+        "fixture-b.json": {
+          "sha256": "5f32409ba37734902c4ae5edfb8bae2837561c71088d7b0b69f0889af7d25294",
+          "bytes": 5560
+        },
+        "fixture-c.json": {
+          "sha256": "bacfb87417dffd1ad9b8176efb2a697113699c2926d73c04c691f1e658a763a1",
+          "bytes": 5560
+        }
+      },
+      "credentialCleanup": {
+        "scannedFiles": 39,
+        "redactedFiles": 3,
+        "remainingMatches": 0,
+        "sqliteMatches": 0
+      },
+      "guidance": {
+        "sha256": "a2d5fc058ceff9c6ab9ab49fee8dc1e9befc304ade7a22470b0d2878cbd7b140",
+        "legacyExitCodeClaim": false
+      },
+      "sources": {
+        "host": {
+          "commit": "89c301e68570c3eb619fbfb6f4aa27620aa4f2f4",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "work": {
+          "commit": "d2d3edce95fcab65b0fdbbb41deabc17dd436593",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "loop": {
+          "commit": "3ab5c02a1fd9a883c0ec8d7552e124f4e2e0ff05",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "context": {
+          "commit": "3d2bd9adcda40a0d8bddbd7dd234a62db32bca0d",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "bash": {
+          "commit": "9c88fca7cee607609fad8f9556d2953bbbf53a1f",
+          "trackedDirty": true,
+          "trackedDiffSha256": "2a3dc06ac75fd393c5bc35bd49a44060a66aaf372992f3fb9e71024ce9bbfe1f"
+        },
+        "web": {
+          "commit": "46e229c2b48606fbeba54fc2f75e6fb21d068311",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "tool-exec": {
+          "commit": "cc6dfeac6bac9b6ce25f83944180a020b7b97ab0",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "foundation": {
+          "commit": "52dec7e276db62f720448c8e2ec176b9cbffde2d",
+          "trackedDirty": false,
+          "trackedDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "harnessSha256": "e3d7b147bcaf4c932112c11d8bd938e320d1bde222261c50e714462410667ae7"
+      },
+      "arms": [
+        {
+          "mode": "direct",
+          "passed": true,
+          "correctOutput": true,
+          "matchesRequestedMode": true,
+          "topLevelCallCount": 3,
+          "nestedCallCount": 0,
+          "elapsedInputToResultSeconds": 9.3776,
+          "startupAndCatalogSeconds": 11.207,
+          "elapsedIncludingStartupSeconds": 20.5846,
+          "finalResponse": "{\"ids\":[\"a\",\"b\",\"c\"],\"sum\":51}\nBENCHMARK_DONE",
+          "catalog": {
+            "count": 15,
+            "jsonBytes": 24846,
+            "sha256": "1f1865e5f980958ca1eefc91667fab2f84090c041760f2b7743f25570e0041f3",
+            "passiveHarnessReads": 1
+          },
+          "modelCalls": 4,
+          "metrics": {
+            "inputTokens": {
+              "value": 42480,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "outputTokens": {
+              "value": 109,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "totalTokens": {
+              "value": 42589,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "grossInputTokens": {
+              "value": 58653,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once"
+            },
+            "grossTotalTokens": {
+              "value": 58762,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once and output"
+            },
+            "reasoningTokens": {
+              "value": 22,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheReadTokens": {
+              "value": 42468,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheWriteTokens": {
+              "value": 16173,
+              "unit": "tokens",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "costUsd": {
+              "value": 0.0502581,
+              "unit": "USD",
+              "knownCalls": 4,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "estimatedValue": 0,
+              "estimatedCalls": 0,
+              "source": "provider-reported or explicitly attributed estimate; no host price table"
+            }
+          },
+          "canonicalToolResultContentBytes": 16980
+        },
+        {
+          "mode": "programmatic",
+          "passed": true,
+          "correctOutput": true,
+          "matchesRequestedMode": true,
+          "topLevelCallCount": 1,
+          "nestedCallCount": 3,
+          "elapsedInputToResultSeconds": 6.5753,
+          "startupAndCatalogSeconds": 3.196,
+          "elapsedIncludingStartupSeconds": 9.7713,
+          "finalResponse": "{\"ids\":[\"a\",\"b\",\"c\"],\"sum\":51}\nBENCHMARK_DONE",
+          "catalog": {
+            "count": 15,
+            "jsonBytes": 24846,
+            "sha256": "1f1865e5f980958ca1eefc91667fab2f84090c041760f2b7743f25570e0041f3",
+            "passiveHarnessReads": 1
+          },
+          "modelCalls": 2,
+          "metrics": {
+            "inputTokens": {
+              "value": 20665,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "outputTokens": {
+              "value": 259,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "totalTokens": {
+              "value": 20924,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "grossInputTokens": {
+              "value": 27500,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once"
+            },
+            "grossTotalTokens": {
+              "value": 27759,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "source": "Core input includes cache reads; add reported cache writes once and output"
+            },
+            "reasoningTokens": {
+              "value": 40,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheReadTokens": {
+              "value": 20659,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "cacheWriteTokens": {
+              "value": 6835,
+              "unit": "tokens",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known"
+            },
+            "costUsd": {
+              "value": 0.0243393,
+              "unit": "USD",
+              "knownCalls": 2,
+              "pendingCalls": 0,
+              "unknownCalls": 0,
+              "status": "known",
+              "estimatedValue": 0,
+              "estimatedCalls": 0,
+              "source": "provider-reported or explicitly attributed estimate; no host price table"
+            }
+          },
+          "canonicalToolResultContentBytes": 1873
+        }
+      ]
+    }
+  ]
+}

@@ -363,10 +363,21 @@ class EventLogView:
         if not indexes:
             return None
         live = session.get('execution', {})
+        from .session_projection import accounting_projection, ACCOUNTING_FIELDS
+        accounting = accounting_projection(live)
         live_nodes = live.get('nodes', [])
-        live_by_id = {row['id']: row for row in live_nodes}
-        live_by_source = {row.get('_canonicalId', row['id']): row for row in live_nodes}
         aliases = {root, session['id']}
+        def model_key(row, field='id'):
+            sid = row.get('sessionId')
+            return (session['id'] if sid in aliases else sid, row.get(field, row['id']))
+        live_by_id = {model_key(row): row for row in live_nodes}
+        live_by_source = {model_key(row, '_canonicalId'): row for row in live_nodes}
+        bound_sessions = {session['id']}
+        bound_sessions.update(row.get('sessionId') for row in accounting
+                              if row.get('kind') == 'worker' and row.get('rootSessionId') == session['id'])
+        bound_sessions.update(row.get('sessionId') for row in session.get('workers', []) if row.get('sessionId'))
+        bindings = {model_key(row): row for row in accounting
+                    if row.get('rootSessionId') == session['id'] and row.get('sessionId') in bound_sessions}
         def call_key(row):
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))
@@ -381,8 +392,11 @@ class EventLogView:
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
         remap = {}
         for node in nodes:
+            binding = bindings.get(model_key(node))
+            if binding and binding.get('kind') != node.get('kind'):
+                binding = None
             node['_canonicalId'] = node['id']
-            previous = tool_ids.get(call_key(node)) if node['kind'] == 'tool' else live_by_source.get(node['id']) or live_by_id.get(node['id'])
+            previous = tool_ids.get(call_key(node)) if node['kind'] == 'tool' else live_by_source.get(model_key(node)) or live_by_id.get(model_key(node))
             if previous is None and node['kind'] == 'llm':
                 candidates = [row for row in live_nodes if row.get('kind') == 'llm' and not row.get('canonicalHistory')
                     and (row.get('sessionId') == node.get('sessionId') or row.get('sessionId') in aliases and node.get('sessionId') in aliases)
@@ -391,7 +405,7 @@ class EventLogView:
                     previous = candidates[0]
             if previous:
                 old = node['id'];node['id'] = previous['id'];remap[old] = node['id']
-                for key in ('turnId', 'parentId', 'rootSessionId', 'liveObservation', 'lifecycle'):
+                for key in ('turnId', 'parentId', 'lifecycle'):
                     if previous.get(key):node[key] = previous[key]
                 if node['kind'] == 'llm' and previous.get('usage'):
                     recorded = node.get('usage') or {}
@@ -400,6 +414,12 @@ class EventLogView:
                         node['usage']['costType'] = previous['usage'].get('costType', 'reported')
                 if node.get('phase') in LIVE_PHASES and isinstance(previous.get('endedAt'), (int, float)) and previous['endedAt'] >= (node.get('startedAt') or 0):
                     node.update(phase=previous.get('phase', 'recorded'), endedAt=previous['endedAt'])
+            if binding:
+                # Exact host-owned call identity joins display and accounting.
+                # Native timing similarity alone is never budget authority, and
+                # stale log snapshots cannot replace newer observed revisions.
+                node.update({key: copy.deepcopy(value) for key, value in binding.items() if key in ACCOUNTING_FIELDS})
+                node['liveObservation'] = True
             if node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
                 observed = previous and previous.get('liveObservation') and previous.get('phase') in LIVE_PHASES and not previous.get('endedAt')
                 active = session.get('status') in {'working', 'starting', 'stopping'} or node.get('lifecycle') == 'background'
@@ -470,7 +490,8 @@ class EventLogView:
             if starts:turn['startedAt'] = min(starts)
             if ends and not any(row.get('phase') in {'running', 'working', 'retrying'} and not row.get('endedAt') for row in members):
                 turn.update(endedAt=max(ends), phase='completed')
-        tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl'}
+        tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
+                'retiredUsageNodes': accounting}
         refresh_usage(tree)
         return tree
 

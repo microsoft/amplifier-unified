@@ -43,6 +43,8 @@ def test_history_limits_and_exact_published_version():
 
 
 async def test_exact_release_history_includes_skipped_versions_and_failure_does_not_block_update(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(app_updates.components,'updates',AsyncMock(return_value=[]))
     monkeypatch.setattr(app_updates.shutil,'which',lambda _:'/tool')
     calls=[]
     async def process(*args,**kwargs):

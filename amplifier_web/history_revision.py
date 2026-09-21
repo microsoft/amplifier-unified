@@ -124,6 +124,12 @@ def trim_execution(session, previous, message_id):
         tree['turns'] = [row for row in tree.get('turns', []) if row.get('anchorMessageId') not in removed
                          and row.get('inputId') not in discarded_inputs]
         kept = {row['id'] for row in tree['turns']}
+        # Editing visible history cannot erase already incurred model usage.
+        # Transfer receipts out of the visible tree; do not create a second ledger.
+        from .session_projection import accounting_projection
+        retired = [*tree.get('retiredUsageNodes', []), *(row for row in tree.get('nodes', [])
+            if row.get('turnId') not in kept and row.get('kind') in {'llm', 'worker'} and not row.get('nativeHistory'))]
+        tree['retiredUsageNodes'] = accounting_projection({'retiredUsageNodes': retired})
         tree['nodes'] = [row for row in tree.get('nodes', []) if row.get('turnId') in kept]
         tree['currentTurnId'] = None
         tree['aggregateUsage'] = rollup([row for row in tree['nodes'] if row.get('kind') == 'llm'])
@@ -142,7 +148,7 @@ def apply_revision(service, session, result, *, interrupted=False):
     session.update(historyManaged=False, historyLoaded=True, historyLoading=False, streaming='', workers=[], approvals=[])
     for key in ('historyActivity', 'nativeBoundary', 'nativeBoundaryId', 'messageWindow', 'executionWindow', 'error', 'failure', 'health'):
         session.pop(key, None)
-    message = service._message(session, 'user', edit['text'], edit['via'], inputId=edit['operationId'], attachments=edit['attachments'])
+    message = service._message(session, 'user', edit['text'], edit['via'], inputId=edit['operationId'], inputOrigin=edit.get('inputOrigin'), attachments=edit['attachments'])
     if interrupted:
         message['delivery'] = {'status': 'unknown'}
     from .execution import ensure_turn

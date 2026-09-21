@@ -12,13 +12,17 @@ from importlib import metadata
 from . import __version__
 from .host.config import write_private
 from .updates import process
+from . import app_component_graph as components
 
 REPOSITORY='microsoft/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
+OPTIONAL_EXTRAS={'native-desktop':'amplifier-module-tool-computer-use','tui':'amplifier-app-tui'}
 PROBE = r'''import json,sys
 facts={"ok":False,"stage":"imports","isolated":bool(sys.flags.isolated),"pythonVersion":"%s.%s.%s"%sys.version_info[:3]}
 try:
  from pathlib import Path
+ extras=sys.argv[1:]
+ assert len(extras)==len(set(extras)) and all(extra in {"native-desktop","tui"} for extra in extras)
  import amplifier_web
  from amplifier_web import __version__
  from amplifier_web.server import create_app
@@ -34,7 +38,12 @@ try:
  facts["stage"]="login"
  facts["loginAvailable"]=callable(pam.authenticate)
  assert facts["loginAvailable"]
- if "tui" in sys.argv[1:]:
+ if "native-desktop" in extras:
+  facts["stage"]="capabilities"
+  from amplifier_module_tool_computer_use import foreground
+  assert Path(foreground.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+  assert callable(foreground.local_observer) and issubclass(foreground.ForegroundUnavailable,RuntimeError)
+ if "tui" in extras:
   import os
   from amplifier_tui.connected import main
   from amplifier_tui.launcher import executable
@@ -78,14 +87,25 @@ def git_environment():
     return env
 
 def installed_extras():
-    """Retain the optional client already installed in this host environment."""
-    try:metadata.distribution('amplifier-app-tui')
-    except metadata.PackageNotFoundError:return []
-    return ['tui']
+    """Retain known optional features without loading clients or desktop backends."""
+    extras=[]
+    for extra,distribution in sorted(OPTIONAL_EXTRAS.items()):
+        try:metadata.distribution(distribution)
+        except metadata.PackageNotFoundError:continue
+        extras.append(extra)
+    return extras
+
+def validated_extras(extras):
+    if (not isinstance(extras,list) or
+        any(not isinstance(extra,str) or extra not in OPTIONAL_EXTRAS for extra in extras) or
+        len(extras)!=len(set(extras))):
+        raise ValueError('Unsupported optional application features')
+    return sorted(extras)
 
 def install_requirement(revision,extras):
+    extras=validated_extras(extras)
     source='git+'+SOURCE+'@'+revision
-    return 'amplifier-unified[tui] @ '+source if extras==['tui'] else source
+    return 'amplifier-unified['+','.join(extras)+'] @ '+source if extras else source
 
 def application_state():
     from .release_notes import history
@@ -116,11 +136,16 @@ async def check():
                 base['releaseNotes']=history(parse(raw,tag.removeprefix('v')),tag)
             except (ValueError,RuntimeError,TimeoutError):
                 base['releaseNotesWarning']='Release notes for the available update could not be loaded. Installed release history is still available.'
-        return {**base,'status':'update' if version>current else 'current','latest':tag,'revision':revision,
+        component_updates = await components.updates(process, git_environment())
+        # Never downgrade a development host to an older published application.
+        refresh_components = bool(component_updates) and not ahead
+        return {**base,'status':'update' if version>current or refresh_components else 'current','latest':tag,'revision':revision,
+            'componentUpdates':component_updates,
             'url':SOURCE+'/releases/tag/'+tag,'publishedAt':data.get('published_at'),'releaseBehind':ahead,
             'detail':('This installation is newer than the latest published release. Updates follow published releases, not the main branch.' if ahead
                       else 'A newer application release is available; installation restarts the host when idle.' if version>current
-                      else 'The latest published application release is installed.')}
+                      else 'Newer application components are available; installation restarts the host when idle.' if refresh_components
+                      else 'The latest published application release and checked components are installed.')}
     except (ValueError,KeyError,RuntimeError,TimeoutError):
         return {**base,'status':'check_failed','detail':'No accessible published release was found. Check GitHub sign-in and release availability.'}
 
@@ -141,21 +166,28 @@ async def _stage(manager):
     if release.get('status')!='update':raise ValueError('Check for an application release first')
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
-    folder=manager.directory/'applications'/revision
+    generation=uuid.uuid4().hex
+    folder=manager.directory/'applications'/revision/generation
     folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
-    extras=installed_extras()
+    extras=validated_extras(installed_extras())
+    host_graph=manager.diagnostics.sync('host-components',components.installed_graph)
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
-    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force',install_requirement(revision,extras),env=env,timeout=900)
+    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force','--upgrade','--refresh',install_requirement(revision,extras),env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     output=await manager.diagnostics.run('candidate-probe',process,python,'-I','-c',PROBE,*extras,timeout=30)
     installed=verified_version(manager,output,release['latest'],'candidate-version')
-    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras}))
+    graph=await manager.diagnostics.run('candidate-components',components.read_graph,process,python)
+    app=next((item for item in graph if item['name']=='amplifier-unified'),{})
+    if app.get('revision')!=revision or app.get('url')!=SOURCE or app.get('version')!=installed:
+        raise ValueError('Candidate component graph does not match the selected application')
+    manager.diagnostics.sync('candidate-components-record',write_private,folder/'components.txt',components.requirements(graph))
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph)}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
-    await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId']},detail='Application release validated. Waiting for work to finish before restarting.')
+    await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation},detail='Application release validated. Waiting for work to finish before restarting.')
 
 async def activate(manager):
     async with manager.service.runtime_lifecycle():
@@ -172,6 +204,13 @@ async def _activate_serialized(manager):
             if last.get('status')!='failed':
                 manager.diagnostics.begin('application',manager.service.state['updates'].get('pendingApp',{}).get('revision'))
                 manager.diagnostics.record('activation-validation','failed',errorType=exception_type(error))
+            state=manager.service.state['updates']
+            if isinstance(state.get('pendingApp'),dict) and state['pendingApp'].get('generation') and state.get('phase')!='activating':
+                # Preserve the failed generation as evidence, but allow a later
+                # explicit Install to create a new candidate. Never retry effects.
+                await manager.publish(phase='error',pendingApp=None,appAvailable=True,
+                    error='The staged application changed or could not be validated. Install again to prepare a new candidate.',
+                    detail='The running host and previous candidate evidence were preserved.')
             raise
 
 async def installed_target():
@@ -206,7 +245,12 @@ async def _activate(manager):
     if not release:return
     revision=release.get('revision','')
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid staged release revision')
-    marker=manager.directory/'applications'/revision/'validated.json'
+    generation=release.get('generation')
+    if generation is not None and (not isinstance(generation,str) or not re.fullmatch('[0-9a-f]{32}',generation)):
+        raise ValueError('Invalid staged application generation')
+    folder=manager.directory/'applications'/revision
+    if generation:folder=folder/generation
+    marker=folder/'validated.json'
     # Validate one snapshot before closing the runtime or touching the install.
     try:
         validated=json.loads(marker.read_text())
@@ -216,15 +260,29 @@ async def _activate(manager):
         raise ValueError('App release must pass isolated validation before activation')
     if version_tuple(validated.get('version'))!=version_tuple(release.get('latest')):
         raise ValueError('The pending release does not match its validated package')
-    extras=validated.get('extras',[])
-    if extras not in ([],['tui']) or extras!=installed_extras():
-        message='Optional clients changed after validation. Install the update again to validate the current selection.'
+    try:
+        extras=validated_extras(validated.get('extras',[]))
+        extras_match=extras==installed_extras()
+    except ValueError:
+        extras_match=False
+    if not extras_match:
+        message='Optional features changed after validation. Install the update again to validate the current selection.'
         manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
         manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
         # Removing the pending pointer lets the normal install command stage a
         # fresh candidate. Keep its receipt on disk for diagnosis, never reuse it.
         await manager.publish(phase='error',pendingApp=None,appAvailable=True,error=message,detail=message)
         raise ValueError(message)
+    graph=None
+    if generation:
+        graph=components.validate_graph(validated.get('componentGraph'))
+        if validated.get('generation')!=generation or components.digest(graph)!=validated.get('componentDigest'):
+            raise ValueError('The component receipt does not match this application generation')
+        host_graph=components.validate_graph(validated.get('hostGraph'))
+        if components.digest(host_graph)!=validated.get('hostDigest') or components.installed_graph()!=host_graph:
+            raise ValueError('The installed host components changed after validation; prepare a new candidate')
+        if (folder/'components.txt').read_text()!=components.requirements(graph):
+            raise ValueError('The component resolution changed after validation')
     async with manager.service.lock:
         if manager.busy():return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
@@ -232,15 +290,24 @@ async def _activate(manager):
     helper_python=marker.parent/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     if not helper_python.is_file():
         raise ValueError('The validated app environment is missing; stage the release again')
+    if graph is not None:
+        candidate_graph=await manager.diagnostics.run('candidate-components-recheck',components.read_graph,process,helper_python)
+        if candidate_graph!=graph:
+            raise ValueError('The candidate components changed after validation; stage a new update')
     async with manager.service.lock:
         if manager.busy():return
         manager.service.state['updates'].update(phase='activating',detail='Installing the app update and restarting…')
         manager.service._publish()
     try:
         manager.diagnostics.sync('recovery-record',write_private,manager.directory/'previous-app.json',json.dumps(previous))
-        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
+        resolution_args=['--overrides',str(folder/'components.txt')] if graph is not None else []
+        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
         output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,*extras,timeout=30)
         installed=verified_version(manager,output,validated['version'],'replacement-version')
+        if graph is not None:
+            replacement_graph=await manager.diagnostics.run('replacement-components',components.read_graph,process,installed_python)
+            if replacement_graph!=graph:
+                raise ValueError('Installed components do not match the qualified application generation')
     except asyncio.CancelledError:
         await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')
         raise

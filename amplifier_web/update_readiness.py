@@ -63,12 +63,31 @@ def recovery_candidate(manager):
     revision = failure.get('revision', '')
     if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{40}', revision):
         return None
+    directory = manager.directory / 'applications' / revision
+    paths = [directory / 'validated.json']
+    # New update attempts keep separate immutable receipts. Match the precise
+    # failed attempt, never a newer candidate for the same app version/revision.
     try:
-        validated = json.loads((manager.directory / 'applications' / revision / 'validated.json').read_text())
-    except (OSError, ValueError):
+        paths.extend(child / 'validated.json' for child in directory.iterdir()
+                     if not child.is_symlink() and child.is_dir()
+                     and re.fullmatch('[a-f0-9]{32}', child.name))
+    except OSError:
+        pass
+    matches = []
+    for path in paths:
+        try:
+            candidate = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if (not valid_target(candidate) or candidate['attemptId'] != failure.get('attemptId')
+                or candidate['revision'] != revision):
+            continue
+        if path.parent != directory and candidate.get('generation') != path.parent.name:
+            continue
+        matches.append(candidate)
+    if len(matches) != 1:
         return None
-    if not valid_target(validated) or validated['attemptId'] != failure.get('attemptId') or validated['revision'] != revision:
-        return None
+    validated = matches[0]
     if not any(event.get('attemptId') == validated['attemptId'] and event.get('revision') == revision
                and event.get('kind') == 'application' and event.get('phase') == 'replacement-probe'
                and event.get('status') == 'succeeded' and event.get('probe', {}).get('ok') is True
@@ -112,6 +131,11 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 state.pop('reconciliation', None)
                 detail = 'Application update installed and the restarted server is healthy.'
                 phase = 'restart-ack'
+            application = state.get('application', {})
+            application.pop('componentUpdates', None)
+            application.update(status='current', current=identity['version'])
+            state['items'] = [application if row.get('id') == 'application' else row for row in state.get('items', [])]
+            state['available'] = sum(row.get('status') == 'update' for row in state['items'])
             state.update(phase='installed', pendingRestart=None, pendingApp=None, appAvailable=False,
                          installedAt=time.time(), error=None, detail=detail)
             if command_id:

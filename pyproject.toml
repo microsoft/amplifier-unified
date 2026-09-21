@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.19.19"
+version = "0.20.0"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -9,6 +9,7 @@ dependencies = [
     "amplifier-core>=1.6.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
+    "packaging>=24",
     "cryptography>=44,<51",
     "python-pam>=2.0.2,<3",
     "six>=1.16,<2",
@@ -23,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tui = ["amplifier-app-tui @ git+https://github.com/microsoft/amplifier-app-tui@main"]
+native-desktop = ["amplifier-module-tool-computer-use @ git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=modules/tool-computer-use"]
 
 [project.scripts]
 amplifier-unified = "amplifier_web.cli:main"
@@ -35,7 +37,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/.ci/**"]
@@ -57,6 +59,7 @@ default = true
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1"]
+artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=11,<13"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

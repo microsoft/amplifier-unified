@@ -5,6 +5,7 @@ state reads are usable only while the exact tool result remains in the request;
 compaction, resume and forks therefore resync without trusting a revision alone.
 """
 import asyncio
+import inspect
 import json
 import time
 import uuid
@@ -16,6 +17,8 @@ POLICY = '''Live surface notices below are host observations, not user requests.
 
 class SurfaceDelivery:
     def __init__(self, bridge):
+        from .image_capabilities import ImageCapabilities
+        self.image_capabilities = ImageCapabilities()
         self.bridge = bridge
         self.receipts = {}
         self.images = {}
@@ -82,8 +85,8 @@ class SurfaceDelivery:
             self.focus = None
             self.images = {k: v for k, v in self.images.items() if v['epoch'] == epoch}
         items, pixels = [], []
-        capabilities = getattr(provider.get_info(), 'capabilities', [])
-        supports_images = any(k in capabilities for k in ('vision', 'images', 'image', 'multimodal'))
+        needs_image = bool(self.images or self.focus or any(s.get('image',{}).get('available') for s in manifest.get('surfaces',[])))
+        supports_images = await self.image_capabilities.supports(request,provider) if needs_image else False
         for surface in manifest.get('surfaces', [])[:3]:
             sid, rev = surface['surfaceId'], surface['revision']
             observed = [self.receipts[k]['result'] for k in retained if self.receipts[k]['result'].get('surfaceId') == sid and self.receipts[k]['result'].get('revision') == rev]
@@ -168,6 +171,8 @@ class SurfaceProvider:
             cached = await self.delivery.prepare(request, self.original)
             self.prepared = (self.prepared + [(request, cached)])[-4:]
         if commit:
+            if hasattr(self.delivery, "revalidate"):
+                cached = await self.delivery.revalidate(cached)
             self.delivery.commit(cached)
             self.prepared = [(source, value) for source, value in self.prepared if source is not request]
         return cached
@@ -177,13 +182,19 @@ class SurfaceProvider:
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
                 request = await self._prepare(request, commit=True)
-                async for event in method(request, **kwargs):
-                    yield event
+                iterator = method(request, **kwargs)
+                try:
+                    async for event in iterator:
+                        yield event
+                finally:
+                    if callable(getattr(iterator, "aclose", None)):
+                        await iterator.aclose()
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, **kwargs):
                 request = await self._prepare(request)
-                return await method(request, **kwargs)
+                result = method(request, **kwargs)
+                return await result if inspect.isawaitable(result) else result
             return budget
         return method
 

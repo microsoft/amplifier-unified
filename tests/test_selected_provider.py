@@ -60,3 +60,20 @@ async def test_budget_only_wrapper_preserves_automatic_model_and_effort():
     assert [chunk async for chunk in selected.stream(request)] == ['first', 'last']
     assert provider.request == Request('routed-model', 'low', 321)
     assert provider.kwargs == {}
+
+
+async def test_surface_budget_preserves_synchronous_optional_protocol():
+    from amplifier_web.surface_delivery import SurfaceProvider
+    seen=[]
+    class BudgetProvider(Provider):
+        def request_budget(self,request,**kwargs):
+            seen.append((request,kwargs))
+            return {'context_token_budget':12} if len(seen)==1 else None
+    class Delivery:
+        async def prepare(self,request,provider):return request
+    original=BudgetProvider()
+    selected=SelectedProvider(original,{'model':'pinned-model','effort':'high'},
+        lambda provider:SurfaceProvider(provider,Delivery()))
+    assert await selected.request_budget(Request(),context_estimate=20)=={'context_token_budget':12}
+    assert await selected.request_budget(Request(),context_estimate=20) is None
+    assert all(request.model=='pinned-model' and kwargs['context_estimate']==20 for request,kwargs in seen)

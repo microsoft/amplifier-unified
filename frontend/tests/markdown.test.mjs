@@ -17,3 +17,8 @@ test('images require an explicit click instead of fetching remote assets',()=>{
  const html=render('![A diagram](https://example.com/diagram.png)');
  assert.ok(!html.includes('<img'));assert.ok(html.includes('Image: A diagram'));assert.ok(html.includes('href="https://example.com/diagram.png"'));
 });
+
+test('reusable writing retains safe Markdown and inert metadata',()=>{
+ const html=render(':::writing{variant="document" id="12345"}\n**A draft**\n\n<script>alert(1)</script>\n:::');
+ assert.ok(html.includes('Reusable writing'));assert.ok(html.includes('<strong>A draft</strong>'));assert.ok(html.includes('Copy writing'));assert.ok(!html.includes('<script>'));
+});

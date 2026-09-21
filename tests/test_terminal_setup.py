@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -14,6 +15,7 @@ from amplifier_web.auth import new_session
 from amplifier_web.server import create_app
 from amplifier_web.terminal_devices import TerminalDevices
 from amplifier_web.terminal_setup import TerminalSetup
+from amplifier_web.terminal_release import TerminalRelease
 from test_service import Runtime
 
 
@@ -24,7 +26,9 @@ async def terminal(aiohttp_client, tmp_path, monkeypatch):
     client = await aiohttp_client(app)
     cookie = {'Cookie': 'amplifier_unified_session=' + new_session(app['session_secret'])}
     manager = app['terminal_setup']
-    monkeypatch.setattr(manager, 'wheel', AsyncMock(return_value=b'synthetic platform wheel'))
+    monkeypatch.setattr(manager, 'release', AsyncMock(return_value=TerminalRelease(
+        '0.9.0rc1', 'amplifier_app_tui-0.9.0rc1-py3-none-macosx_26_0_arm64.whl',
+        hashlib.sha256(b'synthetic platform wheel').hexdigest(), b'synthetic platform wheel')))
     return client, manager, cookie, app
 
 
@@ -75,7 +79,8 @@ async def test_prepare_is_idempotent_and_changed_retries_are_refused(terminal):
     one = await (await prepare(terminal)).json()
     two = await (await prepare(terminal)).json()
     assert one == two
-    assert terminal[1].wheel.await_count == 1
+    assert one['installer']['version'] == '0.9.0rc1'
+    assert terminal[1].release.await_count == 1
     response = await prepare(terminal, name='Other device')
     assert response.status == 409
 
@@ -84,7 +89,7 @@ async def test_arbitrary_server_and_platform_are_refused_before_download(termina
     assert (await prepare(terminal, server='https://attacker.example')).status == 409
     assert (await prepare(terminal, server='http://remote.example')).status == 409
     assert (await prepare(terminal, platform='windows')).status == 400
-    assert terminal[1].wheel.await_count == 0
+    assert terminal[1].release.await_count == 0
 
 
 async def test_one_use_grant_is_not_api_auth_and_device_auth_survives_restart(terminal):
@@ -172,7 +177,7 @@ async def test_expired_grants_downloads_and_cross_origin_enrollment_are_refused(
 
 async def test_download_failure_does_not_create_grant_or_installer(terminal, monkeypatch):
     client, manager, cookie, _ = terminal
-    monkeypatch.setattr(manager, 'wheel', AsyncMock(side_effect=ValueError('Release access is unavailable.')))
+    monkeypatch.setattr(manager, 'release', AsyncMock(side_effect=ValueError('Release access is unavailable.')))
     response = await prepare(terminal)
     assert response.status == 409
     assert not list(manager.directory.glob('*.sh'))
@@ -274,7 +279,7 @@ def test_enrollment_tls_failure_does_not_replace_previous_local_installation(tmp
     module.executable = lambda _: str(native)
     monkeypatch.setitem(sys.modules, 'amplifier_tui', types.ModuleType('amplifier_tui'))
     monkeypatch.setitem(sys.modules, 'amplifier_tui.launcher', module)
-    monkeypatch.setattr(importlib.metadata, 'version', lambda _: '0.4.0rc1')
+    monkeypatch.setattr(importlib.metadata, 'version', lambda _: '0.9.0rc1')
     class RefuseTLS:
         def open(self, *args, **kwargs):
             raise urllib.error.URLError('certificate verify failed')
@@ -282,7 +287,7 @@ def test_enrollment_tls_failure_does_not_replace_previous_local_installation(tmp
     (tmp_path / 'default.json').write_text('{"id":"previous"}')
     with pytest.raises(urllib.error.URLError):
         install({'server': 'https://spark.example', 'expiresAt': time.time()+60,
-                 'ca': '', 'grant': 'fixture', 'name': 'Mac'}, tmp_path, tmp_path / 'candidate')
+                 'ca': '', 'grant': 'fixture', 'name': 'Mac', 'clientVersion': '0.9.0rc1'}, tmp_path, tmp_path / 'candidate')
     assert (tmp_path / 'default.json').read_text() == '{"id":"previous"}'
     assert not (tmp_path / 'connections').exists()
 
@@ -421,3 +426,24 @@ def test_terminal_command_handles_incomplete_default_without_path_escape(tmp_pat
         assert result.returncode == 1
         assert 'Finish setup' in result.stderr
         assert 'Traceback' not in result.stderr and str(tmp_path) not in result.stderr
+
+
+@pytest.mark.parametrize('expected', [None, '', '0.9.1'])
+def test_installed_version_must_match_prepared_release_before_redeeming(tmp_path, monkeypatch, expected):
+    import importlib.metadata
+    import sys
+    import types
+    from amplifier_web.terminal_install_client import install
+    module = types.ModuleType('amplifier_tui.launcher')
+    module.executable = lambda _: tmp_path / 'unused'
+    monkeypatch.setitem(sys.modules, 'amplifier_tui', types.ModuleType('amplifier_tui'))
+    monkeypatch.setitem(sys.modules, 'amplifier_tui.launcher', module)
+    monkeypatch.setattr(importlib.metadata, 'version', lambda _: '0.9.0rc1')
+    def forbidden(*args, **kwargs):
+        pytest.fail('Invalid installation must not redeem a credential')
+    monkeypatch.setattr('urllib.request.build_opener', forbidden)
+    (tmp_path / 'default.json').write_text('{"id":"original"}')
+    with pytest.raises(ValueError, match='validation'):
+        install({'server': 'https://spark.example', 'expiresAt': time.time()+60,
+                 'clientVersion': expected}, tmp_path, tmp_path / 'candidate')
+    assert (tmp_path / 'default.json').read_text() == '{"id":"original"}'

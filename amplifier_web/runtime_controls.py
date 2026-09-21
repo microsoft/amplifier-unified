@@ -100,12 +100,20 @@ class RuntimeControls:
         self.selection_cleared = False
         self.max_output_tokens = None
         self.logins = {}
+        self.kernels = None
+        self.kernel_install = None
         from .provider_catalog import ProviderCatalog
         self.model_catalog=ProviderCatalog()
         self.catalog_revision=str(uuid.uuid4())
         self.coordinator.register_capability("web.controls.persist", self.persist)
+        from .task_continuity import TaskController
+        self.tasks = TaskController(self)
+        from .capacity import CapacityController
+        self.capacity = CapacityController(self)
 
     async def close(self):
+        if self.kernels:
+            await self.kernels.shutdown()
         await self.model_catalog.close()
         tasks = [row["task"] for row in self.logins.values() if not row["task"].done()]
         for task in tasks:
@@ -123,6 +131,16 @@ class RuntimeControls:
         if self.configurator:
             await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
+        self.coordinator.session_state["task"] = saved.get("task")
+        self.tasks.receipts = saved.get("taskReceipts", {})
+        self.tasks.history = saved.get("taskHistory", [])
+        self.capacity.policy.update(saved.get("capacity", {}))
+        self.capacity.receipts = saved.get("capacityReceipts", {})
+        self.capacity.last_denial = saved.get("capacityLastDenial")
+        task = self.tasks.record()
+        if task:
+            task['appliedRevision'] = None
+            self.tasks.apply()
         # Older snapshots recorded None for module-managed/automatic limits.
         # Absence of an override must leave the newly mounted module's default
         # intact, rather than passing null to the explicit budget-edit API.
@@ -154,7 +172,7 @@ class RuntimeControls:
         # Do not silently move an old pin to another model, account or backend.
         return selection
 
-    def persist(self):
+    def persist(self, *, task_only=False):
         snapshot = self.configurator.snapshot() if self.configurator else {}
         loop, context = self.coordinator.get("orchestrator"), self.coordinator.get("context")
         budget = {key:getattr(target, attr) for key,target,attr in
@@ -163,8 +181,11 @@ class RuntimeControls:
             budget["maxOutputTokens"] = self.max_output_tokens
         previous = json.loads(self.state_path().read_text()) if self.state_path().exists() else {}
         write_private(self.state_path(), json.dumps({"configurator":{"disabled":{key:row.get("disabled",[]) for key,row in snapshot.items()}},
-            "goal":self.coordinator.session_state.get("goal"),"mode":self.coordinator.session_state.get("active_mode"),
+            "capacity":self.capacity.policy,"capacityReceipts":self.capacity.receipts,"capacityLastDenial":self.capacity.last_denial,
+            "goal":self.coordinator.session_state.get("goal"),"task":self.coordinator.session_state.get("task"),"taskReceipts":self.tasks.receipts,"taskHistory":self.tasks.history,"mode":self.coordinator.session_state.get("active_mode"),
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget},default=str))
+        if task_only:
+            return
         write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(
             {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS},default=str))
 
@@ -223,10 +244,59 @@ class RuntimeControls:
         args = args or {}
         if not isinstance(args, dict):
             raise ValueError("Control arguments must be an object")
+        if operation.startswith("kernels."):
+            if self.kernels is None:
+                from .computation import install
+                if self.kernel_install is None:
+                    self.kernel_install = asyncio.create_task(install(self))
+                self.kernels = await asyncio.shield(self.kernel_install)
+            arguments = {key: value for key, value in args.items() if key != "actor"}
+            arguments["action"] = operation.removeprefix("kernels.")
+            return await self.invoke({"name": "compute", "arguments": arguments},
+                bound_arguments=arguments, checkpoint=False,
+                provenance={"source": operation, "actor": args.get("actor", "ui")})
+        if operation == "operations.submit":
+            arguments = {"action": "start", "command": args.get("command"),
+                         "question_ids": args.get("questionIds", []),
+                         **{key: args[key] for key in ("timeout", "pty") if key in args}}
+            return await self.invoke({"name": "bash", "arguments": arguments},
+                bound_arguments=arguments, checkpoint=False,
+                provenance={"source": operation, "actor": args.get("actor", "ui")})
+        if operation in {"operations.cancel", "operations.write"}:
+            coordinator = self.coordinator
+            target = args.get("runtimeSessionId")
+            if target != self.session.session_id:
+                children = coordinator.get_capability("live.children")
+                child = children.sessions.get(target) if children else None
+                if child is None:
+                    raise ValueError("The operation's owning session is no longer mounted")
+                coordinator = child.coordinator
+            arguments = {"action": "terminate" if operation == "operations.cancel" else "write", "process_id": args.get("processId")}
+            if operation == "operations.write":
+                arguments.update(stdin=args.get("stdin", ""), close_stdin=args.get("closeStdin", False))
+            return await self.invoke({"name": "bash", "arguments": arguments},
+                coordinator=coordinator, bound_arguments=arguments,
+                expected_process_owner=(args.get("processId"), args.get("ownerId")),
+                provenance={"source": operation, "actor": args.get("actor", "ui"),
+                            "operation_id": args.get("operationId")}, checkpoint=False)
         async with self.lock:
             return await self._perform(operation, args)
 
     async def _perform(self, operation, args):
+        if operation.startswith("capacity."):
+            return await self.capacity.perform(operation, args)
+        if operation.startswith('task.'):
+            return await self.tasks.perform(operation, args)
+        if operation in {"native.status", "native.compact"}:
+            native = self.coordinator.get_capability("web.native_provider")
+            if native is None:
+                return {"supported": False, "steering": "request_boundary", "reason": "Native transport is unavailable in this runtime."}
+            if operation == "native.status":
+                return native.status()
+            self.require_idle()
+            result = await native.compact()
+            await self.checkpoint()
+            return result
         if operation == "configuration.inspect":
             return self.configuration()
         if operation == "history.snapshot":
@@ -302,6 +372,8 @@ class RuntimeControls:
             return await self.mode(operation, args)
         if operation in {"goals.get", "goals.set", "goals.clear"}:
             if operation != "goals.get":
+                if self.tasks.record() and self.tasks.record()["status"] != "completed":
+                    raise ValueError("Use the saved task controls to update or pause its goal")
                 self.require_idle()
                 if not self.capabilities()["goals"]:
                     raise ValueError("This orchestrator does not support goal continuation")
@@ -342,7 +414,7 @@ class RuntimeControls:
                     selection = dict(current.selection) if isinstance(current,SelectedProvider) else {}
                     original = current.original if isinstance(current,SelectedProvider) else current
                     selection["max_output_tokens"] = args["maxOutputTokens"]
-                    loop.root_provider = SelectedProvider(original,selection)
+                    loop.root_provider = SelectedProvider(original,selection,self.coordinator.get_capability('web.provider_transform'))
                     self.max_output_tokens = args["maxOutputTokens"]
                 self.persist()
             return {"maxIterations":getattr(loop,"max_iterations",None), "contextTokens":getattr(context,"max_tokens",None),
@@ -359,7 +431,7 @@ class RuntimeControls:
                 if self.max_output_tokens is not None and providers:
                     automatic = loop._select_provider(providers)
                     if automatic is not None:
-                        loop.root_provider = SelectedProvider(automatic, {'max_output_tokens': self.max_output_tokens})
+                        loop.root_provider = SelectedProvider(automatic, {'max_output_tokens': self.max_output_tokens},self.coordinator.get_capability('web.provider_transform'))
             except Exception:
                 loop.root_provider = previous
                 raise
@@ -376,14 +448,15 @@ class RuntimeControls:
                 raise ValueError("Select an available provider instance and model")
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
-            self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective)
+            self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))
             self.selection = selected
             self.selection_cleared = False
             self.persist()
             return {"selection":selected,"scope":"main session"}
         if operation == "tool.invoke":
             self.require_idle()
-            return await self.invoke(args)
+            return await self.invoke(args, generic=True,
+                provenance={"source": "tool.invoke", "actor": args.get("actor", "ui")})
         raise ValueError(f"Unsupported runtime control: {operation}")
 
     async def provider_control(self, operation, args):
@@ -582,18 +655,23 @@ class RuntimeControls:
         await self.checkpoint()
         return await self.mode("mode.list", {})
 
-    async def invoke(self, args):
+    async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False):
+        coordinator = coordinator or self.coordinator
+        bound_arguments = copy.deepcopy(bound_arguments)
         import jsonschema
         name, arguments = args.get("name"), args.get("arguments", {})
-        tool = (self.coordinator.get("tools") or {}).get(name)
+        if generic:
+            from .tool_authority import require_generic_tool
+            require_generic_tool(name, arguments)
+        tool = (coordinator.get("tools") or {}).get(name)
         if tool is None:
             raise ValueError("Tool is not mounted")
         jsonschema.validate(arguments, getattr(tool,"input_schema",{}))
         call = str(uuid.uuid4())
-        data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user"}
-        hooks = self.coordinator.hooks
+        data = {"tool_name":name,"tool_call_id":call,"tool_input":arguments,"source":"user", "tool_obj":tool, **(provenance or {})}
+        hooks = coordinator.hooks
         pre = await hooks.emit("tool:pre", data)
-        pre = await self.coordinator.process_hook_result(pre,"tool:pre",name)
+        pre = await coordinator.process_hook_result(pre,"tool:pre",name)
         if pre.action == "deny":
             await hooks.emit("tool:error",{**data,"error":{"type":"Denied"}})
             return {"success":False,"error":{"message":pre.reason or "Denied by session policy"},"callId":call}
@@ -601,12 +679,36 @@ class RuntimeControls:
             arguments = pre.data["tool_input"]
             jsonschema.validate(arguments,getattr(tool,"input_schema",{}))
             data = {**data,"tool_input":arguments}
+        if generic:
+            # Approval may modify an otherwise valid ordinary call. Recheck the
+            # actual arguments before execution, including in-place changes.
+            try:
+                require_generic_tool(name, arguments)
+            except ValueError:
+                await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
+                raise
+        if bound_arguments is not None and arguments != bound_arguments:
+            await hooks.emit("tool:error", {**data, "error": {"type": "Denied"}})
+            raise ValueError("A policy modification cannot redirect an identity-bound operation")
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
         try:
+            if name == "bash" and arguments.get("question_ids"):
+                # Older mounted modules must not silently ignore new dependency
+                # arguments even if their JSON schema permits extra fields.
+                properties = getattr(tool, "input_schema", {}).get("properties", {})
+                if "question_ids" not in properties:
+                    raise ValueError("The mounted shell cannot enforce question dependencies")
+            if expected_process_owner is not None:
+                checker = getattr(tool, "validate_process_owner", None)
+                if checker is None and arguments.get("action") == "write":
+                    raise ValueError("The mounted shell does not support identity-bound input")
+                if checker is not None:
+                    checker(*expected_process_owner)
             result = await tool.execute(arguments)
             await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
-            await self.checkpoint()
+            if checkpoint:
+                await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
         except Exception as exc:
             await hooks.emit("tool:error",{**data,"error":{"type":type(exc).__name__}})

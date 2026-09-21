@@ -1,0 +1,33 @@
+{
+  "scenario": "voice-question-ingress-after-reconnect",
+  "source": "89c301e68570c3eb619fbfb6f4aa27620aa4f2f4",
+  "harnessSha256": "2095bbc349ba851874c63bee74d435296ed7221d9488a94bcc7331da52a36a1d",
+  "checks": {
+    "independent_real_tool_read_while_pending": true,
+    "question_still_pending": true,
+    "pending_question_survives_host_restart": true,
+    "exact_voice_ingress_provenance": true,
+    "agent_cites_actual_user_message": true,
+    "answer_saved_and_delivered": true,
+    "single_delegation_after_duplicate_wire_events": true,
+    "single_answer_input": true,
+    "matching_result_returned_on_real_sideband": true,
+    "answer_reaches_actual_worker": true,
+    "selection_preserved": true,
+    "draft_preserved": true,
+    "not_permission_approval": true,
+    "sdp_bytes_preserved": true,
+    "duplicate_answer_receipt_no_replay": true,
+    "answered_restart_no_replay": true
+  },
+  "paidCalls": 0,
+  "physicalMicrophone": false,
+  "remoteSpeechProvider": false,
+  "sourceMessageId": "b91e8444-ad51-4a79-a95a-04272947faca",
+  "questionId": "022e4be2-656a-4801-97f2-260ab28151cb",
+  "voiceId": "fixture-call-2",
+  "answerInputId": "question:022e4be2-656a-4801-97f2-260ab28151cb:answer",
+  "localProviderCalls": 5,
+  "voiceConnections": 2,
+  "passed": true
+}

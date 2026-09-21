@@ -33,6 +33,9 @@ def live_plan(plan, background_delegate=True):
     if root_loop not in {"loop-streaming", "loop-live"}:
         raise ValueError(f"Main session orchestrator {root_loop!r} is not compatible with live input. Select a bundle using loop-streaming or loop-live; custom orchestrators are not silently replaced.")
     def visit(node, prefix=""):
+        context = node.get("session", {}).get("context", {})
+        if context.get("module") == "context-managed" and context.get("config", {}).get("engine") == "boundary":
+            context.setdefault("config", {}).setdefault("durable_checkpoints", True)
         loop = node.get("session", {}).get("orchestrator", {})
         if loop.get("module") in {"loop-streaming", "loop-live"}:
             original = loop["module"]
@@ -118,11 +121,14 @@ class _NativeTranscriptGuard:
 
 class SelectedProvider:
     """Root-only model preference; worker routing remains bundle-owned."""
-    def __init__(self, provider, selection):
+    def __init__(self, provider, selection, execution_adapter=None):
         self.original, self.selection = provider, selection
+        self.execution_adapter = execution_adapter
+    def _execution_provider(self):
+        return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
-        method = getattr(self.original, name)
-        if name == "stream" and callable(method):
+        method = getattr(self._execution_provider() if name in {'stream','request_budget'} else self.original, name)
+        if name in {"stream", "request_budget"} and callable(method):
             # Keep feature detection honest: providers without stream still
             # raise AttributeError, while streaming providers receive the same
             # root-only overrides as complete().
@@ -148,7 +154,7 @@ class SelectedProvider:
 
     async def complete(self, request, **kwargs):
         request, kwargs = self._selected_request(request, kwargs)
-        return await self.original.complete(request, **kwargs)
+        return await self._execution_provider().complete(request, **kwargs)
 
 
 _copilot_credential = None
@@ -258,10 +264,12 @@ def _expand_module_configuration(node, in_provider=False):
     return result
 
 
-def _apply_host_policy(bundle, config):
+def _apply_host_policy(bundle, config, *, execution_workspace=None):
     """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
-    workspace = str(Path(config.workspace).resolve())
+    # A managed checkout can differ from the immutable history/config workspace.
+    # Resolve only relative write policies against the actual execution folder.
+    workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -269,7 +277,7 @@ def _apply_host_policy(bundle, config):
         result = []
         for value in values:
             path = Path(value).expanduser()
-            result.append((path if path.is_absolute() else Path(config.workspace) / path).resolve())
+            result.append((path if path.is_absolute() else Path(workspace) / path).resolve())
         return result
 
     # Settings support both legacy module lists and current config/overrides.
@@ -355,7 +363,7 @@ def _apply_host_policy(bundle, config):
     return bundle
 
 
-async def compose_configured_bundle(registry, loaded, config):
+async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     snapshot = is_snapshot(loaded)
     if not snapshot:
@@ -377,7 +385,7 @@ async def compose_configured_bundle(registry, loaded, config):
         loaded = _apply_settings(loaded, config)
     # Credentials and safety policy remain local host responsibilities. They
     # do not add modules or replace the saved source/model/routing selections.
-    loaded = _apply_host_policy(loaded, config)
+    loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
     return loaded
@@ -389,7 +397,7 @@ def module_source(config, snapshot, module, source):
     return source if snapshot else config.module_sources.get(module) or source
 
 
-async def load_root_bundle(config, chosen):
+async def load_root_bundle(config, chosen, *, execution_workspace=None):
     """Resolve a root and host composition without per-conversation overrides."""
     from amplifier_foundation import BundleRegistry
     registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
@@ -402,7 +410,7 @@ async def load_root_bundle(config, chosen):
     if candidate is not None:
         chosen = str(candidate)
     loaded = await registry.load(chosen)
-    loaded = await compose_configured_bundle(registry, loaded, config)
+    loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
 
 
@@ -412,9 +420,14 @@ class ResolvedRoot:
     config: HostConfig
     bundle: str
     root: tuple | None
+    execution_workspace: Path | str | None = None
 
-    def take(self, config, bundle):
-        if self.root is None or config != self.config or bundle != self.bundle:
+    def __post_init__(self):
+        self.execution_workspace = Path(self.execution_workspace or self.config.workspace).expanduser().resolve()
+
+    def take(self, config, bundle, *, execution_workspace=None):
+        workspace = Path(execution_workspace or config.workspace).expanduser().resolve()
+        if self.root is None or config != self.config or bundle != self.bundle or workspace != self.execution_workspace:
             raise ValueError("The bundle configuration changed while switching. Try again.")
         root, self.root = self.root, None
         return root
@@ -424,7 +437,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           ask=None, report_dir=None, resume=False, selection=None,
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
-                          write_guard=None, resolved_root=None, **kwargs):
+                          write_guard=None, resolved_root=None, execution_workspace=None,
+                          refresh_dependencies=False, install_overrides=None, **kwargs):
+    if refresh_dependencies and resume:
+        raise ValueError("Dependency refresh is limited to a new isolated qualification session.")
     from amplifier_foundation import SessionConfigurator
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_module_loop_live.job_store import JobStore
@@ -439,7 +455,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
     # remain the community data root, including for mounted CI logging hooks.
-    os.chdir(config.workspace)
+    execution_workspace = Path(execution_workspace or config.workspace).expanduser().resolve(strict=True)
+    os.chdir(execution_workspace)
     from ..session_files import capture_dir
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
@@ -480,8 +497,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry, loaded, chosen = (resolved_root.take(config, chosen) if resolved_root is not None
-                               else await load_root_bundle(config, chosen))
+    registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
+                               else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
     snapshot = is_snapshot(loaded)
     from ..runtime_controls import override_path, validate_plan
     edited_path = override_path(runtime.session_id)
@@ -495,7 +512,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         for key in ("session", "agents", "context", "instruction"):
             if key in edited:
                 setattr(loaded, key, edited[key])
-        loaded = _apply_host_policy(loaded, config)
+        loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
         for key in ("providers", "tools", "hooks", "session", "agents"):
             if key in edited:
                 setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
@@ -513,9 +530,14 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime.observer:
             runtime.observer({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Preparing community modules (" + str(action).replace("_", " ")[:60] + ")."})
+    preparation_policy = {}
+    if refresh_dependencies:
+        preparation_policy["refresh_dependencies"] = True
+    if install_overrides is not None:
+        preparation_policy["install_overrides"] = Path(install_overrides)
     # Activate modules from the same generation as the bundle registry. The
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
-    prepared = await loaded.prepare(strict=True,
+    prepared = await loaded.prepare(strict=True, **preparation_policy,
         cache_dir=config.registry_home / "cache",
         source_resolver=lambda module, source: module_source(config, snapshot, module, source),
         progress_callback=progress)
@@ -539,8 +561,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     session = None
     try:
         session = await prepared.create_session(session_id=runtime.session_id,
-            session_cwd=config.workspace, approval_system=approvals, is_resumed=messages is not None)
+            session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        coordinator.register_capability('web.history_workspace', str(config.workspace))
         coordinator.register_capability("live.runtime", runtime)
         coordinator.register_capability("live.jobs", jobs)
         coordinator.register_capability("live.recovered_jobs", [row["job_id"] for row in recovered])
@@ -583,6 +606,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "bundle_name": bundle_identity, "working_dir": str(config.workspace),
             "created": (saved[1].get("created") if saved else None) or datetime.now(UTC).isoformat(),
             "application_host": application_host, "config": redact(session.config)}
+        continuity = None
         async def checkpoint(status="in_progress"):
             if write_guard:
                 write_guard()
@@ -600,12 +624,16 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
             native_guard.saved()
+            if continuity:
+                continuity.save()
         coordinator.register_capability("live.checkpoint", checkpoint)
+        from ..context_continuity import install as install_continuity
+        continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)
         async def checkpoint_hook(event, data):
             if data.get("session_id", runtime.session_id) == runtime.session_id:
                 await checkpoint()
             return HookResult()
-        for event in ("tool:post", "tool:error", "orchestrator:complete"):
+        for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
             coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
         async def cleanup_jobs():
             jobs.close()
@@ -642,6 +670,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             "module_load_failures": failures}
         report["config_inputs"] = config_inputs
         report["history_source"] = history_source
+        report["execution_workspace"] = str(execution_workspace)
         write_private(directory / "mounted.json", json.dumps(redact(report), indent=2, default=str))
         registry.save()
         return session, runtime, report

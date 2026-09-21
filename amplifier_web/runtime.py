@@ -60,7 +60,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
     if kind == "execution.event":
         event = event.get("event", {})
-        allowed = ("id", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
+        allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         return "execution.event", {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
     if kind == "runtime.activity":
@@ -77,11 +77,15 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == "assistant.message":
         return "assistant.message", {**base, "text": event.get("text", ""),
             "inputId": (event.get("input_ids") or [input_id])[-1],
-            "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", [])}
+            "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", []),
+            **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
         return "runtime.generation", {**base, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids") if key in event}}
+                "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
+    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
+        return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
+            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -99,7 +103,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return "worker.updated", {**base, "id": event.get("sessionId"),
             "status": event.get("status", "running"), "name": event.get("agent", "Worker"),
             "report": event.get("report", ""), "persistent": event.get("persistent", False),
-            "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time")}
+            "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
+            **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
     statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
                 "input.delivered": "working"}
     if kind in statuses:
@@ -123,8 +128,27 @@ class RuntimeManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._closed = False
         self._retired = {}
+        self._execution_state = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
+
+    def bind_execution_state(self, read):
+        """Host-owned synchronous authority; never supplied by a model command."""
+        self._execution_state = read
+
+    def _check_execution(self, sid, session=None, *, allow_fenced=False):
+        if self._execution_state is None:
+            return
+        current = self._execution_state(sid)
+        if current.get('hostMatches') is False and not allow_fenced:
+            raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
+        if current['fenced'] and not allow_fenced:
+            raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
+        if session is not None and (
+            session.get('executionRevision', 0) != current['revision']
+            or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
+        ):
+            raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
 
     def has_pending_operations(self):
         """Preparing a worker or waiting for its reply must defer host updates."""
@@ -178,26 +202,37 @@ class RuntimeManager:
             async with self._locks.setdefault(sid, asyncio.Lock()):
                 row = self.workers.get(sid)
                 retirement = row.get('retirement_task') if row else None
-                if retirement is None or retirement.done():
+                stopping = row.get('stop_task') if row else None
+                if stopping is not None:
+                    if stopping.done():
+                        # A failed shutdown cannot reopen the still-owned row.
+                        # Successful shutdown removes it before this future ends.
+                        raise RuntimeError('Worker shutdown was not confirmed. No new command was sent; inspect shutdown before retrying.')
+                    pending = stopping
+                elif retirement is not None and not retirement.done():
+                    pending = retirement
+                else:
                     yield
                     return
-            # Never send a new command to an owner that might still exit after
-            # a delayed retirement acknowledgement. Waiting does not cancel it.
+            # session.closed can be published before the OS process exits.
+            # Never admit work to that closing owner, including after a user
+            # Stop. Waiting outside the lock neither cancels nor replays it.
             try:
-                await asyncio.wait_for(asyncio.shield(retirement), self.retention.reply_timeout)
+                await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
             except TimeoutError as exc:
-                raise RuntimeError('Idle worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
+                raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
     async def _start_locked(self, session, emit):
         if self._closed:
             raise RuntimeError("The runtime host is closing.")
         sid = session["id"]
+        self._check_execution(sid, session)
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
             current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
-                'id', 'workspace', 'workingDirectory', 'bundle', 'selection',
+                'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}
             await asyncio.wait_for(asyncio.shield(current["ready"]), self.startup_timeout)
             return
@@ -217,7 +252,7 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','bundle','selection','forkContext') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
@@ -392,7 +427,7 @@ class RuntimeManager:
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._admission(sid):
-            if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"}:
+            if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
                 session, emit = self._retired[sid]
                 await self._start_locked(session, emit)
             pending = await self._admit(sid, op, args)
@@ -402,6 +437,16 @@ class RuntimeManager:
         return await self._reply(*await self._admit(sid, op, args), op=op, args=args)
 
     async def _admit(self, sid, op, args):
+        # Handoff holds this same admission lock while releasing its writer.
+        # The host fence persists until the durable execution-state commit, so
+        # queued controls cannot resurrect the old checkout in the gap.
+        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies'} or (
+            op == 'control' and args.get('operation') in {
+                'operations.cancel', 'kernels.interrupt', 'kernels.close',
+                'task.pause', 'task.block', 'task.complete',
+            }
+        )
+        self._check_execution(sid, allow_fenced=safe)
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
@@ -413,7 +458,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "delivery"}:
+        if op not in {"park", "retire", "dependencies", "delivery"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -515,11 +560,65 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
+    async def quiesce_for_handoff(self, session, request_id):
+        """Save and release a known local writer before moving execution cwd."""
+        from amplifier_foundation.session import SharedSessionStore, SessionBusyError, request_release
+        sid = session['id']
+        store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+        async with self._admission(sid):
+            row = self.workers.get(sid)
+            released_owner = None
+            try:
+                held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
+            except SessionBusyError as busy:
+                if not row or busy.owner.get('app') != 'amplifier-unified' or busy.owner.get('pid') != row['process'].pid:
+                    raise SessionInUseError(busy.owner) from None
+                released_owner = {key: busy.owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in busy.owner}
+                result = await request_release(store, expected_owner=busy.owner, request_id=request_id, requester_app='Unified checkout handoff', timeout=30)
+                if result.status != 'released':
+                    raise RuntimeError(f'Checkout handoff could not confirm saved writer release ({result.status}). {result.message}')
+                held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
+            try:
+                # Parked workers already saved before relinquishing their lock.
+                # A released worker cannot write while this proof handle is held.
+                await self.stop(sid)
+                from .host_identity import local_host_identity, require_local_host
+                owner = held.owner
+                require_local_host(owner.get('hostname'))
+                return {'quiesced': True, 'executionHost': local_host_identity(), 'releasedOwner': released_owner, 'releaseOwner': {key: owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in owner}, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
+            finally:
+                await asyncio.to_thread(held.release)
+
     async def approval(self, session_id, approval_id, decision):
         return await self._request(session_id, "approval", approval_id=approval_id, decision=decision)
 
+    async def scheduled_input(self, session_id, arguments, guard):
+        """Internal authorized schedule handoff using ordinary worker admission."""
+        async with self._admission(session_id):
+            if session_id not in self.workers and session_id in self._retired:
+                session, emit = self._retired[session_id]
+                await self._start_locked(session, emit)
+            reason = guard()
+            if reason:
+                return {"accepted": False, "reason": reason}
+            args = {"operation": "schedule.submit", "arguments": arguments}
+            pending = await self._admit(session_id, "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
+
+    async def dependencies(self, session_id):
+        """Inspect an existing worker without warming or acquiring its session."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'No ready session runtime.'}
+        if row['ready'].exception() is not None:
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
+        try:
+            return {**await self._request(session_id, 'dependencies'), 'sessionId': session_id}
+        except RuntimeError:
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 
     async def shared_state_probe(self, request):
         """Run one read-only shared-state request inside the isolated runtime."""
@@ -549,6 +648,9 @@ class RuntimeManager:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
+
+    async def message_worker(self, session_id, worker_id, text, input_id=None):
+        return await self._request(session_id, "worker.message", worker_id=worker_id, text=text, input_id=input_id)
 
     async def steer_worker(self, session_id, worker_id, text):
         return await self._request(session_id, "worker.steer", worker_id=worker_id, text=text)
@@ -599,7 +701,8 @@ class RuntimeManager:
         await self._execution_ended(session_id, row, "stopped")
         await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
-        self.workers.pop(session_id, None)
+        if self.workers.get(session_id) is row:
+            self.workers.pop(session_id, None)
 
     async def close(self):
         self._closed = True
