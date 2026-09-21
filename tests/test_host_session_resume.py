@@ -70,12 +70,21 @@ def mounted_host(tmp_path, monkeypatch):
             shared_handle=held, shared_snapshot=snapshot, **kwargs)
     return SimpleNamespace(prepare=prepare, store=store, held=held, checkpoint=checkpoint,
         writes=writes, runtime=runtime, session=session, prepared=prepared, registry=registry,
-        context=context, capabilities=capabilities, home=home,
+        context=context, capabilities=capabilities, home=home, loaded=loaded, config=config,
         path=store.directory(runtime.session_id) / "transcript.jsonl")
 
 
 def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
+
+
+async def test_module_preparation_uses_active_registry_cache_not_shared_history_home(mounted_host):
+    h = mounted_host
+    h.config.registry_home = h.home / "updates/releases/validated/foundation"
+    shared = os.environ["AMPLIFIER_HOME"]
+    await h.prepare()
+    assert h.loaded.prepare.call_args.kwargs["cache_dir"] == h.config.registry_home / "cache"
+    assert os.environ["AMPLIFIER_HOME"] == shared
 
 
 async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host):
