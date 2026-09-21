@@ -1,7 +1,7 @@
 # Unified shell behavior and skill
 
 Compose `behaviors/unified-shell.yaml` into an existing host. It includes the
-pinned Microsoft `skills-tool` behavior, enables the normal skills catalog, and
+Microsoft `skills-tool` behavior from `main`, enables the normal skills catalog, and
 adds `@unified:skills`. The minimal skills behavior avoids adding another
 curated collection; collections already provided by the chosen root or other
 behaviors remain available through Foundation's list composition.
@@ -36,8 +36,9 @@ The app resolves this exact default URI to its own packaged behavior and
 resources. Explicit alternative Git revisions retain normal Foundation
 resolution. The repository and installed wheel have the same relative layout
 for skills, shell documentation, SDK, and examples. The skills implementation
-is pinned separately because namespace skill sources require its deferred
-resolution support.
+is declared explicitly from the same upstream `main` because namespace skill
+sources require its deferred resolution support. These declarations track
+`main`; they are not immutable revision pins.
 
 Behavior changes take effect on subsequent runtime preparation, not by
 rewriting an already running session. Saved complete bundle snapshots retain
@@ -81,7 +82,7 @@ toolchain. Read [the shell guide](README.md) for extension validation setup.
 After building a wheel, `scripts/validate_shell_skill.py WHEEL` checks its
 relative references, loads the actual upstream skills behavior through
 Foundation, and mounts the skills tool with early and deferred namespace
-resolution. Install the pinned `amplifier-module-tool-skills` module in the
-validation environment, or pass its source module directory as a second
-argument. The script uses provider-free coordinator fixtures and does not
+resolution. Install `amplifier-module-tool-skills` from the source declared in
+`behaviors/unified-shell.yaml` in the validation environment, or pass its source
+module directory as a second argument. The script uses provider-free coordinator fixtures and does not
 claim to test a live conversation or browser interaction.
