@@ -69,6 +69,12 @@ try{
  await page.evaluate(()=>{delete visualViewport.height;visualViewport.dispatchEvent(new Event('resize'));});
  await page.setViewportSize({width:736,height:390});await expect.poll(()=>footer.evaluate(el=>Math.round(el.getBoundingClientRect().bottom))).toBe(390);
  assert.ok(await body.evaluate(el=>el.clientHeight>80));await page.setViewportSize({width:390,height:844});
+
+ // App-owned diagnostics use the same nested header and preserve destination drafts.
+ await openSettingsPage(page,'diagnostics');await page.getByRole('button',{name:'Add server',exact:true}).click();await route('diagnostics/destination');
+ await page.getByLabel('Name',{exact:true}).fill('Mobile diagnostics draft');await page.getByLabel('Server URL',{exact:true}).fill('https://fixture.invalid');
+ await expect(footer.getByRole('button',{name:'Save destination',exact:true})).toBeVisible();await back();await route('diagnostics');
+ await page.locator('.a-diagnostic-destinations button').filter({hasText:'Mobile diagnostics draft'}).click();await route('diagnostics/destination');assert.equal(await page.getByLabel('Server URL',{exact:true}).inputValue(),'https://fixture.invalid');
  await openSettingsPage(page,'loaded-modules');await expect(page.locator('.a-settings-section-picker')).toBeVisible();await page.screenshot({path:'/tmp/settings-mobile-modules.png'});
  // Every existing destination remains reachable through narrow navigation.
  for(const width of [320,390,736,960,1280]){
