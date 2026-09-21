@@ -15,10 +15,13 @@ from .updates import process
 
 REPOSITORY='microsoft/amplifier-unified'
 SOURCE='https://github.com/'+REPOSITORY
+OPTIONAL_EXTRAS={'native-desktop':'amplifier-module-tool-computer-use','tui':'amplifier-app-tui'}
 PROBE = r'''import json,sys
 facts={"ok":False,"stage":"imports","isolated":bool(sys.flags.isolated),"pythonVersion":"%s.%s.%s"%sys.version_info[:3]}
 try:
  from pathlib import Path
+ extras=sys.argv[1:]
+ assert len(extras)==len(set(extras)) and all(extra in {"native-desktop","tui"} for extra in extras)
  import amplifier_web
  from amplifier_web import __version__
  from amplifier_web.server import create_app
@@ -34,7 +37,12 @@ try:
  facts["stage"]="login"
  facts["loginAvailable"]=callable(pam.authenticate)
  assert facts["loginAvailable"]
- if "tui" in sys.argv[1:]:
+ if "native-desktop" in extras:
+  facts["stage"]="capabilities"
+  from amplifier_module_tool_computer_use import foreground
+  assert Path(foreground.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+  assert callable(foreground.local_observer) and issubclass(foreground.ForegroundUnavailable,RuntimeError)
+ if "tui" in extras:
   import os
   from amplifier_tui.connected import main
   from amplifier_tui.launcher import executable
@@ -78,14 +86,25 @@ def git_environment():
     return env
 
 def installed_extras():
-    """Retain the optional client already installed in this host environment."""
-    try:metadata.distribution('amplifier-app-tui')
-    except metadata.PackageNotFoundError:return []
-    return ['tui']
+    """Retain known optional features without loading clients or desktop backends."""
+    extras=[]
+    for extra,distribution in sorted(OPTIONAL_EXTRAS.items()):
+        try:metadata.distribution(distribution)
+        except metadata.PackageNotFoundError:continue
+        extras.append(extra)
+    return extras
+
+def validated_extras(extras):
+    if (not isinstance(extras,list) or
+        any(not isinstance(extra,str) or extra not in OPTIONAL_EXTRAS for extra in extras) or
+        len(extras)!=len(set(extras))):
+        raise ValueError('Unsupported optional application features')
+    return sorted(extras)
 
 def install_requirement(revision,extras):
+    extras=validated_extras(extras)
     source='git+'+SOURCE+'@'+revision
-    return 'amplifier-unified[tui] @ '+source if extras==['tui'] else source
+    return 'amplifier-unified['+','.join(extras)+'] @ '+source if extras else source
 
 def application_state():
     from .release_notes import history
@@ -146,7 +165,7 @@ async def _stage(manager):
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
-    extras=installed_extras()
+    extras=validated_extras(installed_extras())
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
     await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force',install_requirement(revision,extras),env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
@@ -211,9 +230,13 @@ async def _activate(manager):
         raise ValueError('App release must pass isolated validation before activation')
     if version_tuple(validated.get('version'))!=version_tuple(release.get('latest')):
         raise ValueError('The pending release does not match its validated package')
-    extras=validated.get('extras',[])
-    if extras not in ([],['tui']) or extras!=installed_extras():
-        message='Optional clients changed after validation. Install the update again to validate the current selection.'
+    try:
+        extras=validated_extras(validated.get('extras',[]))
+        extras_match=extras==installed_extras()
+    except ValueError:
+        extras_match=False
+    if not extras_match:
+        message='Optional features changed after validation. Install the update again to validate the current selection.'
         manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
         manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
         # Removing the pending pointer lets the normal install command stage a
