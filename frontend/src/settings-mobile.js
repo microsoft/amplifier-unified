@@ -4,8 +4,8 @@ import {moduleRows} from './module-config.js';
 // History contains navigation only. Drafts, credentials and configuration are
 // never copied into browser history or restored from an old history entry.
 export const settingsIndexPatch={panel:'settings',settingsSection:'index',settingsExpanded:[]};
-export function settingsBaseNavigation(page){
- const navigation={...settingsPatch(page)};
+export function settingsBaseNavigation(page,sections){
+ const navigation={...settingsPatch(page,sections)};
  if(page==='diagnostics')navigation.diagnosticsDraft={destinationId:null};
  if(page==='providers')navigation.providerEditor={detailOpen:false,orderOpen:false};
  if(page==='routing')navigation.routingEditor={detailOpen:false,candidateOpen:false,orderOpen:false};
@@ -19,10 +19,10 @@ export function mergeSettingsNavigation(view,navigation){
  for(const key of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft'])if(key in patch)patch[key]={...view[key],...patch[key]};
  return patch;
 }
-export function settingsTrail(view={},state={}){
- const {page,section}=settingsLocation(view),trail=[{key:'index',title:'Settings',navigation:settingsIndexPatch}];
+export function settingsTrail(view={},state={},sections){
+ const {page,section}=settingsLocation(view,sections),trail=[{key:'index',title:'Settings',navigation:settingsIndexPatch}];
  if(view.settingsSection==='index'&&view.panel!=='appearance')return trail;
- const base=settingsBaseNavigation(page);
+ const base=settingsBaseNavigation(page,sections);
  trail.push({key:page,title:section.title,navigation:base});
  const add=(key,title,editor,patch)=>trail.push({key,title,navigation:{...base,[editor]:{...base[editor],...patch}}});
  if(page==='diagnostics'){

@@ -9,3 +9,6 @@ export function useNavigation(React,host){
 export function useCanvas(React,host){
  return React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);
 }
+export function useShellComponent(React,host){
+ return React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);
+}

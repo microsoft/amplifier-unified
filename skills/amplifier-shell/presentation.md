@@ -28,9 +28,10 @@ artifact views; live MCP App bindings have a separate primary-view constraint.
 Read the canvas sections of [the shell guide](../../docs/shell/README.md) before
 changing viewers, dirty state, or recovery.
 
-Do not promise arbitrary new slots, replacement chat composers, or full
-conversation decomposition: those need host implementation unless the current
-action schemas and SDK explicitly expose them.
+Discover registered contribution points in `shell.inspect.slots`; see
+[component contributions](../../docs/shell/components.md). Do not promise
+replacement chat composers or whole conversation decomposition unless the
+installed schemas and SDK explicitly expose them.
 
 ## Themes
 
