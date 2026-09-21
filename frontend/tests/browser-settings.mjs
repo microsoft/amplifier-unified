@@ -1,7 +1,8 @@
 import {settingsSections} from '../src/settings-navigation.js';
 export async function openSettingsDialog(page){
  if(await page.locator('.a-settings-experience').isVisible())return;
- const settings=page.getByRole('button',{name:'Settings',exact:true});
+ // The menu's attention badge adds its own accessible unread-item label.
+ const settings=page.getByRole('button',{name:/^Settings\b/});
  if(!await settings.isVisible())await page.getByRole('button',{name:'More app options',exact:true}).click();
  await settings.click();
 }
