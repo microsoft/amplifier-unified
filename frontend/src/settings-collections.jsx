@@ -1,4 +1,5 @@
-import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {SettingsActions,SettingsLayoutContext} from './settings-layout';
+import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {ArrowLeft,ArrowUp,ArrowDown,ChevronRight,GripVertical} from 'lucide-react';
 import './settings-collections.css';
 
@@ -9,16 +10,16 @@ export function CollectionRow({id,label,description,selected,onSelect,checked,on
  </div>;
 }
 export function Collection({list,children,detailOpen=true,onBack,label='items'}){
- const listRef=useRef(null),detailRef=useRef(null);
- useEffect(()=>{if(detailOpen&&typeof window!=='undefined'&&window.matchMedia('(max-width:959px)').matches){detailRef.current?.focus({preventScroll:true});detailRef.current?.scrollIntoView({block:'start'});}},[detailOpen]);
+ const listRef=useRef(null),detailRef=useRef(null),layout=useContext(SettingsLayoutContext);
+ useEffect(()=>{if(detailOpen&&layout.compact){detailRef.current?.focus({preventScroll:true});}},[detailOpen,layout.compact]);
  const back=()=>{onBack?.();requestAnimationFrame(()=>listRef.current?.querySelector('button[aria-current=true],button')?.focus({preventScroll:true}));};
  return <div className={'a-collection'+(detailOpen?' detail-open':'')}><div className="a-collection-list" ref={listRef}>{list}</div><div className="a-collection-detail" ref={detailRef} tabIndex={-1}>
- {onBack&&<button type="button" className="a-link a-collection-back" data-action="view.update" onClick={back}><ArrowLeft/>Back to {label}</button>}{children}</div></div>;
+ {onBack&&!layout.compact&&<button type="button" className="a-link a-collection-back" data-action="view.update" onClick={back}><ArrowLeft/>Back to {label}</button>}{children}</div></div>;
 }
 export function moveItem(ids,id,to){const next=ids.filter(key=>key!==id);next.splice(Math.max(0,Math.min(to,next.length)),0,id);return next;}
 
 // Preview is local until drop; the enclosing editor owns the draft and Save/Cancel.
-export function OrderEditor({title,description,items,ids,onChange,onSave,onCancel,busy=false,error,action='view.update'}){
+export function OrderEditor({title,description,items,ids,onChange,onSave,onCancel,busy=false,error,notice,action='view.update'}){
  const root=useRef(null),drag=useRef(null),rects=useRef(new Map()),[preview,setPreview]=useState(null),[floating,setFloating]=useState(null),[announcement,announce]=useState('');
  const shown=preview||ids,rows=new Map(items.map(item=>[item.id,item]));
  const focus=id=>requestAnimationFrame(()=>root.current?.querySelector(`[data-order-id="${CSS.escape(id)}"] .a-order-grip`)?.focus({preventScroll:true}));
@@ -58,7 +59,7 @@ export function OrderEditor({title,description,items,ids,onChange,onSave,onCance
   setFloating({id:current.id,left:box.left+8,top:event.clientY-(current.y-box.top),width:box.width,valid:current.valid});
  };
  return <section className="a-order-editor" ref={root} onPointerMove={moving} onPointerUp={()=>finish(false)} onPointerCancel={()=>finish(true)} onLostPointerCapture={()=>{if(drag.current)finish(true);}} onDragStart={e=>e.preventDefault()}>
-  <h4>{title}</h4><p>{description}</p><p className="a-caption">Drag the handle or choose a position. Changes apply when you save.</p>
+  <h4>{title}</h4>{notice&&<p role="status">{notice}</p>}<p>{description}</p><p className="a-caption">Drag the handle or choose a position. Changes apply when you save.</p>
   <div className="a-order-list">{shown.map((id,index)=>{const item=rows.get(id)||{label:id};return <div key={id} data-order-id={id} className={'a-order-item'+(floating?.id===id?' a-order-placeholder':'')}>
    {floating?.id===id&&floating.valid&&<span className="a-order-insertion" aria-hidden="true"/>}
    <button type="button" className="a-icon a-order-grip" disabled={busy} draggable={false} data-action="view.update" aria-label={'Reorder '+item.label} title="Drag, or press the up and down arrow keys" onPointerDown={e=>down(e,id)} onKeyDown={e=>{if(['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();capture();const next=moveItem(ids,id,index+(e.key==='ArrowUp'?-1:1));onChange(next);announce(`${item.label}, position ${next.indexOf(id)+1}`);focus(id);}}}><GripVertical/></button>
@@ -68,6 +69,6 @@ export function OrderEditor({title,description,items,ids,onChange,onSave,onCance
   </div>;})}</div>
   {floating&&<div className="a-order-floating" aria-hidden="true" style={{left:floating.left,top:floating.top,width:floating.width}}><GripVertical/><strong>{rows.get(floating.id)?.label}</strong><small>{rows.get(floating.id)?.description}</small></div>}
   <span className="a-sr-only" role="status" aria-live="polite">{announcement}</span>{error&&<p role="alert" className="a-danger">{error}</p>}
-  <div className="a-dialog-actions"><button type="button" className="a-primary" disabled={busy||!!floating} data-action={action} onClick={onSave}>{busy?'Saving order…':'Save order'}</button><button type="button" className="a-soft" disabled={busy} data-action="view.update" onClick={onCancel}>Cancel</button></div>
+  <SettingsActions><button type="button" className="a-primary" disabled={busy||!!floating} data-action={action} onClick={onSave}>{busy?'Saving order…':'Save order'}</button><button type="button" className="a-soft" disabled={busy} data-action="view.update" onClick={onCancel}>Cancel</button></SettingsActions>
  </section>;
 }

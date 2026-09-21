@@ -177,6 +177,14 @@ def apply_provider_environment(plan):
 
 def _apply_settings(bundle, config):
     settings = config.settings
+    # Generic list merging replaces config arrays. Keep the bundle's explicit
+    # filesystem denials across that merge so host policy can enforce them.
+    filesystem_denials = {
+        row.get("id") or row.get("instance_id") or row["module"]:
+            copy.deepcopy(row["config"]["denied_write_paths"])
+        for row in bundle.tools
+        if row.get("module") == "tool-filesystem" and "denied_write_paths" in row.get("config", {})
+    }
     bundle.providers = merge(bundle.providers, config.providers)
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
     for kind in ("tools", "hooks"):
@@ -203,6 +211,14 @@ def _apply_settings(bundle, config):
             if override.get("enabled") is False or (kind == "providers" and (row.get("id") or row.get("instance_id") or row["module"].removeprefix("provider-")) in settings.get("configurator", {}).get("disabled", {}).get("providers", [])):
                 continue
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
+            identity = row.get("id") or row.get("instance_id") or row.get("module")
+            if kind == "tools" and row.get("module") == "tool-filesystem" and identity in filesystem_denials:
+                original = filesystem_denials[identity]
+                effective = row.get("config", {}).get("denied_write_paths", [])
+                if any(not isinstance(paths, list) or any(not isinstance(path, str) for path in paths)
+                       for paths in (original, effective)):
+                    raise ValueError('File-access paths must be lists of strings.')
+                row.setdefault("config", {})["denied_write_paths"] = list(dict.fromkeys(original + effective))
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
                 row["instance_id"] = row["id"]
             if kind == "providers":
@@ -248,9 +264,12 @@ def _expand_module_configuration(node, in_provider=False):
     return result
 
 
-def _apply_host_policy(bundle, config):
+def _apply_host_policy(bundle, config, *, execution_workspace=None):
     """Host write boundaries cover filesystem and patch tools, including snapshots."""
     settings = config.settings
+    # A managed checkout can differ from the immutable history/config workspace.
+    # Resolve only relative write policies against the actual execution folder.
+    workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
     policy_keys = {"allowed_write_paths", "denied_write_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -258,7 +277,7 @@ def _apply_host_policy(bundle, config):
         result = []
         for value in values:
             path = Path(value).expanduser()
-            result.append((path if path.is_absolute() else Path(config.workspace) / path).resolve())
+            result.append((path if path.is_absolute() else Path(workspace) / path).resolve())
         return result
 
     # Settings support both legacy module lists and current config/overrides.
@@ -281,7 +300,13 @@ def _apply_host_policy(bundle, config):
         values = merge(values, overrides.get("tool-filesystem", {}).get("config", {}))
         if identity != "tool-filesystem":
             values = merge(values, overrides.get(identity, {}).get("config", {}))
-        policies[identity] = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        policy = expand_environment({key: value for key, value in values.items() if key in policy_keys})
+        # Match the CLI's _ensure_cwd_in_write_paths policy. Shared allowed
+        # directories extend project access; they must not replace it. Use an
+        # absolute session workspace, never the server process's directory.
+        if "allowed_write_paths" in policy:
+            policy["allowed_write_paths"] = list(dict.fromkeys([workspace, *(str(path) for path in paths(policy["allowed_write_paths"]))]))
+        policies[identity] = policy
 
     def restrict(current, policy):
         policy = copy.deepcopy(policy)
@@ -314,6 +339,13 @@ def _apply_host_policy(bundle, config):
                 specific = overrides.get(identity, {}).get("config", {})
                 policy = merge(policy, expand_environment({key: value for key, value in specific.items() if key in policy_keys}))
                 row["config"] = merge(current, policy)
+                row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
+                    *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
+                if "denied_write_paths" in row["config"]:
+                    # Shared settings may add restrictions, but must not erase
+                    # the declaration's explicitly denied directories.
+                    row["config"]["denied_write_paths"] = list(dict.fromkeys(str(path) for path in
+                        paths(current.get("denied_write_paths", [])) + paths(policy.get("denied_write_paths", []))))
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.
@@ -331,7 +363,7 @@ def _apply_host_policy(bundle, config):
     return bundle
 
 
-async def compose_configured_bundle(registry, loaded, config):
+async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     snapshot = is_snapshot(loaded)
     if not snapshot:
@@ -353,7 +385,7 @@ async def compose_configured_bundle(registry, loaded, config):
         loaded = _apply_settings(loaded, config)
     # Credentials and safety policy remain local host responsibilities. They
     # do not add modules or replace the saved source/model/routing selections.
-    loaded = _apply_host_policy(loaded, config)
+    loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
     return loaded
@@ -365,7 +397,7 @@ def module_source(config, snapshot, module, source):
     return source if snapshot else config.module_sources.get(module) or source
 
 
-async def load_root_bundle(config, chosen):
+async def load_root_bundle(config, chosen, *, execution_workspace=None):
     """Resolve a root and host composition without per-conversation overrides."""
     from amplifier_foundation import BundleRegistry
     registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
@@ -378,7 +410,7 @@ async def load_root_bundle(config, chosen):
     if candidate is not None:
         chosen = str(candidate)
     loaded = await registry.load(chosen)
-    loaded = await compose_configured_bundle(registry, loaded, config)
+    loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
 
 
@@ -388,9 +420,14 @@ class ResolvedRoot:
     config: HostConfig
     bundle: str
     root: tuple | None
+    execution_workspace: Path | str | None = None
 
-    def take(self, config, bundle):
-        if self.root is None or config != self.config or bundle != self.bundle:
+    def __post_init__(self):
+        self.execution_workspace = Path(self.execution_workspace or self.config.workspace).expanduser().resolve()
+
+    def take(self, config, bundle, *, execution_workspace=None):
+        workspace = Path(execution_workspace or config.workspace).expanduser().resolve()
+        if self.root is None or config != self.config or bundle != self.bundle or workspace != self.execution_workspace:
             raise ValueError("The bundle configuration changed while switching. Try again.")
         root, self.root = self.root, None
         return root
@@ -457,8 +494,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     chosen = saved_bundle or bundle or config.active_bundle
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
-    registry, loaded, chosen = (resolved_root.take(config, chosen) if resolved_root is not None
-                               else await load_root_bundle(config, chosen))
+    registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
+                               else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
     snapshot = is_snapshot(loaded)
     from ..runtime_controls import override_path, validate_plan
     edited_path = override_path(runtime.session_id)
@@ -472,7 +509,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         for key in ("session", "agents", "context", "instruction"):
             if key in edited:
                 setattr(loaded, key, edited[key])
-        loaded = _apply_host_policy(loaded, config)
+        loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
         for key in ("providers", "tools", "hooks", "session", "agents"):
             if key in edited:
                 setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))

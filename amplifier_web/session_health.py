@@ -25,7 +25,7 @@ def failure_details(error, error_type=None):
     if ('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing')):
         category, summary = 'invalid_image', 'The provider rejected an image or computer-tool result in the conversation context.'
         guidance = 'Restarting may leave the same invalid history. Create a recovery copy to continue with readable history and without old tool or image payloads.'
-    elif 'context_length' in text or 'context window' in text or 'maximum context' in text:
+    elif kind.rsplit('.', 1)[-1] == 'ContextLengthError' or any(value in text for value in ('contextlengtherror', 'context_length', 'context window', 'maximum context', 'input allowance before dispatch')):
         category, summary, guidance = 'context_limit', 'The conversation exceeded the model context limit.', 'Choose a model with more context or start a new conversation with a summary.'
     elif 'authentication' in text or 'invalid_api_key' in text or 'unauthorized' in text:
         category, summary, guidance = 'authentication', 'The provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'

@@ -40,6 +40,28 @@
       ]
     },
     {
+      "version": "0.19.17",
+      "title": "Mobile navigation, retained Canvas, and project access",
+      "changes": [
+        "Narrow windows show full-width chat, the conversation title, and navigation and action drawers with larger touch targets.",
+        "Settings opens one section or editor at a time on narrow windows, preserving drafts and browser Back navigation. Ordering drafts refresh safely when routing choices change.",
+        "Canvas shows and hides immediately while retaining its viewers, scroll position, and unsaved edits.",
+        "Default interface text is larger. Customized or renamed skins retain their settings.",
+        "File tools retain access to the selected project when extra writable folders are configured, while preserving explicitly denied folders and narrower patch-tool restrictions.",
+        "Typed context-limit failures now show recovery guidance in conversation diagnostics."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.16",
+      "title": "Restore recipe agent and report steps",
+      "changes": [
+        "Ordinary recipe agent steps can run again, fixing the child-session option error that stopped validation and audit recipes before their final reports.",
+        "Recipe children retain conversation approvals, working directories, and saved history. Recipes requesting subprocess isolation receive a clear unsupported-mode error before the child starts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.15",
       "title": "Keep local source validation results visible",
       "changes": [

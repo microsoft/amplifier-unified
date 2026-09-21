@@ -9,11 +9,18 @@ from amplifier_web.execution_events import ExecutionEvents
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.runtime import normalize_event
 from amplifier_web.service import AppService, AppError
-from amplifier_web.session_health import inspect_session, exception_details
+from amplifier_web.session_health import inspect_session, exception_details, failure_details
 from amplifier_web.session_store import fork_session
 
 
 BAD_IMAGE = "Invalid 'input[86].output.image_url'. Expected a base64-encoded data URL, but got an invalid base64-encoded value."
+
+
+def test_typed_context_error_is_recognized_without_sdk_message_wording():
+    detail = failure_details('OpenAI request exceeds the local input allowance before dispatch.', 'ContextLengthError')
+    assert detail['category'] == 'context_limit'
+    assert detail['errorType'] == 'ContextLengthError'
+    assert 'cause is not available' not in detail['summary']
 
 
 def rows():
@@ -105,7 +112,12 @@ async def test_inspection_reads_legacy_root_error_and_exposes_identity_to_agent(
     await app.close()
 
 
-async def test_original_provider_cause_survives_runtime_wrapper(tmp_path):
+@pytest.mark.parametrize('message,error_class,category', [
+    (BAD_IMAGE, ValueError, 'invalid_image'),
+    ('OpenAI request exceeds the local input allowance before dispatch.',
+     type('ContextLengthError', (RuntimeError,), {}), 'context_limit'),
+])
+async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, message, error_class, category):
     app = AppService(tmp_path, workspace=tmp_path)
     await app.dispatch('session.create', {})
     session = app._session()
@@ -113,20 +125,20 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path):
         def get_info(self):
             return SimpleNamespace(id='test', defaults={'model': 'fixture'})
         async def complete(self, request, **kwargs):
-            raise ValueError(BAD_IMAGE)
+            raise error_class(message)
     provider, emitted = Provider(), []
     events = ExecutionEvents(session['id'], emitted.append)
     events.lifecycle({'type': 'input.delivered', 'input_id': 'turn-id'})
     events.instrument_provider(session['id'], provider)
-    with pytest.raises(ValueError):
+    with pytest.raises(error_class):
         await provider.complete(SimpleNamespace(model='fixture'))
     for event in emitted:
         kind, payload = normalize_event(event, session['id'], 'turn-id')
         await app.on_runtime_event(kind, payload)
     await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay'})
-    assert session['failure']['category'] == 'invalid_image'
+    assert session['failure']['category'] == category
     assert session['failure']['inputId'] == 'turn-id'
-    assert inspect_session(tmp_path, session)['failure']['category'] == 'invalid_image'
+    assert inspect_session(tmp_path, session)['failure']['category'] == category
     assert exception_details(ValueError('unknown error with secret=never-copy'))['category'] == 'unknown'
     await app.close()
 

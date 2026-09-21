@@ -32,13 +32,30 @@ async def mount(coordinator,config=None):
     from amplifier_web.runtime_worker import Worker
     import amplifier_web.runtime_worker as module
     from amplifier_web.host.storage import SessionStore
-    events=[];module.publish=events.append;worker=Worker()
+    events=[];admissions=[];unexpected=[];replies=set();worker=Worker()
+    async def reply(event):
+        operation=event['operation']
+        if operation=='context.manifest':
+            result={'surfaces':[],'inputIds':event['args'].get('_contextInputs',[])}
+        elif operation=='capacity.admit' and not worker.controls.capacity.policy['enabled']:
+            admissions.append(event['args']['call']['id'])
+            result={'allowed':True,'budgetRevision':worker.controls.capacity.policy['revision']}
+        else:
+            unexpected.append(operation)
+            await worker.command({'op':'bridge.result','id':event['id'],'error':'Unexpected fixture bridge operation'})
+            return
+        await worker.command({'op':'bridge.result','id':event['id'],'result':result})
+    def publish(event):
+        events.append(event)
+        if event.get('op')=='bridge':
+            task=asyncio.create_task(reply(event));replies.add(task);task.add_done_callback(replies.discard)
+    module.publish=publish
     import amplifier_web.host.session as host
     original_load=host.load_root_bundle
     resolutions=[]
-    async def counted_load(config,bundle):
+    async def counted_load(config,bundle,**kwargs):
         resolutions.append(bundle)
-        return await original_load(config,bundle)
+        return await original_load(config,bundle,**kwargs)
     host.load_root_bundle=counted_load
     async def control(operation,args=None):
         identity='request-'+str(len(events))
@@ -50,7 +67,8 @@ async def mount(coordinator,config=None):
         for _ in range(300):
             if worker.parked:return
             await asyncio.sleep(.02)
-        raise AssertionError('worker did not park')
+        raise AssertionError('worker did not park: '+json.dumps([{key:value for key,value in event.items()
+            if key in {'type','op','operation','error'}} for event in events[-15:]]))
     try:
         await worker.start({'id':'switch-fixture','workspace':str(workspace),'bundle':bundles['first']},raise_errors=True)
         await worker.command({'op':'send','id':'send','input_id':'original-input','text':'Remember the fixture history.'})
@@ -88,8 +106,10 @@ async def mount(coordinator,config=None):
         await worker.command({'op':'send','id':'after','input_id':'after-switch','text':'Continue after the failed switch.'})
         await settled()
         assert sum(event.get('type')=='assistant.message' for event in events)==2
-        print(json.dumps({'reviewed_and_direct_switch':True,'one_resolution_per_apply':True,'history_preserved':True,'model_effort_preserved':True,'old_budget_reset':True,'failed_mount_rolled_back':True,'continued_after_failure':True,'replayed_work':False}))
+        assert not unexpected and len(admissions)==len(set(admissions))==2
+        print(json.dumps({'reviewed_and_direct_switch':True,'one_resolution_per_apply':True,'history_preserved':True,'model_effort_preserved':True,'old_budget_reset':True,'failed_mount_rolled_back':True,'continued_after_failure':True,'host_admissions':len(admissions),'replayed_work':False}))
     finally:
         worker.shutdown.set();await worker.run()
+        if replies:await asyncio.gather(*replies)
 
 asyncio.run(main())

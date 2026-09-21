@@ -1,4 +1,4 @@
-"""Adding a patch writer cannot bypass the existing file-access choice."""
+"""Workspace access matches the CLI; explicit patch limits and denials remain."""
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -15,22 +15,37 @@ def apply(tmp_path, patch, shared):
     return _apply_host_policy(bundle, config)
 
 
+def test_global_extra_directories_do_not_replace_workspace_access(tmp_path):
+    workspace = tmp_path / 'project'
+    extra = tmp_path / 'notes'
+    denied = workspace / 'private'
+    bundle = SimpleNamespace(tools=[{'module': 'tool-filesystem'}, {'module': 'tool-apply-patch'}], agents={
+        'worker': {'tools': [{'module': 'tool-filesystem'}, {'module': 'tool-apply-patch'}]}})
+    settings = {'modules': {'tools': [{'module': 'tool-filesystem', 'config': {
+        'allowed_write_paths': [str(extra)], 'denied_write_paths': [str(denied)]}}]}}
+    _apply_host_policy(bundle, SimpleNamespace(workspace=workspace, settings=settings))
+    for tool in [*bundle.tools, *bundle.agents['worker']['tools']]:
+        assert tool['config']['allowed_write_paths'] == [str(workspace), str(extra)]
+        assert tool['config']['denied_write_paths'] == [str(denied)]
+
+
 def test_shared_allow_and_deny_cover_root_and_child_patch_tools(tmp_path):
     policy = {'allowed_write_paths': [str(tmp_path / 'allowed')],
               'denied_write_paths': [str(tmp_path / 'allowed/private')]}
     result = apply(tmp_path, {'engine': 'native'}, policy)
-    assert result.tools[0]['config'] == {'engine': 'native', **policy}
-    assert result.agents['child']['tools'][0]['config'] == {'engine': 'function', **policy}
+    effective = {**policy, 'allowed_write_paths': [str(tmp_path), str(tmp_path / 'allowed')]}
+    assert result.tools[0]['config'] == {'engine': 'native', **effective}
+    assert result.agents['child']['tools'][0]['config'] == {'engine': 'function', **effective}
 
 
 @pytest.mark.parametrize('shared,patch,expected', [
     (['.'], ['src'], ['src']),
-    (['src'], ['.'], ['src']),
-    (['src'], ['other'], []),
-    ([], ['.'], []),
+    (['src'], ['.'], ['.', 'src']),
+    (['src'], ['other'], ['other']),
+    ([], ['.'], ['.']),
     (['.'], [], []),
 ])
-def test_allowlists_intersect_instead_of_widening(tmp_path, shared, patch, expected):
+def test_explicit_patch_policy_intersects_workspace_and_shared_extras(tmp_path, shared, patch, expected):
     result = apply(tmp_path, {'allowed_write_paths': patch}, {'allowed_write_paths': shared})
     assert result.tools[0]['config']['allowed_write_paths'] == [str(tmp_path / p) for p in expected]
 
@@ -61,7 +76,7 @@ def test_legacy_and_current_module_lists_restrict_patch_even_in_snapshots(tmp_pa
     settings = {section: {'tools': [{'module': 'tool-filesystem', 'config': {
         'allowed_write_paths': ['/home/example/old-linux-workspace']}}]}}
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(Path('/home/example/old-linux-workspace').resolve())]
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path), str(Path('/home/example/old-linux-workspace').resolve())]
 
 
 def test_settings_precedence_and_multiple_filesystem_instances(tmp_path):
@@ -75,10 +90,11 @@ def test_settings_precedence_and_multiple_filesystem_instances(tmp_path):
         'overrides': {'narrow': {'config': {'allowed_write_paths': [str(tmp_path / 'src')]}}},
     }
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path / 'src')]
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path), str(tmp_path / 'src')]
     settings['overrides']['tool-filesystem'] = {'config': {'allowed_write_paths': []}}
+    bundle.tools = [{'module': 'tool-apply-patch'}]
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config']['allowed_write_paths'] == []
+    assert bundle.tools[0]['config']['allowed_write_paths'] == [str(tmp_path), str(tmp_path / 'src')]
 
 
 def test_snapshot_and_child_patch_environment_paths_expand_before_intersection(tmp_path, monkeypatch):
@@ -109,7 +125,8 @@ def test_bundle_declared_filesystem_instance_policy_also_restricts_patch(tmp_pat
               'denied_write_paths': [str(tmp_path / 'src/private')]}
     settings = {'overrides': {'project-files': {'config': policy}}}
     _apply_host_policy(bundle, SimpleNamespace(workspace=tmp_path, settings=settings))
-    assert bundle.tools[0]['config'] == policy
-    assert filesystem['config'] == policy
+    effective = {**policy, 'allowed_write_paths': [str(tmp_path), str(tmp_path / 'src')]}
+    assert bundle.tools[0]['config'] == effective
+    assert filesystem['config'] == effective
     if in_child:
-        assert bundle.agents['child']['tools'][1]['config'] == policy
+        assert bundle.agents['child']['tools'][1]['config'] == effective
