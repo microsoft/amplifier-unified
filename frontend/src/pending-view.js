@@ -12,7 +12,10 @@ export function createPendingView(){
    if(!state||!patches.size)return state;
    let view={...state.view},canvas=state.canvas;
    for(const {patch,sessionId,canvas:pending} of patches.values()){
-    if(pending){if(pending.sessionId===state.selectedSessionId&&pending.canvasId===state.canvas?.id&&pending.host===state.client?.hostInstanceId){canvas={...canvas,open:pending.open};if(!pending.open)view.canvasFocused=false}continue}
+    // Painting an open panel is not permission to read its server-bound tool.
+    // Keep that distinction until every matching visibility action settles,
+    // even when an intermediate SSE snapshot already has the desired value.
+    if(pending){if(pending.sessionId===state.selectedSessionId&&pending.canvasId===state.canvas?.id&&pending.host===state.client?.hostInstanceId){canvas={...canvas,open:pending.open,visibilityPending:true};if(!pending.open)view.canvasFocused=false}continue}
     const values={...patch};if(sessionId!==undefined&&sessionId!==state.selectedSessionId)delete values.draft;view={...view,...values}};
    return {...state,view,canvas};
   },

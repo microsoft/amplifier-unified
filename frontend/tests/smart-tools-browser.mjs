@@ -9,8 +9,15 @@ import assert from 'node:assert/strict';
 const temp=await mkdtemp(join(tmpdir(),'unified-mcp-browser-'));
 const source=`import {App} from '@modelcontextprotocol/ext-apps';
 const app=new App({name:'Independent counter',version:'1.0.0'},{});
-let hostUpdates=0;
-const showHostContext=()=>{const context=app.getHostContext()||{};document.body.dataset.theme=context.theme||'';document.body.dataset.displayMode=context.displayMode||'';document.body.dataset.hostUpdates=String(hostUpdates);};
+let hostUpdates=0,resumeReads=false,lastVisible;
+window.enableFixtureResumeReads=value=>resumeReads=value;
+window.fixtureRead=()=>app.callServerTool({name:'counter_read',arguments:{}});
+const showHostContext=()=>{
+ const context=app.getHostContext()||{},visible=context['com.microsoft.amplifier/visibility']!==false;
+ document.body.dataset.theme=context.theme||'';document.body.dataset.displayMode=context.displayMode||'';document.body.dataset.hostUpdates=String(hostUpdates);document.body.dataset.visible=String(visible);
+ if(resumeReads&&visible&&lastVisible===false)window.fixtureRead().then(()=>document.body.dataset.resumeReads=String(Number(document.body.dataset.resumeReads||0)+1)).catch(error=>document.body.dataset.resumeError=error.message);
+ lastVisible=visible;
+};
 app.onhostcontextchanged=()=>{hostUpdates++;showHostContext();};
 const draw=async result=>{const value=result.structuredContent;document.querySelector('#count').textContent=String(value.count);await app.updateModelContext({structuredContent:value});};
 app.ontoolresult=draw;
@@ -28,7 +35,7 @@ fetch('/api/state').then(()=>document.body.dataset.network='FAILED').catch(()=>d
 `;
 const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'counter.js'},bundle:true,write:false,format:'esm',minify:true});
 const attack=`<script>parent.parent.postMessage({jsonrpc:'2.0',id:'forged',method:'tools/call',params:{name:'counter_add',arguments:{amount:1000}}},'*')</script>`;
-const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
+const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><input aria-label="Unsaved tool draft"><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
 await writeFile(join(temp,'app.html'),html);
 const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
 let browser;
@@ -76,6 +83,42 @@ try{
  assert.equal(await frame.locator('body').getAttribute('data-network'),'blocked');
  let state=await page.evaluate(()=>window.amplifier.getState());const savedId=state.canvas.id;
  assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,1,'Nested content cannot call host tools');
+ // The panel paints optimistically, but the live MCP frame must not resume
+ // reads until the matching shared visibility action has been acknowledged.
+ const visibilityRequests=[],visibilityReports=[];let nextVisibility;
+ page.on('request',request=>{
+  if(request.url().includes('/tools/call'))visibilityRequests.push(request.postDataJSON());
+  if(request.url().endsWith('/api/actions')){const body=request.postDataJSON();if(body.args?.action==='canvas.report')visibilityReports.push(body.args.args)}
+ });
+ const waitVisibility=()=>new Promise(resolve=>nextVisibility=resolve);
+ const holdVisibility=route=>{
+  if(route.request().postDataJSON()?.action==='canvas.visibility'){nextVisibility(route);return}
+  return route.continue();
+ };
+ await page.route('**/api/actions',holdVisibility);
+ await frame.getByRole('textbox',{name:'Unsaved tool draft'}).fill('Keep this unsaved');
+ await frame.locator('body').evaluate(()=>window.enableFixtureResumeReads(true));
+ const hideRequest=waitVisibility();await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();const hideRoute=await hideRequest;
+ await page.locator('#workspace-canvas').waitFor({state:'hidden'});
+ await frame.locator('body[data-visible="false"]').waitFor({state:'attached'});
+ await hideRoute.continue();await page.waitForFunction(()=>!window.amplifier.getState().canvas.visibilityPending&&!window.amplifier.getState().canvas.open);
+ const restoreRequest=waitVisibility();
+ await page.evaluate(()=>{window.fixtureRestore=window.amplifier.dispatch('canvas.visibility',{open:true})});const restoreRoute=await restoreRequest;
+ await page.locator('#workspace-canvas').waitFor({state:'visible'});
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.visibilityPending),true);
+ assert.equal(await frame.locator('body').getAttribute('data-visible'),'false','An optimistic panel is not an acknowledged tool view');
+ const paused=await frame.locator('body').evaluate(async()=>{try{await window.fixtureRead();return 'unexpectedly sent'}catch(error){return error.message}});
+ assert.match(paused,/paused/);assert.equal(visibilityRequests.length,0,'Reads must not reach the closed server binding while acknowledgement is delayed');
+ await restoreRoute.continue();await page.evaluate(()=>window.fixtureRestore);
+ await frame.locator('body[data-resume-reads="1"]').waitFor();
+ assert.equal(await frame.locator('body').getAttribute('data-resume-error'),null);
+ assert.equal(visibilityRequests.length,1);assert.equal(visibilityRequests[0].name,'counter_read');
+ assert.equal(visibilityReports.filter(row=>row.status==='error').length,0,'Expected suspension must not publish a host error');
+ assert.equal(await frame.getByRole('textbox',{name:'Unsaved tool draft'}).inputValue(),'Keep this unsaved');
+ await frame.locator('body').evaluate(()=>window.enableFixtureResumeReads(false));
+ await page.unroute('**/api/actions',holdVisibility);
+ await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(row=>row.id===id&&row.status==='completed'),visibilityRequests[0].id);
+ state=await page.evaluate(()=>window.amplifier.getState());
  // System changes update the existing bridge. They must neither replace the
  // iframe nor replay the app's startup tool request.
  const themeOperationCount=state.smartTools.operations.length;
