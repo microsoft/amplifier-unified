@@ -31,12 +31,12 @@ try{
  await provider.getByRole('button',{name:'Preference order',exact:true}).click();
  const order=provider.locator('.a-order-editor'),ids=()=>order.locator('[data-order-id]').evaluateAll(rows=>rows.map(row=>row.dataset.orderId));
  const original=await ids();assert.deepEqual(original,['one','two','three']);
- const drag=async()=>{const from=await order.getByRole('button',{name:'Reorder one',exact:true}).boundingBox(),to=await order.locator('[data-order-id=three]').boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:8});};
+ const drag=async()=>{const handle=order.getByRole('button',{name:'Reorder one',exact:true});await handle.hover();const from=await handle.boundingBox(),to=await order.locator('[data-order-id=three]').boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:8});};
  await drag();await expect(order.locator('.a-order-floating')).toBeVisible();assert.deepEqual(await ids(),['two','three','one']);
  const geometry=await order.locator('.a-order-insertion').evaluate(line=>{const a=line.getBoundingClientRect(),b=line.parentElement.getBoundingClientRect();return {line:a.top,row:b.top,height:a.height};});assert.ok(geometry.line<geometry.row&&geometry.height===3);
  await page.screenshot({path:'/tmp/settings-collections-drag.png'});
  await page.keyboard.press('Escape');await page.mouse.up();assert.deepEqual(await ids(),original);
- await page.waitForTimeout(180);await drag();await expect(order.locator('.a-order-floating')).toBeVisible();assert.deepEqual(await ids(),['two','three','one']);await page.mouse.up();await expect.poll(ids).toEqual(['two','three','one']);assert.deepEqual((await state()).setup.providers.map(p=>p.id),original);
+ await drag();await expect(order.locator('.a-order-floating')).toBeVisible();assert.deepEqual(await ids(),['two','three','one']);await page.mouse.up();await expect.poll(ids).toEqual(['two','three','one']);assert.deepEqual((await state()).setup.providers.map(p=>p.id),original);
  await order.getByRole('button',{name:'Cancel',exact:true}).click();await provider.getByRole('button',{name:'Preference order',exact:true}).click();assert.deepEqual(await ids(),original);
  await order.getByLabel('Position of one',{exact:true}).selectOption({value:'2'});await order.getByRole('button',{name:'Save order',exact:true}).click();await expect(order).toHaveCount(0);assert.deepEqual((await state()).setup.providers.map(p=>p.id),['two','three','one']);
  await provider.getByRole('button',{name:'Preference order',exact:true}).click();const committed=await ids();
