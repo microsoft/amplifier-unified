@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.16",
+      "title": "Restore recipe agent and report steps",
+      "changes": [
+        "Ordinary recipe agent steps can run again, fixing the child-session option error that stopped validation and audit recipes before their final reports.",
+        "Recipe children retain conversation approvals, working directories, and saved history. Recipes requesting subprocess isolation receive a clear unsupported-mode error before the child starts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.15",
       "title": "Keep local source validation results visible",
       "changes": [
