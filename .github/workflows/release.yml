@@ -34,7 +34,7 @@ jobs:
         run: |
           cp scripts/release.py "$RUNNER_TEMP/release.py"
           python "$RUNNER_TEMP/release.py" plan --output "$GITHUB_OUTPUT"
-      - name: Use the original commit when resuming an existing tag
+      - name: Pin the verified selected commit
         env:
           RELEASE_REVISION: ${{ steps.release.outputs.revision }}
         run: git checkout --detach "$RELEASE_REVISION"
