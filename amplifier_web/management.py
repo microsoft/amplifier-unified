@@ -638,12 +638,39 @@ class Management:
             from .recovery import reset
             await reset(self,args)
         elif action=='maintenance.repair':
-            if self.service.update_manager and self.service.update_manager.busy():raise ValueError('Finish active work before repairing the runtime')
-            await self.service.runtime.close()
-            from .runtime import RuntimeManager
-            from .updates import process
-            command=RuntimeManager()._command()
-            await process(command[0],'sync','--project',command[3],'--python','3.13','--reinstall',timeout=900)
+            updates = self.service.update_manager
+            async with self.service.runtime_lifecycle():
+                candidate = previous_phase = None
+                try:
+                    async with self.service.lock:
+                        if self.service.closed:
+                            raise RuntimeError('The runtime host is closing.')
+                        if updates and updates.lock.locked():
+                            raise ValueError('Finish active updates before repairing the runtime')
+                        if updates and updates.busy():
+                            raise ValueError('Finish active work before repairing the runtime')
+                        candidate = self.service.runtime_candidate()
+                        previous_phase = self.service.state.setdefault('updates', {}).get('phase', 'idle')
+                        self.service.state['updates'].update(phase='activating',
+                            detail='Repairing runtime dependencies…')
+                        self.service._publish()
+                    from .updates import process
+                    from .runtime import RuntimeManager
+                    command=RuntimeManager()._command()
+                    project=RuntimeManager.project_path(command)
+                    await process(command[0],'sync',*(('--locked',) if '--locked' in command else ()),
+                                  '--project',project,'--python','3.13','--reinstall',timeout=900)
+                    await self.service.replace_runtime(candidate)
+                except BaseException:
+                    await self.service.discard_runtime(candidate)
+                    if previous_phase is not None:
+                        async with self.service.lock:
+                            self.service.state['updates']['phase'] = previous_phase
+                            self.service._publish()
+                    raise
+                async with self.service.lock:
+                    self.service.state['updates']['phase'] = previous_phase
+                    self.service._publish()
             await self.publish(maintenance={'detail':'Runtime dependencies repaired. Conversations will resume when you next send a message.'})
         else:
             raise ValueError('Management action is not implemented: '+action)

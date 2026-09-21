@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from pathlib import Path
@@ -70,6 +71,39 @@ async def test_unvalidated_app_cannot_replace_installed_host(tmp_path):
     service.state['updates']['pendingApp']={'revision':'a'*40}
     with pytest.raises(ValueError,match='validation'):await app_updates.activate(manager)
     await service.close()
+
+
+async def test_activation_queued_across_shutdown_snapshot_does_not_discover_or_install(tmp_path, monkeypatch):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    revision='a'*40
+    service.state['updates']['pendingApp']={'revision':revision,'latest':'v99.0.0'}
+    marker=manager.directory/'applications'/revision/'validated.json'
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'revision':revision,'version':'99.0.0'}))
+    start=asyncio.Event()
+    target=AsyncMock(side_effect=AssertionError('closed host must not discover an installation target'))
+    installer=AsyncMock(side_effect=AssertionError('closed host must not install an application update'))
+    monkeypatch.setattr(app_updates,'installed_target',target)
+    monkeypatch.setattr(app_updates,'process',installer)
+
+    async def queued_activation():
+        await start.wait()
+        await app_updates.activate(manager)
+
+    await service.runtime_lifecycle_lock.acquire()
+    activation=asyncio.create_task(queued_activation())
+    await asyncio.sleep(0)
+    shutdown=asyncio.create_task(service.close())
+    await asyncio.sleep(0)
+    assert service.closed and not shutdown.done()
+    start.set()
+    with pytest.raises(RuntimeError,match='host is closing'):
+        await activation
+    target.assert_not_awaited()
+    installer.assert_not_awaited()
+    service.runtime_lifecycle_lock.release()
+    await asyncio.wait_for(shutdown,3)
 
 
 @pytest.mark.parametrize("marker_kind", ["missing", "corrupt-json", "list", "null", "number", "string",
@@ -172,12 +206,14 @@ async def test_managed_service_restart_does_not_spawn_a_second_host(tmp_path,mon
 
 async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypatch):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    await service.dispatch('session.create', {})
     async def process(*args,**kwargs):return '98.0.0' if '-c' in args else ''
     monkeypatch.setattr(app_updates,'process',process)
     monkeypatch.setattr(app_updates.os,'kill',lambda *args:pytest.fail('The retained host must not be terminated'))
     await app_updates.activate(manager)
     assert service.state['updates']['phase']=='error'
     assert service.state['updates']['pendingApp'] is None
+    assert (await service.dispatch('conversation.send', {'text': 'Still usable after failed application probe'}))['delivery'] == 'accepted'
     await service.close()
 
 @pytest.mark.parametrize('receipt',[

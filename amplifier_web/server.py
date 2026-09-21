@@ -75,12 +75,12 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if runtime is None:
         from .runtime import RuntimeManager
         runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"])
-        service.runtime = runtime
+        await service.install_runtime(runtime)
         service.state["runtime"]["available"] = True
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
-    app["runtime"] = runtime
+    service.bind_runtime_alias(lambda current: app.__setitem__("runtime", current))
     from .smart_tools import SmartToolsManager
     from .smart_canvas import SmartCanvas
     service.smart_tools = SmartToolsManager(service)

@@ -147,6 +147,15 @@ class RuntimeManager:
         recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
         return [uv, "run", *(["--locked"] if recorded else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
 
+    @staticmethod
+    def project_path(command):
+        """Return the runtime project's path from a uv command without offsets."""
+        try:
+            project = command.index("--project") + 1
+            return command[project]
+        except (ValueError, IndexError) as exc:
+            raise RuntimeError("The runtime command does not identify a uv project.") from exc
+
     async def start(self, session: dict, emit: Emitter):
         sid = session["id"]
         async with self._admission(sid):
@@ -548,11 +557,6 @@ class RuntimeManager:
         await row["emit"]("runtime.warmth" if row.get("retiring") else "runtime.status",
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         self.workers.pop(session_id, None)
-
-    async def reset(self):
-        """Retire workers at an idle update boundary, retaining this host."""
-        await self.close()
-        self._closed = False
 
     async def close(self):
         self._closed = True

@@ -9,7 +9,6 @@ from amplifier_web.updates import UpdateManager,active_release,foundation_home,s
 class Runtime:
     def __init__(self): self.closed=0
     async def close(self): self.closed+=1
-    async def reset(self): self.closed+=1
 
 def git(path,*args):
     return subprocess.check_output(['git',*args],cwd=path,text=True,stderr=subprocess.DEVNULL).strip()
@@ -26,6 +25,8 @@ async def app(tmp_path,monkeypatch,repo):
         return await original(*args,**kwargs)
     monkeypatch.setattr(updates,'process',process)
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
+    from amplifier_web.deployment import load_server_config
+    service.server_config = load_server_config(service.data_dir)
     await service.dispatch('session.create',{'bundle':'anchors-amp-dev'})
     service.update_manager=UpdateManager(service)
     yield service
@@ -202,9 +203,10 @@ async def test_ecosystem_activation_does_not_claim_application_was_installed(app
     assert app.state['updates']['items'][1]['status']=='current'
 
 
-async def test_real_runtime_accepts_new_messages_after_update_and_rollback(app, repo, tmp_path):
-    """Exercise the process manager, not a close-only fake, across both swaps."""
+async def test_runtime_lifecycle_preserves_dispatch_across_update_repair_reset_and_rollback(app, repo, tmp_path, monkeypatch):
+    """Every host-continuing lifecycle operation retains AppService admission."""
     import sys
+    from amplifier_web.management import Management
     from amplifier_web.runtime import RuntimeManager
     script = r'''
 import json,sys
@@ -221,32 +223,326 @@ for line in sys.stdin:
         break
 '''
     log = tmp_path / 'delivered.txt'
-    runtime = RuntimeManager(command=[sys.executable, '-c', script, str(log)], startup_timeout=3)
-    app.runtime = runtime
+    bridge = app.app_bridge
+    runtime = RuntimeManager(bridge, command=[sys.executable, '-c', script, str(log)],
+                             startup_timeout=3, progress_interval=.01)
+    await app.install_runtime(runtime)
     session = app.state['sessions'][0]
-    async def emit(*args): pass
-    await runtime.send(session, 'first', 'before-update', emit)
+    assert (await app.dispatch('conversation.send', {'text': 'before update'}, command_id='before-update'))['delivery'] == 'accepted'
+    await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
     original_process = runtime.workers[session['id']]['process']
     original_retention = runtime.retention.task
     manager, _ = await prepare(app, repo)
     async def validate(*args): pass
     manager.validate = validate
+    from amplifier_web import updates
+    original_write = updates.write_private
+    def fail_inventory(path, contents):
+        if path == manager.directory / 'inventory.json':
+            raise OSError('inventory cleanup unavailable')
+        return original_write(path, contents)
+    monkeypatch.setattr(updates, 'write_private', fail_inventory)
     await manager.install()
     assert app.state['updates']['phase'] == 'installed'
     assert original_process.returncode is not None
     assert original_retention.done()
     assert not runtime.workers
     assert log.read_text().splitlines() == ['before-update']
-    assert (await runtime.send(session, 'next', 'after-update', emit))['accepted']
-    assert runtime.retention.task is not original_retention
-    assert not runtime.retention.task.done()
-    updated_process = runtime.workers[session['id']]['process']
+    assert runtime._closed
+    replacement = app.runtime
+    assert replacement is not runtime
+    assert replacement.app_bridge is bridge
+    assert replacement.command == runtime.command
+    assert replacement.startup_timeout == runtime.startup_timeout
+    assert replacement.progress_interval == runtime.progress_interval
+    assert replacement.retention.settings == runtime.retention.settings
+    assert (await app.dispatch('conversation.send', {'text': 'after update'}, command_id='after-update'))['delivery'] == 'accepted'
+    await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+    updated_process = replacement.workers[session['id']]['process']
+    updated_retention = replacement.retention.task
     await manager.rollback()
     assert active_release(app.data_dir)['current'] is None
     assert updated_process.returncode is not None
-    assert (await runtime.send(session, 'next', 'after-rollback', emit))['accepted']
-    assert log.read_text().splitlines() == ['before-update', 'after-update', 'after-rollback']
-    await runtime.close()
-    with pytest.raises(RuntimeError, match='host is closing'):
-        await runtime.send(session, 'do not send', 'after-shutdown', emit)
-    assert log.read_text().splitlines() == ['before-update', 'after-update', 'after-rollback']
+    assert updated_retention.done()
+    assert replacement._closed
+    restored = app.runtime
+    assert restored is not replacement
+    assert (await app.dispatch('conversation.send', {'text': 'after rollback'}, command_id='after-rollback'))['delivery'] == 'accepted'
+    await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+    app.management = Management(app)
+    async def repaired(*args, **kwargs):
+        assert args[1] == 'sync'
+        return ''
+    monkeypatch.setattr(updates, 'process', repaired)
+    await app.management.perform('maintenance.repair', {})
+    repaired_runtime = app.runtime
+    assert repaired_runtime is not restored and restored._closed
+    assert (await app.dispatch('conversation.send', {'text': 'after repair'}, command_id='after-repair'))['delivery'] == 'accepted'
+    await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+    await app.management.perform('maintenance.reset', {'parts': ['settings'], 'apply': True, 'confirmation': 'RESET'})
+    reset_runtime = app.runtime
+    assert reset_runtime is not repaired_runtime and repaired_runtime._closed
+    assert (await app.dispatch('conversation.send', {'text': 'after reset'}, command_id='after-reset'))['delivery'] == 'accepted'
+    assert log.read_text().splitlines() == ['before-update', 'after-update', 'after-rollback', 'after-repair', 'after-reset']
+
+
+@pytest.mark.parametrize('failure', ['pointer', 'candidate'])
+async def test_ecosystem_activation_preflight_failures_leave_live_runtime_and_pointer_untouched(app, repo, monkeypatch, failure):
+    manager, _ = await prepare(app, repo)
+    release = 'f' * 32
+    marker = manager.directory / 'releases' / release / 'validated.json'
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'hostVersion': __import__('amplifier_web').__version__}))
+    app.state['updates']['pendingRelease'] = release
+    original = app.runtime
+    from amplifier_web import updates
+    if failure == 'pointer':
+        original_write = updates.write_private
+        def reject_pointer(path, contents):
+            if path == manager.directory / 'active.json':
+                raise OSError('pointer unavailable')
+            return original_write(path, contents)
+        monkeypatch.setattr(updates, 'write_private', reject_pointer)
+    else:
+        monkeypatch.setattr(app, 'runtime_candidate', lambda: (_ for _ in ()).throw(OSError('candidate unavailable')))
+    await manager.activate()
+    assert app.runtime is original
+    assert original.closed == 0
+    assert not active_release(app.data_dir)
+    assert app.state['updates']['phase'] == 'error'
+
+
+async def test_repair_and_ecosystem_activation_are_serialized(app, repo, monkeypatch):
+    import asyncio
+    from amplifier_web.management import Management
+    from amplifier_web import updates
+
+    manager, _ = await prepare(app, repo)
+    app.management = Management(app)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def process(*args, **kwargs):
+        if args[1] == 'sync':
+            entered.set()
+            await release.wait()
+        return ''
+
+    monkeypatch.setattr(updates, 'process', process)
+    repair = asyncio.create_task(app.management.perform('maintenance.repair', {}))
+    await asyncio.wait_for(entered.wait(), 3)
+    generation = 'e' * 32
+    marker = manager.directory / 'releases' / generation / 'validated.json'
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'hostVersion': __import__('amplifier_web').__version__}))
+    app.state['updates']['pendingRelease'] = generation
+    activation = asyncio.create_task(manager.activate())
+    await asyncio.sleep(0)
+    assert not activation.done()
+    release.set()
+    await repair
+    await activation
+    assert active_release(app.data_dir)['current'] == generation
+    assert app.state['updates']['phase'] == 'installed'
+
+
+@pytest.mark.parametrize('locked', [True, False])
+async def test_repair_finds_uv_project_without_fixed_command_offsets(app, monkeypatch, locked):
+    from amplifier_web.management import Management
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web import updates
+
+    app.management = Management(app)
+    command = ['/fixture/uv', 'run', *( ['--locked'] if locked else []), '--project',
+               '/actual/runtime-project', '--python', '3.13', 'python', '/fixture/worker.py']
+    monkeypatch.setattr(RuntimeManager, '_command', lambda self, *args, **kwargs: list(command))
+    calls = []
+    async def process(*args, **kwargs):
+        calls.append(args)
+        return ''
+    monkeypatch.setattr(updates, 'process', process)
+
+    await app.management.perform('maintenance.repair', {})
+
+    assert calls == [('/fixture/uv', 'sync', *(('--locked',) if locked else ()),
+                      '--project', '/actual/runtime-project', '--python', '3.13', '--reinstall')]
+    assert isinstance(app.runtime, RuntimeManager) and not app.runtime._closed
+
+
+@pytest.mark.parametrize('failure', ['replacement', 'publication'])
+@pytest.mark.parametrize('rollback', [False, True])
+async def test_post_commit_promotion_retry_preserves_pointer_identity(app, repo, monkeypatch, failure, rollback):
+    manager, _ = await prepare(app, repo)
+    async def validate(*args): pass
+    manager.validate = validate
+    if rollback:
+        await manager.install()
+    before = dict(active_release(app.data_dir))
+    original_replace = app.replace_runtime
+    original_publish = manager.publish
+    failed = False
+
+    async def replace(candidate):
+        nonlocal failed
+        if failure == 'replacement' and not failed:
+            failed = True
+            raise OSError('replacement failed after pointer commit')
+        return await original_replace(candidate)
+
+    async def publish(**values):
+        nonlocal failed
+        if failure == 'publication' and values.get('phase') == 'installed' and not failed:
+            failed = True
+            raise OSError('final publication failed after pointer commit')
+        return await original_publish(**values)
+
+    monkeypatch.setattr(app, 'replace_runtime', replace)
+    monkeypatch.setattr(manager, 'publish', publish)
+    if rollback:
+        await manager.rollback()
+    else:
+        await manager.install()
+
+    committed = dict(active_release(app.data_dir))
+    target = committed.get('current')
+    assert committed == {'current': target, 'previous': before.get('current'), 'at': committed['at']}
+    assert app.state['updates']['phase'] == 'error'
+    if rollback:
+        assert 'pendingRollback' in app.state['updates']
+    else:
+        assert app.state['updates']['pendingRelease'] == target
+
+    if rollback:
+        await manager.rollback()
+    else:
+        await manager.activate()
+
+    assert active_release(app.data_dir) == committed
+    assert app.state['updates']['phase'] == 'installed'
+    assert app.state['updates'].get('pendingRelease') is None
+    assert 'pendingRollback' not in app.state['updates']
+
+
+async def test_normal_promotion_supersedes_failed_rollback_target(app, repo, monkeypatch):
+    manager, _ = await prepare(app, repo)
+    from amplifier_web import updates
+
+    original_write = updates.write_private
+    release_a, release_b, release_c = 'a' * 32, 'b' * 32, 'c' * 32
+    for release in (release_a, release_b, release_c):
+        marker = manager.directory / 'releases' / release / 'validated.json'
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({'hostVersion': __import__('amplifier_web').__version__}))
+    original_write(manager.directory / 'active.json',
+                   json.dumps({'current': release_a, 'previous': release_b, 'at': 1}))
+    original_candidate = app.runtime_candidate
+    failed = True
+
+    def candidate():
+        nonlocal failed
+        if failed:
+            failed = False
+            raise OSError('failed rollback preflight')
+        return original_candidate()
+
+    monkeypatch.setattr(app, 'runtime_candidate', candidate)
+    await manager.rollback()
+    assert app.state['updates']['pendingRollback'] == release_b
+    assert active_release(app.data_dir)['current'] == release_a
+
+    app.state['updates']['pendingRelease'] = release_c
+    await manager.activate()
+    assert active_release(app.data_dir)['current'] == release_c
+    assert active_release(app.data_dir)['previous'] == release_a
+    assert 'pendingRollback' not in app.state['updates']
+
+    await manager.rollback()
+    assert active_release(app.data_dir)['current'] == release_a
+    assert active_release(app.data_dir)['previous'] == release_c
+
+
+async def test_committed_normal_promotion_invalidates_stale_rollback_before_final_publication(app, repo, monkeypatch):
+    manager, _ = await prepare(app, repo)
+    from amplifier_web import updates
+
+    original_write = updates.write_private
+    release_a, release_b, release_c = 'a' * 32, 'b' * 32, 'c' * 32
+    for release in (release_a, release_b, release_c):
+        marker = manager.directory / 'releases' / release / 'validated.json'
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({'hostVersion': __import__('amplifier_web').__version__}))
+    original_write(manager.directory / 'active.json',
+                   json.dumps({'current': release_a, 'previous': release_b, 'at': 1}))
+    original_candidate = app.runtime_candidate
+    failed_preflight = True
+
+    def candidate():
+        nonlocal failed_preflight
+        if failed_preflight:
+            failed_preflight = False
+            raise OSError('failed rollback preflight')
+        return original_candidate()
+
+    monkeypatch.setattr(app, 'runtime_candidate', candidate)
+    await manager.rollback()
+    assert app.state['updates']['pendingRollback'] == release_b
+
+    original_publish = manager.publish
+    failed_publication = True
+
+    async def publish(**values):
+        nonlocal failed_publication
+        if values.get('phase') == 'installed' and failed_publication:
+            failed_publication = False
+            raise OSError('final normal-promotion publication failed')
+        return await original_publish(**values)
+
+    monkeypatch.setattr(manager, 'publish', publish)
+    app.state['updates']['pendingRelease'] = release_c
+    await manager.activate()
+    assert active_release(app.data_dir)['current'] == release_c
+    assert active_release(app.data_dir)['previous'] == release_a
+    assert app.state['updates']['phase'] == 'error'
+    assert 'pendingRollback' not in app.state['updates']
+
+    await manager.rollback()
+    assert active_release(app.data_dir)['current'] == release_a
+    assert active_release(app.data_dir)['previous'] == release_c
+
+
+async def test_normal_promotion_supersedes_failed_base_runtime_rollback(app, repo, monkeypatch):
+    manager, _ = await prepare(app, repo)
+    from amplifier_web import updates
+
+    original_write = updates.write_private
+    release_a, release_c = 'a' * 32, 'c' * 32
+    for release in (release_a, release_c):
+        marker = manager.directory / 'releases' / release / 'validated.json'
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({'hostVersion': __import__('amplifier_web').__version__}))
+    original_write(manager.directory / 'active.json',
+                   json.dumps({'current': release_a, 'previous': None, 'at': 1}))
+    original_candidate = app.runtime_candidate
+    failed = True
+
+    def candidate():
+        nonlocal failed
+        if failed:
+            failed = False
+            raise OSError('failed base-runtime rollback preflight')
+        return original_candidate()
+
+    monkeypatch.setattr(app, 'runtime_candidate', candidate)
+    await manager.rollback()
+    assert 'pendingRollback' in app.state['updates']
+    assert app.state['updates']['pendingRollback'] is None
+    assert active_release(app.data_dir)['current'] == release_a
+
+    app.state['updates']['pendingRelease'] = release_c
+    await manager.activate()
+    assert active_release(app.data_dir)['current'] == release_c
+    assert active_release(app.data_dir)['previous'] == release_a
+    assert 'pendingRollback' not in app.state['updates']
+
+    await manager.rollback()
+    assert active_release(app.data_dir)['current'] == release_a
+    assert active_release(app.data_dir)['previous'] == release_c
