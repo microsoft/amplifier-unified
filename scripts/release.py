@@ -43,9 +43,17 @@ def plan(root):
     version = version_at(root)
     tag = "v" + version
     tags = run("git", "tag", "--list", tag, cwd=root).splitlines()
-    revision = run("git", "rev-parse", tag + "^{commit}" if tags else "HEAD", cwd=root)
-    if tags and version_at(root, revision) != version:
-        raise ValueError("Existing immutable release tag does not match its package version")
+    revision = run("git", "rev-parse", "HEAD", cwd=root)
+    if tags:
+        tagged_revision = run("git", "rev-parse", tag + "^{commit}", cwd=root)
+        if version_at(root, tagged_revision) != version:
+            raise ValueError("Existing immutable release tag does not match its package version")
+        if tagged_revision != revision:
+            raise ValueError(
+                "Existing immutable release tag does not match the selected commit. "
+                "Increment the package version to release this commit, or select the "
+                "original tagged commit to resume that release."
+            )
     return {"version": version, "tag": tag, "revision": revision, "existing_tag": bool(tags)}
 
 
