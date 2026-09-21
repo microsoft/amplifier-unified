@@ -2,11 +2,13 @@
 import sys
 from types import ModuleType
 
-from amplifier_web import cli
+from amplifier_web import cli, terminal_cli
 from amplifier_web.deployment import DEFAULT_SERVER, save_server_config
 
 
 def invoke(monkeypatch, home, *arguments):
+    # Exercise the optional-client route without reading a personal managed install.
+    monkeypatch.setattr(terminal_cli, 'saved', lambda: None)
     calls = []
     module = ModuleType('amplifier_tui.connected')
     module.main = calls.append
