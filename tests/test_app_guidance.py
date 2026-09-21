@@ -2,7 +2,24 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import pytest
+
+
+def test_surface_runtime_import_does_not_require_host_css_parser():
+    result = subprocess.run([sys.executable, '-c', """
+import importlib.abc
+import sys
+
+class RuntimeWithoutCssParser(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'tinycss2' or fullname.startswith('tinycss2.'):
+            raise ModuleNotFoundError('CSS parser is only installed in the web host')
+
+sys.meta_path.insert(0, RuntimeWithoutCssParser())
+from amplifier_web.surface_delivery import SurfaceProvider
+"""], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_real_core_receives_canvas_tool_and_ephemeral_instructions():
