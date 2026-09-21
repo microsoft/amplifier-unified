@@ -8,6 +8,7 @@ export interface ShellHost {
  setDirty(dirty: boolean): Promise<unknown>;
 }
 export interface NavigationSnapshot {
+ readonly generation: number;
  readonly view: Readonly<Record<string, unknown>>;
  readonly selectedWorkspaceId: string | null;
  readonly selectedSessionId: string | null;
@@ -35,3 +36,30 @@ export interface CanvasHost {
  setDirty(dirty: boolean): Promise<unknown>;
 }
 export function useCanvas(React: any, host: CanvasHost): CanvasSnapshot;
+
+/** Read only the fields for capabilities declared by this component. */
+export interface ComponentSnapshot {
+ readonly revision: number;
+ readonly compositionRevision: number;
+ readonly generation: number;
+ readonly slot: 'app.actions' | 'app.status' | 'conversation.header' | 'composer.actions' | 'canvas.toolbar' | 'settings.appearance' | 'settings.section';
+ readonly view: Readonly<Record<string, unknown>>;
+ readonly presentation: Readonly<{scheme?:'light'|'dark'|'system';density?:'comfortable'|'compact';layout?:'balanced'|'conversation'|'work';executionDetail?:'minimal'|'standard'|'detailed';decorations?:boolean;accent?:string}>;
+ readonly selectedSessionId: string | null;
+ readonly selectedWorkspaceId: string | null;
+ readonly runtime: {readonly available:boolean};
+ readonly conversation?: null | {readonly id:string;readonly title:string;readonly status:string;readonly autoName?:boolean;readonly workspaceId?:string;readonly bundle?:string;readonly naming?:Readonly<Record<string,unknown>>};
+ readonly canvas?: Readonly<{id?:string;title?:string;kind?:string;open?:boolean}>;
+ readonly attention?: Readonly<{unread:number;sections:Readonly<Record<string,number>>}>;
+}
+export interface ComponentHost {
+ readonly apiVersion:'1.0';
+ readonly clientId:string;
+ readonly instanceId:string;
+ getSnapshot(): Readonly<ComponentSnapshot>;
+ subscribe(listener:()=>void):()=>void;
+ /** Inspect shell.inspect.componentCommands for current argument schemas and capabilities. */
+ dispatch(action:'view.update'|'panel.open'|'presentation.update'|'session.naming'|'session.rename'|'conversation.stop',args:Record<string,unknown>):Promise<{accepted:boolean;result?:unknown}>;
+ setDirty(dirty:boolean):Promise<unknown>;
+}
+export function useShellComponent(React:any,host:ComponentHost):ComponentSnapshot;

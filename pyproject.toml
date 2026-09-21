@@ -51,6 +51,7 @@ exclude = ["/.ci/**"]
 "packages/shell-sdk" = "amplifier_web/bundle_data/packages/shell-sdk"
 "examples/shell-navigator" = "amplifier_web/bundle_data/examples/shell-navigator"
 "examples/shell-reader" = "amplifier_web/bundle_data/examples/shell-reader"
+"examples/shell-controls" = "amplifier_web/bundle_data/examples/shell-controls"
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
