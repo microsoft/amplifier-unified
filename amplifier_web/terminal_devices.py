@@ -56,16 +56,19 @@ class TerminalDevices:
         if not isinstance(grant, str) or not re.fullmatch(r'[a-f0-9]{32}\.[A-Za-z0-9_-]{43}', grant):
             raise ValueError('Setup expired or was already used. Download a new setup file.')
         identity, secret = grant.split('.')
-        token = 'amt_' + identity + '.' + secrets.token_urlsafe(48)
+        # Enrollment retries can reuse a preparation ID after its receipt expires.
+        # A newly installed device must never replace an older device's credential.
+        device_id = secrets.token_hex(16)
+        token = 'amt_' + device_id + '.' + secrets.token_urlsafe(48)
         with self.transaction() as state:
             row = state['grants'].get(identity)
             if not row or row['expiresAt'] <= time.time() or not hmac.compare_digest(row['digest'], digest(secret)):
                 raise ValueError('Setup expired or was already used. Download a new setup file.')
             if len(state['devices']) >= MAX_DEVICES:
                 raise ValueError('Remove an unused terminal connection before adding another.')
-            state['devices'][identity] = {'id': identity, 'name': row['name'], 'digest': digest(token), 'createdAt': int(time.time())}
+            state['devices'][device_id] = {'id': device_id, 'name': row['name'], 'digest': digest(token), 'createdAt': int(time.time())}
             del state['grants'][identity]
-        return {'id': identity, 'token': token}
+        return {'id': device_id, 'token': token}
 
     def identify(self, token):
         if not re.fullmatch(r'amt_[a-f0-9]{32}\.[A-Za-z0-9_-]{64}', token):

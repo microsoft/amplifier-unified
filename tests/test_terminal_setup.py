@@ -120,6 +120,45 @@ async def test_revocation_closes_existing_stream_and_refuses_new_commands(termin
     assert manager.devices.listing() == []
 
 
+async def test_revocation_detaches_request_without_cancelling_accepted_work(terminal, monkeypatch):
+    client, manager, cookie, app = terminal
+    device, _, _ = await issued(terminal)
+    started, finish, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    dispatch = app['service'].dispatch
+    async def waiting_dispatch(action, *args, **kwargs):
+        if action != 'test.accepted-work':
+            return await dispatch(action, *args, **kwargs)
+        started.set()
+        await finish.wait()
+        completed.set()
+        return {'accepted': True}
+    monkeypatch.setattr(app['service'], 'dispatch', waiting_dispatch)
+    request = asyncio.create_task(client.post('/api/actions',
+        headers={'Authorization': 'Bearer ' + device['token']}, json={'action': 'test.accepted-work'}))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        response = await client.post('/api/actions', headers=cookie,
+            json={'action': 'terminal.revoke', 'args': {'id': device['id']}})
+        assert response.status == 200
+        finish.set()
+        await asyncio.wait_for(completed.wait(), 2)
+    finally:
+        finish.set()
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+
+
+def test_reused_preparation_id_never_replaces_existing_device_credential(tmp_path):
+    devices = TerminalDevices(tmp_path)
+    first_grant, _ = devices.grant('First Mac', 'a' * 32)
+    first = devices.redeem(first_grant)
+    second_grant, _ = devices.grant('Second Mac', 'a' * 32)
+    second = devices.redeem(second_grant)
+    assert first['id'] != second['id']
+    assert devices.identify(first['token']) == first['id']
+    assert devices.identify(second['token']) == second['id']
+
+
 async def test_expired_grants_downloads_and_cross_origin_enrollment_are_refused(terminal, monkeypatch):
     client, manager, cookie, _ = terminal
     receipt = await (await prepare(terminal)).json()
