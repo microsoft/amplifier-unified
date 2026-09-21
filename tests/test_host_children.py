@@ -29,3 +29,15 @@ def test_real_foundation_child_lifecycle_and_delegate_contract():
     assert result.returncode==0,result.stderr+result.stdout
     assert '"delegate_compatible": true' in result.stdout
     assert '"cli_imports": false' in result.stdout
+
+
+def test_real_community_recipe_completes_its_report_step():
+    python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
+    if not python or not os.environ.get('WARM_RECIPES_PATH'):
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON and WARM_RECIPES_PATH for the community recipe probe')
+    probe = Path(__file__).parent / 'fixtures/recipe_children_probe.py'
+    result = subprocess.run([python, str(probe)], text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert '"recipe_report_completed": true' in result.stdout
+    assert '"approval_preserved": true' in result.stdout
+    assert '"subprocess_not_downgraded": true' in result.stdout
