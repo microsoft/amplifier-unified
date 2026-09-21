@@ -582,6 +582,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if failures:
             from ..module_failures import persist_failures
             raise persist_failures(directory, failures)
+        from ..module_failures import clear_failures
+        clear_failures(directory)
         # Stamp only explicit, local bundle resources actually consumed by this
         # mount. Registry caches and reports are intentionally excluded because
         # they are rewritten by normal preparation.

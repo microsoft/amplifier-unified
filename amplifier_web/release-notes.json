@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.14",
+      "title": "Validate replacement module sources before saving",
+      "changes": [
+        "Module validation now checks the same effective source selected by the runtime, including scoped source overrides.",
+        "The source editor can validate a candidate without saving it, and validates module replacements before saving. Failed validation leaves the saved source unchanged.",
+        "Release publication refuses an existing version tag at a different commit, so a later fix cannot silently reuse an older release."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.13",
+      "title": "Keep delayed message delivery separate from stopped work",
+      "changes": [
+        "A delayed message acknowledgement no longer marks the conversation or its running work as failed. The saved message stays unconfirmed until delivery can be established.",
+        "A late acknowledgement updates the original message without resending it or restarting a finished turn. Genuine worker failures continue to report an error."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.12",
       "title": "An optional terminal client for shared conversations",
       "changes": [

@@ -40,3 +40,18 @@ def persist_failures(directory,failures):
     error=ConfiguredModuleError(failures)
     write_private(Path(directory)/'module-load-failures.json',json.dumps(error.failures,indent=2))
     return error
+
+
+def read_failures(directory):
+    try:
+        path=Path(directory)/'module-load-failures.json'
+        with path.open('rb') as stream:
+            content=stream.read(128_001)
+        return safe_failures(json.loads(content)) if len(content)<=128_000 else []
+    except (OSError,ValueError):
+        return []
+
+
+def clear_failures(directory):
+    path=Path(directory)/'module-load-failures.json'
+    if path.exists():write_private(path,'[]')

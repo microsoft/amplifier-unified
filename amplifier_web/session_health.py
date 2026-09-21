@@ -42,6 +42,9 @@ def inspect_session(home, session):
               'title': session.get('title', ''), 'workspace': session.get('workspace', ''),
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
               'selection': session.get('selection', {}), 'workReplayed': False}
+    from .module_failures import read_failures
+    directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
+    report['moduleFailures'] = read_failures(directory)
     if session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
         # Older versions discarded the cause at the manager boundary. Read a

@@ -58,3 +58,17 @@ async def test_service_retains_diagnostic_on_reload_and_clears_after_recovery(tm
         await restored.on_runtime_event('runtime.status',{'sessionId':sid,'status':'ready'})
         assert 'moduleFailures' not in restored._session(sid)
     finally:await restored.close()
+
+
+def test_native_history_inspection_reads_only_safe_current_failure(tmp_path):
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_health import inspect_session
+    from amplifier_web.module_failures import clear_failures
+    session={'id':'native-fixture','runtimeSessionId':'native-fixture','workspace':str(tmp_path),'status':'idle'}
+    directory=SessionStore.for_app(tmp_path,tmp_path).directory(session['id'])
+    persist_failures(directory,[{'module':'tool-fixture','type':'tool','reason_code':'missing_source','error':'private-token'}])
+    report=inspect_session(tmp_path,session)
+    assert report['moduleFailures'][0]['reason_code']=='missing_source'
+    assert 'private-token' not in json.dumps(report)
+    clear_failures(directory)
+    assert inspect_session(tmp_path,session)['moduleFailures']==[]
