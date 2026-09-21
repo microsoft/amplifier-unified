@@ -11,6 +11,7 @@ from pathlib import Path
 import stat
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private
+from .components import HostComponents, ComponentResolver, compose_bundles, installed_package_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -366,10 +367,13 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     snapshot = is_snapshot(loaded)
+    components = required_components()
     if not snapshot:
         from ..builtin_behaviors import resolve_builtin_behavior
         for behavior in config.app_bundles:
-            loaded = loaded.compose(await registry.load(resolve_builtin_behavior(behavior)))
+            selected = await registry.load(resolve_builtin_behavior(behavior))
+            components.select_bundle(selected, config.module_sources)
+            loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
             from ..session_files import capture_dir, project_slug
             # The community hook owns kernel capture, discovery and metadata.
@@ -381,8 +385,16 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
         if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
-            loaded = loaded.compose(await registry.load("git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml"))
+            selected = await registry.load("git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
+            components.select_bundle(selected, config.module_sources)
+            loaded = compose_bundles(loaded, selected)
         loaded = _apply_settings(loaded, config)
+        # Existing root defaults are explicit selections, not a new forced
+        # version. Reuse their effective source for child/sibling declarations.
+        for row in loaded.hooks:
+            if row.get("module") in {"hook-context-intelligence", "hooks-routing"}:
+                components.select(row["module"], config.module_sources.get(row["module"]) or row.get("source"))
+    loaded = components.apply(loaded)
     # Credentials and safety policy remain local host responsibilities. They
     # do not add modules or replace the saved source/model/routing selections.
     loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
@@ -391,9 +403,19 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     return loaded
 
 
-def module_source(config, snapshot, module, source):
-    if module == "loop-live":
-        return LOOP_SOURCE
+def installed_loop_source():
+    return installed_package_source('amplifier-module-loop-live', 'amplifier_module_loop_live')
+
+
+def required_components():
+    return HostComponents({'loop-live': LOOP_SOURCE}, {'loop-live': installed_loop_source})
+
+
+def module_source(config, snapshot, module, source, components=None):
+    components = components or required_components()
+    selected = components.source(module, source, installed=True)
+    if components.owns(module, source):
+        return selected
     return source if snapshot else config.module_sources.get(module) or source
 
 
@@ -431,6 +453,33 @@ class ResolvedRoot:
             raise ValueError("The bundle configuration changed while switching. Try again.")
         root, self.root = self.root, None
         return root
+
+
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None):
+    """Prepare a fresh qualification worker before importing its live runtime.
+
+    This first probe only installs configured dependencies. A separate process
+    mounts the resulting frozen worker normally; source changes never mix an
+    already imported wheel runtime with an editable cache in one interpreter.
+    No conversation, history store, job recovery or model execution is opened.
+    """
+    config = load_config(workspace)
+    from .config import prepare_registry
+    prepare_registry(config)
+    execution_workspace = Path(config.workspace).expanduser().resolve(strict=True)
+    os.chdir(execution_workspace)
+    _, loaded, _ = await load_root_bundle(config, bundle or config.active_bundle,
+                                          execution_workspace=execution_workspace)
+    snapshot = is_snapshot(loaded)
+    adapted, _ = live_plan(loaded.to_mount_plan())
+    components = getattr(loaded, '_host_components', None) or required_components()
+    loaded.session = adapted['session']
+    loaded.agents = adapted.get('agents', {})
+    components.apply(loaded)
+    await loaded.prepare(strict=True, refresh_dependencies=True,
+        **({'install_overrides': Path(install_overrides)} if install_overrides is not None else {}),
+        cache_dir=config.registry_home / 'cache',
+        source_resolver=lambda module, source: module_source(config, snapshot, module, source, components))
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,
@@ -522,6 +571,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # agent-specific source go through Foundation's normal activation mechanism.
     loaded.session = adapted["session"]
     loaded.agents = adapted.get("agents", {})
+    components = getattr(loaded, "_host_components", None) or required_components()
+    components.apply(loaded)
+    adapted = components.normalize(adapted)
     write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
     write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))
     def progress(action, detail):
@@ -539,8 +591,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
     prepared = await loaded.prepare(strict=True, **preparation_policy,
         cache_dir=config.registry_home / "cache",
-        source_resolver=lambda module, source: module_source(config, snapshot, module, source),
+        source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
         progress_callback=progress)
+    if getattr(prepared, "resolver", None) is not None:
+        prepared.resolver = ComponentResolver(prepared.resolver, components)
     await materialize_bundle_providers(loaded, prepared)
     apply_provider_environment(prepared.mount_plan)
     from ..session_files import project_slug

@@ -94,6 +94,74 @@ def lock_overrides(project, target):
     return Path(target)
 
 
+def verify_install_overrides(project, target):
+    """Verify a recorded policy without re-exporting or rewriting its receipt."""
+    target = Path(target)
+    if not target.is_file():
+        raise ValueError('The recorded worker installation policy is missing; its generation was preserved.')
+    policy_file = target.with_name('runtime-install-policy.json')
+    if policy_file.exists():
+        policy = json.loads(policy_file.read_text())
+        valid = (policy.get('version') == 2
+                 and policy.get('lockSha256') == hashlib.sha256((Path(project) / 'uv.lock').read_bytes()).hexdigest()
+                 and policy.get('overridesSha256') == hashlib.sha256(target.read_bytes()).hexdigest())
+    else:
+        # 0.20 receipts used the original universal-lock formatter. Do not
+        # silently replace those exact policies with a new interpretation.
+        valid = target.read_text() == override_content(project)
+    if not valid:
+        raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
+    return target
+
+
+async def prepare_overrides(project, target):
+    """Export resolver-selected markers instead of flattening a universal lock.
+
+    uv owns dependency-edge marker propagation, extras, groups and version
+    forks. A frozen/offline export never resolves newer sources. Store its exact
+    policy once, so ordinary recorded workers do not depend on exporter changes.
+    """
+    from .updates import process
+    from .deployment import write_private
+    project, target = Path(project).resolve(), Path(target)
+    if (target.parent / 'runtime-installed.json').exists():
+        return verify_install_overrides(project, target)
+    uv = shutil.which('uv')
+    if not uv:
+        raise RuntimeError('Install uv to prepare the Amplifier runtime.')
+    output = await process(uv, 'export', '--frozen', '--offline', '--no-emit-project',
+                           '--no-header', '--no-hashes', '--no-annotate', '--project', str(project),
+                           cwd=project, timeout=90)
+    # Exported local requirements are relative to the resolver project, while
+    # the module installer can run anywhere. Keep their exact editable paths.
+    local_names = {}
+    for row in tomllib.loads((project / 'uv.lock').read_text()).get('package', []):
+        source = row.get('source') or {}
+        path = source.get('editable') or source.get('directory')
+        if path:
+            local_names[(project / path).resolve()] = row['name']
+    lines = []
+    for line in output.splitlines():
+        value, separator, marker = line.partition(' ; ')
+        editable = value.startswith('-e ')
+        reference = value[3:] if editable else value
+        if editable or reference.startswith(('.', '/')):
+            parsed = urlsplit(reference)
+            path = Path(unquote(parsed.path)) if parsed.scheme == 'file' else project / reference
+            path = path.resolve()
+            if path not in local_names:
+                raise ValueError('An exported local source did not match its worker lock.')
+            value = ('-e ' if editable else local_names[path] + ' @ ') + path.as_uri()
+        lines.append(value + separator + marker)
+    content = '\n'.join(sorted(lines)) + '\n'
+    write_private(target, content)
+    write_private(target.with_name('runtime-install-policy.json'), json.dumps({
+        'version': 2, 'lockSha256': hashlib.sha256((project / 'uv.lock').read_bytes()).hexdigest(),
+        'overridesSha256': hashlib.sha256(content.encode()).hexdigest(),
+    }) + '\n')
+    return target
+
+
 def frozen_manifest(content, graph):
     """A generation receipt reproduces all installed packages, including locals.
 
@@ -181,8 +249,8 @@ async def freeze(manager, generation, project):
     shutil.copy2(final / 'pyproject.toml', receipt / 'runtime.toml')
     shutil.copy2(final / 'uv.lock', receipt / 'runtime.lock')
     receipt.joinpath('runtime-sources.json').write_text(json.dumps(policies, indent=2) + '\n')
+    await manager.diagnostics.run('ecosystem-runtime-policy', prepare_overrides, final, receipt / 'runtime-install-overrides.txt')
     receipt.joinpath('runtime-installed.json').write_text(json.dumps(actual, indent=2) + '\n')
-    lock_overrides(final, receipt / 'runtime-install-overrides.txt')
     return final
 
 
@@ -214,11 +282,9 @@ def active_install_overrides(home, current_override=None):
     compatibility = Path(__file__).parent / 'runtime_deps/compatibility.txt'
     if current_override and current_override not in {str(target), str(compatibility)}:
         return None
-    if not target.is_file():
-        raise ValueError('The recorded worker installation policy is missing; its generation was preserved.')
     project = environments.project_path(home, generation)
-    if ((project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes()
-            or target.read_text() != override_content(project)):
+    if (project / 'uv.lock').read_bytes() != (receipt / 'runtime.lock').read_bytes():
         raise ValueError('The recorded worker installation policy changed; its generation was preserved.')
+    verify_install_overrides(project, target)
     verify_recorded(project, receipt, allow_additions=True)
     return target

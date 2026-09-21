@@ -10,14 +10,14 @@ import pytest
 PACKAGE = Path(__file__).resolve().parents[1] / "amplifier_web"
 
 
-@pytest.mark.parametrize("entrypoint", ["update_probe.py", "runtime_worker.py"])
-def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint):
+@pytest.mark.parametrize("entrypoint,refresh", [("update_probe.py", False), ("update_probe.py", True), ("runtime_worker.py", False)])
+def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, refresh):
     outer = tmp_path / "host-site-packages"
     package = outer / "amplifier_web"
     package.mkdir(parents=True)
     runtime = tmp_path / "runtime-site-packages"
     runtime.mkdir()
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "ownership.py", "__init__.py", "runtime_bootstrap.py"):
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     (outer / "host_only_dependency.py").write_text("HOST_ONLY = True\n")
@@ -43,11 +43,11 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint):
     """)
     (package / "host").mkdir()
     (package / "host" / "__init__.py").write_text("")
-    (package / "update_diagnostics.py").write_text(
-        "PROBE_PREFIX = 'PROBE:'\ndef exception_type(error): return type(error).__name__\n"
-    )
     (package / "host" / "session.py").write_text(
         checks + textwrap.dedent("""
+        async def prepare_dependencies(*args, **kwargs):
+            import sys
+            assert not any(name.startswith("amplifier_module_loop_live") for name in sys.modules)
         class Session:
             async def cleanup(self): pass
         async def prepare_manager(*args, **kwargs):
@@ -66,7 +66,8 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint):
         script = Path(sys.argv[1])
         sys.path.insert(0, sys.argv[2])
         sys.path.insert(0, str(script.parent))
-        sys.argv = [str(script), "/unused", "anchors"]
+        refresh = sys.argv[3] == "refresh"
+        sys.argv = [str(script), "/unused", "anchors"] + (["--refresh-dependencies"] if refresh else [])
         if script.name == "update_probe.py":
             runpy.run_path(str(script), run_name="__main__")
         else:
@@ -76,11 +77,14 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint):
             asyncio.run(worker.start({"id": "test"}))
     """)
     result = subprocess.run(
-        [sys.executable, "-I", "-S", "-c", runner, str(package / entrypoint), str(runtime)],
+        [sys.executable, "-I", "-S", "-c", runner, str(package / entrypoint), str(runtime), "refresh" if refresh else "ordinary"],
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr + result.stdout
     if entrypoint == "update_probe.py":
         assert '"ok": true' in result.stdout, result.stdout
+        if refresh:
+            assert '"dependenciesPrepared": true' in result.stdout
+            assert '"standalone"' not in result.stdout and '"providersPresent"' not in result.stdout
     else:
         assert "ISOLATED" in result.stdout, result.stdout

@@ -508,8 +508,8 @@ class UpdateManager:
             rows.append({'id': 'historical-source-configuration', 'label': 'Older conversation settings', 'status': 'historical',
                 'eligible': False, 'kind': 'history', 'sourceIssues': historical_issues,
                 'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
-        from .runtime_environment import inventory
-        rows.extend(inventory(self.home))
+        from .runtime_environment import update_inventory
+        rows.extend(await update_inventory(self.home))
         return rows
 
     async def command(self, action):
@@ -608,10 +608,12 @@ class UpdateManager:
                 return
             release=uuid.uuid4().hex
             self.diagnostics.begin('ecosystem',release)
-            self.diagnostics.record('ecosystem-stage','started')
+            stage_id=uuid.uuid4().hex
+            self.diagnostics.record('ecosystem-stage','started',commandId=stage_id)
             stage=self.directory/'releases'/release
             stage.mkdir(parents=True,mode=0o700)
             source=foundation_home(self.home)
+            phase='ecosystem-stage'
             try:
                 await self.publish(phase='staging',detail='Preparing an isolated copy of the ecosystem…',error=None)
                 if source.exists():
@@ -636,8 +638,9 @@ class UpdateManager:
                         continue
                     target=stage/'foundation'/row['path']
                     if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
-                    current=await process('git','rev-parse','HEAD',cwd=target)
-                    dirty,artifacts=await cache_changes(target)
+                    phase='ecosystem-source-preflight'
+                    current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
+                    dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
                     if dirty or current!=row['current']: raise ValueError('Source changed since check')
                     meta=target/'.amplifier_cache_meta.json'
                     data=json.loads(meta.read_text())
@@ -646,31 +649,37 @@ class UpdateManager:
                     if artifacts:
                         # Restore only verified tracked artifacts in this copy.
                         # Rechecking here also protects edits made after check.
-                        await process('git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
+                        await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
                     await self.publish(detail='Downloading '+row['label']+'…')
                     await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
                     await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
                     data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
                     meta.write_text(json.dumps(data))
                 await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
+                phase='ecosystem-validation'
                 await self.validate(stage,release)
                 write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__}))
                 self.diagnostics.clear_failure()
-                self.diagnostics.record('ecosystem-stage','succeeded')
+                self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,detail='Update validated; waiting for conversations and calls to be idle.')
-            except asyncio.CancelledError: raise
-            except Exception as error:
+            except BaseException as error:
                 from .update_diagnostics import exception_type
+                interrupted=isinstance(error,asyncio.CancelledError)
+                status='interrupted' if interrupted else 'failed'
                 last=self.diagnostics.state.get('latest',{})
-                phase=last.get('phase','ecosystem-stage')
-                if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
-                await self.publish(phase='error',pendingRelease=None,error='Ecosystem update failed during '+phase.replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
+                if last.get('status') not in {'failed','interrupted'}:
+                    self.diagnostics.record(phase,status,**{'errorType':exception_type(error),**getattr(error,'diagnostic_facts',{})})
+                failure=self.diagnostics.state['lastFailure']
+                self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
+                await self.publish(phase='interrupted' if interrupted else 'error',pendingRelease=None,
+                    error='Ecosystem update '+('interrupted' if interrupted else 'failed')+' during '+failure['phase'].replace('-',' ')+'. Current sources remain active; no conversation work was replayed.')
+                if not isinstance(error,Exception):raise
                 return
         await self.activate()
 
     async def validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
-        from .runtime_qualification import freeze, lock_overrides, verify_recorded
+        from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         receipt=receipt_directory(self.home,release)
         fresh=not (receipt/'runtime.lock').exists()
         project=await stage_runtime(self, release, [row for row in self.inventory if row.get('eligible') and (row.get('status') == 'update' or
@@ -684,7 +693,7 @@ class UpdateManager:
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':''}
         async def probe(project, *, refresh=False):
             qualified=fresh or (receipt/'runtime-installed.json').exists()
-            overrides=lock_overrides(project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
+            overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
             command=[shutil.which('uv'),'run','--locked','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
             if refresh:flags.append('--refresh-dependencies')

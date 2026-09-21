@@ -296,3 +296,19 @@ test('unknown update remains installable while unknown pins and current status s
  assert.doesNotMatch(html,/disabled="" data-action="updates.install"/);
  assert.doesNotMatch(html,/Needs attention/);
 });
+
+test('runtime preflight identifies the module and recovery action and completes parent progress',()=>{
+ const attemptId='e'.repeat(32),commandId='f'.repeat(32);
+ const parent={id:'start',attemptId,commandId,phase:'ecosystem-stage',status:'started'};
+ const preflight={id:'blocked',attemptId,phase:'ecosystem-runtime-preflight',status:'failed',errorType:'ValueError',package:'amplifier-legacy-hooks',reason:'protected-runtime-source'};
+ const events=[parent,{id:'checkout',attemptId,phase:'ecosystem-checkout',status:'succeeded'},preflight,{...parent,id:'end',status:'failed'}];
+ const diagnostics={attemptId,lastFailure:preflight,events};
+ const html=render({phase:'error',diagnostics},{maintenanceDraft:{updateDiagnosticsExpanded:true}});
+ assert.match(html,/Last update issue: Check installed worker sources/);
+ assert.match(html,/amplifier-legacy-hooks/);
+ assert.match(html,/Local source changes or an explicit dependency override were preserved/);
+ assert.match(html,/Bundles &amp; modules/);
+ assert.doesNotMatch(html,/Running/);
+ assert.match(html,/Switch staged source/);
+ assert.equal(JSON.parse(diagnosticReceipt(diagnostics)).lastFailure.reason,'protected-runtime-source');
+});

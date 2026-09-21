@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.1",
+      "title": "Reliable component updates and shared module loading",
+      "changes": [
+        "Older installations can update components whose only local changes are generated cache files, while preserving source edits, staged changes and pinned versions.",
+        "Component preparation respects platform-specific dependencies, avoiding Windows-only installs on Mac and Linux.",
+        "App-selected modules use a consistent source when bundles or child agents include them again, while retaining their settings and separate configured instances.",
+        "Failed updates identify the preparation stage and provide recovery guidance. Current components and saved conversations remain available; conversation work is not replayed."
+      ],
+      "notices": [
+        {
+          "id": "retry-component-updates",
+          "title": "Retry a previously failed component update",
+          "detail": "Install this application update before retrying a component update that failed during preparation.",
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
+        }
+      ]
+    },
+    {
       "version": "0.20.0",
       "title": "Persistent work, shared controls and reusable outputs",
       "changes": [
