@@ -7,6 +7,8 @@ export function shellFor(state,act){
   const view={...state.view,workspaceDraft:(instance.id==='chats'?chat:!chat)?draft:{}};
   return [instance.id,{...state,view}];
  }));
- return {ready:true,composition,data:{revision:0,snapshots,packages:{}},recover:()=>{},report:()=>{},statusFor:()=>()=>{},
+ const slots=Object.fromEntries(Object.entries({'app.actions':'builtin.app-actions','app.status':'builtin.app-status','conversation.header':'builtin.conversation-header','composer.actions':'builtin.composer-actions','canvas.toolbar':'builtin.canvas-toolbar','settings.appearance':'builtin.settings-appearance'}).map(([slot,packageId])=>[slot,{default:packageId}]));
+ const resolvedInstances=[...composition.instances,...Object.entries(slots).map(([slot,value])=>({id:'core.'+slot,slot,package:value.default}))];
+ return {ready:true,composition,data:{revision:0,composition,effectiveComposition:composition,resolvedInstances,slots,snapshots,packages:{}},recover:()=>{},report:()=>{},statusFor:()=>()=>{},
   hostFor:instance=>({apiVersion:'1.0',clientId:'test-client',instanceId:instance.id,subscribe:()=>()=>{},getSnapshot:()=>snapshots[instance.id],dispatch:act,setDirty:async()=>{}})};
 }

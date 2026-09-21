@@ -3,6 +3,7 @@ import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
+import {shellFor} from './shell-host.mjs';
 let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true,panel:'settings',settingsSection:'setup',settingsExpanded:['providers'],providerEditor:{id:'one',module:'provider-openai',model:'model-a',config:'{}',scope:'global',credentialMode:'private',source:'',advanced:false,dirty:true}},sessions:[{id:'chat',sessionKind:'root',title:'Saved chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'one',module:'provider-openai',config:{default_model:'model-a'},credentialsConfigured:true}],providersLoadedAt:1,providersWorkspace:'/fixture',metadata:{'provider-openai':{info:{config_fields:[]}}},providerCatalogs:{one:{phase:'ready',models:[{id:'model-a'},{id:'model-b'}]}}},canvas:{open:false}};
 let browser,vite;const errors=[],waiting=[],calls=[];
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -14,9 +15,11 @@ try{
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/state')return route.fulfill({json:state});
+  if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){
    const body=route.request().postDataJSON();calls.push(body);
+   if(body.action==='shell.report')return route.fulfill({json:{accepted:true}});
    if(['providers.models','locations.list','session.draft','notifications.get','maintenance.backup'].includes(body.action)){waiting.push({route,body});return}
    if(body.action==='view.update')state={...state,revision:state.revision+1,view:{...state.view,...body.args.patch}};
    return route.fulfill({json:{accepted:true,state}});
