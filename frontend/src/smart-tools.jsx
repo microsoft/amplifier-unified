@@ -1,7 +1,7 @@
 import {SettingsActions} from './settings-layout';
 import {Collection,CollectionRow} from './settings-collections';
 import {ActivityRegion,useRefreshValue} from './activity-region';
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {ArrowLeft, ArrowRight, Box, Cable, Check, ChevronRight, Code2, Download, ExternalLink, Globe, Play, Plus, RefreshCw, Settings2, Trash2, Unplug} from 'lucide-react';
 import {useListFilter} from './list-filter.jsx';
 import {PathField, ResultNotice} from './settings-ui';
@@ -21,7 +21,9 @@ function useEditor(state, act) {
   const shared = state.view?.smartToolsEditor;
   const [editor, setEditor] = useState({...defaults, ...shared});
   const current = useRef(editor);
-  useEffect(() => {if (shared) {current.current = {...defaults, ...shared}; setEditor(current.current);}}, [shared]);
+  // Browser Back updates the shared route before this retained editor. Commit
+  // its list/detail layout before paint so scroll restoration sees that route's content.
+  useLayoutEffect(() => {if (shared) {current.current = {...defaults, ...shared}; setEditor(current.current);}}, [shared]);
   const edit = patch => {const next = {...current.current, ...patch}; current.current = next; setEditor(next); act('view.update', {patch:{smartToolsEditor:next}});};
   return [editor, edit];
 }
