@@ -5,8 +5,8 @@ A local Python host serving a bundled React interface. One conversation supports
 ## Optional terminal client
 
 On the computer where you want the terminal, open your Unified service's
-**Settings → Install → Terminal setup**, or visit `/setup` and follow **Terminal
-setup**. Download the prepared setup file and run the command shown on that page.
+**Settings → Advanced → Install app** and choose **Install the Terminal app on
+this computer**, or visit `/setup` and follow its terminal installation link. Download the prepared setup file and run the command shown on that page.
 It installs a prebuilt client, saves a secure connection to that service, and
 creates a launcher. Your workspaces and tools stay on the service host.
 

@@ -8,8 +8,9 @@ conversation behavior after connection.
 ## Install on a Mac and connect to Spark
 
 1. On the Mac, open Spark's trusted HTTPS Unified address in your browser.
-2. Visit `/setup` and follow **Terminal setup**, or follow **Terminal setup** in
-   the web app's Install settings. Sign in if asked.
+2. Visit `/setup` and follow its terminal installation link, or open **Settings →
+   Advanced → Install app** and choose **Install the Terminal app on this computer**.
+   Sign in if asked.
 3. Choose **Mac with Apple silicon**, name the connection, and select **Prepare
    setup file**. The page shows progress while Spark prepares the download.
 4. Download the file. Open Terminal, paste the displayed command, and run it.

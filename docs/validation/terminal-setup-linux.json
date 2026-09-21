@@ -1,0 +1,23 @@
+{
+  "platform": "Linux",
+  "architecture": "aarch64",
+  "libc": [
+    "glibc",
+    "2.39"
+  ],
+  "restrictedPath": "/usr/bin:/bin",
+  "pinnedPrebuiltClientInstalled": true,
+  "verifiedFixtureHTTPS": true,
+  "savedLauncherAuthenticatedListing": true,
+  "nativePTYConnectedRender": true,
+  "nativeCleanDetach": true,
+  "consumedGrantPreservesDefault": true,
+  "checksumFailurePreservesDefault": true,
+  "failedCandidatesRemoved": true,
+  "serverOverrideRefused": true,
+  "privateCredentialPermissions": true,
+  "existingLaunchersUnchanged": true,
+  "productionServicesChanged": false,
+  "modelCalls": false,
+  "installerSourceHead": "b365843f6fe311d7c1a69e60ebcd5a1bf78e151f"
+}
