@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import os
@@ -310,6 +311,12 @@ class AppService:
         self.smart_tool_tasks = set()
         self.smart_tool_requests = {}
         self.lock = asyncio.Lock()
+        # RuntimeManager.close() is terminal.  Every host-continuing operation
+        # that retires it therefore shares this exclusion and installs a fresh
+        # manager before reopening normal work.
+        self.runtime_lifecycle_lock = asyncio.Lock()
+        self._runtime_lifecycle_tasks = set()
+        self._runtime_alias = None
         self.closed = False
         from .session_warmup import SessionWarmup
         self.warmup = SessionWarmup(self)
@@ -660,6 +667,85 @@ class AppService:
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return task
+
+    def bind_runtime_alias(self, setter):
+        """Keep an embedding host's runtime reference aligned with this service."""
+        self._runtime_alias = setter
+        setter(self.runtime)
+
+    @asynccontextmanager
+    async def runtime_lifecycle(self):
+        """Serialize and track a runtime-retiring operation during host shutdown."""
+        if self.closed:
+            raise RuntimeError("The runtime host is closing.")
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("Runtime lifecycle work requires an asyncio task.")
+        self._runtime_lifecycle_tasks.add(task)
+        try:
+            async with self.runtime_lifecycle_lock:
+                # A task can begin after close() has taken its lifecycle-task
+                # snapshot, or wait here while shutdown begins.  Reject it after
+                # it owns the exclusion, before it can mutate state or run work.
+                if self.closed:
+                    raise RuntimeError("The runtime host is closing.")
+                yield
+        finally:
+            self._runtime_lifecycle_tasks.discard(task)
+
+    def runtime_candidate(self, *, retention=None):
+        """Construct a replacement without mutating or retiring the live runtime."""
+        from .runtime import RuntimeManager
+
+        current = self.runtime
+        if isinstance(current, RuntimeManager):
+            return RuntimeManager(
+                app_bridge=current.app_bridge,
+                command=current.command,
+                startup_timeout=current.startup_timeout,
+                progress_interval=current.progress_interval,
+                retention=retention if retention is not None else dict(current.retention.settings),
+            )
+        from .deployment import load_server_config
+        config = getattr(self, "server_config", None) or load_server_config(self.data_dir)
+        return RuntimeManager(app_bridge=self.app_bridge,
+                              retention=retention if retention is not None else config["runtime"])
+
+    async def install_runtime(self, runtime):
+        """Publish a prepared runtime consistently to the service and embedding host."""
+        if self.closed:
+            if runtime:
+                await runtime.close()
+            raise RuntimeError("The runtime host is closing.")
+        self.runtime = runtime
+        self.state["runtime"]["available"] = runtime is not None
+        if hasattr(runtime, "retention"):
+            self.state["runtime"]["retention"] = dict(runtime.retention.settings)
+        if self._runtime_alias:
+            self._runtime_alias(runtime)
+
+    async def replace_runtime(self, candidate):
+        """Switch to a preflighted runtime before terminally closing the old one."""
+        if self.closed:
+            await candidate.close()
+            raise RuntimeError("The runtime host is closing.")
+        previous = self.runtime
+        await self.install_runtime(candidate)
+        if previous:
+            close_task = asyncio.create_task(previous.close())
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                # Shutdown cancels the lifecycle operation, but the displaced
+                # runtime must finish its own cleanup before the new one closes.
+                await asyncio.gather(close_task, return_exceptions=True)
+                raise
+        return previous
+
+    async def discard_runtime(self, candidate):
+        """Close an unused replacement candidate without retiring the live runtime."""
+        if candidate is not None and candidate is not self.runtime and not getattr(candidate, "_closed", False):
+            await candidate.close()
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
@@ -2328,10 +2414,21 @@ class AppService:
             self._publish()
 
     async def close(self):
+        if self.closed:
+            return
         self.closed = True
+        lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
+                           if task is not asyncio.current_task()]
+        for task in lifecycle_tasks:
+            task.cancel()
+        if lifecycle_tasks:
+            await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
         await self.voice_visual.close()
         await self.schedules.close()
         await self.worktrees.close()
+        async with self.runtime_lifecycle_lock:
+            if self.runtime:
+                await self.runtime.close()
         await self.warmup.close()
         await self.history.close()
         await self.event_log_view.close()
@@ -2339,8 +2436,6 @@ class AppService:
             await self.update_manager.close()
         if self.management and self.management.setup_manager:
             await self.management.setup_manager.close()
-        if self.runtime:
-            await self.runtime.close()
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)

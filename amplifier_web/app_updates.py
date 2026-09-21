@@ -190,6 +190,11 @@ async def _stage(manager):
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation},detail='Application release validated. Waiting for work to finish before restarting.')
 
 async def activate(manager):
+    async with manager.service.runtime_lifecycle():
+        await _activate_serialized(manager)
+
+
+async def _activate_serialized(manager):
     if manager.lock.locked() or manager.closed:return
     async with manager.lock:
         try:await _activate(manager)
@@ -294,7 +299,6 @@ async def _activate(manager):
         manager.service.state['updates'].update(phase='activating',detail='Installing the app update and restarting…')
         manager.service._publish()
     try:
-        if manager.service.runtime:await manager.diagnostics.run('runtime-close',manager.service.runtime.close)
         manager.diagnostics.sync('recovery-record',write_private,manager.directory/'previous-app.json',json.dumps(previous))
         resolution_args=['--overrides',str(folder/'components.txt')] if graph is not None else []
         await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras),env=git_environment(),timeout=900)

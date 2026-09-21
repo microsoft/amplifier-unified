@@ -81,7 +81,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if runtime is None:
         from .runtime import RuntimeManager
         runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"])
-        service.runtime = runtime
+        await service.install_runtime(runtime)
         service.state["runtime"]["available"] = True
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
@@ -96,7 +96,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     app.router.add_get("/oauth/mcp/callback", mcp_oauth_callback, allow_head=False)
     app.router.add_get("/oauth/mcp/complete", mcp_oauth_complete)
-    app["runtime"] = runtime
+    service.bind_runtime_alias(lambda current: app.__setitem__("runtime", current))
     from .voice_visual import setup_routes as visual_routes
     visual_routes(app)
     from .terminal_setup import setup_routes as setup_terminal
