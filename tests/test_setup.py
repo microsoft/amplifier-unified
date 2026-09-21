@@ -243,3 +243,19 @@ async def test_active_routing_can_be_loaded_edited_saved_and_used(manager,tmp_pa
     result=await manager.perform('routing.save',{'workspace':str(tmp_path),'name':'custom','matrix':edited,'activate':True})
     assert result['matrix']['roles']['general']['candidates'][0]['model']=='edited-model'
     assert manager.store.read(tmp_path)['routing']['matrix']=='custom'
+
+
+async def test_complete_provider_order_is_atomic_and_rejects_stale_list(tmp_path):
+    manager=SetupManager(tmp_path)
+    args={'workspace':str(tmp_path)}
+    for name in ('one','two','three'):
+        await manager.perform('providers.save',{**args,'id':name,'module':'provider-test','config':{'custom':name}})
+    result=await manager.perform('providers.reorder',{**args,'ids':['three','one','two'],'expectedIds':['one','two','three']})
+    assert [row['id'] for row in result['providers']]==['three','one','two']
+    assert result['providers'][0]['config']['custom']=='three'
+    before=manager.store.read(tmp_path)
+    with pytest.raises(ValueError,match='changed'):
+        await manager.perform('providers.reorder',{**args,'ids':['two','one','three'],'expectedIds':['one','two','three']})
+    assert manager.store.read(tmp_path)==before
+    with pytest.raises(ValueError):
+        await manager.perform('providers.reorder',{**args,'ids':['three','three','two'],'expectedIds':['three','one','two']})

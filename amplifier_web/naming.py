@@ -5,7 +5,7 @@ from pathlib import Path
 from amplifier_foundation.session.metadata import NAMING_FIELDS, SessionMetadataStore
 
 FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs')
-PLACEHOLDERS = {'New conversation', 'A new conversation', 'Untitled conversation'}
+PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled conversation'}
 
 
 def automatic(session):

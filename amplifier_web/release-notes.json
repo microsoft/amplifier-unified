@@ -2,6 +2,41 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.19.8",
+      "title": "Settings collections that keep the details within reach",
+      "changes": [
+        "Models, bundles and Smart Tools use compact lists with focused details. The whole row responds to hover and selection, while checkboxes stay independent.",
+        "Reorder provider preferences, routing choices and bundle composition in dedicated views. Neighboring rows move as you drag, a line shows where the item will land, and Save commits the draft. Buttons and keyboard controls provide the same choices.",
+        "Routing opens without waiting for provider discovery and shows one role and choice at a time. Model names and patterns remain editable; private model and schema caches last 24 hours and retain the last successful results during refresh.",
+        "Select multiple catalog tools across filters and pages, choose package extras, and install them together. Catalogs show all results through 50 items, then use pages of 40. Each installation records its outcome, and retry handles only unfinished items.",
+        "Existing settings, advanced configuration and shared agent actions remain available. Queued installation selections survive interruption without automatically replaying work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.7",
+      "title": "Set up your chat before it starts",
+      "changes": [
+        "New chat lives in the sidebar and opens a setup page. Choose the workspace, name, bundle and model before the first message; drafts and attachments survive reload without saving an empty chat.",
+        "Goals, modes and session controls are accessible beside the composer. The header holds chat details, the shared session ID and export controls.",
+        "The composer uses one Send/Stop button. It stops active work when the draft is empty and sends when text or attachments are present.",
+        "Canvas opens from an icon-only toolbar button. Unavailable older artifact sources no longer block the drawer, and their saved references remain intact for recovery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.19.6",
+      "title": "Work details from your event log",
+      "changes": [
+        "Expanded work reads recorded tool inputs and results from native event logs, without another redaction pass, new payload copies or the old Tool completed placeholder.",
+        "Work sections appear between assistant replies in their actual order. Brief groups stay open, and actions no longer have nested disclosure controls or duplicate raw input/results.",
+        "Code blocks show all content through 15 lines, then preview the first 10. Copy keeps the complete content, and unavailable reads offer retry.",
+        "Choose time only, time with tokens and cost, or those details with tool/model call counts in Appearance. Group totals include earlier action pages and count cache writes once.",
+        "Live timing and usage survive delayed log writes and reloads. Existing native logs and historical saved content remain intact."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.19.5",
       "title": "Keep conversations ready after ecosystem updates",
       "changes": [

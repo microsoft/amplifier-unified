@@ -174,3 +174,19 @@ async def test_builtin_work_and_catalog_order_use_displayed_names_without_loadin
         'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'foundation', 'work', 'Zulu']
     assert next(row for row in result['registeredBundles'] if row['name']=='work')['label']=='Work'
     assert not (tmp_path/'foundation/registry.json').exists()
+
+
+async def test_composition_reorder_preserves_aliases_and_disabled_entries(tmp_path):
+    manager=BundleManager(tmp_path);args={'workspace':str(tmp_path)}
+    manager.store.update(tmp_path,'global',lambda settings:settings.update(bundle={'app':[]}))
+    for name,role in [('A','behavior'),('Alias','standalone'),('B','behavior'),('Disabled','behavior')]:
+        result=await manager.perform('bundles.add',{**args,'uri':'foundation:'+name,'name':name,'role':role})
+    by_name={row['name']:row['id'] for row in result['bundles']}
+    await manager.perform('bundles.toggle',{**args,'id':by_name['Disabled'],'enabled':False})
+    await manager.perform('bundles.reorder',{**args,'ids':[by_name['B'],by_name['A']],'expectedIds':[by_name['A'],by_name['B']]})
+    saved=manager.store.read(tmp_path)
+    assert saved['bundle']['app']==['foundation:B','foundation:A']
+    assert saved['bundle']['added']['Alias']=='foundation:Alias'
+    with pytest.raises(ValueError,match='changed'):
+        await manager.perform('bundles.reorder',{**args,'ids':[by_name['A'],by_name['B']],'expectedIds':[by_name['A'],by_name['B']]})
+    assert manager.store.read(tmp_path)==saved

@@ -78,7 +78,7 @@ def display_message(row, index, session, *, include_internal=False):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0), **observation}
+            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None, **observation}
 
 
 def read_transcript(session, *, before=None, limit=100):

@@ -12,12 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 class Runtime:
     def __init__(self):
         self.sent = []
+        self.stopped = []
+        self.started = []
 
     async def start(self, session, emit):
+        self.started.append(session["id"])
         await emit("runtime.status", {"sessionId": session["id"], "status": "ready"})
 
     async def send(self, session, text, input_id, emit):
         self.sent.append({"sessionId": session["id"], "text": text})
+        if '--chat-controls' in sys.argv:
+            self.sent[-1].update(workspace=session['workspace'], bundle=session['bundle'],
+                                 selection=session.get('selection'), attachments=session['messages'][-1].get('attachments', []))
         if hasattr(self, 'service'):
             binding = session.get('surfaceInputs', {}).get(input_id, {})
             context = self.service.surface_context.manifest(session['id'], [binding])
@@ -30,8 +36,9 @@ class Runtime:
     async def control(self, *args):
         return {}
 
-    async def stop(self, *args):
-        pass
+    async def stop(self, sid):
+        self.stopped.append(sid)
+        await self.service.on_runtime_event("runtime.status", {"sessionId": sid, "status": "idle"})
 
     async def close(self):
         pass
@@ -61,9 +68,36 @@ async def main(home):
     async def inspect(request):
         return web.json_response({"sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
-            "workerCount": len(getattr(runtime, 'workers', {}))})
+            "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if '--chat-controls' in sys.argv:
+        async def activity(request):
+            data = await request.json()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            session['status'] = data.get('status', 'working')
+            session['workers'] = data.get('workers', [])
+            service._publish()
+            return web.json_response({'ok': True})
+
+        async def damage(request):
+            from amplifier_web.resource_files import root
+            service = app['service']
+            aid = (await request.json())['artifactId']
+            row = next(row for row in service.state['canvasArtifacts'] if row['id'] == aid)
+            identity = row['body']['$resource']
+            (root(service.db) / (identity + '.json')).unlink()
+            service.db.execute('DELETE FROM state_resources WHERE id=?', (identity,))
+            for record in service.clients.records.values():
+                if record.get('canvas', {}).get('id') == aid:
+                    record['canvas'] = {'id': 'stale', 'sessionId': 'different-chat', 'open': False}
+            service._last_storage_sweep = 0
+            service._publish()
+            return web.json_response({'ok': True})
+
+        app.router.add_post('/fixture/activity', activity)
+        app.router.add_post('/fixture/damage', damage)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)

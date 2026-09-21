@@ -4,7 +4,7 @@ import {readItems} from './attention';
 import {isTopLevelChat} from './chat-navigation';
 import {sessionIdentity} from './navigation-presentation';
 
-export function ConversationName({session,act}){
+export function ConversationName({session,act,detailsOpen=false}){
  const [name,setName]=useState(session.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const dirty=useRef(false),inFlight=useRef(false);
  useEffect(()=>{if(!dirty.current)setName(session.title||'')},[session.title]);
@@ -17,7 +17,7 @@ export function ConversationName({session,act}){
    dirty.current=false;setName(name.trim());
   }catch(error){setError(error.message)}finally{inFlight.current=false;setSaving(false)}
  }
- return <><form onSubmit={save} aria-busy={saving}><label htmlFor="session-title">Conversation name</label><input id="session-title" value={name} disabled={saving} required maxLength={200} onChange={event=>{dirty.current=true;setName(event.target.value);setError('')}}/><div className="a-dialog-actions"><button type="submit" className="a-soft" data-action="session.rename" disabled={saving||!name.trim()||name===session.title}>{saving?'Saving…':'Save name'}</button></div>{error&&<p role="alert" className="a-danger">{error}</p>}</form><ConversationDetails key={session.id} session={session} act={act}/></>;
+ return <><form onSubmit={save} aria-busy={saving}><label htmlFor="session-title">Chat name</label><input id="session-title" value={name} disabled={saving} required maxLength={200} onChange={event=>{dirty.current=true;setName(event.target.value);setError('')}}/><div className="a-dialog-actions"><button type="submit" className="a-soft" data-action="session.rename" disabled={saving||!name.trim()||name===session.title}>{saving?'Saving…':'Save name'}</button></div>{error&&<p role="alert" className="a-danger">{error}</p>}</form><ConversationDetails key={session.id} session={session} act={act} initiallyOpen={detailsOpen}/></>;
 }
 
 export function ConversationDetails({session,act,initiallyOpen=false}){
@@ -63,7 +63,7 @@ export function ConversationSelect({state,session,choices,onSelect}){
  return <select className="a-session-select" aria-label="Select conversation" data-action="session.select" value={isTopLevelChat(session)?session?.id||'':''}
   onFocus={hold} onPointerDown={hold} onBlur={()=>setHeld(null)} onKeyDown={event=>{if(event.key==='Escape')setHeld(null)}}
   onChange={event=>{const id=event.target.value;setHeld(null);onSelect(id)}}>
-  {!isTopLevelChat(session)&&<option value="" disabled>Viewing subagent history</option>}
+  {!isTopLevelChat(session)&&<option value="" disabled>{session?'Viewing subagent history':'New chat'}</option>}
   {rows.map(row=><option key={row.id} value={row.id}>{row.title}{state.attention?.sessions?.[row.id]?' · Needs attention':['working','running','starting','stopping'].includes(row.status)?' · '+(row.status==='starting'?'Preparing':row.status==='stopping'?'Stopping':'Working'):''}</option>)}
   {choices.total>rows.length&&<option disabled>Find all chats in the workspace sidebar</option>}
  </select>;
