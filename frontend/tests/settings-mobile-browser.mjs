@@ -18,7 +18,9 @@ try{
  await expect(page.getByRole('button',{name:'Close settings',exact:true})).toBeVisible();await page.screenshot({animations:'disabled',path:'/tmp/settings-mobile-index.png'});
  await openSettingsPage(page,'providers');await route('providers');
  const providers=page.locator('[data-part=provider-settings]');await providers.locator('[data-collection-id=two]>button').click();await route('providers/detail');
- await providers.locator('summary').filter({hasText:'Provider & access'}).click();await page.locator('#provider-key-source').selectOption('private');await page.locator('#provider-key').fill('mobile-private-never-share');await page.locator('#provider-model').fill('mobile-unsaved-model');
+ const access=providers.locator('.a-provider-access'),accessSummary=access.locator('summary');
+ await accessSummary.focus();await page.keyboard.press('Enter');await expect(access).toHaveAttribute('open','');await page.keyboard.press('Space');await expect(access).not.toHaveAttribute('open','');
+ await accessSummary.click();await page.locator('#provider-key-source').selectOption('private');await page.locator('#provider-key').fill('mobile-private-never-share');await page.locator('#provider-model').fill('mobile-unsaved-model');
  await expect(footer.getByRole('button',{name:/Save/})).toBeVisible();
  await page.evaluate(()=>history.back());await route('providers');await page.evaluate(()=>history.forward());await route('providers/detail');
  for(let i=0;i<8;i++){await page.locator('#provider-model').fill('mobile-unsaved-model');await page.evaluate(()=>history.back());await route('providers');await page.evaluate(()=>history.forward());await route('providers/detail');}
