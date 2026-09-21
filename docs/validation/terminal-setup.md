@@ -6,11 +6,12 @@ Microsoft TUI release `0.4.0rc1`; the TUI source was not changed.
 
 ## Verified in an isolated Mac environment
 
-- Full backend suite: 1,444 passed, 13 skipped before the final CLI-default and
-  active-CA handling refinements; focused final setup/auth/CLI suite: 77 passed,
-  1 skipped. Coverage includes authenticated downloads, one-use grants,
+- Full backend suite after rebasing onto main 0.19.16: 1,448 passed,
+  18 skipped. Focused setup/auth/CLI suite: 77 passed, 1 skipped. The final
+  credential lifecycle refinements additionally passed all 17 setup tests. Coverage includes authenticated downloads, one-use grants,
   expiry, transport/origin rejection, idempotent preparation, persistent hashed
-  credentials, revocation of active SSE, and web/agent action parity.
+  credentials, revocation of active SSE without cancelling accepted work, distinct device
+  identities when a preparation ID is reused, and web/agent action parity.
 - Frontend production build passed. Python wheel build passed and contains the
   setup HTML/JavaScript, shell bootstrap and standalone installer implementation.
 - Headless Chromium used the real isolated HTTPS app and authenticated session:
