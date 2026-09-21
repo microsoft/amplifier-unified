@@ -1,18 +1,34 @@
 # Shell customization: status and next milestones
 
 Source audit: 2026-09-21 UTC, Microsoft Unified `e2dd77d1` (package 0.19.15).
-This is a code and contract audit, not new browser acceptance or a deployment
-claim. The milestones below are proposals; they are not additional SDK APIs.
+Implementation follow-up reconciled with main `82b9157e` (0.19.17):
 
-## What can be replaced today
+- [PR #58](https://github.com/microsoft/amplifier-unified/pull/58), head
+  `f551e7dd`: complete theme definitions/backgrounds, saved-appearance startup,
+  compact conversation errors and shared automatic-name controls. The host
+  suite passed 1,462 tests with 56 skips; 220 frontend tests and production
+  browser proofs for themes, restored controls, details and mobile integration
+  passed.
+- [PR #60](https://github.com/microsoft/amplifier-unified/pull/60), head
+  `aa54383d`: named component contributions, bounded data/action contracts,
+  generation/dirty safeguards, SDK, skill and independent hot-loading example.
+  The host suite passed 1,472 tests with 56 skips; 220 frontend tests and
+  production browser proofs for component changes and mobile integration passed.
+
+These PRs were open at this update. Check their current merge/release state;
+provider-free fixture acceptance is not a live deployment claim. The larger
+contracts below remain proposed and must not be taught as installed APIs.
+
+## Baseline and reviewed extensions
 
 | Surface | Current contract | Remaining boundary |
 | --- | --- | --- |
-| Workspace manager and chat list | Registered navigation modules, including custom modules and up to 12 instances with stable IDs | `navigation` is the only composition slot; snapshots and actions are bounded to navigation |
+| Workspace manager and chat list | Registered navigation modules, including custom modules and up to 12 instances with stable IDs | Baseline snapshots/actions are bounded to navigation; PR #60 adds the named slots below |
 | Artifact content viewers | Validated renderer packages selected per canvas view; primary and pinned secondary views | A renderer does not replace canvas tabs, toolbar, view routing or the whole canvas container |
 | Interactive conversation surfaces | Sandboxed HTML/CSS/JS, typed state and events, stable identity, revisions, restore and shared user/agent interaction | Conversation artifacts, not installable shell modules; privileged requests currently allow only theme preview/apply/revert |
-| Appearance and layout | Complete CSS skins, palette changes, scheme, density, accent and three layout presets | No complete structured theme/background contract or extensible layout registry |
-| Conversation header, messages, execution display, composer, app toolbar, voice controls, Settings and status/notifications | Built-in React components using existing host actions | Separate source files do not make these registered, hot-swappable modules |
+| Appearance and layout | Complete CSS skins, palette changes, scheme, density, accent and three layout presets | PR #58 adds complete light/dark definitions and backgrounds; extensible layouts remain future work |
+| Header, app actions/status, composer actions, canvas toolbar, Appearance and additional Settings sections | PR #60 registers replaceable outlets and built-in fallbacks, including mobile placement and Settings navigation | Same-origin trusted components; capability checks are not isolation |
+| Whole conversation/composer, message/execution renderers, canvas container, voice implementation and Settings system | Built-in React components using existing host actions | Still require replacement contracts; separate source files do not make them registered modules |
 
 The existing loader is real: stage, host validation, prepare, preview/apply,
 browser activation evidence, and revert/recovery. Dirty instances defer unsafe
@@ -34,7 +50,7 @@ discussion links.
 
 | Microsoft issue | Original | Relationship to customization |
 | --- | --- | --- |
-| [#28: theme backgrounds](https://github.com/microsoft/amplifier-unified/issues/28) | bkrabach #157 | Direct theme gap: palette application retains the old decorative background; requested preview parity and artwork toggle are absent |
+| [#28: theme backgrounds](https://github.com/microsoft/amplifier-unified/issues/28) | bkrabach #157 | Direct theme gap addressed by PR #58; verify its release before closing |
 | [#43: Canvas Apps](https://github.com/microsoft/amplifier-unified/issues/43) | bkrabach #83 | Core surface/state/event/revision/observation behavior exists; reconcile acceptance against current code before closing. General host capability requests and common semantic controls remain bounded or incomplete |
 | [#29: sidebar shortcuts](https://github.com/microsoft/amplifier-unified/issues/29) | bkrabach #154 | Keep keyboard navigation on the shared selection path and preserve dirty-view/draft guards; coordinate with sidebar work |
 | [#39: execution observability](https://github.com/microsoft/amplifier-unified/issues/39) | bkrabach #88 | A useful consumer of execution/status component contracts; current summary detail levels do not fulfill all requested scopes and metrics |
@@ -45,39 +61,31 @@ discussion links.
 related pending work. Presence on a migrated branch is not evidence of release
 or of an extension contract. Check their current state separately.
 
-## First milestone: a complete theme definition
+## Complete theme definition: implemented in PR #58
 
-`canvas_apps.theme_input` appends palette declarations to the existing CSS skin.
-Its ten permitted palette keys do not include `--a-gradient-top` or
-`--a-gradient-bottom`, which drive the default shell background in `unified.css`.
-A new palette therefore retains those old gradient values. Full CSS can already
-change the background, but the smaller theme API cannot describe a complete one.
-This supports the mechanism reported in #28; it is not a replay of the original
-Quiet Water conversation.
+At the audit baseline, palette patches retained the old CSS gradient, explaining
+why a new palette could show the previous theme's decorative background. PR #58
+adds versioned complete light/dark palettes and optional gradients, patterns or
+embedded raster artwork. A per-client decoration preference is separate from
+the theme. Complete application compiles from the built-in skin, while legacy
+palette patches remain supported without accumulating CSS declarations.
 
-Introduce a versioned theme definition with palette, light/dark variants and
-an explicit background treatment, including gradients, patterns and managed
-artwork references. Keep the user's decorative-background enabled/disabled
-preference distinct from the theme definition. The preview and shell should
-render that same definition rather than independently recreating its appearance.
-Define the difference between patching a palette and applying a whole theme;
-complete application must not accidentally inherit a previous theme's artwork.
-Preserve existing full-CSS skins and avoid repeatedly appending generated CSS.
-
-Use the same preview/apply/revert actions from UI controls, agents and Canvas
-App requests. Verify light/dark/system modes, background on/off, failed or
-unavailable assets, preview cancellation, refresh, and unchanged conversations
-and unsent drafts. An agent-created theme chooser remains a demonstration of
-these capabilities, not a bundled app that must ship with the product.
+UI controls, agents and Canvas App requests share preview/apply/revert paths.
+Browser checks cover the preview/application match, background toggle, system
+changes, saved light appearance on a dark device, and reload with open Settings
+and a multiline draft. Delayed startup also reattaches completion acknowledgement
+and earlier-history scrolling. Conversations and drafts remain host-owned. A
+custom theme chooser remains an agent-created demonstration, not a shipped app.
 
 ## Then extend the component contracts
 
-1. **Define named contribution points and a discoverable catalog.** Start with
-   app and conversation header actions, status widgets, canvas toolbar actions,
-   and Settings sections. Specify cardinality, ordering, responsive placement,
-   supported inputs/actions and accessible labels. Agents must be able to query
-   the installed host's actual catalog and schemas rather than infer support
-   from examples or prose.
+1. **Named contribution points and a discoverable catalog: implemented in
+   PR #60.** `shell.inspect` describes slot cardinality, placement, registered
+   built-ins and semantic command schemas. Added slots are `app.actions`,
+   `app.status`, `conversation.header`, `composer.actions`, `canvas.toolbar`,
+   `settings.appearance` and `settings.section`. Packages can replace defaults
+   or include the default explicitly to supplement it. Query the installed
+   host rather than assuming a pending PR's contract is available.
 2. **Move the built-ins onto those same contracts.** Keep one shared host action
    implementation for each operation. Extract the fixed canvas container into
    a replaceable presentation adapter over host-owned view identity, selection,
