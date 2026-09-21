@@ -14,6 +14,7 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);
  const turn=page.locator('[data-group-id="inspect@long-answer"]');
+ await turn.waitFor();for(const group of await page.locator('button.a-execution-turn-line').all())await group.click();
  const action=id=>turn.locator(`[data-node-id$=":${id}"]`),open=async id=>{const row=action(id);await row.waitFor();const button=row.locator(':scope > button.a-execution-action-line');if(await button.getAttribute('aria-expanded')==='false')await button.click();return row};
  const patch=await open('patch');await patch.locator('.a-execution-diff').waitFor();
  assert.equal(await patch.locator('.a-execution-diff-row.add').count(),2);assert.equal(await patch.locator('.a-execution-diff-row.remove').count(),1);
