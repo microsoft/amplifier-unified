@@ -10,14 +10,16 @@ export function OperationsPanel({sessionId}){
  const [command,setCommand]=useState(''),[terminal,setTerminal]=useState(false),[questions,setQuestions]=useState([]),[dependencies,setDependencies]=useState([]),[input,setInput]=useState(''),[closeInput,setCloseInput]=useState(false),[requests,setRequests]=useState([]),[receipt,setReceipt]=useState(null);
  const activeOperation=useRef(null);
  const [open,setOpen]=useState(false),[rows,setRows]=useState([]),[selected,setSelected]=useState(null),[detail,setDetail]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[pageCursor,setPageCursor]=useState(0);
+ const activeView=useRef({sessionId,open}),refreshVersion=useRef(0),requestVersion=useRef(0);
+ if(activeView.current.sessionId!==sessionId||activeView.current.open!==open)activeView.current={sessionId,open};
  activeOperation.current=selected;
  useEffect(()=>{setInput('');setCloseInput(false)},[selected,sessionId]);
  useEffect(()=>{setOpen(false);setRows([]);setSelected(null);setDetail(null);setError('');setCommand('');setInput('');setDependencies([]);setQuestions([]);setRequests([]);setReceipt(null);setBusy(false)},[sessionId]);
  useEffect(()=>{
   if(!open||!sessionId)return;
-  const controller=new AbortController();
-  call('operations.list',{sessionId},controller.signal).then(value=>{setRows(value.operations);setRequests(value.requests||[])}).catch(e=>{if(e.name!=='AbortError')setError(e.message)});
-  call('question.list',{sessionId},controller.signal).then(value=>setQuestions(value.items||[])).catch(e=>{if(e.name!=='AbortError')setError(e.message)});
+  const controller=new AbortController(),view=activeView.current;
+  refresh(controller.signal);
+  call('question.list',{sessionId},controller.signal).then(value=>{if(!controller.signal.aborted&&activeView.current===view)setQuestions(value.items||[])}).catch(e=>{if(e.name!=='AbortError'&&activeView.current===view)setError(e.message)});
   return()=>controller.abort();
  },[open,sessionId]);
  useEffect(()=>{
@@ -33,6 +35,16 @@ export function OperationsPanel({sessionId}){
   })().catch(e=>{if(e.name!=='AbortError')setError(e.message)});
   return()=>controller.abort();
  },[open,selected,sessionId,pageCursor]);
+ async function refresh(signal){
+  const view=activeView.current,version=++refreshVersion.current;
+  try{const value=await call('operations.list',{sessionId:view.sessionId},signal);if(!signal?.aborted&&activeView.current===view&&refreshVersion.current===version){setRows(value.operations);setRequests(value.requests||[])}}
+  catch(e){if(e.name!=='AbortError'&&activeView.current===view&&refreshVersion.current===version)setError(e.message)}
+ }
+ async function checkRequest(requestId){
+  const view=activeView.current,version=++requestVersion.current;
+  try{const value=await call('operations.request',{sessionId:view.sessionId,requestId});if(activeView.current===view&&requestVersion.current===version){setReceipt(value);setRequests(values=>values.map(row=>row.requestId===value.requestId?value:row))}}
+  catch(e){if(activeView.current===view&&requestVersion.current===version)setError(e.message)}
+ }
  async function cancel(){
   const owner=sessionId,target=selected;setBusy(true);setError('');
   try{await call('operations.cancel',{sessionId:owner,id:target});const value=await call('operations.read',{sessionId:owner,id:target});if(activeSession.current===owner&&activeOperation.current===target)setDetail(value)}
@@ -56,10 +68,10 @@ export function OperationsPanel({sessionId}){
  return <section className="a-operations" aria-label="Operations">
   <button type="button" onClick={()=>setOpen(!open)} aria-expanded={open}>Operations</button>
   {open&&<div className="a-operations-body">
-   <p>Saved execution evidence for this conversation.</p><button type="button" data-action="operations.list" onClick={()=>call('operations.list',{sessionId}).then(value=>{setRows(value.operations);setRequests(value.requests||[])}).catch(e=>setError(e.message))}>Refresh operations</button>
+   <p>Saved execution evidence for this conversation.</p><button type="button" data-action="operations.list" onClick={()=>refresh()}>Refresh operations</button>
    {error&&<p role="alert">{error}</p>}
    {receipt&&<p role="status">Request: {receipt.state.replaceAll('_',' ')}{receipt.message&&` — ${receipt.message}`}</p>}
-   {requests.filter(item=>['admitting','outcome_unknown'].includes(item.state)).map(item=><p key={item.requestId}>A command or input request has {item.state==='admitting'?'not yet confirmed admission':'an unknown outcome'}. It has not been replayed. <button type="button" data-action="operations.request" onClick={()=>call('operations.request',{sessionId,requestId:item.requestId}).then(value=>{setReceipt(value);setRequests(values=>values.map(row=>row.requestId===value.requestId?value:row))}).catch(e=>setError(e.message))}>Check request</button></p>)}
+   {requests.filter(item=>['admitting','outcome_unknown'].includes(item.state)).map(item=><p key={item.requestId}>A command or input request has {item.state==='admitting'?'not yet confirmed admission':'an unknown outcome'}. It has not been replayed. <button type="button" data-action="operations.request" onClick={()=>checkRequest(item.requestId)}>Check request</button></p>)}
    <form data-action="operations.submit" onSubmit={event=>{event.preventDefault();mutate('operations.submit',{command,pty:terminal,questionIds:dependencies})}}>
     <label>Command<textarea aria-label="Command to start" value={command} onChange={event=>setCommand(event.target.value)} disabled={busy}/></label>
     <label><input type="checkbox" checked={terminal} onChange={event=>setTerminal(event.target.checked)} disabled={busy}/>Use a terminal when enabled by this host</label>
