@@ -24,7 +24,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         calls.append('freeze')
         (receipt / 'runtime-installed.json').write_text('[]')
         return frozen
-    def overrides(project, target):
+    async def overrides(project, target):
         calls.append(('overrides', project))
         return target
     def verify(project, target):
@@ -32,11 +32,13 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         calls.append('verify')
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            if phase == 'ecosystem-runtime-policy':
+                return await function(*command, **kwargs)
             assert command[command.index('--project') + 1] in {str(first), str(frozen)}
             calls.append(('probe', '--refresh-dependencies' in command))
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
-    monkeypatch.setattr(runtime_qualification, 'lock_overrides', overrides)
+    monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
     monkeypatch.setattr(runtime_qualification, 'verify_recorded', verify)
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))

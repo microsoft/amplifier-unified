@@ -679,7 +679,7 @@ class UpdateManager:
 
     async def validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
-        from .runtime_qualification import freeze, lock_overrides, verify_recorded
+        from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         receipt=receipt_directory(self.home,release)
         fresh=not (receipt/'runtime.lock').exists()
         project=await stage_runtime(self, release, [row for row in self.inventory if row.get('eligible') and (row.get('status') == 'update' or
@@ -693,7 +693,7 @@ class UpdateManager:
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':''}
         async def probe(project, *, refresh=False):
             qualified=fresh or (receipt/'runtime-installed.json').exists()
-            overrides=lock_overrides(project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
+            overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
             command=[shutil.which('uv'),'run','--locked','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
             if refresh:flags.append('--refresh-dependencies')
