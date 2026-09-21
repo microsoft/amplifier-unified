@@ -418,7 +418,7 @@ class RuntimeManager:
         # The admission portion holds the same lock as retirement. Waiting for
         # replies does not: a tool control may itself await an approval/bridge.
         async with self._admission(sid):
-            if sid not in self.workers and sid in self._retired and op in {"send", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
+            if sid not in self.workers and sid in self._retired and op in {"send", "retry", "control", "resume"} and not (op == "control" and (args.get("operation", "").startswith(("operations.", "kernels.")))):
                 session, emit = self._retired[sid]
                 await self._start_locked(session, emit)
             pending = await self._admit(sid, op, args)
@@ -449,7 +449,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies"}:
+        if op not in {"park", "retire", "dependencies", "delivery"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -504,6 +504,25 @@ class RuntimeManager:
         return await self._request(session["id"], "send", text=text, input_id=input_id,
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+
+    async def delivery(self, session, input_id):
+        """Inspect existing evidence; never start a worker or submit an input."""
+        row = self.workers.get(session['id'])
+        if row and row['process'].returncode is None and row['ready'].done():
+            try:
+                result = await self._request(session['id'], 'delivery', input_id=input_id)
+                if result.get('delivery') == 'accepted':
+                    return 'accepted'
+            except (RuntimeError, TimeoutError, OSError):
+                pass  # A worker may have retired; still inspect its saved evidence.
+        from .message_delivery import saved_delivery
+        return await asyncio.to_thread(saved_delivery, session, input_id)
+
+    async def retry(self, session, text, input_id, emit):
+        await self.start(session, emit)
+        return await self._request(session['id'], 'retry', text=text, input_id=input_id,
+            context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
+            attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))
 
     async def takeover(self, session, emit, expected_owner=None, timeout=30):
         """One deliberate request; a competing successor is never asked to yield."""
