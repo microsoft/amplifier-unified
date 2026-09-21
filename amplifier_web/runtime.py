@@ -21,6 +21,14 @@ from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 
 Emitter = Callable[[str, dict], Awaitable[None]]
 
+class RuntimeOperationPending(RuntimeError):
+    """A written operation has no reply yet; its outcome remains uncertain."""
+
+    def __init__(self, operation):
+        self.operation = operation
+        super().__init__('The runtime operation has not returned yet. It may still be running; do not automatically repeat it.')
+
+
 class SessionInUseError(RuntimeError):
     """A definite rejected admission, not an uncertain execution failure."""
 
@@ -302,12 +310,19 @@ class RuntimeManager:
                     task.add_done_callback(row["bridge_tasks"].discard)
                 elif data.get("op") == "reply":
                     row["inflight"].discard(data.get("id"))
+                    input_id = row.get('sendInputs', {}).pop(data.get('id'), None)
                     future = row["pending"].get(data.get("id"))
                     if future and not future.done():
                         if data.get("error"):
                             future.set_exception(_worker_error(data))
                         else:
                             future.set_result(data.get("result"))
+                    result = data.get('result')
+                    if (input_id and not data.get('error') and isinstance(result, dict)
+                            and result.get('accepted') is True and result.get('inputId', input_id) == input_id):
+                        # The HTTP caller may already have timed out. Reconcile
+                        # only this send's receipt, without changing turn state.
+                        await row['emit']('runtime.delivery', {'sessionId': sid, 'inputId': input_id})
                 elif data.get("type") == "runtime.parked":
                     row["parked"] = True
                     row["parked_at"] = self.retention.clock()
@@ -375,6 +390,7 @@ class RuntimeManager:
             if not row["ready"].done():
                 row["ready"].set_exception(RuntimeError(error))
         finally:
+            row.get('sendInputs', {}).clear()
             for future in row["pending"].values():
                 if not future.done():
                     future.set_exception(RuntimeError("Amplifier worker disconnected"))
@@ -423,6 +439,8 @@ class RuntimeManager:
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         row["pending"][identity] = future
+        if op == 'send':
+            row.setdefault('sendInputs', {})[identity] = args['input_id']
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
@@ -433,6 +451,7 @@ class RuntimeManager:
         except (ValueError, TypeError):
             row["inflight"].discard(identity)
             row["pending"].pop(identity, None)
+            row.get('sendInputs', {}).pop(identity, None)
             raise
         except BaseException as exc:
             # A partial transport write has an unknown outcome. Keep the
@@ -451,7 +470,7 @@ class RuntimeManager:
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
-                raise RuntimeError("The runtime operation has not returned yet. It may still be running; do not automatically repeat it.") from exc
+                raise RuntimeOperationPending(op) from exc
         finally:
             row["pending"].pop(identity, None)
 

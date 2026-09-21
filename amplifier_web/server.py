@@ -12,6 +12,7 @@ from . import __version__
 from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
+from .runtime import RuntimeOperationPending
 from .live_clients import client_context
 from .setup_page import detect_platform, render_setup_page
 from .tls import ca_bytes
@@ -42,6 +43,11 @@ async def boundaries(request, handler):
     except web.HTTPException as exc:
         _set_response_headers(exc, request.path)
         raise
+    except RuntimeOperationPending as exc:
+        payload = {'error': str(exc), 'code': 'runtime_pending'}
+        if exc.operation == 'send':
+            payload['delivery'] = 'unknown'
+        return _set_response_headers(web.json_response(payload, status=504), request.path)
     except AppError as exc:
         payload = {"error": str(exc), "accepted": False}
         if exc.code:
