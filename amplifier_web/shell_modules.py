@@ -52,6 +52,7 @@ COMPOSITION = {'type': 'object', 'additionalProperties': False, 'required': ['in
     'instances': {'type': 'array', 'maxItems': 12, 'items': INSTANCE},
     'presentation': {'type': 'object', 'additionalProperties': False, 'properties': {
         'scheme': {'enum': ['light', 'dark', 'system']}, 'layout': {'enum': ['balanced', 'conversation', 'work']},
+        'executionDetail': {'enum': ['minimal', 'standard', 'detailed']},
         'density': {'enum': ['comfortable', 'compact']}, 'accent': {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'},
     }},
 }}

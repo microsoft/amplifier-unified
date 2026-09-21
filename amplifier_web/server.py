@@ -104,6 +104,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.schedules.start()
     service.worktrees.start()
     service.history.start()
+    service.event_log_view.start()
     if preload_providers:
         service.management.background(service.management.command("providers.list", {}))
     from .updates import UpdateManager
@@ -133,7 +134,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         from .browser_detail import page, read_text
         session = service._session(request.query.get('sessionId'))
         if 'field' in request.query:
-            return web.json_response(read_text(session, request.query))
+            return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before')))
 
     async def conversation_export(request):

@@ -10,8 +10,6 @@ import json
 import time
 import uuid
 import weakref
-
-from .execution_details import tool_detail
 from .token_usage import with_gross_tokens
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
@@ -62,6 +60,7 @@ class ExecutionEvents:
 
     def publish(self, row):
         row = {**row, "revision": self.nodes.get(row["id"], {}).get("revision", 0) + 1}
+        row = {**row, "liveObservation": True}
         self.nodes[row["id"]] = row
         self.emit({"type": "execution.event", "event": dict(row)})
 
@@ -251,28 +250,17 @@ class ExecutionEvents:
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
             row["phase"] = {"tool:pre": "running", "tool:post": "completed", "tool:error": "error"}[event]
-            arguments=data.get("tool_input")
-            if event=="tool:pre":
-                row.update(endedAt=None, output=None, error=None)
-            # Streaming hooks use `result`; app-side controls use `tool_result`.
-            # A post hook also carries arguments when the pre hook was missed.
-            if arguments is not None and (event=="tool:pre" or "input" not in row):
-                row["input"] = tool_detail(arguments)
-                try: public_arguments = json.loads(row["input"])
-                except (ValueError, TypeError): public_arguments = {}
-                operation = next((public_arguments.get(key) for key in ("command", "file_path", "path", "action", "operation", "description") if isinstance(public_arguments, dict) and isinstance(public_arguments.get(key), str)), "")
-                row["purpose"] = tool_detail(operation)[:200]
-                row["summary"] = "Running " + row["label"] + (" · " + row["purpose"] if row["purpose"] else "")
-            if event != "tool:pre":
+            # The observer supplies transient lifecycle metadata only. Tool
+            # inputs/results are read from their native event-log records.
+            row["liveObservation"] = True
+            if event == "tool:pre":
+                row["endedAt"] = None
+            else:
                 if row.get("endedAt") is None: row["endedAt"] = now
-                result=data.get("result") if "result" in data else data.get("tool_result",{})
-                if hasattr(result,"model_dump"):result=result.model_dump()
-                failed=event=="tool:error" or (isinstance(result,dict) and result.get("success") is False)
-                if failed:row["phase"]="error"
-                row["summary"] = ("Failed " if failed else "Completed ") + row["label"] + (" · " + row.get("purpose", "") if row.get("purpose") else "")
-                if "result" in data or "tool_result" in data: row["output"] = tool_detail(result)
-                error = data.get("error") or data.get("error_message") or (result.get("error") if isinstance(result, dict) else None)
-                if error is not None: row["error"] = tool_detail(error)
+                result = data.get("result") if "result" in data else data.get("tool_result", {})
+                if hasattr(result, "model_dump"): result = result.model_dump()
+                if event == "tool:error" or isinstance(result, dict) and result.get("success") is False:
+                    row["phase"] = "error"
 
             self.calls[key] = row
             self.publish(row)

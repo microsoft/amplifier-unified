@@ -216,7 +216,8 @@ class CapacityController:
 def restore_observation(session):
     """A host restart loses observation, not proof of external cancellation."""
     changed = False
-    for row in session.get('execution', {}).get('nodes', []):
+    tree = session.get('execution', {})
+    for row in tree.get('nodes', []) + tree.get('retiredUsageNodes', []):
         if row.get('kind') == 'llm' and row.get('producerId') and row.get('phase') in LIVE:
             row['phase'] = 'outcome_unknown'
             changed = True

@@ -16,7 +16,7 @@ export function reopenCanvas(state,act){
 }
 export function CanvasToggle({state,act,layout}){
  const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight;
- return <button type="button" className="a-soft a-canvas-toggle" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><Icon/><span>Canvas</span></button>;
+ return <button type="button" className="a-icon a-canvas-toggle" aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action={state.canvas?.open?'canvas.close':'canvas.reopen'} onClick={()=>state.canvas?.open?act('canvas.close',{}):reopenCanvas(state,act)}><Icon/></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell}){
  const layout=usePanelLayout(state,act);
@@ -25,11 +25,11 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell}
  const expand=value=>{if(!pinned&&!!view.navExpanded!==value)patch(act,{navExpanded:value})};
  const manager=shell.composition.instances.find(item=>item.package==='builtin.workspaces');
  const addWorkspace=()=>{expand(true);const host=shell.hostFor(manager);const draft=host.getSnapshot().view.workspaceDraft||{};return host.dispatch('view.update',{patch:{workspaceDraft:draft.mode==='add'?{}:{mode:'add',path:'',name:''}}})};
- const add=()=>{(newSession||((path)=>act('session.create',{workspace:path})))(workspace?.path);if(!pinned)patch(act,{navExpanded:false})};
+ const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
  return <aside className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onPointerEnter={e=>{if(e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(e.pointerType!=='touch'&&!e.currentTarget.contains(document.activeElement))expand(false)}}>
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label={pinned?'Unpin navigation':'Pin navigation open'} title={pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>patch(act,{navPinned:!pinned,navExpanded:!pinned})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button><strong className="a-nav-reveal">Your work</strong></div>
-   <button className="a-nav-main" type="button" onClick={add} data-action="session.create" disabled={!workspace} aria-label="New chat in workspace" title={!workspace?'Choose an existing workspace folder':'New chat in '+workspace.path}><Plus/><span className="a-nav-reveal">New chat</span></button>
+   <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
    {manager&&<button className="a-nav-main" type="button" onClick={addWorkspace} data-action="view.update" aria-label="New workspace" title="New workspace"><FolderPlus/><span className="a-nav-reveal">New workspace</span></button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>
   </div>

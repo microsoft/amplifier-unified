@@ -93,8 +93,15 @@ def collect(db, state):
         if identity in marked:
             continue
         marked.add(identity)
-        if db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
-            pending.extend(references(resource(db, identity)))
+        if not db.execute('SELECT 1 FROM state_resources WHERE id=?', (identity,)).fetchone():
+            return []  # Its unavailable body may retain other sources.
+        else:
+            try:
+                pending.extend(references(resource(db, identity)))
+            except (OSError, ValueError, TypeError, KeyError):
+                # Unknown nested references cannot be proven unreferenced. Keep
+                # all sources until the damaged retained artifact is recovered.
+                return []
     stale = [row[0] for row in db.execute('SELECT id FROM state_resources') if row[0] not in marked]
     db.executemany('DELETE FROM state_resources WHERE id=?', ((identity,) for identity in stale))
     # Files are deleted only after the caller commits the pruned references.

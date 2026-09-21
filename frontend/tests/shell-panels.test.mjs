@@ -31,10 +31,10 @@ test('all-chat switch hides the folder explorer without changing its location or
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,0);
  assert.deepEqual(root.root.findAll(node=>node.type==='small'&&node.props.className==='a-nav-chat-workspace').map(node=>node.children.join('')),['/one','/one','/two']);
- const newChat=root.root.findByProps({'aria-label':'New chat in workspace'});
- assert.equal(newChat.props.title,'New chat in /one');
+ const newChat=root.root.findByProps({'aria-label':'New chat'});
+ assert.equal(newChat.props.title,'New chat');
  await renderAct(async()=>newChat.props.onClick());
- assert.ok(calls.some(call=>call.name==='session.create'&&call.args.workspace==='/one'));
+ assert.ok(calls.some(call=>call.name==='session.draft'));
  assert.equal(state.view.navWorkspacePath,'/saved/folder');
  await renderAct(async()=>root.root.findByProps({role:'group','aria-label':'Chat view'}).findAllByType('button')[0].props.onClick());
  await renderAct(async()=>root.update(render()));
@@ -183,7 +183,7 @@ test('automatic discovery reports loading/errors and refreshes through the share
  await renderAct(async()=>root.unmount());
 });
 
-test('unresolved native project folders are hidden and cannot start a chat',async()=>{
+test('unresolved folders are hidden but the launcher lets users choose a valid workspace',async()=>{
  const state=initial();state.workspaces=[{id:'native-one',name:'One',path:null,available:false},{id:'native-two',name:'Two',path:null,available:false}];state.selectedWorkspaceId='native-two';state.workspaceExplorer={rows:[],totalWorkspaces:0};
  state.sessions=[{id:'a',title:'Project one chat',workspaceId:'native-one',workspace:null},{id:'b',title:'Project two chat',workspaceId:'native-two',workspace:null}];let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
@@ -191,7 +191,7 @@ test('unresolved native project folders are hidden and cannot start a chat',asyn
  assert.equal(rows.length,0);
  assert.equal(root.root.findAllByProps({'data-action':'workspace.select'}).length,0);
  assert.match(JSON.stringify(root.toJSON()),/Create a workspace to start a chat/);
- assert.equal(root.root.findByProps({'aria-label':'New chat in workspace'}).props.disabled,true);
+ assert.ok(!root.root.findByProps({'aria-label':'New chat'}).props.disabled);
  await renderAct(async()=>root.unmount());
 });
 

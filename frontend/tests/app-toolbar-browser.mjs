@@ -24,7 +24,7 @@ try{
  const more=page.getByRole('button',{name:'More app options',exact:true}),menu=page.getByRole('group',{name:'More app options'});
  const toggle=page.locator('.a-top .a-canvas-toggle'),canvas=page.getByRole('complementary',{name:'Agent canvas'});
  await expect(page.getByRole('button',{name:'Open workspace canvas'})).toHaveCount(0);
- await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('Canvas');await expect(toggle).toHaveAttribute('aria-pressed','false');
+ await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('');await expect(toggle).toHaveAttribute('aria-pressed','false');
  const initialBox=await toggle.boundingBox();await toggle.click();await expect(canvas).toBeVisible();
  await expect(toggle).toHaveAccessibleName('Close canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await expect(canvas).toHaveCount(0);await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);

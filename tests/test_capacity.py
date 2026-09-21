@@ -326,3 +326,52 @@ async def test_complete_using_stream_has_one_admission_and_one_receipt():
     await provider.complete(SimpleNamespace(model='test'))
     assert len(admitted) == len(telemetry.nodes) == 1
     assert next(iter(telemetry.nodes.values()))['usage']['totalTokens'] == 2
+
+
+async def test_live_accounting_survives_projection_restart_without_event_bodies(tmp_path, monkeypatch):
+    app, worker, sid = await setup(tmp_path, monkeypatch)
+    try:
+        await app.dispatch('capacity.set', {'sessionId':sid,'expectedRevision':0,'enabled':True,'maxTotalTokens':20}, command_id='budget')
+        events = []
+        telemetry = ExecutionEvents(sid, events.append)
+        telemetry.lifecycle({'type':'child.updated','sessionId':'child-accounting','status':'running'})
+        for event in events:
+            await app.on_runtime_event('execution.event', event['event'])
+        for owner, identity in [(sid,'root-call'),('child-accounting','child-call')]:
+            row = call(identity, owner, rootSessionId=sid, producerId='producer-one', liveObservation=True)
+            await app.on_runtime_event('execution.event', row)
+        current = app._session(sid)
+        for row in current['execution']['nodes']:
+            row.update(input='must-not-persist', requestInfo={'raw':'must-not-persist'}, requestDetail={'raw':'must-not-persist'}, _eventFields={'raw':'must-not-persist'})
+        # Native libraries can be unloaded without discarding real accounting.
+        current.update(nativeProject='fixture', historyLoaded=False)
+        app._save()
+        from amplifier_web.session_projection import view_path
+        saved = json.loads(view_path(app.data_dir, current).read_text())
+        assert 'must-not-persist' not in json.dumps(saved['execution']['retiredUsageNodes'])
+        assert not saved['execution']['nodes']
+        await worker.close()
+        await app.close()
+        restored = AppService(tmp_path, workspace=tmp_path)
+        try:
+            result = await restored.dispatch('capacity.read', {'sessionId':sid})
+            assert result['result']['usage']['calls'] == 2
+            assert result['result']['usage']['metrics']['totalTokens']['value'] == 20
+            assert result['result']['admission']['allowed'] is False
+            restored._save()
+            assert usage_snapshot(restored._session(sid))['calls'] == 2
+        finally:
+            await restored.close()
+    finally:
+        if not app.closed:
+            await worker.close()
+            await app.close()
+
+
+def test_restart_marks_retired_inflight_accounting_unknown():
+    from amplifier_web.capacity import restore_observation
+    session={'id':'root','execution':{'nodes':[], 'turns':[], 'retiredUsageNodes':[call('pending',producerId='old',phase='running',endedAt=None,usage={})]}}
+    restore_observation(session)
+    record = usage_snapshot(session)['receipts'][0]
+    assert record['phase'] == 'outcome_unknown'
+    assert usage_snapshot(session)['metrics']['totalTokens']['unknownCalls'] == 1

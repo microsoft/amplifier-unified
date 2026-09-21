@@ -35,7 +35,7 @@ ACTION_DEFINITIONS = {
     "diagnostics.records": ("Read retained diagnostics by session and stream glob, newest first. Continue using nextBefore. Metadata is the default; conversation text is captured only if explicitly enabled.",schema({"sessionId":string(200),"stream":string(100),"before":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
     "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
     "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200)},["path"])),
-    "workspace.create": ("Create or choose a workspace folder and open its first chat. Existing chats are reused; no model work starts until a message is sent.", schema({"path":{**string(4000),"minLength":1},"name":string(200)},["path"])),
+    "workspace.create": ("Create or choose a workspace folder. Open an existing chat or a configurable draft; a new chat is saved on first submission.", schema({"path":{**string(4000),"minLength":1},"name":string(200)},["path"])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
@@ -52,7 +52,8 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.create": ("Start a fresh conversation. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000)}, [])),
+    "session.create": ("Start a fresh conversation. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -73,8 +74,8 @@ ACTION_DEFINITIONS = {
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
     "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
-    "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":string(200),"name":string(200),"base64":string(12000000)},["name","base64"])),
-    "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":string(200),"id":string(32)},["id"])),
+    "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(12000000)},["name","base64"])),
+    "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.stop": ("Stop session execution", schema({"sessionId": string(200)}, [])),
     "worker.spawn": ("Start a worker lane for heavier work", schema({"sessionId": string(200), "instruction": string(100000), "bundle": string(2000)}, ["instruction"])),
     "worker.stop": ("Stop one worker lane", schema({"sessionId": string(200), "id": string(100)}, ["id"])),
@@ -374,6 +375,8 @@ class AppService:
         self.history = AutomaticHistory(self)
         from .outputs import Outputs
         self.outputs = Outputs(self)
+        from .event_log_view import EventLogView
+        self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
@@ -597,8 +600,13 @@ class AppService:
             raise AppError("The workspace folder does not exist.")
         from .bundle_selection import defaults
         selected_bundle = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))["effective"]
+        from .new_chat import selection
+        try:
+            chosen = selection(args.get('selection', {}))
+        except ValueError as exc:
+            raise AppError(str(exc)) from None
         now = time.time()
-        return {"id": str(uuid.uuid4()), "title": args.get("title") or "New conversation", "titleSource":"manual" if args.get("title") and args["title"] not in {"New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
+        return {**({'selection': chosen} if chosen else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -624,11 +632,14 @@ class AppService:
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
+        # Keep older shells/agents on the same non-committing launcher.
+        if action == 'view.update' and args.get('patch', {}).get('panel') == 'new-session':
+            action, args = 'session.draft', {}
         client_id = self.clients.current.get()
         if client_id is not None and action in {'conversation.send', 'conversation.stop', 'worker.spawn', 'worker.stop', 'worker.steer', 'worker.message', 'approval.respond', 'attachment.add', 'attachment.remove'}:
             args.setdefault('sessionId', self.state.get('selectedSessionId'))
-            if not args['sessionId']:
-                raise AppError('Select a conversation first.', 404)
+            if not args['sessionId'] and action not in {'attachment.add', 'attachment.remove'}:
+                raise AppError('Select a chat first.', 404)
         if action == 'runtime.control' and args.get('operation', '').startswith(('kernels.', 'operations.')):
             raise AppError('Use the shared computation and operation actions; their ownership and dependency checks cannot be bypassed.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
@@ -720,7 +731,7 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -853,15 +864,10 @@ class AppService:
                     workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
                     matches = [s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == workspace['id'] or (workspace.get('path') and s.get('workspace') == workspace['path']))]
                     selected = next((s for s in matches if s['id'] == self.state.get('selectedSessionId')), matches[0] if matches else None)
-                    if action == 'workspace.create':
-                        self.state['view']['draft'] = ''
-                        if selected is None:
-                            from .workspace_canvas import select_session_workspace
-                            selected = self._new_session({})
-                            selected['deferRuntimeUntilInteraction'] = True
-                            select_session_workspace(self.state, selected)
-                            self.state['sessions'].insert(0, selected)
                     self.state['selectedSessionId'] = selected['id'] if selected else None
+                    if action == 'workspace.create' and selected is None:
+                        from .new_chat import open_draft
+                        open_draft(self, {'workspace': workspace['path']})
                     if selected and selected.get('nativeProject'):
                         pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
@@ -906,7 +912,12 @@ class AppService:
                         self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
                 else:
                     canvas_command(self.state, action, args, origin)
+            elif action == 'session.draft':
+                from .new_chat import open_draft
+                open_draft(self, args)
             elif action == "session.create":
+                if args.get('fromDraft') and not args.get('workspace', '').strip():
+                    raise AppError('Choose a workspace folder before starting this chat.')
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
@@ -915,6 +926,8 @@ class AppService:
                     apply(self, session, inherited)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
+                if args.get('fromDraft') and command_id:
+                    session['creationCommandId'] = command_id
                 from .naming import persist
                 persist(self.data_dir,session,shared_rename=True)
                 self.state["sessions"].insert(0, session)
@@ -924,9 +937,12 @@ class AppService:
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
                     self.state["view"]["draft"] = ""
-                    if client_id is not None and previous_scope[0] is None:
+                    if client_id is not None and (previous_scope[0] is None or args.get('fromDraft')):
                         drafts = self.clients.record().setdefault("drafts", {})
                         self.clients.draft(session["id"], drafts.pop("", ""))
+                        attachments = self.clients.record().setdefault('attachments', {})
+                        attachments[session['id']] = attachments.pop('', [])
+                    self.state['view'].pop('newSessionDraft', None)
             elif action == "session.select":
                 session = self._session(args["id"])
                 from .workspace_canvas import select_session_workspace
@@ -1117,12 +1133,14 @@ class AppService:
                 effects.append({"type": "download", "filename": "amplifier-skin.css" if action == "theme.export" else "amplifier-export.json", "mime": mime, "mimeType": mime, "content": content if isinstance(content, str) else json.dumps(content, indent=2)})
             elif action == "attachment.add":
                 from .attachments import save,MAX_FILES
-                session=self._session(args.get('sessionId'))
+                target = args.get('sessionId', self.state.get('selectedSessionId'))
+                session = self._session(target) if target is not None else None
                 draft=self.clients.attachments(session)
                 if len(draft)>=MAX_FILES:raise AppError('Attach up to 8 files per message.')
                 draft.append(save(self.data_dir,args['name'],args['base64']))
             elif action == "attachment.remove":
-                session=self._session(args.get('sessionId'))
+                target = args.get('sessionId', self.state.get('selectedSessionId'))
+                session = self._session(target) if target is not None else None
                 draft=self.clients.attachments(session)
                 draft[:]=[row for row in draft if row['id']!=args['id']]
             elif action.startswith('question.'):
@@ -1145,7 +1163,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,delivery={'status':'sending'})
-                if session["title"] in {"New conversation","A new conversation","Untitled conversation"}:
+                if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
@@ -1234,6 +1252,12 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 patch = copy.deepcopy(patch)
+                if 'newSessionDraft' in patch:
+                    from .new_chat import validate_setup
+                    try:
+                        patch['newSessionDraft'] = validate_setup(patch['newSessionDraft'])
+                    except ValidationError as exc:
+                        raise AppError(exc.message) from None
                 if patch.get('panel'):
                     patch['toolbarMenuOpen'] = False
                 if 'draft' in patch:
@@ -1250,6 +1274,8 @@ class AppService:
                             patch.pop('draft')
                     elif self.state.get('selectedSessionId') is not None:
                         raise AppError('Attach a client to save a draft without a conversation.')
+                    else:
+                        self.state['view']['newChatText'] = patch['draft']
                 self.state["view"].update(patch)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
                 self.feedback.attachment_command(action,args)
@@ -1358,7 +1384,7 @@ class AppService:
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
                 selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
-                self.state['view']['draft']=selected.get('draft','') if selected else ''
+                self.state['view']['draft']=selected.get('draft','') if selected else self.state['view'].get('newChatText','')
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
             if client_id is not None and previous_scope[0] != self.state.get('selectedSessionId'):
@@ -1394,6 +1420,7 @@ class AppService:
             receipt = {"accepted": True, "revision": self.state["revision"] + 1, "effects": effects}
             if action in {"worker.message", "worker.stop", "worker.steer"}:
                 receipt.update(delivery="requested", commandAction=action, target={"sessionId": args["sessionId"], "workerId": args["id"]}, completed=False, effectsState="not_rolled_back")
+            if action == 'session.create':receipt['sessionId']=session['id']
             if action == 'conversation.send':receipt['delivery']='sending'
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action.startswith("smartTools.") and action != "smartTools.context":
@@ -2050,6 +2077,7 @@ class AppService:
         await self.worktrees.close()
         await self.warmup.close()
         await self.history.close()
+        await self.event_log_view.close()
         if self.update_manager:
             await self.update_manager.close()
         if self.management and self.management.setup_manager:

@@ -18,7 +18,7 @@
     "test:artifact-browser": "node tests/artifact-browser.mjs",
     "test:timeline-browser": "node tests/timeline-browser.mjs",
     "test:execution-browser": "node tests/execution-inspection-browser.mjs",
-    "test:execution-actions-browser": "node tests/execution-actions-browser.mjs",
+    "test:execution-actions-browser": "node tests/execution-actions-browser.mjs && node tests/canonical-work-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
     "test:panel-browser": "node tests/panel-layout-browser.mjs",
@@ -37,7 +37,7 @@
     "test:review-during-send-browser": "node tests/review-during-send-browser.mjs",
     "test:typing-audit-browser": "node tests/typing-audit-browser.mjs",
     "test:bootstrap-recovery-browser": "node tests/bootstrap-recovery-browser.mjs",
-    "test:empty-host-browser": "node tests/empty-host-browser.mjs && node tests/empty-host-browser.mjs --fail-create",
+    "test:empty-host-browser": "node tests/empty-host-browser.mjs && node tests/empty-host-browser.mjs --fail-create && node tests/empty-host-browser.mjs --lost-create",
     "build:reader-example": "node scripts/build-reader-example.mjs",
     "test:canvas-renderers-browser": "node tests/canvas-renderers-browser.mjs",
     "test:canvas-dirty-browser": "node tests/canvas-dirty-browser.mjs",
@@ -62,7 +62,8 @@
     "test:worktrees-browser": "node tests/worktrees-browser.mjs",
     "test:connectors-browser": "node tests/connectors-browser.mjs",
     "test:capacity-browser": "node tests/capacity-browser.mjs",
-    "test:scheduled-new-tasks-browser": "node tests/scheduled-new-tasks-browser.mjs"
+    "test:scheduled-new-tasks-browser": "node tests/scheduled-new-tasks-browser.mjs",
+    "test:new-chat-browser": "node tests/new-chat-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

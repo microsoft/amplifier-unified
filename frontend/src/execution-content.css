@@ -1,4 +1,4 @@
-/* Action content comes first; retained accounting remains in Details. */
+/* Action content is visible once; accounting follows the chosen detail level. */
 #amp-one .a-execution-content {background:var(--a-surface);color:var(--a-ink)}
 #amp-one .a-execution-content .a-execution-node {border-bottom:1px solid var(--a-line)}
 #amp-one .a-execution-content .a-execution-node:last-child {border-bottom:0}
@@ -10,7 +10,7 @@
 #amp-one .a-execution-content .a-execution-label code {font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:none;color:inherit;padding:0;white-space:normal}
 #amp-one .a-execution-content .a-execution-phase {white-space:nowrap;font-size:11px;margin:1px 0 0}
 #amp-one .a-execution-content .a-execution-usage {font-size:11px;opacity:1;margin-top:1px}
-#amp-one .a-execution-content .a-execution-body {padding:0 10px 13px 55px}
+#amp-one .a-execution-content .a-execution-body {padding:0 10px 13px 33px}
 #amp-one .a-execution-content .a-execution-body>small {font-size:11px}
 #amp-one .a-execution-content .a-execution-counts {display:inline-flex;gap:6px;margin-left:7px;font-size:11px;font-weight:400}
 #amp-one .a-execution-content .a-execution-counts>span:first-child {color:var(--a-green)}
@@ -50,4 +50,19 @@
  #amp-one .a-execution-content .a-execution-diff-row {grid-template-columns:23px 23px 13px minmax(0,1fr)}
  #amp-one .a-execution-content .a-execution-usage {white-space:normal}
  #amp-one .a-execution-content .a-execution-children .a-execution-body {padding-left:8px}
+}
+#amp-one .a-execution-call-counts{display:var(--a-work-counts,none);color:var(--a-muted);font-size:11px;white-space:nowrap}
+#amp-one[data-execution-detail="detailed"]{--a-work-counts:inline}
+#amp-one[data-execution-detail="minimal"] .a-execution-usage,#amp-one[data-execution-detail="minimal"] .a-execution-turn-line>.a-execution-complete{display:none}
+#amp-one .a-execution-node>.a-execution-line{cursor:default}
+#amp-one .a-execution-node>.a-execution-line:hover{background:transparent}
+#amp-one .a-execution-turn-line{flex-wrap:wrap}
+#amp-one .a-execution-body:empty{display:none}
+@media(max-width:600px){#amp-one .a-execution-call-counts{font-size:10px;white-space:normal}}
+
+@media(max-width:600px){
+ #amp-one .a-execution-turn-line>.a-execution-label{flex:1 0 calc(100% - 50px)}
+ #amp-one .a-execution-turn-line>.a-execution-complete,#amp-one .a-execution-turn-line>.a-execution-warning,#amp-one .a-execution-turn-line>.a-execution-dot{order:1}
+ #amp-one .a-execution-turn-line>.a-execution-usage{order:2}
+ #amp-one .a-execution-turn-line>.a-execution-call-counts{order:3;font-size:11px}
 }

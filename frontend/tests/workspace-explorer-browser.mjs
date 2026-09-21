@@ -125,7 +125,7 @@ try{
  await page.setViewportSize({width:1280,height:900});
  assert.deepEqual((await info()).runtimeStarts,[],'browsing saved workspaces never mounts their runtimes');
 
- // Creating a workspace makes its first root chat, so it is immediately visible.
+ // Creating a workspace opens a configurable draft without saving an empty chat.
  await showPath(paths.dev);
  await page.getByRole('button',{name:'New workspace',exact:true}).click();
  await page.locator('#nav-workspace-path').fill(paths.new);
@@ -134,22 +134,23 @@ try{
  let current=await info(),newWorkspace=current.state.workspaces.find(workspace=>workspace.path===paths.new);
  assert.equal(current.directories.new,true);
  assert.ok(newWorkspace);
- assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.new&&chat.sessionKind!=='worker').length,1);
+ assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.new&&chat.sessionKind!=='worker').length,0);
  assert.equal(current.state.selectedWorkspaceId,newWorkspace.id);
- await showPath(paths.new.slice(0,paths.new.lastIndexOf('/')));
- assert.equal(await row(paths.new).count(),1);
+ assert.equal(current.state.view.newSessionDraft.workspace,paths.new);
+ assert.equal(current.state.selectedSessionId,null);
  await page.getByRole('button',{name:'New workspace',exact:true}).click();
  await page.locator('#nav-workspace-path').fill(paths.existing);
  await page.getByRole('button',{name:'Create workspace',exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().settings.workspace===path,paths.existing);
  current=await info();
  assert.equal(current.existingContents,'Existing workspace contents must stay intact.\n');
- assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,1);
- await showPath(paths.root);assert.equal(await row(paths.existing).count(),1);
- // Agent creation is the same action; repeating it must not duplicate the chat.
+ assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,0);
+ assert.equal(current.state.view.newSessionDraft.workspace,paths.existing);
+ assert.equal(current.state.selectedSessionId,null);
+ // Agent creation is the same action; repeating it must not commit a chat.
  await agent('workspace.create',{path:paths.existing});
  current=await info();
- assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,1);
+ assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,0);
  assert.deepEqual(current.runtimeStarts,[]);
  assert.deepEqual(current.runtimeSends,[]);
  assert.deepEqual(errors,[]);

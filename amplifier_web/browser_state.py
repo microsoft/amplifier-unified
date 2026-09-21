@@ -12,7 +12,7 @@ SUMMARY_FIELDS = ('id', 'title', 'titleSource', 'description', 'status', 'worksp
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt',
     'sessionKind', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
     'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
-    'sharedHistoryTotal', 'turnCount', 'unreadCompletion')
+    'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
 

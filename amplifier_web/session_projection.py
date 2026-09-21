@@ -15,8 +15,11 @@ def hydrate(home, state, db):
     canvas = state.get('canvas', {})
     reference = canvas.pop('$body', None)
     if reference and not canvas.get('contentResource'):
-        from .state_storage import resource
-        canvas.update(resource(db, reference['$resource']))
+        from .canvas_library import restore_body
+        canvas['contentResource'] = reference
+        # Global legacy snapshots kept small document bodies inline. Preserve
+        # that contract; explicitly compact large documents stay indirect.
+        restore_body(canvas, db, inline_documents=True)
     for index, session in enumerate(state.get('sessions', [])):
         if session.pop('$native', False):
             session.update(messages=[], workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)
@@ -44,6 +47,31 @@ def migrate(home, state):
         workspace = meta.get('working_dir') or meta.get('workspace') or workspaces.get(path.parent.name) or workspaces.get(meta.get('parent_id'))
         if workspace:
             SessionStore.for_app(home, workspace)._migrate(path.parent.name)
+
+
+# Admission accounting must survive even when display observations are rebuilt
+# from native events. Keep metadata in the existing accounting projection only;
+# never persist action bodies or lazy event-file references here.
+ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
+    'parentId', 'turnId', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
+    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle'}
+
+
+def accounting_projection(tree):
+    rows = list(tree.get('retiredUsageNodes', []))
+    rows.extend(row for row in tree.get('nodes', [])
+                if row.get('liveObservation') and row.get('kind') in {'llm', 'worker'}
+                and not row.get('nativeHistory') and not row.get('canonicalHistory'))
+    saved = {}
+    for row in rows:
+        if row.get('kind') not in {'llm', 'worker'} or not row.get('id'):
+            continue
+        key = (row.get('sessionId'), row['id'])
+        prior = saved.get(key)
+        if prior and (row.get('revision', 0), bool(row.get('endedAt'))) < (prior.get('revision', 0), bool(prior.get('endedAt'))):
+            continue
+        saved[key] = {key: value for key, value in row.items() if key in ACCOUNTING_FIELDS}
+    return list(saved.values())
 
 
 def persist(home, state, cache):
@@ -76,12 +104,14 @@ def persist(home, state, cache):
             continue
         path = view_path(home, session)
         # Native event activity is a lazy view, never another persisted event
-        # or message cache. Runtime-owned execution nodes retain their history.
+        # or message cache. Preserve pre-existing legacy records, but never write
+        # new live observations or event-log-derived action bodies here.
         value = {key: item for key, item in session.items() if key not in {'historyActivity', 'questions'}}
         if 'execution' in value:
             value['execution'] = {**value['execution'],
-                'nodes': [row for row in value['execution'].get('nodes', []) if not row.get('nativeHistory')],
-                'turns': [row for row in value['execution'].get('turns', []) if not row.get('nativeHistory')]}
+                'retiredUsageNodes': accounting_projection(value['execution']),
+                'nodes': [row for row in value['execution'].get('nodes', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
+                'turns': [row for row in value['execution'].get('turns', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
         text = json.dumps(value, ensure_ascii=False)
         if cache.get(str(path)) != text:
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
