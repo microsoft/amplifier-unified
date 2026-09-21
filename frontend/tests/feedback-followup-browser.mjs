@@ -68,7 +68,7 @@ try{
  await page.getByLabel('Add a comment',{exact:true}).fill('Additional details from the browser.');
  await page.getByRole('button',{name:'Send comment',exact:true}).click();
  await page.getByText('Comment added to your feedback report.',{exact:true}).waitFor();
- assert.equal(await page.getByRole('link',{name:'View comment',exact:true}).getAttribute('href'),'https://github.com/bkrabach/amplifier-unified/issues/42#issuecomment-123');
+ assert.equal(await page.getByRole('link',{name:'View comment',exact:true}).getAttribute('href'),'https://github.com/microsoft/amplifier-unified/issues/42#issuecomment-123');
  const pending=await page.evaluate(()=>window.amplifier.getState().view.feedbackFollowupDraft.pending);
  await page.evaluate(args=>window.amplifier.dispatch('feedback.comment',args),pending);
  const sent=await page.evaluate(()=>fetch('/api/fixture/followup').then(response=>response.json()));

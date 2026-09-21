@@ -1,6 +1,6 @@
 # Work profile in Unified
 
-The [Amplifier Work bundle](https://github.com/bkrabach/amplifier-bundle-work)
+The [Amplifier Work bundle](https://github.com/microsoft/amplifier-bundle-work)
 owns portable composition and operating instructions. This application owns the
 integration, preview launcher, and real-provider/browser acceptance tools.
 Both repositories are private during development; use normal GitHub access.
@@ -22,7 +22,7 @@ a registered root, preview an idle conversation switch, or fork with another roo
 The new-conversation options also accept a bundle source:
 
 ```text
-git+https://github.com/bkrabach/amplifier-bundle-work@main#subdirectory=bundle.md
+git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md
 ```
 
 Replace `main` with a reviewed commit for a reproducible selection. You can also

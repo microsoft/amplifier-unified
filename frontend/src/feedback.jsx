@@ -21,7 +21,7 @@ export function FeedbackPanel({state,act}){
  useEffect(()=>{if(result&&['submitted','failed','unknown'].includes(result.status))setError('')},[result?.status]);
  const working=busy||['queued','sending'].includes(result?.status),done=['submitted','failed','unknown'].includes(result?.status);
  const frozen=!!pending||uploading,preview=draft.previewId,selected=(draft.attachments||[]).filter(row=>!pending||pending.attachmentIds?.includes(row.id));
- const issues=state.feedback?.issuesUrl||'https://github.com/bkrabach/amplifier-unified/issues';
+ const issues=state.feedback?.issuesUrl||'https://github.com/microsoft/amplifier-unified/issues';
  async function flush(){
   clearTimeout(timer.current);
   if(saving.current){await saving.current;return flush()}
@@ -67,7 +67,7 @@ export function FeedbackPanel({state,act}){
  async function startNew(){if(busy||uploading)return;setError('');setRetryUpload(null);try{await save(empty())}catch{setError('Could not start a new draft. Reconnect and try again.')}}
  const facts=state.feedback?.diagnostics||{};
  return <section className={`a-feedback${dragging?' is-dragging':''}`} data-part="feedback" onPaste={paste} onDrop={drop} onDragOver={event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();event.stopPropagation();if(!frozen)setDragging(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget))setDragging(false)}}>
-  <p>Send a bug report, idea, or question to <a href={issues} target="_blank" rel="noopener noreferrer">bkrabach/amplifier-unified</a>. Uses the host’s GitHub sign-in.</p>
+  <p>Send a bug report, idea, or question to <a href={issues} target="_blank" rel="noopener noreferrer">microsoft/amplifier-unified</a>. Uses the host’s GitHub sign-in.</p>
   {(result||error)&&<div className="a-feedback-result"><ResultNotice phase={result?.status==='submitted'?'success':['failed','unknown'].includes(result?.status)?'error':'working'} message={result?.message}/>{error&&<ResultNotice phase="error" message={error}/>} {result?.url&&<a className="a-feedback-link" href={result.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>} {result?.status==='unknown'&&<><a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues <ExternalLink size={14}/></a>{result.attachmentsUrl&&<a href={result.attachmentsUrl} target="_blank" rel="noopener noreferrer">Check attachment branch <ExternalLink size={14}/></a>}</>}</div>}
   <form onSubmit={submit} data-action="feedback.submit">
    <label htmlFor="feedback-category">Type</label><select id="feedback-category" data-action="view.update" value={shown.category||'bug'} disabled={frozen} onChange={e=>edit({category:e.target.value})}><option value="bug">Bug report</option><option value="idea">Feature idea</option><option value="question">Question</option><option value="other">Other feedback</option></select>

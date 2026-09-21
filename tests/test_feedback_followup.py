@@ -60,7 +60,7 @@ async def test_agent_comment_ui_retry_and_restart_share_one_post(tmp_path, api):
         await settle(app)
         posts = [call for call in api.call_args_list if call.args[1] is not None]
         assert len(posts) == 1
-        assert posts[0].args == ("repos/bkrabach/amplifier-unified/issues/42/comments", {"body": args()["body"] + "\n\n<!-- amplifier-feedback-comment:followup-comment-1 -->"})
+        assert posts[0].args == ("repos/microsoft/amplifier-unified/issues/42/comments", {"body": args()["body"] + "\n\n<!-- amplifier-feedback-comment:followup-comment-1 -->"})
         assert "Private title" not in json.dumps(posts[0].args)
         assert {"feedback.get", "feedback.comment"} <= {item["name"] for item in app.get_actions()}
         with pytest.raises(AppError, match="different contents"):
@@ -98,6 +98,52 @@ async def test_get_reads_report_and_comments_with_explicit_pagination(tmp_path, 
         await settle(app)
         assert api.call_count == before
         assert app.state["feedback"]["report"]["body"] != "Changed remotely"
+    finally:
+        await app.close()
+
+
+async def test_historical_feedback_keeps_original_repository_after_migration(tmp_path, api):
+    legacy_url = "https://github.com/bkrabach/amplifier-unified/issues/42"
+    original = api.side_effect
+    api.issue["html_url"] = legacy_url
+
+    async def response(endpoint, payload):
+        result = await original(endpoint, payload)
+        if payload is not None:
+            result["html_url"] = legacy_url + "#issuecomment-123"
+        return result
+
+    api.side_effect = response
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await seed(app)
+        await app.feedback.update(FEEDBACK_ID, url=legacy_url)
+        await app.dispatch("feedback.get", {"requestId": "legacy-read", "feedbackId": FEEDBACK_ID})
+        await settle(app)
+        assert app.state["feedback"]["report"]["url"] == legacy_url
+        await app.dispatch("feedback.comment", args())
+        await settle(app)
+        assert app.state["feedback"]["followups"][0]["status"] == "submitted"
+        endpoints = [call.args[0] for call in api.call_args_list if call.args[0] != "user"]
+        assert endpoints and all(endpoint.startswith("repos/bkrabach/amplifier-unified/issues/42") for endpoint in endpoints)
+        assert app.state["feedback"]["repository"] == "microsoft/amplifier-unified"
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/another/amplifier-unified/issues/42",
+    "https://github.com/bkrabach/amplifier-unified/issues/42/comments",
+    "https://github.com/microsoft/amplifier-unified/issues/42?redirect=1",
+])
+async def test_migration_does_not_allow_arbitrary_receipt_destinations(tmp_path, api, url):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await seed(app)
+        await app.feedback.update(FEEDBACK_ID, url=url)
+        with pytest.raises(AppError):
+            await app.dispatch("feedback.comment", args())
+        api.assert_not_awaited()
     finally:
         await app.close()
 

@@ -24,7 +24,7 @@ Install the private release (GitHub repository access is required):
 ```sh
 gh auth login
 gh auth setup-git
-uv tool install git+https://github.com/bkrabach/amplifier-unified
+uv tool install git+https://github.com/microsoft/amplifier-unified
 amplifier-unified
 ```
 
@@ -134,7 +134,7 @@ a private timestamped backup. Installation captures the invoking shell's `PATH`
 so the runtime can find `uv` in Snap or custom locations, and starts/restarts
 the service to apply it. After changing tool locations, rerun installation from
 the shell where `uv --version` works (keep your `--workspace` selection).
-`uv tool install git+https://github.com/bkrabach/amplifier-unified`
+`uv tool install git+https://github.com/microsoft/amplifier-unified`
 installs the same CLI and service support.
 
 ## Standalone host and session flow
@@ -473,7 +473,7 @@ are not all marked unread retroactively.
 ### Send feedback
 
 Use **Send feedback** in the app header to submit a bug report, idea, or question
-as an issue in the private `bkrabach/amplifier-unified` repository. The host uses
+as an issue in the private `microsoft/amplifier-unified` repository. The host uses
 its existing GitHub CLI sign-in (`gh auth login`); that account needs repository
 access. Review the title and details, then send. The result includes a link to
 the created issue. No label configuration is required. After durable acceptance,

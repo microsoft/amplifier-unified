@@ -17,7 +17,7 @@ from ..shared_settings import read_yaml, read_settings
 from ..session_files import amplifier_home
 
 FOUNDATION_SOURCE = "git+https://github.com/microsoft/amplifier-foundation@main"
-WORK_SOURCE = "git+https://github.com/bkrabach/amplifier-bundle-work@main#subdirectory=bundle.md"
+WORK_SOURCE = "git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md"
 _KEY_FILE_VALUES = {}
 
 

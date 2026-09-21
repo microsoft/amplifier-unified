@@ -39,7 +39,7 @@ test('report refresh uses shared read action; unknown outcomes have no send-agai
  const read=calls.find(call=>call.name==='feedback.get');
  assert.equal(read.args.feedbackId,'original-feedback');assert.equal(read.args.page,1);
  const pending={requestId:'frozen-comment',feedbackId:'original-feedback',body:'Extra details'};
- const next={...state,view:{feedbackFollowupDraft:{...state.view.feedbackFollowupDraft,pending}},feedback:{...state.feedback,followups:[{...pending,action:'feedback.comment',status:'unknown',url:'https://github.com/bkrabach/amplifier-unified/issues/42',message:'Check the issue'}]}};
+ const next={...state,view:{feedbackFollowupDraft:{...state.view.feedbackFollowupDraft,pending}},feedback:{...state.feedback,followups:[{...pending,action:'feedback.comment',status:'unknown',url:'https://github.com/microsoft/amplifier-unified/issues/42',message:'Check the issue'}]}};
  await renderAct(async()=>root.update(React.createElement(FeedbackFollowup,{state:next,act:async()=>({accepted:true})})));
  assert.equal(root.root.findAllByType('button').filter(node=>node.props.type==='submit').length,0);
  assert.ok(root.root.findAllByType('a').some(node=>node.props.href.endsWith('/42')));
