@@ -7,7 +7,8 @@
       "changes": [
         "Module validation now checks the same effective source selected by the runtime, including scoped source overrides.",
         "The source editor can validate a candidate without saving it, and validates module replacements before saving. Failed validation leaves the saved source unchanged.",
-        "Release publication refuses an existing version tag at a different commit, so a later fix cannot silently reuse an older release."
+        "Release publication refuses an existing version tag at a different commit, so a later fix cannot silently reuse an older release.",
+        "Delayed acknowledgements for voice requests and edited-message forks stay unconfirmed until resolved, without falsely failing the turn or replaying the request."
       ],
       "notices": []
     },
