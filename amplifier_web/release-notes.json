@@ -3,13 +3,33 @@
   "releases": [
     {
       "version": "0.20.7",
-      "title": "Clear compaction activity and reliable agent controls",
+      "title": "Work artifacts, memory, publishing and task transfer",
       "changes": [
+        "Inspect generated image outputs through the provider's visual input path and check artifact dependencies in the worker that will create the deliverable.",
+        "Opt in separately to memory contribution and relevant-context retrieval, with source exclusions, correction handling and controls shared by the interface and agents.",
+        "Preview immutable publishing releases, record review, deploy or roll back to an inspected target, and reconcile uncertain results without automatically repeating an external action.",
+        "Export and import signed task transfers with preserved history and output evidence. Execution ownership remains fenced until the transfer is reconciled.",
+        "Inspect desktop and browser readiness, explicitly install optional native screen observation, and keep work paused when application replacement has an uncertain outcome until the serving installation is verified.",
+        "Configure optional native Microsoft 365 document tools and live Excel support through the published companion components and account setup guidance.",
+        "Keep late worker progress attached to its original run without reopening completed work or adopting a newer run's identity.",
+        "Use one composer button for voice, send and cancel. Keep chat ordering stable during background activity while reducing browser request traffic.",
         "Context compaction calls are identified separately from ordinary replies, retain usage and safe failure details, and keep internal summary text out of the conversation.",
         "Compaction summaries retain their requested reasoning effort when the conversation has a higher effort selected. Budget checks and model dispatch use the same setting.",
         "Malformed app_control requests receive a clear corrective request shape before any action executes, while valid action receipts remain unchanged."
       ],
       "notices": [
+        {
+          "id": "work-companion-components",
+          "title": "Update Work components and review optional setup",
+          "detail": "Work skill and runtime improvements include separately published bundle and module changes. Memory remains opt-in. Microsoft 365, live Excel, image generation and native desktop features require their own configured services, dependencies or permissions; selecting Work does not connect accounts or grant access.",
+          "action": "After updating the app, check available component updates and review the setup guidance for the optional capabilities you want to use. Deliberate source pins remain in effect."
+        },
+        {
+          "id": "publishing-transfer-ownership",
+          "title": "Choose publishing and transfer targets deliberately",
+          "detail": "Publishing requires a configured target and an explicit access policy. Tasks retaining managed publishing state, including stopped sites or receipts, cannot transfer. Transfer requires compatible writers on both hosts and does not migrate credentials or install the destination runtime. Older session writers do not respect its ownership fence.",
+          "action": "Before transferring, update both hosts and upgrade or disable every CLI, TUI and runtime that can write the session, then pair the hosts and verify destination setup. Keep the source available until handoff is confirmed. Inspect saved operation state before retrying an uncertain action."
+        },
         {
           "id": "update-compaction-components",
           "title": "Update companion components for compaction recovery",
