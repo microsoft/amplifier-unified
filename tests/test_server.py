@@ -148,6 +148,7 @@ async def test_slow_canvas_call_does_not_delay_host_shutdown(authenticated_clien
 async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
     client = await authenticated_client(app)
+    await app['service'].dispatch('session.create', {})
     await app['service'].dispatch('canvas.show', {'kind':'html','content':'<button onclick="this.textContent=42">Test</button>'})
     identity = app['service'].state['canvas']['id']
     response = await client.get('/api/canvas/'+identity+'/document')
@@ -191,6 +192,7 @@ async def test_large_html_is_served_separately_with_same_sandbox(authenticated_c
     (tmp_path/'large.html').write_text(body)
     app=await create_app(tmp_path/'data',preload_providers=False,workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
     client=await authenticated_client(app)
+    await app['service'].dispatch('session.create', {})
     baseline=len(await (await client.get('/api/state')).read())
     await app['service'].dispatch('canvas.show',{'kind':'auto','path':str(tmp_path/'large.html')})
     identity=app['service'].state['canvas']['id']

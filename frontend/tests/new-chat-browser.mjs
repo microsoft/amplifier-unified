@@ -19,7 +19,7 @@ try{
  await action('view.update',{patch:{navPinned:true}});
  const launcher=page.getByRole('button',{name:'New chat',exact:true});await expect(launcher).toHaveCount(1);
  assert.equal(await page.locator('.a-top [data-action="session.create"],.a-top [data-action="session.draft"]').count(),0);
- await expect(page.locator('.a-canvas-toggle')).toHaveText('');await expect(page.locator('.a-canvas-toggle')).toHaveAttribute('title','Open canvas');
+ await expect(page.locator('.a-canvas-toggle')).toHaveText('');await expect(page.locator('.a-canvas-toggle')).toBeDisabled();await expect(page.locator('.a-canvas-toggle')).toHaveAttribute('title','Send a message to start a chat before opening Canvas');
  await expect(page.getByRole('button',{name:'Chat details',exact:true})).toBeDisabled();
  const originalWorkspace=(await state()).settings.workspace;
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
