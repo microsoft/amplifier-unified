@@ -13,8 +13,10 @@
         "Choose provider, model, reasoning effort and bundle directly in the composer. Compact selectors show the actual selection, group duplicate provider labels, and retain bundle descriptions.",
         "Create folders directly in the workspace chooser. The separate New workspace entry and chat Collections feature have been removed while saved history is retained.",
         "Canvas controls float over previews until pinned, preserving live frames and unsaved edits. Canvas opens only after a chat exists, and empty canvases offer clear file and website actions.",
+        "Embedded HTML Canvas previews can play self-contained video and audio, with play, pause, seeking and reopening verified. Remote media remains outside this preview sandbox.",
         "The header exposes Feedback directly, keeps Settings beside More and Canvas at the right edge, and removes Activity. Agent computation and operations controls no longer occupy the chat panel.",
         "Provider catalogs publish fewer full-state updates and reuse fresh cached models, reducing setup delays and keeping other requests more responsive.",
+        "Sidebar and Canvas layout controls save their own client view without rewriting the conversation catalog, keeping large libraries responsive during active work.",
         "Model-call rows retain distinct request identities and independent expansion. Continued work updates its own turn summary without reopening completed history.",
         "Selected-model request budgeting preserves Anthropic request options, and provider tool-configuration failures retain actionable diagnostics."
       ],
