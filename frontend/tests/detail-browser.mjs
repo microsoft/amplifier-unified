@@ -21,12 +21,12 @@ try{
  await first.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-message-id] p')?.textContent.length>5000);assert.ok((await first.innerText()).length>before.length);
  await page.getByRole('button',{name:'Load earlier activity',exact:true}).click();
  await page.locator('.a-execution-turn-line').first().click();await page.locator('.a-execution-node').first().waitFor();assert.equal(await page.locator('.a-execution-node').count(),200);
- const node=page.locator('.a-execution-node').first();await node.locator('.a-execution-line').first().click();await node.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.a-execution-node .a-execution-body')?.textContent.includes('x'.repeat(10000)));assert.ok((await node.innerText()).length>10000);
+ const node=page.locator('.a-execution-node').first();await node.locator('.a-execution-line').first().click();await node.getByRole('button',{name:'Show all 10,000 characters',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.a-execution-node .a-execution-body')?.textContent.includes('x'.repeat(10000)));assert.ok((await node.innerText()).length>10000);
  // New live revisions preserve explicitly requested earlier history.
  await page.evaluate(async()=>window.amplifier.dispatch('view.update',{patch:{notice:'fixture update'}}));assert.equal(await page.locator('[data-message-id]').count(),120);
  await page.screenshot({path:'/tmp/amplifier-browser-detail.png',fullPage:false});
  // Exercise packaged build identity in real feedback UI; intercept submission.
- await control({op:'reset'});await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await control({op:'reset'});await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByLabel('Title',{exact:true}).fill('Fixture report - never posted');await page.getByLabel('Details',{exact:true}).fill('Synthetic browser test only.');
  assert.equal(await page.getByLabel('Include reproduction diagnostics').isChecked(),true);
  await page.getByText('Build and device diagnostics',{exact:true}).click();

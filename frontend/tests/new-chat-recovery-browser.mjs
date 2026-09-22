@@ -9,7 +9,7 @@ let state={revision:1,settings:{workspace:'/existing'},runtime:{available:true},
  sessions:[{id:'old',title:'Previous conversation',sessionKind:'root',workspace:'/existing',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],
  workspaces:[{id:'project',name:'Existing',path:'/existing',available:true}],selectedSessionId:null,selectedWorkspaceId:'project',
  setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/existing'},canvas:{open:false}};
-const calls=[],workers=[],workspaces=[],errors=[];let browser,vite,page;
+const calls=[],workers=[],folders=[],errors=[];let browser,vite,page;
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const reply=(route,extra={})=>{state.revision++;return route.fulfill({json:{accepted:true,state,...extra}})};
 try{
@@ -39,7 +39,11 @@ try{
    state.sessions.find(row=>row.id===body.args.sessionId).messages.push({id:'received',inputId:body.id,role:'user',text:body.args.text,delivery:{status:'accepted'}});
   }
   if(body.action==='worker.spawn'){workers.push({route,body});return;}
-  if(body.action==='workspace.create'){workspaces.push({route,body});return;}
+  if(body.action==='locations.list'){
+   state.locationListing={controlId:body.args.controlId,path:body.args.path||'/existing',parent:'/',entries:[]};
+   state.actionStatus={'locations.list':{phase:'ready',commandId:body.id,target:{controlId:body.args.controlId}}};
+  }
+  if(body.action==='locations.create'){folders.push({route,body});return;}
   return reply(route);
  });
  await page.goto(vite.resolvedUrls.local[0]);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
@@ -78,14 +82,28 @@ try{
  state.view={...state.view,workerDraft:'A newer shared worker draft'};await reply(sharedWorker.route);
  await expect(worker).toHaveValue('A newer shared worker draft');await expect(page.getByRole('dialog')).toBeVisible();
  assert.equal(state.view.workerDraft,'A newer shared worker draft');
- await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New workspace',exact:true}).click();
- const workspace=page.locator('#nav-workspace-path');await workspace.fill('/first-workspace');await page.getByRole('button',{name:'Create workspace',exact:true}).click();
- await expect.poll(()=>workspaces.length).toBe(1);await workspace.fill('/newer-workspace');await reply(workspaces.shift().route);
- await expect(workspace).toHaveValue('/newer-workspace');
- await page.getByRole('button',{name:'Create workspace',exact:true}).click();await expect.poll(()=>workspaces.length).toBe(1);await workspaces.shift().route.fulfill({status:409,json:{accepted:false,error:'Workspace denied for fixture'}});
- await expect(workspace).toHaveValue('/newer-workspace');await expect(page.getByText('Workspace denied for fixture',{exact:true})).toBeVisible();
- await page.getByRole('button',{name:'Create workspace',exact:true}).click();await expect.poll(()=>workspaces.length).toBe(1);await reply(workspaces.shift().route);
- await expect(workspace).toHaveCount(0);assert.deepEqual(state.view.workspaceDraft,{});
+ await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New chat',exact:true}).click();
+ await expect(page.getByRole('button',{name:'New workspace',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await page.getByRole('button',{name:'New folder',exact:true}).click();
+ const folder=page.getByRole('textbox',{name:'New folder name',exact:true});
+ await folder.fill('first-folder');await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await expect.poll(()=>folders.length).toBe(1);await expect(folder).toBeDisabled();
+ await folders.shift().route.fulfill({status:409,json:{accepted:false,error:'Folder denied for fixture'}});
+ await expect(folder).toBeEnabled();await expect(folder).toHaveValue('first-folder');
+ await expect(page.getByText('Folder denied for fixture',{exact:true})).toBeVisible();
+ await folder.fill('created-folder');await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await expect.poll(()=>folders.length).toBe(1);const creation=folders.shift();
+ assert.equal(creation.body.args.name,'created-folder');
+ const createdPath=creation.body.args.path+'/created-folder';
+ state.locationListing={controlId:creation.body.args.controlId,path:createdPath,parent:creation.body.args.path,entries:[],createdBy:creation.body.id};
+ state.actionStatus['locations.create']={phase:'ready',commandId:creation.body.id};
+ await reply(creation.route,{operationId:creation.body.id});
+ await expect(folder).toHaveCount(0);
+ await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(createdPath);
+ await page.getByRole('button',{name:'Use this folder',exact:true}).click();
+ await expect(page.locator('#new-chat-workspace')).toHaveValue(createdPath);
+ assert.equal(calls.filter(row=>row.action==='conversation.send').length,1,'Folder selection does not send a new message');
  assert.deepEqual(errors,[]);
  console.log('New chat recovery passed: truthful new-chat header; persisted failed-message discard; inline creation error; corrected-path retry sends once; worker success persists reset; failure/local and shared newer drafts retained; modal error dismissal. Zero model calls.');
 }finally{await browser?.close();await vite?.close()}

@@ -54,7 +54,7 @@ try{
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
- await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture');
  await page.getByLabel('Details',{exact:true}).fill('This is a mocked browser test.');
  const diagnostics=page.getByRole('checkbox',{name:'Include reproduction diagnostics'});
@@ -100,7 +100,7 @@ try{
  assert.equal(calls.uploads.filter(call=>call.endpoint.endsWith('/git/blobs')).length,3);
  assert.match(calls.calls[0].body,/picked-image\.png/);assert.match(calls.calls[0].body,/pasted-image\.png/);assert.match(calls.calls[0].body,/dropped\.txt/);assert.doesNotMatch(calls.calls[0].body,/agent\.txt/);
  assert.equal(saved.attachmentIds.length,3);
- await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
  await page.waitForFunction(()=>window.amplifier.getState().view.feedbackDraft.title===''&&!window.amplifier.getState().view.feedbackDraft.pending);
  await page.waitForFunction(()=>document.querySelector('#feedback-title')?.value==='');
