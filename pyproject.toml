@@ -38,7 +38,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/.ci/**"]

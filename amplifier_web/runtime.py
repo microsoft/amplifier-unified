@@ -577,7 +577,7 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def quiesce_for_handoff(self, session, request_id):
+    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
         """Save and release a known local writer before moving execution cwd."""
         from amplifier_foundation.session import SharedSessionStore, SessionBusyError, request_release
         sid = session['id']
@@ -602,6 +602,12 @@ class RuntimeManager:
                 from .host_identity import local_host_identity, require_local_host
                 owner = held.owner
                 require_local_host(owner.get('hostname'))
+                if transfer_destination is not None:
+                    if not hasattr(held, 'fence_transfer'):
+                        raise ValueError('This runtime needs Foundation durable transfer fencing before task export')
+                    held.fence_transfer(request_id, transfer_destination, role='source')
+                    return {'quiesced': True, 'transferFenced': True, 'nativeSessionId': store.session_id,
+                            'effectsRolledBack': False, 'inputsReplayed': False}
                 return {'quiesced': True, 'executionHost': local_host_identity(), 'releasedOwner': released_owner, 'releaseOwner': {key: owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in owner}, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
             finally:
                 await asyncio.to_thread(held.release)

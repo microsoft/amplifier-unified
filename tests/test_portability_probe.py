@@ -106,9 +106,10 @@ async def test_only_a_valid_completed_text_response_accepts_execution(provider, 
     assert not result.get("accountVerified")
 
 
-async def test_missing_runtime_fence_fails_before_provider_construction(provider, monkeypatch):
+@pytest.mark.parametrize('capability', ['acquire_transfer', 'confirm_transfer_commit'])
+async def test_missing_runtime_fence_fails_before_provider_construction(provider, monkeypatch, capability):
     from amplifier_foundation.session import SharedSessionStore
-    monkeypatch.delattr(SharedSessionStore, "acquire_transfer")
+    monkeypatch.delattr(SharedSessionStore, capability)
     result = await portability_probe.probe(request())
     assert result["code"] == "runtime_fence_unavailable"
     assert provider.instances == []

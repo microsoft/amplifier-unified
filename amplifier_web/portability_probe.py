@@ -50,7 +50,8 @@ def _runtime_transfer_fence():
     try:
         from amplifier_foundation.session import SharedSessionStore, SessionTransferFencedError
         from amplifier_foundation.session.shared_state import SharedStateError
-        if not callable(getattr(SharedSessionStore, "acquire_transfer", None)):
+        if any(not callable(getattr(SharedSessionStore, name, None))
+               for name in ("acquire_transfer", "confirm_transfer_commit")):
             raise ProbeFailure("runtime_fence_unavailable")
         previous_home = os.environ.get("AMPLIFIER_HOME")
         try:
@@ -84,7 +85,22 @@ def _runtime_transfer_fence():
                 ordinary = store.acquire(app="destination-transfer-probe")
                 handles.callback(ordinary.release)
                 ordinary.check()
+                ordinary.fence_transfer("probe-source-transfer", "destination", role="source")
                 ordinary.release()
+                source = store.acquire_transfer("probe-source-transfer", app="destination-transfer-probe")
+                handles.callback(source.release)
+                source.commit_transfer()
+                source.release()
+                confirmed = store.confirm_transfer_commit("probe-source-transfer", app="destination-transfer-probe")
+                if confirmed.get('phase') != 'committed' or confirmed.get('role') != 'source':
+                    raise ProbeFailure("runtime_fence_unavailable")
+                try:
+                    unexpected = store.acquire(app="ordinary-committed-probe")
+                except SessionTransferFencedError:
+                    pass
+                else:
+                    handles.callback(unexpected.release)
+                    raise ProbeFailure("runtime_fence_unavailable")
         finally:
             if previous_home is None:
                 os.environ.pop("AMPLIFIER_HOME", None)

@@ -266,6 +266,8 @@ from .voice_visual import VoiceVisual, definitions as visual_definitions
 ACTION_DEFINITIONS.update(visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+from .portability import definitions as portability_definitions
+ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -444,6 +446,8 @@ class AppService:
         self.worktrees = Worktrees(self)
         from .publishing import Publishing
         self.publishing = Publishing(self)
+        from .portability import Portability
+        self.portability = Portability(self)
         self._refresh_shared_preferences()
         from .operations import Operations
         self.operations = Operations(self)
@@ -565,6 +569,7 @@ class AppService:
         self.questions.sync()
         self.schedules.sync()
         self.worktrees.sync()
+        self.portability.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -845,6 +850,12 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+                      'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
+                      'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
+            transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
+            if transfer_sid and self.portability.fenced(transfer_sid):
+                raise AppError('This task is fenced for transfer. Inspect its portability receipt on the execution owner.', 409)
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')
@@ -945,6 +956,12 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
+        if action.startswith('portability.'):
+            try:
+                result = await self.portability.dispatch(action, args, origin, command_id)
+            except (ValueError, OSError, KeyError) as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('worktree.'):
             try:
                 result = await self.worktrees.dispatch(action, args, origin, command_id)
@@ -2417,7 +2434,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('worktree.'):
+            if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id
@@ -2593,6 +2610,7 @@ class AppService:
         await self.recall.personalization.close()
         await self.worktrees.close()
         await self.publishing.close()
+        await self.portability.close()
         async with self.runtime_lifecycle_lock:
             if self.runtime:
                 await self.runtime.close()
