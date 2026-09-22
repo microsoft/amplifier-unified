@@ -25,6 +25,8 @@ amplifier-unified tui install
 amplifier-unified tui status
 amplifier-unified tui
 amplifier-unified tui --session HOST_CONVERSATION_ID
+amplifier-unified tui --resume
+amplifier-unified tui --resume CLI_SESSION_ID_OR_PREFIX
 ```
 
 Installation uses the saved connection when present, otherwise the configured

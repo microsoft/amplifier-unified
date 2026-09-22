@@ -43,7 +43,11 @@ Windows and other Linux architectures need their own published builds.
 The guided installer provides `amplifier-terminal` without installing the Unified
 service on the client computer. It starts the last successfully selected saved
 connection in the current terminal and forwards conversation options such as
-`--session ID`, `--new` and `--list-sessions`. The saved launcher still refuses
+`--session ID`, `--resume [ID]`, `--new` and `--list-sessions`. Bare `--resume`
+opens the Resume picker in the launch directory. An ID or unique prefix resolves
+either a native CLI session or a host conversation in that same scope. Use
+`--workspace` to choose a different server directory. This requires a terminal
+client with startup-picker and native-ID resolution support. The saved launcher still refuses
 server/credential overrides. A command under `~/.local/bin` is added only when
 that name is free or already belongs to this installation; unrelated commands
 are preserved. Setup never changes shell profiles or `PATH`, and prints an
