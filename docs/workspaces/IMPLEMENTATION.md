@@ -34,6 +34,19 @@ Validation recorded on 2026-09-22:
 - Workspace browser: 13 scenarios, including desktop, 320/390-pixel layouts, light/dark, draft/attachment preservation, real drag-and-drop and Alt+Up/Down pin reordering, retained keyboard focus and persisted order after reload.
 - Existing new-chat and first-send recovery browser checks passed.
 
+## Release candidate 0.20.8
+
+Refreshed onto canonical main `69294c9d458951966944e8a3db8d33e6a27f4dae` after 0.20.7 publication. The reviewed pin-ordering and allocation-recovery corrections remain included. Package metadata, the lockfile root version, release notes and compiled assets agree on 0.20.8.
+
+- Full combined Python suite: 3,199 passed, 130 skipped (environment/integration prerequisites), including the reviewed placement recovery cases.
+- All 296 frontend unit tests and all 13 workspace browser scenarios passed.
+- Existing navigation, mobile navigation, new-chat, first-send recovery, review-during-send, settings, settings completeness and mobile settings browser checks passed. Navigation now explicitly asserts that discovered chats use their native public ID; folder-browsing coverage follows the new attach journey and checks retained bundle choice.
+- Compiled desktop readiness, memory personalization, publishing and portability workflow browser checks passed with their synthetic fixtures.
+- The large-library browser check passed with 22,915 sessions, 3,932 workspaces, four browsers and one terminal stream. P95 latencies were 171 ms for health, 212 ms for admission and 192 ms for actions; drafts were retained and no model calls occurred. These are local fixture measurements, not Spark service measurements.
+- Locked dependency resolution, reproducible production frontend build, wheel/source build and local distribution verification passed.
+
+The shipping owner retains the immutable release qualification, merge, publication and deployed-host acceptance. These local results do not cover private companion-runtime release gates or live Spark adoption.
+
 ## Existing mechanisms retained
 
 Managed Git worktrees use `amplifier_worktrees`, with original source manifests, exact revision checks, explicit dirty-copy support and preservation-aware cleanup. `amplifier_web/worktrees.py` keeps history home separate from execution directory and records pending/applied/unknown handoffs. Native session ownership is enforced by the shared Foundation session protocol. None of these actions run merely because a folder is attached.

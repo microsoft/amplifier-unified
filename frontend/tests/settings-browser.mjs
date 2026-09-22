@@ -137,17 +137,23 @@ try{
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
  await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
- await page.locator('.a-path-field').filter({has:page.locator('#new-chat-workspace')}).getByRole('button',{name:'Browse',exact:true}).click();
+ await page.getByRole('combobox',{name:'Workspace',exact:true}).selectOption(':attach:');
+ const attach=page.getByRole('form',{name:'Use existing folder',exact:true});
+ await attach.getByRole('button',{name:'Browse',exact:true}).click();
  const workspace=(await state()).settings.workspace;
- await page.locator('#new-chat-workspace-browse-path').fill(workspace+'/missing');
+ await attach.getByRole('textbox',{name:'Folder path',exact:true}).fill(workspace+'/missing');
  await page.getByRole('button',{name:'Go',exact:true}).click();
  await page.getByText('This folder does not exist. Enter a different location.',{exact:true}).first().waitFor();
- await page.locator('#new-chat-workspace-browse-path').fill(workspace+'/project');
- await page.locator('#new-chat-workspace-browse-path').press('Enter');
+ await attach.getByRole('textbox',{name:'Folder path',exact:true}).fill(workspace+'/project');
+ await attach.getByRole('textbox',{name:'Folder path',exact:true}).press('Enter');
  await page.waitForFunction(path=>window.amplifier.getState().locationListing.path===path,workspace+'/project');
 
  await page.getByRole('button',{name:'Use this folder',exact:true}).click();
- assert.match(await page.locator('#new-chat-workspace').inputValue(),/\/workspace\/project$/);
+ assert.match(await attach.getByRole('textbox',{name:/Folder on/}).inputValue(),/\/workspace\/project$/);
+ await attach.getByRole('button',{name:'Use folder',exact:true}).click();
+ await expect(attach).toHaveCount(0);
+ await expect(page.getByRole('combobox',{name:'Workspace',exact:true})).toHaveValue(workspace+'/project');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.bundle),'fixture-root','attaching a browsed folder preserves the selected bundle');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}));
  const data=await page.evaluateHandle(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['#amp-one { --a-accent: purple; }'],'dropped.amplifier.css',{type:'text/css'}));return transfer});
  await page.locator('.a-file-drop').dispatchEvent('drop',{dataTransfer:data});
