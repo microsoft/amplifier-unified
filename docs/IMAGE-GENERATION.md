@@ -69,7 +69,7 @@ The standard outputs library exposes the saved versions and downloads. Call
 `outputs.image` directly through `app_control` to send their exact saved PNG pixels
 to a vision-capable model. Receipt text and browser display are separate evidence.
 
-The host passes effective filesystem write restrictions to the image tool,
+The host passes effective filesystem read and write restrictions to the image tool,
 including root and child declaration denials. Image access stays inside the
 execution workspace. Receipt metadata is producer-reported provenance; the host
 independently verifies bytes, dimensions and hashes, not the provider account's
@@ -105,6 +105,6 @@ separate processes, using the same `--output` and reviewed `--work-source`,
 `--tool-source`, and `--provider-source` directory arguments. It exercises the
 existing provider-save and behavior-add paths with a synthetic credential,
 prepares dependencies, mounts a new normal Work session and loads its image skill.
-It verifies that the configured chat instance/model are preserved while the
-independent image backend is ready. Source overrides exist only in that isolated
+It verifies that the configured chat instance/model are preserved while a separate
+image provider instance owns the ready backend. Source overrides exist only in that isolated
 acceptance directory; no generation is attempted with the synthetic credential.

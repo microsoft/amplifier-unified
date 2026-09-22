@@ -25,14 +25,21 @@ async def run(args):
         folder.mkdir(mode=0o700, parents=True, exist_ok=False)
         workspace.mkdir(mode=0o700)
         setup = SetupManager(folder / 'app')
-        configuration = {'default_model': 'gpt-5.5', 'base_url': 'https://api.openai.com/v1',
-            'image_generation': {'enabled': True, 'id': 'images', 'model': 'gpt-image-1-mini'}}
+        configuration = {'default_model': 'gpt-5.5', 'base_url': 'https://api.openai.com/v1'}
         result = await setup.perform('providers.save', {'workspace': str(workspace),
             'id': 'kept-chat-provider', 'module': 'provider-openai', 'config': configuration,
             'apiKeyEnv': 'WORK_IMAGE_FIXTURE_KEY', 'scope': 'global'})
         saved = result['providers'][0]
         assert saved['id'] == 'kept-chat-provider' and saved['config']['default_model'] == 'gpt-5.5'
-        assert saved['config']['image_generation'] == configuration['image_generation']
+        image_configuration = {**configuration,
+            'image_generation': {'enabled': True, 'id': 'images', 'model': 'gpt-image-1-mini'}}
+        result = await setup.perform('providers.save', {'workspace': str(workspace),
+            'id': 'kept-image-account', 'module': 'provider-openai', 'config': image_configuration,
+            'apiKeyEnv': 'WORK_IMAGE_FIXTURE_KEY', 'scope': 'global'})
+        saved = {row['id']: row for row in result['providers']}
+        assert all(saved['kept-chat-provider']['config'][key] == value for key, value in configuration.items())
+        assert 'image_generation' not in saved['kept-chat-provider']['config']
+        assert saved['kept-image-account']['config']['image_generation'] == image_configuration['image_generation']
         def override(settings):
             settings.setdefault('sources', {}).update(bundles={'work': str(args.work_source.resolve())},
                 modules={'tool-image': str(args.tool_source.resolve()), 'provider-openai': str(args.provider_source.resolve())})
@@ -63,12 +70,17 @@ async def run(args):
             assert capability.success and capability.output['ready']
             assert capability.output['backendStatus']['model'] == 'gpt-image-1-mini'
             assert mounted['effective_selection'] == selection and mounted['root_bundle'] == 'work'
+            providers = session.coordinator.get('providers')
+            backend = session.coordinator.get_capability('image.backends')['images']
+            assert backend.provider is providers['kept-image-account']
+            assert backend.provider is not providers['kept-chat-provider']
             assert 'load_skill' in tools
             skill = await tools['load_skill'].execute({'skill_name': 'imagegen'})
             assert skill.success
             report = {'passed': True, 'phase': 'mount', 'ordinaryRoot': mounted['root_bundle'],
                       'effectiveSelection': mounted['effective_selection'], 'imageSkillLoaded': True,
                       'capabilities': capability.output, 'providerRequests': 0,
+                      'selectedImageProviderId': 'kept-image-account', 'separateImageProviderVerified': True,
                       'sessionId': mounted['session_id'], 'resumed': mounted['resumed']}
         finally:
             await session.cleanup()
