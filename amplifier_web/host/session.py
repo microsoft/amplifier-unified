@@ -684,6 +684,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 info = await info
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
+                "display_name": getattr(info, "display_name", None),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort"), "models": []})
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),

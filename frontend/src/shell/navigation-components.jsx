@@ -5,6 +5,7 @@ import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {WorkspaceExplorer} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
+import {ChatDelete} from '../chat-delete';
 import {AttentionBadge} from '../attention';
 import {PathField} from '../settings-ui';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
@@ -50,7 +51,6 @@ function useNavigationController(host,kind){
    if(draft.mode==='add')result=await act('workspace.create',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});
    else if(draft.mode==='rename')result=await act('workspace.rename',{id:draft.id,name:draft.name||''});
    else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});
-   else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});
    else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});
    if(result&&result.accepted!==false){if(draftVersion.current===version)setDraft({});}
    else setFormError(result?.error||'Could not save. Check the folder or name and try again.');
@@ -62,11 +62,11 @@ function useNavigationController(host,kind){
 }
 function NavigationEditor({model}){
  const {state,act,prefix,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
- return <>    {draft.mode&&draft.mode!=='chat-rename'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
-     <div className="a-nav-form-title"><strong>{draft.mode==='add'?'New workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':draft.mode==='remove'?'Remove workspace?':'Remove chat?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
+ return <>{draft.mode==='chat-delete'&&<div className="a-nav-form"><strong>Delete chat?</strong><ChatDelete key={draft.id} id={draft.id} act={act} cancel={()=>setDraft({})}/></div>}    {draft.mode&&draft.mode!=='chat-rename'&&draft.mode!=='chat-delete'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
+     <div className="a-nav-form-title"><strong>{draft.mode==='add'?'New workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':'Remove workspace?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
      {draft.mode==='add'&&<><p>Choose an existing folder, or enter a path to create one. Your first chat opens here.</p><label htmlFor={prefix+'-path'}>Folder</label><PathField id={prefix+'-path'} value={draft.path||''} onChange={path=>updateDraft({path})} directory state={state} act={act} placeholder="~/Projects/my-project"/></>}
-     {['add','rename','chat-rename'].includes(draft.mode)?<><label htmlFor={prefix+'-name'}>{draft.mode==='add'?'Name (optional)':'Name'}</label><input id={prefix+'-name'} maxLength={200} value={draft.name||''} required={draft.mode!=='add'} data-action="view.update" onChange={e=>updateDraft({name:e.target.value})}/></>:<p>{draft.mode==='remove'?`Remove ${draft.name} from this list? Its files and chats will stay on disk.`:`Remove ${draft.name} from this list? Its shared history stays on disk. Any work in progress in this app will stop.`}</p>}
-     <button type="submit" disabled={saving||(draft.mode==='add'&&!draft.path?.trim())} className={['remove','chat-delete'].includes(draft.mode)?'a-soft a-danger':'a-primary'} data-action={draft.mode==='add'?'workspace.create':draft.mode==='rename'?'workspace.rename':draft.mode==='remove'?'workspace.remove':draft.mode==='chat-delete'?'session.delete':'session.rename'}>{saving?'Saving…':draft.mode==='add'?'Create workspace':draft.mode==='remove'?'Remove registration':draft.mode==='chat-delete'?'Remove chat':'Save name'}</button>
+     {['add','rename','chat-rename'].includes(draft.mode)?<><label htmlFor={prefix+'-name'}>{draft.mode==='add'?'Name (optional)':'Name'}</label><input id={prefix+'-name'} maxLength={200} value={draft.name||''} required={draft.mode!=='add'} data-action="view.update" onChange={e=>updateDraft({name:e.target.value})}/></>:<p>Remove {draft.name} from this list? Its files and chats will stay on disk.</p>}
+     <button type="submit" disabled={saving||(draft.mode==='add'&&!draft.path?.trim())} className={draft.mode==='remove'?'a-soft a-danger':'a-primary'} data-action={draft.mode==='add'?'workspace.create':draft.mode==='rename'?'workspace.rename':draft.mode==='remove'?'workspace.remove':'session.rename'}>{saving?'Saving…':draft.mode==='add'?'Create workspace':draft.mode==='remove'?'Remove registration':'Save name'}</button>
      {formError&&<p role="alert" className="a-danger">{formError}</p>}
     </form>}
 </>;
@@ -85,19 +85,19 @@ function PairedWorkspaceBrowser({host,onOpen}){
 }
 export function ChatDetails({chat,model,now,close}){
  const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
- const title=chat.title||'Untitled conversation';
+ const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
-  <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
-  <CopyDetail label="Full workspace path" value={chat.workspace||'Unavailable'}/>
+  <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
+  <CopyDetail label={managed?"Chat files":"Full workspace path"} value={chat.workspace||'Unavailable'}/>
   <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
-  <p className="a-caption">Shared with Amplifier CLI in this workspace.</p>
+  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Shared with Amplifier CLI in this workspace.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
    <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
-   <button type="button" className="a-danger" aria-label={'Remove '+title+' from list'} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Remove</button>
+   {managed&&!chat.parentId&&<button type="button" className="a-danger" aria-label={'Delete '+title} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Delete</button>}
   </div>}
  </>;
 }

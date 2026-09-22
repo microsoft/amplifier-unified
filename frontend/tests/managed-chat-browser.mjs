@@ -1,7 +1,7 @@
 // Packaged UI plus isolated synthetic server. No provider inference or live data.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,stat,readdir} from 'node:fs/promises';
+import {mkdir,stat,readdir,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
@@ -47,6 +47,34 @@ try{
  await page.reload();await page.getByText('Synthetic first response',{exact:true}).waitFor();assert.deepEqual((await state()).sessions.find(row=>row.id===sid).location,{kind:'managed'});
  await page.getByRole('button',{name:'New chat',exact:true}).click();await expect(page.getByRole('button',{name:'No workspace',exact:true})).toHaveAttribute('aria-pressed','true');
  assert.equal((await readdir(folders)).length,1);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
+ // Only disposable fixture data is erased. Verify both reversible Archive
+ // and irreversible Delete through the actual packaged navigation controls.
+ await action('session.select',{id:sid});
+ await writeFile(path.join(row.workspace,'generated.txt'),'Disposable generated content');
+ await action('session.archive',{id:sid});
+ assert.equal((await stat(row.workspace)).isDirectory(),true);
+ await action('session.restore',{id:sid});
+ const chat=page.locator(`.a-nav-chat[data-session-id="${sid}"]`);
+ await chat.getByRole('button',{name:/Details and actions/}).click();
+ const details=page.locator('.a-navigation-flyout');
+ await expect(details.getByRole('button',{name:/^Remove /})).toHaveCount(0);
+ await details.getByRole('button',{name:/^Delete /}).click();
+ await page.getByRole('button',{name:'Delete permanently',exact:true}).waitFor();
+ await expect(page.locator('.a-chat-delete')).toContainText('This cannot be undone.');
+ await page.getByRole('button',{name:'Keep chat',exact:true}).click();
+ assert.equal((await stat(row.workspace)).isDirectory(),true);
+ assert.equal(calls.filter(call=>call.action==='session.delete').length,0);
+ await chat.getByRole('button',{name:/Details and actions/}).click();
+ await details.getByRole('button',{name:/^Delete /}).click();
+ await page.getByRole('button',{name:'Delete permanently',exact:true}).waitFor();
+ await page.screenshot({path:'/tmp/amplifier-managed-chat/delete-confirmation.png'});
+ await page.getByRole('button',{name:'Delete permanently',exact:true}).click();
+ await expect.poll(async()=>(await state()).sessions.some(row=>row.id===sid)).toBe(false);
+ await assert.rejects(stat(row.workspace));
+ await page.reload();await composer.waitFor();
+ assert.equal((await state()).sessions.some(row=>row.id===sid),false);
+ assert.equal(calls.filter(call=>call.action==='session.delete').length,1);
+ assert.equal((await inspect()).sent.length,1,'Deleting or restoring a chat never replays its work');
  assert.deepEqual(errors,[]);
- console.log('Managed chat browser passed: location choice, global defaults, compact controls, draft reload/attachments, no allocation until first send, mobile layout, isolated storage, All chats filter, saved history, no extra workspace registrations.');
+ console.log('Managed chat browser passed: location choice, global defaults, compact controls, draft reload/attachments, no allocation until first send, mobile layout, isolated storage, All chats filter, saved history, no extra workspace registrations, archive/restore, cancel, confirmed permanent deletion and no replay.');
 }finally{await browser?.close();fixture.kill()}
