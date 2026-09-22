@@ -50,5 +50,25 @@ try{
  await page.screenshot({path:out+'/workspace-settings.png'});await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveValue('Keep this draft through workspace setup');await picker.selectOption(':create:');form=page.getByRole('form',{name:'Create workspace'});await form.getByLabel('Workspace name',{exact:true}).fill('Research');await form.getByRole('button',{name:'Create workspace',exact:true}).click();await expect(form).toHaveCount(0);assert.equal((await state()).view.newSessionDraft.workspace,path.join(root,'research'));
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();current=await state();assert.equal(current.sessions.length,1);assert.equal(current.sessions[0].workspace,path.join(root,'research'));assert.equal(current.sessions[0].messages[0].attachments[0].name,'notes.txt');
- await page.screenshot({path:out+'/sidebar.png'});assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',scenarios:10,screenshots:out}));
+ await page.screenshot({path:out+'/sidebar.png'});
+ // Default navigation retains direct ordering and never changes the active chat
+ // or its unsent message. Use the real shared pin-order action and persistence.
+ const first=current.selectedSessionId,firstTitle=current.sessions.find(row=>row.id===first).title;
+ await action('session.create',{workspace:path.join(root,'research'),title:'Second pinned chat'});const second=(await state()).selectedSessionId;
+ await action('session.create',{workspace:path.join(root,'research'),title:'Third pinned chat'});const third=(await state()).selectedSessionId;
+ for(const id of [first,second,third])await action('session.pin',{id,pinned:true});
+ await action('session.select',{id:first});await composer.fill('Keep this unsent draft while moving pins');
+ const pinned=page.getByRole('region',{name:'Pinned chats'}),handle=title=>pinned.getByRole('button',{name:'Reorder '+title,exact:true});
+ const order=()=>pinned.locator('[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
+ await expect.poll(order).toEqual([first,second,third]);
+ await handle('Second pinned chat').focus();await page.keyboard.press('Alt+ArrowUp');
+ await expect.poll(order).toEqual([second,first,third]);await expect(handle('Second pinned chat')).toBeFocused();
+ await page.keyboard.press('Alt+ArrowDown');await expect.poll(order).toEqual([first,second,third]);
+ await handle('Third pinned chat').dragTo(pinned.locator('[data-session-id="'+first+'"]'));
+ await expect.poll(order).toEqual([third,first,second]);await expect.poll(async()=>(await state()).pinnedSessionIds).toEqual([third,first,second]);
+ assert.equal((await state()).selectedSessionId,first);await expect(composer).toHaveValue('Keep this unsent draft while moving pins');
+ await page.screenshot({path:out+'/pins-reordered.png'});
+ await page.reload();await expect(handle(firstTitle)).toBeVisible();await expect.poll(order).toEqual([third,first,second]);
+ assert.equal((await state()).selectedSessionId,first);await expect(composer).toHaveValue('Keep this unsent draft while moving pins');
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',scenarios:13,screenshots:out}));
 }finally{await browser?.close();fixture.kill('SIGTERM')}

@@ -5,7 +5,7 @@ import {activityFor} from './navigation-presentation';
 import {WorkspaceForm} from './workspace-setup';
 import './workspace-setup.css';
 
-export function SimpleNavigation({model,workspaceHost,ChatDetails}){
+export function SimpleNavigation({model,workspaceHost,ChatDetails,pinRowProps,renderPinHandle,pinError}){
  const {state,act,view,workspace,chats,choose,setDraft}=model,now=useActivityClock();
  const createButton=useRef(null);
  const closeCreate=()=>{setCreating(false);requestAnimationFrame(()=>createButton.current?.focus())};
@@ -18,12 +18,14 @@ export function SimpleNavigation({model,workspaceHost,ChatDetails}){
  const hostAct=workspaceHost?.dispatch||act;
  const moreWorkspaces=async()=>{if(loadingMore)return;setLoadingMore(true);try{const value=await hostAct('workspace.list',{offset:nextOffset}),result=value?.result?.accepted!==undefined?value.result:value;if(!result?.accepted)throw Error(result?.error||'Could not load workspaces.');setExtra(previous=>({items:[...previous.items,...result.result.items],nextOffset:result.result.nextOffset}));setError('')}catch(err){setError(err.message)}finally{setLoadingMore(false)}};
  const open=async row=>{try{setError('');await hostAct('workspace.select',{id:row.id});await patch({navWorkspaceList:false,navChatScope:'workspace',navFilter:'',navStatusFilter:'all',navArchive:'active',navLocationFilter:'all'})}catch(err){setError(err.message)}};
- const renderChat=chat=><NavigationRow key={chat.id} className={`a-nav-chat ${chat.id===state.selectedSessionId?'is-selected':''}`} data-session-id={chat.id} label={chat.title||'Untitled conversation'} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>
+ const renderChat=chat=><NavigationRow key={chat.id} className={`a-nav-chat ${chat.id===state.selectedSessionId?'is-selected':''}`} data-session-id={chat.id} {...pinRowProps(chat)} label={chat.title||'Untitled conversation'} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>
+  {renderPinHandle(chat,pins)}
   <button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} onClick={()=>choose(chat.id)}><NavigationStatus activity={activityFor(chat,state)}/><span className="a-nav-chat-label"><span>{chat.title||'Untitled conversation'}</span></span></button>
  </NavigationRow>;
  const labels=new Map();for(const row of workspaces)labels.set(row.name,(labels.get(row.name)||0)+1);
  return <div className="a-simple-navigation">
   <button type="button" className="a-nav-main" data-action="view.update" onClick={()=>patch({navSimple:false,navChatScope:'all',navFilter:''})}><Search/>Search chats</button>
+  {pinError&&<p role="alert" className="a-danger">{pinError}</p>}
   {pins.length>0&&<section aria-label="Pinned chats"><h4 className="a-nav-chat-group-title">Pinned</h4>{pins.map(renderChat)}</section>}
   <section aria-label="Workspaces"><div className="a-simple-nav-heading"><h4 className="a-nav-chat-group-title">Workspaces</h4><button type="button" className="a-icon" ref={createButton} aria-label="New workspace" onClick={()=>setCreating(true)}><Plus/></button></div>
    {creating&&<WorkspaceForm state={state} act={hostAct} onCancel={closeCreate} onDone={closeCreate}/>}

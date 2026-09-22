@@ -26,9 +26,9 @@ Validation recorded on 2026-09-22:
 
 - Full Python run after integration with main `1b56d652`: 3,183 passed, 130 skipped (environment/integration prerequisites).
 - After the final directory-identity and malformed-reference guards: 33 placement, agent-control and history tests passed.
-- Frontend unit suite: 291 passed, including sidebar grouping and pagination.
+- Frontend unit suite: 296 passed, including sidebar grouping, pagination, direct pin reordering in both navigation views, hidden-pin preservation, duplicate requests and rejected-receipt retry.
 - Production frontend build passed on the integrated source.
-- Workspace browser: 10 scenarios, including desktop, 320/390-pixel layouts, light/dark and draft/attachment preservation.
+- Workspace browser: 13 scenarios, including desktop, 320/390-pixel layouts, light/dark, draft/attachment preservation, real drag-and-drop and Alt+Up/Down pin reordering, retained keyboard focus and persisted order after reload.
 - Existing new-chat and first-send recovery browser checks passed.
 
 ## Existing mechanisms retained

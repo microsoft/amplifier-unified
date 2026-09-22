@@ -268,3 +268,58 @@ test('simple sidebar loads later empty workspaces without leaving the simple vie
  assert.equal(root.root.findAllByType('button').some(button=>button.children.join('')==='More workspaces'),false);
  await renderAct(async()=>root.unmount());
 });
+
+function pinnedNavigation(simple){
+ const state=initial();state.view.navSimple=simple;state.view.navWorkspaceList=false;
+ state.pinnedSessionIds=['a','hidden','b','off-page'];
+ state.homeNavigation={items:state.sessions.slice(0,2).map(chat=>({...chat,pinned:true}))};
+ state.workspaceOverview={items:state.workspaces};return state;
+}
+for(const simple of [true,false]){
+ const label=simple?'default sidebar':'All chats sidebar';
+ test(`${label} restores keyboard pin ordering without dropping hidden pins`,async()=>{
+  const state=pinnedNavigation(simple),calls=[];let root;
+  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
+  const handle=title=>root.root.findByProps({'aria-label':'Reorder '+title});
+  const key=(key,altKey=true)=>({key,altKey,preventDefault(){}});
+  await renderAct(async()=>{handle('First plan').props.onKeyDown(key('ArrowUp'));handle('Another plan').props.onKeyDown(key('ArrowDown'));handle('Another plan').props.onKeyDown(key('ArrowUp',false))});
+  assert.equal(calls.length,0);
+  await renderAct(async()=>handle('Another plan').props.onKeyDown(key('ArrowUp')));
+  assert.deepEqual(calls.at(-1),{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}});
+  await renderAct(async()=>handle('First plan').props.onKeyDown(key('ArrowDown')));
+  assert.deepEqual(calls.at(-1),{name:'session.pinOrder',args:{ids:['hidden','b','a','off-page']}});
+  assert.ok(calls.every(call=>call.name==='session.pinOrder'));
+  await renderAct(async()=>root.unmount());
+ });
+ test(`${label} drag and drop uses the same pin-order action`,async()=>{
+  const state=pinnedNavigation(simple),calls=[];let root;
+  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
+  const row=id=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']===id)[0];
+  const dataTransfer={setData(type,value){this[type]=value}};
+  let prevented=0;const event={dataTransfer,preventDefault(){prevented++}};
+  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(calls.length,0);
+  await renderAct(async()=>root.root.findByProps({'aria-label':'Reorder Another plan'}).props.onDragStart(event));
+  assert.equal(dataTransfer['text/plain'],'b');assert.equal(dataTransfer.effectAllowed,'move');assert.equal(row('b').props['data-pin-dragging'],true);
+  await renderAct(async()=>row('a').props.onDragOver(event));assert.equal(dataTransfer.dropEffect,'move');
+  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(prevented,2);
+  assert.deepEqual(calls,[{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}}]);
+  assert.equal(row('b').props['data-pin-dragging'],undefined);
+  await renderAct(async()=>root.unmount());
+ });
+}
+test('default sidebar prevents duplicate pending reorders and allows retry after a rejected receipt',async()=>{
+ const state=pinnedNavigation(true),calls=[];let root,settle;
+ const act=async(name,args)=>{calls.push({name,args});return calls.length===1?new Promise(resolve=>{settle=resolve}):{accepted:true}};
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ const handle=()=>root.root.findByProps({'aria-label':'Reorder Another plan'});
+ const event={altKey:true,key:'ArrowUp',preventDefault(){}};
+ await renderAct(async()=>{handle().props.onKeyDown(event);handle().props.onKeyDown(event)});
+ assert.equal(calls.length,1);assert.equal(handle().props['aria-disabled'],true);assert.equal(handle().props.draggable,false);
+ await renderAct(async()=>settle({accepted:true,result:{accepted:false,error:'Pin order changed. Please retry.'}}));
+ assert.equal(handle().props['aria-disabled'],false);
+ assert.ok(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')));
+ assert.deepEqual(state.pinnedSessionIds,['a','hidden','b','off-page']);
+ await renderAct(async()=>handle().props.onKeyDown(event));assert.equal(calls.length,2);
+ assert.equal(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')),false);
+ await renderAct(async()=>root.unmount());
+});
