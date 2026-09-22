@@ -57,7 +57,7 @@ try{
  await page.getByRole('combobox',{name:'Reader text size'}).selectOption('22');
  await expect.poll(async()=>(await view('primary')).view.readerScale).toBe(22);
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.locator('#scheme').selectOption('dark');await page.locator('#layout').selectOption('work');
+ await page.getByRole('button',{name:'Dark',exact:true}).click();await page.locator('#layout').selectOption('work');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.equal(await side.frameLocator('iframe').getByRole('textbox',{name:'Viewer note'}).inputValue(),'Still here');
  assert.deepEqual(await page.evaluate(()=>({frame:window.proof.frame===document.querySelector('[data-canvas-view="secondary"] iframe'),root:window.proof.root===document.getElementById('amp-one'),conversation:window.proof.conversation===document.querySelector('[data-part="conversation"]'),time:window.proof.time===performance.timeOrigin,host:window.proof.host===window.amplifier.getState().client.hostInstanceId,session:window.proof.session===window.amplifier.getState().selectedSessionId})),{frame:true,root:true,conversation:true,time:true,host:true,session:true});

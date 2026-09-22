@@ -25,6 +25,7 @@ try{
  await page.addInitScript(()=>{const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
+  if(path==='/api/shell')return route.fulfill({json:{composition:{instances:[],presentation:{}},resolvedInstances:[{id:'appearance',package:'builtin.appearance',slot:'settings.appearance'}],slots:{'settings.appearance':{default:'builtin.appearance'}},snapshots:{appearance:{generation:1}},packages:{}}});
   if(path==='/api/state')return route.fulfill({json:state});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
@@ -35,7 +36,7 @@ try{
  await page.goto(vite.resolvedUrls.local[0]);await page.locator('#amp-one').waitFor();
  for(const [patch,selector,text] of cases){
   await page.evaluate(patch=>window.amplifier.dispatch('view.update',{patch}),patch);
-  const field=page.locator(selector);await field.waitFor();gate=new Promise(resolve=>release=resolve);
+  if(selector.startsWith('#theme-')&&!await page.locator(selector).isVisible())await page.getByText('Advanced customization',{exact:true}).click();const field=page.locator(selector);await field.waitFor();gate=new Promise(resolve=>release=resolve);
   await field.fill('');await field.pressSequentially(text,{delay:10});
   for(let i=0;i<5;i++){state.revision++;await page.evaluate(state=>window.emitState(state),state)}
   assert.equal(await field.inputValue(),text,selector+' retained every character during delayed saves');
@@ -49,4 +50,4 @@ try{
   console.log('Passed delayed typing and concurrent updates: '+selector);
  }
  assert.deepEqual(errors,[]);console.log('All 12 audited fields retained typing and caret state; no external command or feedback submission was made.');
-}finally{release?.();await browser?.close();await vite?.close()}
+}finally{if(errors.length)console.error(errors);release?.();await browser?.close();await vite?.close()}

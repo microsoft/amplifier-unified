@@ -126,6 +126,7 @@ jobs:
         run: |
           npm run test:themes-browser
           npm run test:appearance-startup-browser
+          npm run test:appearance-library-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend

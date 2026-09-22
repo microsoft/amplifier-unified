@@ -229,6 +229,9 @@ def validate_theme(css):
     visit(rules)
 
 
+from .theme_library import definitions as theme_library_definitions
+ACTION_DEFINITIONS.update(theme_library_definitions(schema, string))
+
 from .smart_canvas import definitions as smart_tool_definitions
 ACTION_DEFINITIONS.update(smart_tool_definitions(schema, string))
 from .conversation_library import definitions as library_definitions
@@ -835,6 +838,10 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action in {'theme.list', 'theme.read'}:
+            from . import theme_library
+            value = await asyncio.to_thread(theme_library.listing, self) if action == 'theme.list' else await asyncio.to_thread(theme_library.read, self, args['id'])
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': value}
         if action in {'session.deletePreview', 'session.delete'}:
             from .managed_deletion import dispatch as delete_managed_chat
             return await delete_managed_chat(self, action, args, origin, include_state)
@@ -1639,11 +1646,15 @@ class AppService:
                     SettingsStore(self.data_dir).update(self.state["settings"]["workspace"], "global", save_shared)
                 self.state["settings"].update(copy.deepcopy(patch))
                 self._refresh_shared_preferences()
+            elif action == 'theme.save':
+                from .theme_library import save
+                diagnostic_result = save(self, args)
             elif action in {'theme.apply', 'theme.preview', 'theme.revert'}:
                 from .canvas_apps import theme_command
                 theme_command(self, action, args)
             elif action == "theme.reset":
                 self.state["theme"] = {"name": "Amplifier Unified", "css": self.default_theme()}
+                self.state["view"]["themePreview"] = False
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
             elif action in {"call.start", "call.mute", "call.end"}:

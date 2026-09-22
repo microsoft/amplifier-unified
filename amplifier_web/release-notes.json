@@ -5,6 +5,9 @@
       "version": "0.20.6",
       "title": "Simpler chats, stable Canvas controls and faster setup",
       "changes": [
+        "Preview Aurora, Atelier and Graphite appearances in a redesigned gallery, with light/dark modes, optional backgrounds and a persistent shared CSS appearance library.",
+        "Connected Terminal Resume and latest-session listings default to the directory where amplifier-unified tui is launched. An explicit --workspace still selects a server-side directory.",
+        "Unexpected worker startup exits retain a private local diagnostic log instead of discarding the underlying setup error.",
         "Start chats without choosing a workspace. Each uses a private managed folder; the chat is created only when its first message is sent.",
         "Delete managed chats through an explicit confirmation that previews the affected saved data. Workspace chats keep Archive and Restore; the ambiguous Remove action is gone.",
         "Choose provider, model, reasoning effort and bundle directly in the composer. Compact selectors show the actual selection, group duplicate provider labels, and retain bundle descriptions.",
