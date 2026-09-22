@@ -4,6 +4,7 @@ import json
 import uuid
 
 from .host.config import write_private
+from .managed_chats import is_managed
 from .runtime_controls import public_config
 from amplifier_scheduling.store import fingerprint
 
@@ -24,9 +25,10 @@ def template(service, source):
     if 'capacity' in state:
         controls['capacity'] = {**copy.deepcopy(state['capacity']), 'revision': 0}
     selection = copy.deepcopy(source.get('selection') or controls.get('selection'))
-    config = {'workspace': source.get('workingDirectory') or source['workspace'], 'bundle': source['bundle'],
+    location = {'location': {'kind': 'managed'}} if is_managed(source) else {}
+    config = {**location, 'workspace': source.get('workingDirectory') or source['workspace'], 'bundle': source['bundle'],
               'selection': selection, 'plan': plan, 'controls': controls}
-    return config, {'workspace': config['workspace'], 'bundle': config['bundle'],
+    return config, {**location, 'workspace': config['workspace'], 'bundle': config['bundle'],
                     'selection': public_config(selection), 'configurationHash': fingerprint(config)}
 
 
@@ -55,8 +57,12 @@ def prepare(service, args, origin, caller_session_id):
         raise ValueError('The reviewed source configuration changed; preview again')
     if args.get('selection') and args['selection'] != config['selection']:
         raise ValueError('The explicit model selection must match the reviewed inherited configuration')
-    if args.get('workspace') != config['workspace'] or args.get('bundle') != config['bundle']:
-        raise ValueError('The new conversation must use the reviewed workspace and bundle')
+    # Managed inheritance copies reviewed configuration, never the source's
+    # files directory. session.create allocates a fresh folder for its identity.
+    managed = is_managed(config)
+    if (is_managed(args) != managed or args.get('bundle') != config['bundle']
+            or (bool(args.get('workspace', '').strip()) if managed else args.get('workspace') != config['workspace'])):
+        raise ValueError('The new conversation must use the reviewed location and bundle')
     return config
 
 
