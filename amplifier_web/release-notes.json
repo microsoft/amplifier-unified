@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.7",
+      "title": "Clear compaction activity and reliable agent controls",
+      "changes": [
+        "Context compaction calls are identified separately from ordinary replies, retain usage and safe failure details, and keep internal summary text out of the conversation.",
+        "Compaction summaries retain their requested reasoning effort when the conversation has a higher effort selected. Budget checks and model dispatch use the same setting.",
+        "Malformed app_control requests receive a clear corrective request shape before any action executes, while valid action receipts remain unchanged."
+      ],
+      "notices": [
+        {
+          "id": "update-compaction-components",
+          "title": "Update companion components for compaction recovery",
+          "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
+          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+        }
+      ]
+    },
+    {
       "version": "0.20.6",
       "title": "Simpler chats, stable Canvas controls and faster setup",
       "changes": [
