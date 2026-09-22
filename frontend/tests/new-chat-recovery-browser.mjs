@@ -71,6 +71,13 @@ try{
  await page.getByRole('button',{name:'Start worker',exact:true}).click();await expect.poll(()=>workers.length).toBe(1);await reply(workers.shift().route);
  await expect(page.getByRole('dialog')).toHaveCount(0);assert.equal(state.view.workerDraft,'');
  await page.reload();await composer.waitFor();await action('view.update',{patch:{panel:'worker'}});await expect(worker).toHaveValue('');
+ await worker.fill('Submitted worker instruction');await page.getByRole('button',{name:'Start worker',exact:true}).click();
+ await expect.poll(()=>workers.length).toBe(1);const sharedWorker=workers.shift();
+ assert.equal(sharedWorker.body.args.instruction,'Submitted worker instruction');
+ // An agent's shared-view update arrives with the delayed submission receipt.
+ state.view={...state.view,workerDraft:'A newer shared worker draft'};await reply(sharedWorker.route);
+ await expect(worker).toHaveValue('A newer shared worker draft');await expect(page.getByRole('dialog')).toBeVisible();
+ assert.equal(state.view.workerDraft,'A newer shared worker draft');
  await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New workspace',exact:true}).click();
  const workspace=page.locator('#nav-workspace-path');await workspace.fill('/first-workspace');await page.getByRole('button',{name:'Create workspace',exact:true}).click();
  await expect.poll(()=>workspaces.length).toBe(1);await workspace.fill('/newer-workspace');await reply(workspaces.shift().route);
@@ -80,5 +87,5 @@ try{
  await page.getByRole('button',{name:'Create workspace',exact:true}).click();await expect.poll(()=>workspaces.length).toBe(1);await reply(workspaces.shift().route);
  await expect(workspace).toHaveCount(0);assert.deepEqual(state.view.workspaceDraft,{});
  assert.deepEqual(errors,[]);
- console.log('New chat recovery passed: truthful new-chat header; persisted failed-message discard; inline creation error; corrected-path retry sends once; worker success persists reset; failure/new typing retained; modal error dismissal. Zero model calls.');
+ console.log('New chat recovery passed: truthful new-chat header; persisted failed-message discard; inline creation error; corrected-path retry sends once; worker success persists reset; failure/local and shared newer drafts retained; modal error dismissal. Zero model calls.');
 }finally{await browser?.close();await vite?.close()}

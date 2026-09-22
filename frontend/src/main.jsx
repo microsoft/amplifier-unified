@@ -311,11 +311,13 @@ function App(){
 
  async function submitWorker(event){
   event.preventDefault();if(workerSubmission.current.busy||!workerDraft.trim())return;
-  const revision=workerSubmission.current.revision,sessionId=latest.current?.selectedSessionId;
+  const revision=workerSubmission.current.revision,sessionId=latest.current?.selectedSessionId,instruction=workerDraft;
   workerSubmission.current.busy=true;setWorkerSending(true);setError('');
   try{
-   await dispatch('worker.spawn',{sessionId,instruction:workerDraft});
-   if(workerSubmission.current.revision===revision&&latest.current?.selectedSessionId===sessionId){
+   await dispatch('worker.spawn',{sessionId,instruction});
+   // An agent can replace this shared draft while the submission is pending.
+   const currentDraft=pendingView.current.apply(latest.current)?.view?.workerDraft;
+   if(workerSubmission.current.revision===revision&&latest.current?.selectedSessionId===sessionId&&currentDraft===instruction){
     setWorkerDraft('');
     await dispatch('view.update',{patch:{workerDraft:'',...(latest.current?.view?.panel==='worker'?{panel:null}:{})}});
    }
