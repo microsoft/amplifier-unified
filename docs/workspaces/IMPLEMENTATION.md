@@ -24,10 +24,10 @@ Rendered design references under `mockups/` remain illustrative. They are not de
 
 Validation recorded on 2026-09-22:
 
-- Full Python run: 2,335 passed, 127 skipped (environment/integration prerequisites), before the final alias/discovery refinements.
-- Final relevant Python suites were rerun after those refinements; see the PR for exact counts.
-- Frontend unit suite: 287 passed.
-- Production frontend build passed.
+- Full Python run after integration with main `1b56d652`: 3,183 passed, 130 skipped (environment/integration prerequisites).
+- After the final directory-identity and malformed-reference guards: 33 placement, agent-control and history tests passed.
+- Frontend unit suite: 291 passed, including sidebar grouping and pagination.
+- Production frontend build passed on the integrated source.
 - Workspace browser: 10 scenarios, including desktop, 320/390-pixel layouts, light/dark and draft/attachment preservation.
 - Existing new-chat and first-send recovery browser checks passed.
 
