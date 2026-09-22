@@ -34,6 +34,9 @@ jobs:
       - run: git diff --exit-code -- amplifier_web/static
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
+      - name: Verify active clients with a large conversation library
+        working-directory: frontend
+        run: npm run test:active-client-performance-browser
       - name: Exercise shared workflow controls in compiled UI
         working-directory: frontend
         run: |

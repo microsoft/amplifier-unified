@@ -117,11 +117,17 @@ class Portability:
             raise ValueError('End the active voice call before moving the task')
 
     def sync(self):
-        self.app.state['portability'] = {'host': self.node.identity, 'receipts': self.node.records()}
+        receipts = self.node.records()
+        by_session = {}
+        for row in receipts:
+            by_session.setdefault(row['sessionId'], []).append(row)
+        self.app.state['portability'] = {'host': self.node.identity, 'receipts': receipts}
         for session in self.app.state['sessions']:
-            rows = self.node.records(session['id'])
+            rows = by_session.get(session['id'])
             if rows:
-                session['portability'] = {'host': self.node.identity, 'receipts': rows, 'fenced': self.fenced(session['id'])}
+                # Share only the read, not mutable projection values or authority.
+                # Fence checks still read current ownership evidence from disk.
+                session['portability'] = {'host': self.node.identity, 'receipts': copy.deepcopy(rows), 'fenced': self.fenced(session['id'])}
                 if self.fenced(session['id']):
                     session['configurationBusy'] = True
 
