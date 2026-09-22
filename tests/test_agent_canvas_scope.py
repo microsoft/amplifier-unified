@@ -193,6 +193,35 @@ async def test_managed_background_artifact_has_no_ambient_workspace(app):
     assert result['state']['canvas']['id'] == artifact
 
 
+async def test_navigation_after_commit_preserves_successful_selection_receipt(app, monkeypatch):
+    sid = caller(app)
+    artifact = await publish(app, sid)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = app._flush_pending_progress
+
+    async def delayed_flush():
+        entered.set()
+        await release.wait()
+        await original()
+
+    monkeypatch.setattr(app, '_flush_pending_progress', delayed_flush)
+    task = asyncio.create_task(agent(app, sid, 'canvas.select', {'id': artifact}))
+    await entered.wait()
+    assert app.clients.records['caller']['canvas']['id'] == artifact
+    try:
+        await command(app, 'caller', 'session.select', {'id': app.state['selectedSessionId']})
+    finally:
+        release.set()
+    result = await task
+    assert result['accepted']
+    assert result['state']['selectedSessionId'] == sid
+    assert result['state']['canvasContext']['status'] == 'detached'
+    assert result['state']['canvas']['placeholder']
+    assert app.clients.records['caller']['selectedSessionId'] == app.state['selectedSessionId']
+    with pytest.raises(AppError, match='calling conversation'):
+        await read(app, sid, clientId='caller')
+
+
 async def test_legacy_default_without_attached_clients_still_works(tmp_path):
     app = AppService(tmp_path/'data', workspace=tmp_path)
     try:

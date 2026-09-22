@@ -215,6 +215,9 @@ presentation is attached, ambiguous, or unattached. `get_state {clientId, ...}`
 can address one matching client explicitly. Without a unique target, `/canvas`
 is a closed placeholder and the caller's saved artifact index remains available;
 the host does not present another chat's Canvas or composer as the caller's.
+If the client navigates after selection commits, the accepted receipt remains
+successful and its readback reports a detached placeholder instead of failing
+the completed action. Explicit reads still reject a client displaying another chat.
 
 Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
 only through the retained user messages. Editing forks before the original user

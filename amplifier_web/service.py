@@ -2453,7 +2453,7 @@ class AppService:
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:
                 from .agent_canvas import state
-                context = read_state(state(self, session_id, canvas_client), {}, session_id=session_id, resolve=self.state_resource)
+                context = read_state(state(self, session_id, canvas_client, allow_detached=True), {}, session_id=session_id, resolve=self.state_resource)
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 

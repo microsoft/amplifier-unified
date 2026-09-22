@@ -13,7 +13,7 @@ def scope(service, session_id, *, required=True):
     return session_id, workspace['id'] if workspace else None
 
 
-def target(service, session_id, client_id=None, *, required=False):
+def target(service, session_id, client_id=None, *, required=False, allow_detached=False):
     from .service import AppError
     sid, workspace_id = scope(service, session_id, required=False)
 
@@ -26,6 +26,8 @@ def target(service, session_id, client_id=None, *, required=False):
     if client_id is not None:
         service.clients.validate(client_id)
         if client_id not in candidates:
+            if allow_detached:
+                return None, candidates
             raise AppError('Choose a client displaying the calling conversation.', 409)
         return client_id, candidates
     current = service.clients.current.get()
@@ -53,17 +55,18 @@ def selection_target(service, session_id, args):
     return target(service, session_id, args.get('clientId'), required=True)[0]
 
 
-def state(service, session_id, client_id=None):
+def state(service, session_id, client_id=None, *, allow_detached=False):
     """Project caller Canvas state; absent/ambiguous clients have no active view.
 
     Keep the full artifact catalog and its JSON Pointer indices intact. This is
     presentation scoping, not a replacement for artifact ownership validation.
     """
-    identity, candidates = target(service, session_id, client_id)
+    identity, candidates = target(service, session_id, client_id, allow_detached=allow_detached)
+    detached = client_id is not None and identity is None
     sid, workspace_id = scope(service, session_id, required=False)
     with service.clients.bind(identity):
         snapshot = service.state_context()
-    legacy = (not service.clients.records
+    legacy = (not detached and not service.clients.records
               and snapshot.get('selectedSessionId') == sid
               and snapshot.get('selectedWorkspaceId') == workspace_id)
     if identity is None and not legacy:
@@ -74,6 +77,6 @@ def state(service, session_id, client_id=None):
         snapshot.pop('client', None)
         snapshot.pop('canvasWorkspace', None)
     snapshot['canvasContext'] = {'sessionId': sid, 'clientId': identity, 'clientIds': candidates,
-                                 'status': 'client' if identity else 'default' if legacy else
+                                 'status': 'detached' if detached else 'client' if identity else 'default' if legacy else
                                  'ambiguous' if candidates else 'unattached'}
     return snapshot
