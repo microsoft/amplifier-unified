@@ -54,6 +54,20 @@ class NormalizationTests(unittest.TestCase):
     def test_assistant_retains_input_identity(self):
         self.assertEqual(normalize_event({'type':'assistant.message','text':'hello'},'p','turn')[1]['inputId'],'turn')
 
+    def test_assistant_keeps_public_message_provenance_and_known_event_time(self):
+        _, payload = normalize_event({'type':'assistant.message', 'text':'progress', 'generation_id':'g',
+            'message_id':'m', 'event_id':'e', 'sequence':12, 'time':123.5, 'reasoning':'private'}, 'parent')
+        self.assertEqual(payload['runtimeMessage'], {'messageId':'m', 'eventId':'e', 'sequence':12})
+        self.assertEqual(payload['createdAt'],123.5)
+        self.assertTrue(payload['timestampKnown'])
+        self.assertNotIn('reasoning',payload)
+
+    def test_assistant_does_not_invent_provenance_or_accept_invalid_times(self):
+        for value in (None, 'yesterday', True, float('nan'), float('inf'), -1):
+            _, payload = normalize_event({'type':'assistant.message', 'text':'progress', 'sequence':1, 'time':value}, 'parent')
+            self.assertNotIn('runtimeMessage',payload)
+            self.assertNotIn('createdAt',payload)
+
     def test_background_activity_reports_waiting_without_exposing_extra_fields(self):
         kind, payload = normalize_event({'type':'runtime.activity','phase':'waiting-workers',
             'detail':'Waiting for 5 delegated tasks to report back.', 'activeWorkers':5,
