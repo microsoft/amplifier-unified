@@ -54,8 +54,8 @@ def read_settings(workspace, *, shared_home=None, session_id=None, global_only=F
     return read_scoped_settings(settings_paths(workspace, shared_home=shared_home, session_id=session_id, global_only=global_only).values())
 
 
-def routing_dirs(workspace, *, shared_home=None):
+def routing_dirs(workspace, *, shared_home=None, global_only=False):
     root = Path(shared_home or amplifier_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve()
     from .managed_chats import metadata
-    return [root / "routing"] if metadata(workspace) else [workspace / ".amplifier" / "routing.local", workspace / ".amplifier" / "routing", root / "routing"]
+    return [root / "routing"] if global_only or metadata(workspace) else [workspace / ".amplifier" / "routing.local", workspace / ".amplifier" / "routing", root / "routing"]

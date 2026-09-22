@@ -52,3 +52,22 @@ async def test_default_action_is_read_only_and_keyed_to_requested_draft(tmp_path
     finally:
         await service.runtime.close()
         for task in list(service.tasks):task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_managed_probe_skips_app_directory_project_settings(tmp_path, monkeypatch):
+    import os
+    from amplifier_web.host import session
+    shared = tmp_path/'shared'; shared.mkdir()
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+    (shared/'settings.yaml').write_text('bundle:\n  active: global-bundle\n')
+    home=tmp_path/'app'; home.mkdir(); (home/'.amplifier').mkdir()
+    (home/'.amplifier'/'settings.yaml').write_text('bundle:\n  active: parent-project\n')
+    async def root(config, bundle, **kwargs):
+        assert config.active_bundle == 'global-bundle' and config.global_only
+        from amplifier_web.shared_settings import routing_dirs
+        assert routing_dirs(config.workspace,global_only=config.global_only) == [shared/'routing']
+        return None,types.SimpleNamespace(providers=[]),None
+    monkeypatch.setattr(session,'load_root_bundle',root)
+    await query({'home':str(home),'workspace':str(home),'bundle':'work','globalOnly':True})
+    assert not (home/'chats').exists()

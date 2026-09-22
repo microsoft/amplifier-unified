@@ -34,9 +34,9 @@ def catalog_entry(name, metadata=None):
     return {'name': name, 'value': name, 'label': label, 'description': description}
 
 
-def defaults(home, workspace, app_bundle=None):
+def defaults(home, workspace, app_bundle=None, *, global_only=False):
     from .shared_settings import read_yaml, settings_paths
-    paths = settings_paths(workspace)
+    paths = settings_paths(workspace, global_only=global_only)
     values = {key: read_yaml(path).get('bundle', {}).get('active') for key, path in paths.items()}
     workspace_bundle = values.get('local') or values.get('project')
     effective = workspace_bundle or app_bundle or values['global'] or 'work'

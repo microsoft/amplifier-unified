@@ -1,0 +1,52 @@
+// Packaged UI plus isolated synthetic server. No provider inference or live data.
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {mkdir,stat,readdir} from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
+ browser=await chromium.launch({headless:true});
+ const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[],calls=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
+ await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ await action('view.update',{patch:{navPinned:true}});
+ const initial=await state(),originalWorkspace=initial.settings.workspace,registered=(await inspect()).registeredWorkspaces.map(row=>row.id);
+ const folders=path.resolve(originalWorkspace,'../app/chats');
+ await page.getByRole('button',{name:'No workspace',exact:true}).click();
+ await expect(page.locator('#new-chat-workspace')).toHaveCount(0);
+ await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
+ await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle'})).toContainText('Work');
+ assert.equal((await state()).sessions.length,0);await assert.rejects(stat(folders));
+ const model=page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'});
+ await model.click();await expect(page.locator('#chat-provider')).toBeVisible();await page.locator('#chat-model').selectOption('chosen-model');await page.getByRole('button',{name:'Close model settings'}).click();
+ const saved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Save my managed chat');
+ await composer.fill('Save my managed chat');
+ await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Managed attachment')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();
+ await expect.poll(async()=>(await state()).view.draft).toBe('Save my managed chat');
+ await saved;await page.reload();await expect(composer).toHaveValue('Save my managed chat');
+ await expect(page.getByRole('button',{name:'No workspace',exact:true})).toHaveAttribute('aria-pressed','true');await assert.rejects(stat(folders));
+ await mkdir('/tmp/amplifier-managed-chat',{recursive:true});await page.screenshot({path:'/tmp/amplifier-managed-chat/draft-desktop.png'});
+ await action('view.update',{patch:{navPinned:false,navExpanded:false}});
+ for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:`/tmp/amplifier-managed-chat/draft-${width}.png`})}
+ await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
+ await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
+ let current=await state(),sid=current.selectedSessionId,row=current.sessions.find(row=>row.id===sid);
+ assert.deepEqual(row.location,{kind:'managed'});assert.equal(row.workspace,path.join(folders,sid,'files'));assert.equal((await stat(row.workspace)).isDirectory(),true);
+ assert.equal(current.selectedWorkspaceId,null);assert.deepEqual((await inspect()).registeredWorkspaces.map(row=>row.id),registered);
+ assert.equal((await inspect()).sent.length,1);assert.equal((await inspect()).sent[0].selection.model,'chosen-model');assert.equal((await inspect()).sent[0].attachments[0].name,'notes.txt');
+ await page.getByLabel('Filter chats by location').selectOption('managed');
+ await expect(page.getByLabel('Filter chats by location')).toHaveValue('managed');
+ await page.getByLabel('Filter chats by location').selectOption('all');await expect.poll(async()=>(await state()).chatNavigation.items.some(row=>row.id===sid)).toBe(true);
+ await page.reload();await page.getByText('Synthetic first response',{exact:true}).waitFor();assert.deepEqual((await state()).sessions.find(row=>row.id===sid).location,{kind:'managed'});
+ await page.getByRole('button',{name:'New chat',exact:true}).click();await expect(page.getByRole('button',{name:'No workspace',exact:true})).toHaveAttribute('aria-pressed','true');
+ assert.equal((await readdir(folders)).length,1);assert.equal(calls.filter(row=>row.action==='session.create').length,1);
+ assert.deepEqual(errors,[]);
+ console.log('Managed chat browser passed: location choice, global defaults, compact controls, draft reload/attachments, no allocation until first send, mobile layout, isolated storage, All chats filter, saved history, no extra workspace registrations.');
+}finally{await browser?.close();fixture.kill()}

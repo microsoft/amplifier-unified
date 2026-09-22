@@ -335,9 +335,14 @@ class Management:
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
         elif action=='configuration.defaults':
             from .draft_defaults import resolve_defaults
-            key=json.dumps([args['workspace'],args.get('bundle') or ''],separators=(',',':'),ensure_ascii=False)
+            from .managed_chats import is_managed
+            managed = is_managed(args)
+            workspace = str(self.service.data_dir) if managed else args.get('workspace', '')
+            if not workspace or managed and args.get('workspace', '').strip():
+                raise ValueError('Choose a workspace or a chat without a workspace.')
+            key=json.dumps(['' if managed else workspace,args.get('bundle') or '']+(['managed'] if managed else []),separators=(',',':'),ensure_ascii=False)
             try:
-                result=await resolve_defaults(self.service.data_dir,args['workspace'],args.get('bundle'),self.service.state['settings'].get('appBundle'))
+                result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
                 result['phase']='ready'
             except Exception:
                 result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}

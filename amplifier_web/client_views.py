@@ -119,8 +119,8 @@ class ClientViews:
         selected = next((row for row in self.service._state.get("sessions", []) if row["id"] == sid), {})
         managed = is_managed(selected) or (sid is None and is_managed(record.get("view", {}).get("newSessionDraft", {})))
         workspace = record.get("selectedWorkspaceId")
-        if managed:
-            record["selectedWorkspaceId"] = None
+        if managed and workspace is None:
+            pass
         elif not any(row["id"] == workspace for row in self.service._state.get("workspaces", [])):
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
         from .canvas_library import restore_body

@@ -178,3 +178,39 @@ def test_managed_allocation_refuses_symlink_and_preserves_existing_files(tmp_pat
     with pytest.raises(ValueError, match='symbolic link'):
         allocate(home, str(uuid.uuid4()), 'attempt')
     assert not list(outside.iterdir())
+
+
+async def test_managed_default_resolution_is_global_and_has_separate_cache_key(app, monkeypatch):
+    from amplifier_web.management import Management
+    from amplifier_web import draft_defaults
+    app.management = Management(app)
+    seen = []
+    async def resolve(home, workspace, bundle, app_bundle, **kwargs):
+        seen.append((workspace, kwargs))
+        return {'bundle': 'work', 'effective': {'model': 'global-model'}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    await app.management.command('configuration.defaults', {'location': {'kind': 'managed'}})
+    assert seen == [(str(app.data_dir), {'global_only': True})]
+    assert app.state['draftDefaults']['["","","managed"]']['effective']['model'] == 'global-model'
+    assert not (app.data_dir/'chats').exists() and not app.state['sessions']
+
+
+async def test_workspace_selection_remains_usable_after_managed_chat(app):
+    created = await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}})
+    original = app.state['workspaces'][0]
+    await command(app, 'web', 'workspace.select', {'id': original['id']})
+    await command(app, 'web', 'view.update', {'patch': {'navChatScope': 'workspace'}})
+    assert snapshot(app, 'web')['selectedWorkspaceId'] == original['id']
+    await command(app, 'web', 'session.draft')
+    draft = snapshot(app, 'web')['view']['newSessionDraft']
+    assert draft['workspace'] == original['path'] and draft.get('location', {}).get('kind') != 'managed'
+
+
+async def test_agent_bridge_creates_and_inspects_same_managed_location(app):
+    source=(await app.dispatch('session.create', {}))['sessionId']
+    result=await app.app_bridge('dispatch', {'action':'session.create','args':{'location':{'kind':'managed'},'select':False}}, source)
+    row=next(row for row in app.state['sessions'] if row['id'] != source)
+    assert row['location'] == {'kind':'managed'}
+    observed=await app.app_bridge('get_state', {'path':'/sessions'}, source)
+    assert row['id'] in str(observed) and 'managed' in str(observed)
+    assert not app.runtime.started and not app.runtime.sent

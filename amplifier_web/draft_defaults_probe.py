@@ -18,7 +18,7 @@ async def query(request):
     workspace=Path(request['workspace']).expanduser().resolve()
     existing=workspace
     while not existing.is_dir() and existing.parent!=existing:existing=existing.parent
-    config=load_config(existing,home=request['home'])
+    config=load_config(existing,home=request['home'],global_only=bool(request.get('globalOnly')))
     config.workspace=workspace
     _,bundle,_=await load_root_bundle(config,request['bundle'],execution_workspace=workspace)
     rows=[]

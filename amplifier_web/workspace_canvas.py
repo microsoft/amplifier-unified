@@ -67,6 +67,8 @@ def select_session_workspace(state, session):
         state['view'].update(navChatScope='all', navLocationFilter='managed', navWorkspaceList=False)
         state['canvas']['open'] = False
         return
+    if state['view'].get('navLocationFilter') == 'managed':
+        state['view']['navLocationFilter'] = 'all'
     row = next((w for w in state['workspaces'] if w['id'] == session.get('workspaceId')), None)
     if row is None:
         if session.get('workspace'):

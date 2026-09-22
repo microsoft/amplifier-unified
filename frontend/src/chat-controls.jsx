@@ -2,7 +2,7 @@ import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useEffect,useState,useRef} from 'react';
 import {ChevronDown,X,Paperclip} from 'lucide-react';
 import {providerFields,modelOptions} from './setup-data';
-import {newChatSetup,draftDefaults} from './new-chat';
+import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
 const EMPTY={};
 export function AttachmentStrip({items=[],remove}){
@@ -32,7 +32,9 @@ export function ModelControl({state,session,act,working}){
  const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState('');
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerModel:next}})};
- const draftCatalog=state.setup?.providersRequestedWorkspace===setup.workspace?state.setup:EMPTY;
+ const managed=setup.location?.kind==='managed';
+ const location=managed?{location:{kind:'managed'}}:{};
+ const draftCatalog=state.setup?.providersRequestedWorkspace===setup.workspace&&(state.setup?.providersLocation?.kind==='managed')===managed?state.setup:EMPTY;
  const cachedProviders=(draftCatalog.providers||[]).filter(row=>row.enabled!==false).map(row=>{
   const metadata=draftCatalog.providerCatalogs?.[row.id]?.metadata||draftCatalog.metadata?.[row.module]||{};
   return {...row,...metadata,info:{...metadata.info,defaults:{...metadata.info?.defaults,model:row.config?.default_model||row.config?.model||metadata.info?.defaults?.model}}};
@@ -52,8 +54,8 @@ export function ModelControl({state,session,act,working}){
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map());let models=modelOptions(entry?.models||[]);
- if(models.length)lastModels.current.set((isDraft?setup.workspace:sessionId)+'|'+draft.instance,models);
- else models=lastModels.current.get((isDraft?setup.workspace:sessionId)+'|'+draft.instance)||[];
+ if(models.length)lastModels.current.set((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance,models);
+ else models=lastModels.current.get((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance)||[];
  // Routing aliases contribute their configured models to one provider family.
  const available=new Map(models.map(row=>[row.id,row]));
  for(const row of group?.rows||[]){
@@ -68,14 +70,14 @@ export function ModelControl({state,session,act,working}){
  const effortPending=useRef(false);
  const request=useRef(''),touched=useRef(false);
  useEffect(()=>{
-  if(!isDraft||!setup.workspace)return;
-  const key=JSON.stringify([setup.workspace,setup.bundle||'']);if(request.current===key)return;
+  if(!isDraft||(!setup.workspace&&!managed))return;
+  const key=draftDefaultsKey(setup);if(request.current===key)return;
   const timer=setTimeout(()=>{request.current=key;
   // Prefetch during the draft, never on the click path and never by starting a session.
-  act('configuration.defaults',{workspace:setup.workspace,bundle:setup.bundle||''});
-  if(draftCatalog===EMPTY)act('providers.list',{workspace:setup.workspace});
+  act('configuration.defaults',{workspace:setup.workspace,bundle:setup.bundle||'',...location});
+  if(draftCatalog===EMPTY)act('providers.list',{workspace:setup.workspace,...location});
   },250);return()=>clearTimeout(timer);
- },[isDraft,setup.workspace,setup.bundle]);
+ },[isDraft,setup.workspace,setup.bundle,managed]);
  useEffect(()=>{
   if(open&&!touched.current&&providers.length){const row=providers.find(p=>p.id===(effective.instance||effective.id))||providers[0];edit({instance:row.id,model:effective.model||row.info?.defaults?.model||'',effort:effectiveEffort||''})}
  },[open,sessionId,providers.map(row=>row.id).join('|'),effective.model,effectiveEffort]);
@@ -95,7 +97,7 @@ export function ModelControl({state,session,act,working}){
   if(!value)return;
   const family=groups.find(g=>g.id===value),row=family?.rows.find(p=>p.id===draft.instance)||family?.rows[0];
   value=row?.id;if(!value)return;apply({instance:value,model:row.info?.defaults?.model||'',effort:''});
-  if(isDraft&&!draftCatalog.providerCatalogs?.[value])act('providers.models',{id:value,workspace:setup.workspace});
+  if(isDraft&&!draftCatalog.providerCatalogs?.[value])act('providers.models',{id:value,workspace:setup.workspace,...location});
   else if(!isDraft&&!controls.modelCatalogs?.[value])act('runtime.control',{sessionId,operation:'configuration.providerModels',args:{instance:value}});
  }
  function previewEffort(event){touched.current=true;effortPending.current=true;setDraft({...draft,effort:choices[Number(event.currentTarget.value)]});}

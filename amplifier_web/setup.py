@@ -272,7 +272,7 @@ class SetupManager:
     def _routing_dirs(self,workspace):
         # Same first-hit precedence as the mounted routing hook.
         registry=getattr(self.config(workspace),'registry_home',self.home/'foundation')
-        dirs=routing_dirs(workspace,shared_home=self.store.shared_home)
+        dirs=routing_dirs(workspace,shared_home=self.store.shared_home,global_only=self.global_only)
         dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
         return dirs
 

@@ -229,7 +229,7 @@ def _apply_settings(bundle, config):
         from ..shared_settings import routing_dirs
         for hook in bundle.hooks:
             if hook.get("module") == "hooks-routing":
-                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None))]}
+                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None), global_only=getattr(config, "global_only", False))]}
                 if routing.get("matrix"):
                     patch["default_matrix"] = routing["matrix"]
                 if routing.get("overrides"):

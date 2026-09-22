@@ -65,7 +65,7 @@ async def main(home):
                     'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}}
         SetupManager.cached_probe=catalog
         import amplifier_web.draft_defaults as draft_defaults
-        async def resolve_defaults(home,workspace,bundle=None,app_bundle=None):
+        async def resolve_defaults(home,workspace,bundle=None,app_bundle=None,**kwargs):
             return {'bundle':bundle or 'work','effective':{'instance':'test-provider','model':'first'},
                     'providers':[{'id':'test-provider','info':{'display_name':'Test provider','defaults':{'model':'first'}},
                     'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}]}
@@ -80,7 +80,7 @@ async def main(home):
     runtime.service = app['service']
 
     async def inspect(request):
-        return web.json_response({"sent": getattr(runtime, 'sent', []),
+        return web.json_response({"registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 

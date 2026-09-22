@@ -18,7 +18,8 @@ SETUP = {'type': 'object', 'properties': {
 
 def defaults(state):
     current = next((s for s in state.get('sessions', []) if s['id'] == state.get('selectedSessionId')), {})
-    if is_managed(current) or state.get('view', {}).get('navLocationFilter') == 'managed':
+    view = state.get('view', {})
+    if (is_managed(current) and state.get('selectedWorkspaceId') is None) or (view.get('navChatScope') == 'all' and view.get('navLocationFilter') == 'managed'):
         return {'title': '', 'workspace': '', 'location': {'kind': 'managed'}, 'bundle': '', 'selection': {}}
     workspace = next((w for w in state.get('workspaces', [])
                       if w['id'] == state.get('selectedWorkspaceId')), {})
