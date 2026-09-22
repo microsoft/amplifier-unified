@@ -42,7 +42,7 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
-    "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200)}, [])),
+    "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
     "terminal.prepare": ("Prepare a private, short-lived terminal setup download for a configured service address. Installs on the computer where the user runs it; does not install on the server.", schema({"server": string(500), "platform": {"enum": ["macos-arm64", "linux-arm64"]}, "name": string(80)}, ["server", "platform", "name"])),
     "terminal.devices": ("List enrolled terminal connections without revealing credentials.", schema({})),
     "terminal.revoke": ("Remove one terminal connection's access; accepted work continues on the host.", schema({"id": string(100)}, ["id"])),
@@ -864,10 +864,11 @@ class AppService:
                 sid = args.get('sessionId') or self.state.get('selectedSessionId')
                 if sid:
                     self._session(sid)
-            host = await discover('host')
+            verify = args.get('verifyImports') is True
+            host = await discover('host', **({'verify': True} if verify else {}))
             worker = {'status': 'unavailable', 'reason': 'No running session runtime.', 'sessionId': sid}
             if sid and self.runtime and hasattr(self.runtime, 'dependencies'):
-                worker = await self.runtime.dependencies(sid)
+                worker = await self.runtime.dependencies(sid, **({'verify': True} if verify else {}))
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
                 'result': {'host': host, 'worker': worker},
                 **({'state': self.browser_state()} if include_state else {})}

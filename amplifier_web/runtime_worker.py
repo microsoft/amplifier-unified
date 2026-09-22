@@ -579,7 +579,7 @@ class Worker:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                result = await discover('worker')
+                result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
             elif op in {"delivery", "retry"} and (

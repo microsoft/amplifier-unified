@@ -625,7 +625,7 @@ class RuntimeManager:
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
 
-    async def dependencies(self, session_id):
+    async def dependencies(self, session_id, *, verify=False):
         """Inspect an existing worker without warming or acquiring its session."""
         row = self.workers.get(session_id)
         if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
@@ -633,7 +633,7 @@ class RuntimeManager:
         if row['ready'].exception() is not None:
             return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
         try:
-            return {**await self._request(session_id, 'dependencies'), 'sessionId': session_id}
+            return {**await self._request(session_id, 'dependencies', **({'verifyImports': True} if verify else {})), 'sessionId': session_id}
         except RuntimeError:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 

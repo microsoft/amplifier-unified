@@ -18,6 +18,13 @@ dependencies = [
   "filelock>=3.20,<4",
   "jsonschema>=4.23,<5",
   "pyyaml>=6.0.3,<7",
+  # Public authoring libraries belong in the actual worker interpreter.
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0,<2",
+  "openpyxl>=3.1,<4",
+  "reportlab>=4.4,<5",
+  "pypdf>=6,<7",
+  "Pillow>=11,<13",
 ]
 
 [tool.uv]
@@ -37,4 +44,3 @@ amplifier-module-provider-openai = { git = "https://github.com/microsoft/amplifi
 amplifier-module-provider-openai-chatgpt = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt", rev = "main" }
 amplifier-module-provider-github-copilot = { git = "https://github.com/microsoft/amplifier-module-provider-github-copilot", rev = "main" }
 amplifier-module-provider-gemini = { git = "https://github.com/microsoft/amplifier-module-provider-gemini", rev = "main" }
-
