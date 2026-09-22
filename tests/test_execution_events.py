@@ -7,6 +7,50 @@ from amplifier_web.runtime import normalize_event
 
 
 class ExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compaction_calls_have_distinct_label_usage_and_no_public_stream(self):
+        from amplifier_web.execution_events import CALL_PURPOSE
+        events=ExecutionEvents('root',lambda value:None)
+        events.turn_id='turn'
+        class Provider:
+            def get_info(self):return SimpleNamespace(id='openai',defaults={'model':'fixture'})
+            async def complete(self,request):
+                self.public_stream = not CALL_PURPOSE.get()
+                return SimpleNamespace(usage={'input_tokens':20,'output_tokens':3})
+            async def compact_context(self,request):
+                self.public_stream = not CALL_PURPOSE.get()
+                return {'message':{'opaque':'must not appear in diagnostics'},'usage':{'input_tokens':50,'output_tokens':5}}
+        provider=events.instrument_provider('root',Provider())
+        request=SimpleNamespace(model=None,metadata={'purpose':'context-compaction'})
+        await provider.complete(request)
+        self.assertFalse(provider.public_stream)
+        await provider.compact_context(request)
+        self.assertFalse(provider.public_stream)
+        self.assertIsNone(CALL_PURPOSE.get())
+        rows=list(events.nodes.values())
+        self.assertEqual(len(rows),2)
+        self.assertTrue(all(row['label']=='Context compaction' and row['turnId']=='turn' for row in rows))
+        self.assertEqual(events.usage()['usage']['totalTokens'],78)
+        self.assertNotIn('opaque',str(rows))
+        await provider.complete(SimpleNamespace(model=None,metadata={}))
+        self.assertTrue(provider.public_stream)
+        self.assertEqual(list(events.nodes.values())[-1]['label'],'Model call')
+
+    async def test_failed_compaction_restores_purpose_and_records_safe_failure(self):
+        from amplifier_web.execution_events import CALL_PURPOSE
+        events=ExecutionEvents('root',lambda value:None)
+        class ContextLengthError(Exception):pass
+        class Provider:
+            def get_info(self):return SimpleNamespace(id='openai',defaults={'model':'fixture'})
+            async def complete(self,request):raise ContextLengthError('secret raw request')
+        provider=events.instrument_provider('root',Provider())
+        with self.assertRaises(ContextLengthError):
+            await provider.complete(SimpleNamespace(model=None,metadata={'purpose':'context-compaction'}))
+        row=next(iter(events.nodes.values()))
+        self.assertEqual(row['label'],'Context compaction')
+        self.assertEqual(row['failure']['category'],'context_limit')
+        self.assertNotIn('secret',str(row))
+        self.assertIsNone(CALL_PURPOSE.get())
+
     async def test_concurrent_worker_calls_keep_original_turn_and_parent(self):
         emitted=[]
         events=ExecutionEvents('root',emitted.append)
