@@ -116,6 +116,14 @@ same-origin permission. Its document CSP blocks network access, external scripts
 subframes, forms and access to the parent app. Use inline code and embedded data
 assets. It cannot call app APIs or turn document messages into app commands.
 
+Audio and video may use embedded `data:` sources or `blob:` URLs created inside
+the document. Include native playback controls and a browser-supported codec.
+Remote media URLs, workspace-relative paths and `file:` URLs remain blocked;
+embed small clips, or serve a larger review page using the browser preview.
+The existing HTML content/file size limits also apply to embedded media.
+A document-ready report confirms the HTML loaded, not that its media decoded or
+played. Check playback before claiming a video review surface works.
+
 A bounded bridge reports visible text and up to 100 standard buttons/form controls
 in `canvas.document`; password and file values are redacted. `canvas.interact`
 accepts the current canvas ID, a listed controlId, event `click` or `input`, and

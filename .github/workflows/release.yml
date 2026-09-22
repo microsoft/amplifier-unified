@@ -145,6 +145,9 @@ jobs:
         run: |
           npm run test:message-outbox-browser
           npm run test:message-delivery-browser
+      - name: Verify embedded HTML audio and video playback
+        working-directory: frontend
+        run: npm run test:canvas-media-browser
       - name: Verify canvas toolbar and app options
         if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend

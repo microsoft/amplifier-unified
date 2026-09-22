@@ -13,6 +13,7 @@
     "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
     "test:history-browser": "node tests/native-history-browser.mjs",
     "test:live-history-browser": "node tests/live-history-browser.mjs",
+    "test:canvas-media-browser": "node tests/canvas-media-browser.mjs",
     "test:canvas-browser": "node tests/canvas-browser.mjs",
     "test:message-browser": "node tests/message-browser.mjs",
     "test:artifact-browser": "node tests/artifact-browser.mjs",
