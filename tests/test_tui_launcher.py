@@ -1,5 +1,6 @@
 """Optional launcher stays separate from service startup and host workspace policy."""
 import sys
+from pathlib import Path
 from types import ModuleType
 
 from amplifier_web import cli, terminal_cli
@@ -24,8 +25,8 @@ def test_local_launcher_uses_configured_port_and_credentials(monkeypatch, tmp_pa
     save_server_config(tmp_path, {**DEFAULT_SERVER, 'port': 9321})
     args = invoke(monkeypatch, tmp_path, '--session', 'saved', '--client', 'terminal-a')
     assert args == ['--token-file', str(tmp_path / 'config/auth/control-token'),
-                    '--server', 'http://127.0.0.1:9321', '--client', 'terminal-a', '--session', 'saved']
-    assert '--workspace' not in args
+                    '--server', 'http://127.0.0.1:9321', '--client', 'terminal-a', '--session', 'saved',
+                    '--workspace', str(Path.cwd().resolve())]
 
 
 def test_remote_launcher_never_attaches_local_credentials(monkeypatch, tmp_path):
