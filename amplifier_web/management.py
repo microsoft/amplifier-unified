@@ -307,7 +307,11 @@ class Management:
                 await self.service.refresh_configuration(session['id'])
 
     async def perform(self,action,args,command_id=None):
-        if action=='locations.list':
+        if action=='locations.create':
+            from .locations import create_folder
+            path = await asyncio.to_thread(create_folder, args['path'], args['name'])
+            await self.publish(locationListing={'controlId':args['controlId'],'path':str(path),'parent':str(path.parent),'entries':[],'truncated':False,'createdBy':command_id})
+        elif action=='locations.list':
             path=Path(args.get('path') or self.service.default_workspace).expanduser()
             if not path.is_absolute():path=Path(self.service.default_workspace)/path
             path=path.resolve()

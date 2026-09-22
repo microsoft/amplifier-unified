@@ -3,7 +3,7 @@ import React,{useEffect,useRef,useState} from 'react';
 // Preview and delete share the same authoritative actions with agents. Never
 // persist the review token in a browser draft or reuse it for a different chat.
 export function ChatDelete({id,act,cancel}){
- const [preview,setPreview]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [preview,setPreview]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[cleanup,setCleanup]=useState(false);
  const generation=useRef(0),pending=useRef(false);
  async function review(){
   const version=++generation.current;setPreview(null);setError('');setBusy(true);
@@ -19,7 +19,7 @@ export function ChatDelete({id,act,cancel}){
   const version=generation.current;pending.current=true;setBusy(true);setError('');
   try{const receipt=await act('session.delete',{id,confirmationToken:preview.confirmationToken});
    if(!receipt?.accepted)throw Error(receipt?.error||'Deletion was not confirmed. Review the chat again before retrying.');
-   if(version===generation.current)cancel();
+   if(version===generation.current){if(receipt.result?.cleanupPending){setCleanup(true);setPreview(null)}else cancel();}
   }catch(e){if(version===generation.current){setError(e.message);setPreview(null)}}
   finally{pending.current=false;if(version===generation.current)setBusy(false)}
  }
@@ -30,10 +30,11 @@ export function ChatDelete({id,act,cancel}){
    <p><strong>This cannot be undone.</strong></p>
    {!!preview.preserved?.length&&<p className="a-caption">Kept: {preview.preserved.join('; ')}.</p>}
   </>:busy?<p role="status">Checking what will be deleted…</p>:null}
+  {cleanup&&<p role="status">The chat has been removed. File cleanup is pending and will be retried automatically.</p>}
   {error&&<p role="alert" className="a-danger">{error}</p>}
   <div className="a-dialog-actions">
-   {preview?<button type="button" className="a-soft a-danger" data-action="session.delete" disabled={busy} onClick={remove}>{busy?'Deleting…':'Delete permanently'}</button>:!busy&&<button type="button" className="a-soft" data-action="session.deletePreview" onClick={review}>Review again</button>}
-   <button type="button" className="a-soft" data-action="view.update" disabled={pending.current} onClick={cancel}>Keep chat</button>
+   {preview?<button type="button" className="a-soft a-danger" data-action="session.delete" disabled={busy} onClick={remove}>{busy?'Deleting…':'Delete permanently'}</button>:!busy&&!cleanup&&<button type="button" className="a-soft" data-action="session.deletePreview" onClick={review}>Review again</button>}
+   <button type="button" className="a-soft" data-action="view.update" disabled={pending.current} onClick={cancel}>{cleanup?'Close':'Keep chat'}</button>
   </div>
  </div>;
 }

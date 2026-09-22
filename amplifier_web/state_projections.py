@@ -86,6 +86,6 @@ class StateProjections:
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
-                     state.get('locationListing'), state.get('actionStatus', {}).get('locations.list')]
+                     state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
             return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
         return self.get(('shell-data-key',), build)

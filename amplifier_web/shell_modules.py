@@ -87,8 +87,7 @@ COMMAND_CAPABILITIES = {
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
     'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
-    **{f'collection.{name}': 'chats.manage' for name in ('create', 'rename', 'remove', 'reorder', 'assign', 'order')},
-    'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
+    'locations.create': 'workspaces.manage', 'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
 
 
@@ -315,7 +314,7 @@ class ShellModules:
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error']},
                 'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
-                'actionStatus': {'locations.list': state.get('actionStatus', {}).get('locations.list')}}
+                'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
     async def validate_package(self, digest):
         self.source(digest)

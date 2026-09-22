@@ -154,18 +154,10 @@ def catalog(state, *, indexed=None):
     archive_filter = view.get('navArchive', 'active')
     if archive_filter != 'active':
         scope['archive'] = archive_filter
-    collection_id = view.get('navCollection')
-    collection = next((row for row in organization.get('collections', []) if row['id'] == collection_id), None)
-    collection_order = {sid: i for i, sid in enumerate(collection['sessionIds'])} if collection else {}
-    if collection_id:
-        scope['collectionId'] = collection_id
-    memberships = {sid: row['id'] for row in organization.get('collections', []) for sid in row['sessionIds']}
     rows = []
     for session in roots if mode == 'all' else grouped.get(selected['id'], []) if selected else []:
         is_archived = session['id'] in archived
         if (archive_filter == 'active' and is_archived) or (archive_filter == 'archived' and not is_archived):
-            continue
-        if collection_id and session['id'] not in collection_order:
             continue
         workspace = by_id.get(session.get('workspaceId')) or by_path.get(session.get('workspace'))
         managed = is_managed(session)
@@ -194,12 +186,11 @@ def catalog(state, *, indexed=None):
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
                      **({'archived': True} if is_archived else {}),
-                     **({'collectionId': memberships[session['id']]} if session['id'] in memberships else {}),
                      'recentActivityAt': recent_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
     rows.sort(key=lambda row: (not row['pinned'],
         pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
-        else collection_order.get(row['id'], 0) if collection_id and not row['pinned'] else -row['recentActivityAt']))
+        else -row['recentActivityAt']))
     return rows, scope, counts
 
 

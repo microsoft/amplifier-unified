@@ -19,6 +19,25 @@ try{
  await action('view.update',{patch:{navPinned:true}});
  const initial=await state(),originalWorkspace=initial.settings.workspace,registered=(await inspect()).registeredWorkspaces.map(row=>row.id);
  const folders=path.resolve(originalWorkspace,'../app/chats');
+ await expect(page.getByRole('button',{name:'New workspace',exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('Collection',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await page.getByRole('button',{name:'New folder',exact:true}).click();
+ await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('picker-created');
+ await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await expect.poll(async()=>Boolean((await stat(path.join(originalWorkspace,'picker-created'))).isDirectory())).toBe(true);
+ await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(path.join(originalWorkspace,'picker-created'));
+ assert.equal((await inspect()).sent.length,0);assert.equal((await state()).sessions.length,0);
+ await expect(page.getByRole('textbox',{name:'New folder name',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Up',exact:true}).click();
+ await page.getByRole('button',{name:'New folder',exact:true}).click();
+ await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('picker-created');
+ await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await expect(page.getByRole('alert')).toContainText('already exists');
+ await expect(page.getByRole('textbox',{name:'New folder name',exact:true})).toHaveValue('picker-created');
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ await page.getByRole('button',{name:'Close location picker',exact:true}).click();
+
  await page.getByRole('button',{name:'No workspace',exact:true}).click();
  await expect(page.locator('#new-chat-workspace')).toHaveCount(0);
  await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');

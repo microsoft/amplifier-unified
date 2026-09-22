@@ -28,15 +28,12 @@ export function WorkspaceRail({state,session,act,selectSession,newSession,shell}
  useModalFocus(nav,layout.narrow&&expanded,close);
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const expand=value=>{if(!pinned&&!!view.navExpanded!==value)patch(act,{navExpanded:value})};
- const manager=shell.composition.instances.find(item=>item.package==='builtin.workspaces');
- const addWorkspace=()=>{expand(true);const host=shell.hostFor(manager);const draft=host.getSnapshot().view.workspaceDraft||{};return host.dispatch('view.update',{patch:{workspaceDraft:draft.mode==='add'?{}:{mode:'add',path:'',name:''}}})};
  const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
  return <NavigationOpen.Provider value={expanded}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
  <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} hidden={layout.narrow&&!expanded} inert={layout.narrow&&!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and conversations" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}} onPointerEnter={e=>{if(!layout.narrow&&e.pointerType!=='touch')expand(true)}} onPointerLeave={e=>{if(!layout.narrow&&e.pointerType!=='touch'&&!e.currentTarget.contains(document.activeElement))expand(false)}}>
   <div className="a-nav-rail">
    <div className="a-nav-head"><button className="a-icon" type="button" aria-label={layout.narrow?'Close navigation':pinned?'Unpin navigation':'Pin navigation open'} title={layout.narrow?'Close navigation':pinned?'Unpin sidebar':'Pin sidebar open'} aria-pressed={pinned} aria-expanded={expanded} data-action="view.update" onClick={()=>layout.narrow?close():patch(act,{navPinned:!pinned,navExpanded:!pinned})}>{layout.narrow?<X/>:<PanelLeft/>}{!layout.narrow&&<AttentionBadge state={state} section="chats"/>}</button><strong className="a-nav-reveal">Your work</strong></div>
    <button className="a-nav-main" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><Plus/><span className="a-nav-reveal">New chat</span></button>
-   {manager&&<button className="a-nav-main" type="button" onClick={addWorkspace} data-action="view.update" aria-label="New workspace" title="New workspace"><FolderPlus/><span className="a-nav-reveal">New workspace</span></button>}
    <div className="a-nav-content a-nav-reveal"><ShellModules shell={shell}/></div>
   </div>
   {layout.docked&&<PaneResizer layout={layout} pane="nav"/>}
