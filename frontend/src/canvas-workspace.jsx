@@ -1,3 +1,4 @@
+import {CanvasControl,CanvasViewControls} from './canvas-controls';
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {PanelsTopLeft,X} from 'lucide-react';
 import {request} from './api';
@@ -84,8 +85,8 @@ function ResourceView({view,state,dispatch,recovery}){
  },[isPrimary,state.canvas,loaded,view]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
  if(view.error)return <section className="a-resource-view" role="alert">{view.error}<button type="button" onClick={()=>run('canvas.views.close',targetOf(view))}>Close unavailable view</button></section>;
- return <section className="a-resource-view" data-canvas-view={view.viewId} aria-label={isPrimary?'Primary artifact view':'Secondary artifact view'}>
-  <div className="a-resource-view-controls a-canvas-toolbar">
+ return <CanvasViewControls label={isPrimary?'Primary artifact controls':'Secondary artifact controls'}><section className="a-resource-view" data-canvas-view={view.viewId} aria-label={isPrimary?'Primary artifact view':'Secondary artifact view'}>
+  <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
    {!isPrimary&&<strong title={view.resource.title}>{view.resource.title}</strong>}
    <label>{isPrimary?'Open with':'Secondary viewer'}<select aria-label={isPrimary?'Open with':'Open secondary with'} value={view.renderer} onFocus={()=>dispatch('canvas.views.inspect',{}).catch(()=>{})} onChange={event=>run('canvas.views.renderer',{...targetOf(view),renderer:event.target.value})}>
     {!view.available&&<option value={view.renderer}>Unavailable renderer</option>}
@@ -93,10 +94,10 @@ function ResourceView({view,state,dispatch,recovery}){
    </select></label>
    {isPrimary&&view.resource.kind!=='mcp-app'&&<button type="button" className="a-icon" aria-label="Open a second view" onClick={()=>run('canvas.views.open',{resourceId:view.resourceId,sessionId:view.resource.sessionId??null})}><PanelsTopLeft/></button>}
    {!isPrimary&&<button type="button" className="a-icon" aria-label="Close secondary view" onClick={()=>run('canvas.views.close',targetOf(view))}><X/></button>}
-  </div>
+  </div></CanvasControl>
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
   <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery}/>:<p role="status">Loading saved artifact…</p>}</div>
- </section>;
+ </section></CanvasViewControls>;
 }
 
 export function CanvasWorkspace({state,dispatch,hidden=false}){

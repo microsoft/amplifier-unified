@@ -1,3 +1,4 @@
+import {CanvasControl} from './canvas-controls';
 import {clientUrl} from './api';
 import React,{useEffect,useRef,useState} from 'react';
 import {AppBridge,PostMessageTransport} from '@modelcontextprotocol/ext-apps/app-bridge';
@@ -126,10 +127,10 @@ export function McpAppViewer({canvas,act}){
   return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
  },[canvas.id,canvas.view?.reload]);
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
-  <div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
+  <CanvasControl inline={status.phase==='error'}><div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
    <button type="button" className="a-icon" aria-label="Reconnect tool server" data-action="smartTools.connect" onClick={async()=>{try{await command('smartTools.connect',{id:canvas.mcp.serverId});await act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}catch(error){setStatus({phase:'error',text:error.message})}}}><RefreshCw/></button>
-  </div>
+  </div></CanvasControl>
   {canvas.sharedToolView&&<p className="a-caption">This view shares tool work with the original conversation.</p>}
   <iframe ref={frame} title={canvas.title||'Interactive tool'} className="a-canvas-html" style={{flex:1,minHeight:0}} sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer"/>
  </div>;

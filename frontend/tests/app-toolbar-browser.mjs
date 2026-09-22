@@ -25,7 +25,9 @@ try{
  const toggle=page.locator('.a-top .a-canvas-toggle'),canvas=page.getByRole('complementary',{name:'Agent canvas'});
  await expect(page.getByRole('button',{name:'Open workspace canvas'})).toHaveCount(0);
  await expect(toggle).toHaveAccessibleName('Open canvas');await expect(toggle).toHaveText('');await expect(toggle).toHaveAttribute('aria-pressed','false');
+ await expect(toggle).toBeDisabled();await action('session.create');
  const initialBox=await toggle.boundingBox();await toggle.click();await expect(canvas).toBeVisible();
+ await expect(canvas.getByText('Nothing in Canvas yet',{exact:true})).toBeVisible();await expect(canvas.getByRole('searchbox')).toHaveCount(0);await expect(canvas.getByRole('button',{name:/Saved artifacts/})).toHaveCount(0);await expect(canvas.getByRole('button',{name:'Open a website',exact:true})).toBeVisible();await page.screenshot({path:out+'/canvas-empty.png'});
  await expect(toggle).toHaveAccessibleName('Close canvas');await expect(toggle).toHaveAttribute('aria-pressed','true');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();await expect(page.locator('#workspace-canvas')).toBeHidden();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),initialBox);
  await action('session.create');const session=(await state()).selectedSessionId;
@@ -53,7 +55,7 @@ try{
   await action('view.update',{patch:{scheme}});
   for(const width of [1280,800,600,390,320]){
    await page.setViewportSize({width,height:900});await expect(toggle).toBeVisible();await expect(feedback).toBeVisible();
-   const before=await toggle.boundingBox();assert.ok(before.x>=0&&before.x+before.width<=width);
+   const before=await toggle.boundingBox();const moreBox=await more.boundingBox(),feedbackBox=await feedback.boundingBox();assert.ok(before.x>moreBox.x&&before.x>feedbackBox.x,'Canvas is the rightmost header action');assert.ok(before.x>=0&&before.x+before.width<=width);
    await more.click();await expect(menu).toBeVisible();const rect=await menu.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width&&rect.y+rect.height<=900);
    await page.screenshot({path:out+`/toolbar-${scheme}-${width}.png`});await page.keyboard.press('Escape');
    await toggle.click();await expect(toggle).toHaveAttribute('aria-pressed','false');assert.deepEqual(await toggle.boundingBox(),before);

@@ -1,3 +1,4 @@
+import {CanvasControl} from './canvas-controls';
 import React,{useEffect,useRef,useState} from 'react';
 import {FileText,Globe,X,ExternalLink,RotateCw,ArrowRight} from 'lucide-react';
 import {filterList} from './list-filter';
@@ -36,7 +37,7 @@ export function BrowserPreview({canvas,act}){
   const timer=setTimeout(()=>report('unverified','Preview could not be verified. If it is blank, open it in your browser or check the address and site embedding policy.'),12000);
   return()=>clearTimeout(timer);
  },[canvas.id,canvas.view?.reload,policy.blocked,policy.message]);
- return <div className="a-browser-preview"><div className="a-canvas-toolbar"><Globe/><span className="a-browser-url" title={canvas.url}>{canvas.url}</span><button type="button" className="a-icon" aria-label="Reload browser preview" data-action="canvas.view" onClick={()=>act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}><RotateCw/></button></div>
+ return <div className="a-browser-preview"><CanvasControl><div className="a-canvas-toolbar"><Globe/><span className="a-browser-url" title={canvas.url}>{canvas.url}</span><button type="button" className="a-icon" aria-label="Reload browser preview" data-action="canvas.view" onClick={()=>act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}><RotateCw/></button></div></CanvasControl>
  {policy.blocked?<div className="a-browser-blocked" role="alert"><Globe/><h3>Open this page in your browser</h3><p>{policy.message}</p><a className="a-soft" data-action="canvas.openExternal" href={canvas.url} target="_blank" rel="noopener noreferrer">Open in browser <ExternalLink size={16}/></a></div>:<iframe key={`${canvas.id}-${canvas.view?.reload||0}`} title={canvas.title||'App preview'} className="a-canvas-html" sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" src={canvas.url} onLoad={()=>act('canvas.report',{id:canvas.id,part:'preview',status:'unverified',message:'Frame navigation finished. Browser security prevents confirming whether this external page loaded or permits embedding.'})}/>}
  <div className="a-browser-help"><a data-action="canvas.openExternal" href={canvas.url} target="_blank" rel="noopener noreferrer">Open in browser <ExternalLink size={13}/></a><button className="a-link" type="button" data-action="canvas.view" aria-expanded={!!canvas.view?.help} onClick={()=>act('canvas.view',{id:canvas.id,patch:{help:!canvas.view?.help}})}>Preview help</button>{(canvas.view?.help||policy.localWarning)&&<p>{policy.message} The service must stay running and be reachable from this device. Authentication, frame policies, redirects, and sandbox restrictions can require opening it separately.</p>}</div></div>;
 }
