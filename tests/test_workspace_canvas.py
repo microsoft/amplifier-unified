@@ -56,6 +56,7 @@ async def test_workspace_paths_must_exist(service, tmp_path):
 
 
 async def test_canvas_files_are_confined_and_bounded(service, tmp_path):
+    await service.dispatch('session.create', {})
     root = tmp_path / "workspace"
     (root / "plan.md").write_text("# Plan\nHello")
     await service.dispatch("canvas.show", {"kind":"markdown", "path":"plan.md"}, origin="agent")
@@ -76,6 +77,7 @@ async def test_canvas_files_are_confined_and_bounded(service, tmp_path):
 
 
 async def test_canvas_images_are_embedded_not_active_documents(service, tmp_path):
+    await service.dispatch('session.create', {})
     png = b"\x89PNG\r\n\x1a\n" + b"test"
     (tmp_path / "workspace" / "sample.png").write_bytes(png)
     await service.dispatch("canvas.show", {"kind":"image", "path":"sample.png"})
@@ -86,12 +88,14 @@ async def test_canvas_images_are_embedded_not_active_documents(service, tmp_path
 
 
 async def test_a2ui_surface_and_events_are_agent_visible(service):
+    await service.dispatch('session.create', {})
     await service.dispatch("canvas.show", {"kind":"a2ui", "surface":surface()}, origin="agent")
     await service.dispatch("canvas.event", {"surfaceId":"test", "componentId":"button", "name":"review"})
     result = service.get_state()
     assert result["canvas"]["events"][0]["name"] == "review"
     assert result["canvas"]["events"][0]["origin"] == "ui"
-    assert not result["sessions"]  # Interaction cannot covertly start a paid turn.
+    assert len(result["sessions"]) == 1
+    assert not result["sessions"][0]["messages"]  # Interaction cannot covertly start a paid turn.
     for args in [{"surfaceId":"old", "componentId":"button", "name":"review"}, {"surfaceId":"test", "componentId":"text", "name":"review"}, {"surfaceId":"test", "componentId":"button", "name":"execute"}]:
         with pytest.raises(AppError):
             await service.dispatch("canvas.event", args)
@@ -150,6 +154,7 @@ def test_a2ui_depth_limit_holds_regardless_of_component_order():
 
 
 async def test_rich_canvas_detection_controls_and_stale_reports(service, tmp_path):
+    await service.dispatch('session.create', {})
     for name, content, kind in [('flow.mmd','graph LR; A-->B','mermaid'), ('graph.gv','digraph {a->b}','dot'), ('page.html','<button onclick="this.textContent=42">Test</button>','html'), ('data.json','{"a":1}','json')]:
         (tmp_path/'workspace'/name).write_text(content)
         await service.dispatch('canvas.show', {'kind':'auto','path':name}, origin='agent')
@@ -168,6 +173,7 @@ async def test_rich_canvas_detection_controls_and_stale_reports(service, tmp_pat
 
 
 async def test_canvas_exports_use_shared_device_actions(service):
+    await service.dispatch('session.create', {})
     await service.dispatch('canvas.show', {'kind':'html','content':'<h1>Hello</h1>'}, origin='agent')
     identity = service.state['canvas']['id']
     result = await service.dispatch('canvas.download', {'id':identity}, origin='agent')
@@ -178,6 +184,7 @@ async def test_canvas_exports_use_shared_device_actions(service):
 
 
 async def test_html_standard_controls_are_visible_and_agent_operable(service):
+    await service.dispatch('session.create', {})
     await service.dispatch('canvas.show', {'kind':'html','content':'<button>Run</button>'})
     identity = service.state['canvas']['id']
     await service.dispatch('canvas.snapshot', {'id':identity,'document':{'text':'Run','controls':[{'id':'run','tag':'button','type':'button','label':'Run','value':'','disabled':False}]}})
