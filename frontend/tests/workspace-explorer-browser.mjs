@@ -110,7 +110,7 @@ try{
  for(const key of ['playgroundOne','playgroundTwo']){
   await row(paths[key]).getByRole('button',{name:/Details and actions/}).click();
   assert.ok((await page.locator('.a-navigation-flyout').innerText()).includes(paths[key]),'details expose the complete path');
-  await page.getByRole('button',{name:'Close details',exact:true}).click();
+  await page.keyboard.press('Escape');
  }
  await row(paths.playgroundTwo).getByRole('button',{name:'Open chats in '+paths.playgroundTwo,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundTwo);

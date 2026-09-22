@@ -74,13 +74,13 @@ export function AgentCanvas({state,act,dispatch=act}){
  const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},canvasControlsExpanded:true});
  const controlRegions='.a-canvas-chrome,.a-canvas-toolbar,.a-canvas-result.success,.a-browser-note';
  const inControls=target=>!!target?.closest?.(controlRegions)&&!!panel.current?.contains(target);
- const collapseControls=()=>{if(controls&&!view.canvasControlsPinned&&!draft.open&&!draft.browser)patch(act,{canvasControlsExpanded:false})};
+ const collapseControls=()=>{if(controls&&!view.canvasControlsPinned)patch(act,{canvasControlsExpanded:false})};
  useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}));
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
  return <CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={!canvas.open||!state.selectedSessionId} inert={!canvas.open||!state.selectedSessionId} aria-hidden={!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}
-  onPointerOut={e=>{if(e.pointerType!=='touch'&&inControls(e.target)&&!inControls(e.relatedTarget)&&!inControls(document.activeElement))collapseControls()}}
+  onPointerOut={e=>{if(e.pointerType!=='touch'&&inControls(e.target)&&!inControls(e.relatedTarget))collapseControls()}}
   onBlur={e=>{if(inControls(e.target)&&!inControls(e.relatedTarget)&&!panel.current?.querySelector(controlRegions.split(',').map(selector=>selector+':hover').join(',')))collapseControls()}}>
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome" onFocus={()=>{if(!controls)patch(act,{canvasControlsExpanded:true})}} onPointerEnter={e=>{if(e.pointerType!=='touch'&&!controls)patch(act,{canvasControlsExpanded:true})}}>

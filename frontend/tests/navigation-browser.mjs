@@ -26,6 +26,9 @@ try{
  assert.equal(await page.locator('.a-workspace-explorer').count(),0,'selected workspace gets the full chat list');
  const geometry=()=>page.locator('.a-nav-chat').evaluateAll(rows=>rows.slice(0,8).map(el=>{const r=el.getBoundingClientRect();return {top:r.top,height:r.height,width:r.width}}));
  const before=await geometry();await chatrow(selected).hover();await details.waitFor();
+ assert.equal(await details.getByRole('button',{name:'Close details',exact:true}).count(),0);
+ await page.mouse.move(700,30);await details.waitFor({state:'detached'});
+ await chatrow(selected).hover();await details.waitFor();
  assert.deepEqual(await geometry(),before,'hover must not move, wrap or resize rows');assert.equal(before[0].height,60);
  assert.ok((await details.innerText()).includes(initial.paths.one));
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201'],'flyout exposes only the shared CLI session ID');
@@ -34,7 +37,7 @@ try{
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'alpha-201');
  assert.equal((await info()).state.selectedSessionId,selected);await page.screenshot({path:out+'/chat-flyout.png'});
- await details.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.keyboard.press('Escape');
  const more=chatrow(selected).getByRole('button',{name:/Details and actions/});await more.focus();await page.keyboard.press('Enter');await details.waitFor();await page.keyboard.press('Escape');await details.waitFor({state:'detached'});
  assert.equal(await more.evaluate(el=>el===document.activeElement),true,'Escape returns focus to the trigger');
  await page.getByRole('button',{name:'All chats',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.chatNavigation.scope.mode==='all');
@@ -46,7 +49,7 @@ try{
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,initial.quietSession],'Unified-created chats use the same single-ID presentation');
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),initial.quietSession);
- await details.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.keyboard.press('Escape');
  await chatSearch.fill('');await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===100);
  await page.getByRole('button',{name:'2 need attention',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===2);
  assert.equal((await info()).state.selectedSessionId,selected,'filtering does not select or resume work');
@@ -54,13 +57,13 @@ try{
  assert.equal(snapshot.result.chatNavigation.total,2);assert.equal(snapshot.result.chatNavigation.activityCounts.working,1);
  await patch('chats',{navStatusFilter:'unread'});await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===1);
  const unreadId=await page.locator('.a-nav-chat').getAttribute('data-session-id');await page.locator('.a-nav-chat').hover();await details.waitFor();assert.ok((await info()).state.attention.sessions[unreadId],'a hover never acknowledges a response');
- await details.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.keyboard.press('Escape');
  await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();
  assert.equal(await page.locator('.a-nav-chat').count(),0);assert.equal(await page.getByRole('button',{name:'Recent',exact:true}).getAttribute('aria-pressed'),'true');
  const search=page.getByRole('searchbox',{name:'Filter workspaces',exact:true});await search.fill('*/playground');await page.waitForFunction(()=>document.querySelectorAll('.a-workspace-row').length===2);
  const paths=await page.locator('.a-workspace-result-path').allTextContents();assert.equal(new Set(paths).size,2,'duplicate names have distinct parent labels');
  await page.locator('.a-workspace-row').first().getByRole('button',{name:/Details and actions/}).click();await details.waitFor();await page.screenshot({path:out+'/workspace-flyout.png'});
- await details.getByRole('button',{name:'Close details',exact:true}).click();await page.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'Open chats in '+initial.paths.two,exact:true}).click();
  await page.locator('.a-workspace-explorer').waitFor({state:'detached'});await page.waitForFunction(()=>document.querySelectorAll('.a-nav-chat').length===3);
  await page.getByRole('button',{name:'All workspaces',exact:true}).click();await search.waitFor();await search.fill('');await page.getByRole('button',{name:'Browse folders',exact:true}).click();await page.locator('.a-workspace-location').waitFor();
  const browsed=(await info()).state.selectedSessionId;await page.getByRole('button',{name:'Go to parent workspace folder',exact:true}).click();await page.screenshot({path:out+'/workspace-folders.png'});assert.equal((await info()).state.selectedSessionId,browsed);

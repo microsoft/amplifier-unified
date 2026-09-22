@@ -55,7 +55,7 @@ try{
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
  await page.screenshot({path:`${out}/drawer.png`});assert.ok(await drawer.locator('input').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).every(node=>parseFloat(getComputedStyle(node).fontSize)>=16)));
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
- const details=drawer.locator('.a-navigation-more').first();await details.click();await page.getByRole('button',{name:'Close details',exact:true}).waitFor();
+ const details=drawer.locator('.a-navigation-more').first();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);
  await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelector('.a-nav-slot').hidden);

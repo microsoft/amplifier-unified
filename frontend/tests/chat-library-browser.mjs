@@ -80,7 +80,7 @@ try{
  assert.equal((await ids())[0],quiet);
  await row(quiet).getByRole('button',{name:/Details and actions/}).click();
  assert.equal(await page.locator('.a-navigation-flyout').getByRole('button',{name:'Unpin Quiet older chat',exact:true}).getAttribute('aria-pressed'),'true');
- await page.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.keyboard.press('Escape');
  assert.equal((await state()).selectedSessionId,initial);
 
  // Search includes full paths and fnmatch wildcards, irrespective of folder browsing.
@@ -154,7 +154,7 @@ try{
  assert.equal(overflow,0,'chat labels truncate without horizontal row overflow');
  await row(beta.id).getByRole('button',{name:/Details and actions/}).click();
  assert.ok(await page.locator('.a-navigation-flyout').getByRole('button',{name:'Unpin Beta latest renamed',exact:true}).isVisible());
- await page.getByRole('button',{name:'Close details',exact:true}).click();
+ await page.keyboard.press('Escape');
  await page.screenshot({path:'/tmp/chat-library-views-narrow.png'});
  await page.setViewportSize({width:1280,height:900});
 

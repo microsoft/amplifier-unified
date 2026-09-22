@@ -27,6 +27,19 @@ try{
  assert.equal(await toolbarsMatch(false),true);
  await page.getByRole('button',{name:'Pin canvas controls',exact:true}).focus();await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='true');
  await page.getByRole('textbox',{name:'Message Amplifier'}).focus();await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+ // Opening a form and clicking its input must not keep unpinned controls open.
+ for(const [button,input,value] of [['Open a file in canvas','#canvas-file-path','notes.md'],['Open a website in canvas','#canvas-browser-url','https://example.com/']]){
+  await page.locator('.a-canvas-head').hover();await page.getByRole('button',{name:button,exact:true}).click();
+  const field=page.locator(input);await field.fill(value);
+  await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+  assert.deepEqual(await box('.a-canvas-html'),beforeHover,'unpinning and dismissing do not move Canvas content');
+  await page.locator('.a-canvas-head').hover();assert.equal(await field.inputValue(),value,'hiding controls keeps the unfinished form');
+  await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();
+  assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-controls'),'true');
+  await page.getByRole('button',{name:'Unpin canvas controls',exact:true}).click();await page.mouse.move(100,30);
+  await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+ }
+ await patch({canvasDraft:{},canvasControlsExpanded:false});
  const header=await box('.a-canvas-head'),body=await box('.a-canvas-body'),iframe=await box('.a-canvas-html');
  assert.equal(header.height,36);assert.ok(Math.abs(body.x-iframe.x)<1&&Math.abs(body.width-iframe.width)<1);assert.ok(Math.abs(body.y-iframe.y)<1);assert.ok(Math.abs(iframe.y+iframe.height-950)<1);
  const separator=page.getByRole('separator',{name:'Resize canvas'});await separator.focus();await page.keyboard.press('End');await settled();
