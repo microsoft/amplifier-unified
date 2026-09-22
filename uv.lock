@@ -160,6 +160,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "amplifier-memory"
+version = "0.1.0"
+source = { git = "https://github.com/microsoft/amplifier-bundle-memory?rev=8b704f610584d32fc58b1e287dbf62eef4e7a880#8b704f610584d32fc58b1e287dbf62eef4e7a880" }
+dependencies = [
+    { name = "click" },
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "amplifier-module-tool-computer-use"
 version = "0.1.0"
 source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#5f4fda44ff4c56400f05abc3c749f2c61aac3029" }
@@ -179,6 +188,7 @@ dependencies = [
     { name = "amplifier-bundle-context-intelligence", extra = ["client"] },
     { name = "amplifier-core" },
     { name = "amplifier-foundation" },
+    { name = "amplifier-memory" },
     { name = "cryptography" },
     { name = "filelock" },
     { name = "httpx" },
@@ -221,6 +231,7 @@ requires-dist = [
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "amplifier-core", specifier = ">=1.6.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
+    { name = "amplifier-memory", git = "https://github.com/microsoft/amplifier-bundle-memory?rev=8b704f610584d32fc58b1e287dbf62eef4e7a880" },
     { name = "amplifier-module-tool-computer-use", marker = "extra == 'native-desktop'", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
     { name = "cryptography", specifier = ">=44,<51" },
     { name = "filelock", specifier = ">=3.20,<4" },

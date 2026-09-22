@@ -832,6 +832,8 @@ class AppService:
             args['args'] = {**invocation, 'actor': origin}
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
+            raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
@@ -2201,7 +2203,9 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 session["status"] = payload.get("status", "idle")
-                if session["status"] == "idle": self.schedules.idle(session)
+                if session["status"] == "idle":
+                    self.schedules.idle(session)
+                    self.recall.personalization.idle(session)
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
@@ -2362,6 +2366,8 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == 'memory.context':
+            return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == "questions.admit":
             async with self.lock:
                 self._session(session_id)
@@ -2584,6 +2590,7 @@ class AppService:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
         await self.voice_visual.close()
         await self.schedules.close()
+        await self.recall.personalization.close()
         await self.worktrees.close()
         await self.publishing.close()
         async with self.runtime_lifecycle_lock:

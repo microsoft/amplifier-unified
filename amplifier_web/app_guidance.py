@@ -78,7 +78,8 @@ async def install_app_access(coordinator, bridge):
     from .surface_delivery import SurfaceDelivery, POLICY
     from .voice_visual_delivery import VoiceVisualDelivery
     from .output_image_delivery import OutputImageDelivery
-    delivery = OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge), bridge), bridge)
+    from .memory_delivery import MemoryDelivery, POLICY as MEMORY_POLICY
+    delivery = MemoryDelivery(OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge), bridge), bridge), bridge)
     coordinator.register_capability('web.surface_delivery', delivery)
     from .surface_delivery import SurfaceProvider
     transformed = []
@@ -127,7 +128,7 @@ async def install_app_access(coordinator, bridge):
                 return ToolResult(success=False, error={'message':str(exc)})
 
     async def guidance(event, data):
-        return HookResult(action='inject_context', context_injection=CANVAS_GUIDANCE+'\n'+POLICY,
+        return HookResult(action='inject_context', context_injection=CANVAS_GUIDANCE+'\n'+POLICY+'\n'+MEMORY_POLICY,
                           context_injection_role='system', ephemeral=True)
 
     await coordinator.mount('tools', AppControl(), name='app_control')

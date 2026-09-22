@@ -295,6 +295,9 @@ class RuntimeControls:
             return await self._perform(operation, args)
 
     async def _perform(self, operation, args):
+        if operation == 'memory.consolidate':
+            from .memory_consolidation import generate
+            return await generate(self, args)
         if operation.startswith("capacity."):
             return await self.capacity.perform(operation, args)
         if operation.startswith('task.'):
