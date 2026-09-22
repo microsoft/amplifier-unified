@@ -44,6 +44,7 @@ async def test_workspace_management_is_durable_and_non_destructive(service, tmp_
     with pytest.raises(AppError, match="at least one"):
         await service.dispatch("workspace.remove", {"id":first["id"]})
     # Removed legacy paths must not be silently registered again on restart.
+    await service.close()
     restored = AppService(service.data_dir, workspace=first["path"])
     assert restored.state["workspaces"] == [first]
     assert restored.state["settings"]["workspace"] == first["path"]
@@ -200,13 +201,16 @@ async def test_canvas_focus_and_large_layout_preferences_are_shared_and_durable(
     preferences = {"canvasWidth":1800,"navWidth":280,"canvasFocused":True,
                    "canvasControlsPinned":True,"canvasControlsExpanded":True}
     await service.dispatch("view.update", {"patch":preferences}, origin="agent")
+    await service.close()
     restored = AppService(service.data_dir)
-    assert all(restored.get_state()["view"][key] == value for key, value in preferences.items())
-    await restored.close()
-    for patch in [{"navWidth":215}, {"navWidth":True}, {"canvasFocused":"true"},
-                  {"canvasControlsPinned":1}, {"canvasControlsExpanded":None}, {"canvasWidth":float('nan')}]:
-        with pytest.raises(AppError):
-            await service.dispatch("view.update", {"patch":patch}, origin="agent")
-    await service.dispatch("canvas.close", {}, origin="agent")
-    assert not service.get_state()["view"]["canvasFocused"]
-    assert service.get_state()["view"]["canvasWidth"] == 1800
+    try:
+        assert all(restored.get_state()["view"][key] == value for key, value in preferences.items())
+        for patch in [{"navWidth":215}, {"navWidth":True}, {"canvasFocused":"true"},
+                      {"canvasControlsPinned":1}, {"canvasControlsExpanded":None}, {"canvasWidth":float('nan')}]:
+            with pytest.raises(AppError):
+                await restored.dispatch("view.update", {"patch":patch}, origin="agent")
+        await restored.dispatch("canvas.close", {}, origin="agent")
+        assert not restored.get_state()["view"]["canvasFocused"]
+        assert restored.get_state()["view"]["canvasWidth"] == 1800
+    finally:
+        await restored.close()

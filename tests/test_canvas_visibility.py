@@ -71,6 +71,7 @@ async def test_visibility_receipts_scope_and_restart(app):
         await app.dispatch('canvas.visibility', args)
     # Agent uses the same action with an explicit attached-client target.
     await app.dispatch('canvas.visibility', {**args, 'clientId': 'one'}, origin='agent')
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         assert restored.clients.records['one']['canvas']['open'] is False

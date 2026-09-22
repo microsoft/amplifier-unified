@@ -158,6 +158,7 @@ async def test_view_preferences_survive_restart_and_cloned_client_does_not_share
     current = await show(app)
     await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
     await update(app, view(app, 'secondary'), {'query': 'kept'})
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         assert view(restored, 'secondary')['view']['query'] == 'kept'
@@ -326,6 +327,7 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
         row = app.canvas_views.artifact(current['resourceId'])
         row['contentResource'] = row['body']
         app._save()
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         with restored.clients.bind('one'):

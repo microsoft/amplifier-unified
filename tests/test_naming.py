@@ -18,11 +18,13 @@ async def test_names_persist_preserve_manual_choices_and_checkpoint_metadata(tmp
         assert session['title']=='My solar system' and session['description']=='Now includes orbital controls.'
         store=SessionStore.for_app(tmp_path,tmp_path);store.save(sid,[{'role':'user','content':'test'}],{'name':'Stale checkpoint'})
         assert store.load(sid)[1]['name']=='My solar system'
+        await app.close()
         restored=AppService(tmp_path,workspace=tmp_path)
-        assert restored._session()['title']=='My solar system'
-        await restored.close()
-        await app.on_runtime_event('session.naming.progress',{'sessionId':sid,'completedInputs':['u1','u2']})
-        assert store.load(sid)[1]['naming_completed_inputs']==['u1','u2']
+        try:
+            assert restored._session()['title']=='My solar system'
+            await restored.on_runtime_event('session.naming.progress',{'sessionId':sid,'completedInputs':['u1','u2']})
+            assert store.load(sid)[1]['naming_completed_inputs']==['u1','u2']
+        finally:await restored.close()
     finally:await app.close()
 
 

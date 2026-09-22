@@ -168,6 +168,7 @@ async def test_crash_receipt_retained_and_duplicate_admission_does_not_invoke_pr
         result = await app.dispatch('capacity.read', {'sessionId': sid})
         assert result['result']['admission']['state'] == 'paused'
         assert result['result']['usage']['metrics']['totalTokens']['value'] is None
+        await app.close()
         other = AppService(tmp_path, workspace=tmp_path)
         assert usage_snapshot(other._session(sid))['calls'] == 1
         assert usage_snapshot(other._session(sid))['metrics']['totalTokens']['unknownCalls'] == 1
@@ -244,6 +245,7 @@ async def test_receipt_pages_keep_full_totals_and_restart_observation_unknown(tm
         assert first['metrics']['totalTokens']['value'] == 40
         second = (await app.dispatch('capacity.read', {'sessionId': sid, 'offset': 2, 'limit': 2}))['result']['usage']
         assert first['receipts'][0]['id'] != second['receipts'][0]['id']
+        await app.close()
         restarted = AppService(tmp_path, workspace=tmp_path)
         snapshot = usage_snapshot(restarted._session(sid))
         assert snapshot['metrics']['totalTokens']['pendingCalls'] == 0
