@@ -131,6 +131,9 @@ def create(service, plan_id, command_id):
         # fail creation but cannot redirect it outside the reviewed root.
         fd = os.open(ancestor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
+            opened = os.fstat(fd)
+            if [opened.st_dev, opened.st_ino] != plan['ancestorIdentity']:
+                raise OSError('The destination changed before creation.')
             for part in Path(plan['root']).relative_to(ancestor).parts:
                 try: os.mkdir(part, mode=0o755, dir_fd=fd)
                 except FileExistsError: pass

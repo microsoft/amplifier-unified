@@ -2,13 +2,12 @@
 
 This is a proposed acceptance program, not a report of production conformance. The design direction was accepted on 2026-09-22; implementation evidence is tracked in ../IMPLEMENTATION.md. Their semantic promises require implementation evidence beyond document-shape checks.
 
-## What is verified now
+## Design audit before implementation
 
-- Current Unified main source was inspected at the revision in `source-revision.txt`; the placement, registration, and managed-chat findings are recorded in CURRENT-BEHAVIOR.md.
+- Unified source was inspected at `172fee399ba0b35a78e3c5b914d38bb1457530a6`; the original placement, registration, and managed-chat findings are recorded in CURRENT-BEHAVIOR.md. Later native-history findings identify their own revision in NATIVE-HISTORY.md.
 - The Mac Amplifier PWA at `spark-1:8443/` was inspected using its visible UI: the current sidebar, managed/workspace draft chooser, explicit workspace field, Chat details modal, Subagent history modal, and right-hand Canvas. No chat was submitted and no settings or files were changed. The original conversation was restored with Canvas closed.
 - The mockups adopt that app's observed shell and styling and use the supplied Codex screenshots for organization and drill-down inspiration.
-- `checks/document-results.json` records document shapes and links, not whether contract promises are implemented.
-- `checks/mockup-results.json` records browser assertions against the simulated prototype. Images under `mockups/` are the rendered design. Neither the assertions nor the images prove filesystem, Git, permission, provider, or deployment behavior.
+- The original design bundle included document-shape and simulated-prototype checks. Selected rendered designs are retained under `mockups/`. Those checks and images do not prove filesystem, Git, permission, provider, or deployment behavior. Current product evidence is in [implementation status](../IMPLEMENTATION.md).
 
 ## Required product scenarios
 
@@ -62,13 +61,17 @@ Before enabling new defaults, run comparison fixtures against old persisted stat
 
 Usability sessions should include an information worker who does not use Git, a developer with existing CLI/TUI folders, and an operator who owns a multi-repo live preview. Have each perform their own scenario without teaching the internal vocabulary first.
 
+## Decisions implemented
+
+- Placement uses the current installation account and an explicit host label.
+- Pins are suppressed from duplicate workspace rows in the simple sidebar and remain available in the full chat list.
+- Recent contains chats without a workspace. Workspace conversations remain under their workspace.
+
 ## Decisions left for review
 
-- Initial account scoping: use the current installation account, or expose multiple authenticated host accounts immediately? Recommendation: current account, explicit host label.
 - Default idle working-copy retention: decide from observed storage pressure; avoid an arbitrary deletion timer before preservation evidence exists.
 - Non-Git editor adapters: name the supported first-release writers. Unsupported tools must not inherit an unproven isolation promise.
 - Shared-direction edits by agents: recommend suggestions by default, with an explicit workspace policy allowing attributed updates later.
-- Sidebar pins: recommend suppressing duplicate sidebar rows while keeping pinned chats visible in the workspace's full chat list.
 
 These questions refine implementation policy. They do not block reviewing the name-first journey and proposed separation of workspace, history, and execution.
 

@@ -227,3 +227,24 @@ async def test_replaying_plan_does_not_undo_a_later_workspace_rename(app):
     await app.dispatch('workspace.rename', {'id': first['result']['workspaceId'], 'name': 'New display name'})
     await app.dispatch('workspace.create', {'planId': plan['planId']}, command_id='after-rename')
     assert next(row for row in app.state['workspaces'] if row['id'] == first['result']['workspaceId'])['name'] == 'New display name'
+
+
+async def test_destination_replaced_while_opening_is_not_used(app, tmp_path, monkeypatch):
+    import os
+    root = tmp_path / 'dev'; root.mkdir()
+    plan = await prepare(app, root=str(root))
+    original_open = os.open
+    swapped = False
+
+    def replace_at_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and Path(path) == root:
+            swapped = True
+            root.rename(tmp_path / 'reviewed-dev')
+            root.mkdir()
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', replace_at_open)
+    with pytest.raises(AppError, match='destination changed'):
+        await app.dispatch('workspace.create', {'planId': plan['planId']}, command_id='replace-on-open')
+    assert swapped and not list(root.iterdir()) and not list((tmp_path / 'reviewed-dev').iterdir())

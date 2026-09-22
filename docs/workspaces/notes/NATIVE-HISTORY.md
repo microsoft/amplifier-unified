@@ -1,6 +1,6 @@
 # Shared native history: verified behavior and design correction
 
-Verified September 22, 2026 against `microsoft/amplifier-unified` main `fb1fe674a23e6d4957c87deabe156fa30df65a19`. This is source verification, not a claim that the currently running Spark PWA uses that exact revision. The source snapshot is retained under `source/history-review/`.
+Verified September 22, 2026 against `microsoft/amplifier-unified` main `fb1fe674a23e6d4957c87deabe156fa30df65a19`. This is source verification, not a claim that the currently running Spark PWA uses that exact revision. Source pointers below refer to that audited revision.
 
 ## The native path is already shared
 

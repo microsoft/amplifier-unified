@@ -12,7 +12,7 @@ There are also separate `workspace.add` and `workspace.create` actions. Add requ
 
 Consequently, the user's description is correct for the New chat path. Creating a workspace through that path happens on first submission, not when the directory text is typed. Existing directories are currently reused directly.
 
-Source pointers within `source/`: `frontend/src/chat-location.jsx`; `amplifier_web/service.py` around lines 946–985 and 1187–1205; `amplifier_web/workspace_canvas.py` functions `_registration`, `select_session_workspace`, `_create_workspace_folder`, and `workspace_command`.
+Source pointers at the audited revision `172fee399ba0b35a78e3c5b914d38bb1457530a6`: `frontend/src/chat-location.jsx`; `amplifier_web/service.py` around lines 946–985 and 1187–1205; `amplifier_web/workspace_canvas.py` functions `_registration`, `select_session_workspace`, `_create_workspace_folder`, and `workspace_command`.
 
 ## App-owned chat storage: confirmed
 

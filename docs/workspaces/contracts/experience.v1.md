@@ -78,10 +78,11 @@ Workspace details → Files · Chats · Directions · Settings
 - P7: keyboard-walk the 320-pixel and desktop layouts, including panel return focus.
 - P8: remove/restore a folder and display two same-named workspaces on different hosts.
 
-## Open questions
+## Resolved decisions
 
-- Should pinned workspace conversations be suppressed from their expanded workspace
-  list by default, with a small link indicating that they appear in Pinned?
+Pinned conversations appear once in the simple sidebar, in Pinned. They remain
+available in the workspace's full chat list. Recent contains conversations without
+a workspace.
 
 ## Changelog
 
