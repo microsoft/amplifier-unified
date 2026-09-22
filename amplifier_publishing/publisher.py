@@ -622,7 +622,7 @@ class Publisher:
                 if release["siteId"] == site_id:
                     self._scope(release, session_id, "Site")
             self._stop_listeners(site_id)
-            site.update(status="removed" if action == "remove" else "stopped", url=None, revision=site["revision"] + 1, updatedAt=_now())
+            site.update(status="removed" if action == "remove" else "stopped", url=None, accessPolicy=self._access_policy, revision=site["revision"] + 1, updatedAt=_now())
             site.pop("unknownRequestIds", None)
             self._put("site", site)
             for preview in self._all("preview"):

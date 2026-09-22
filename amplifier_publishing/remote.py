@@ -335,7 +335,19 @@ class SSHClient:
             if not preview and (type(record.get("revision")) is not int or record["revision"] < 0):
                 invalid("Site result has an invalid revision", receipt)
             bind, policy = ("127.0.0.1", "loopback-only") if preview else (self.bind, self.access_policy)
-            if record.get("accessPolicy") != policy:
+            # Older publishers labeled never-deployed sites loopback-only even
+            # on a private target. Retain those inactive audit records verbatim:
+            # no current or historical endpoint or deployment may use this case.
+            legacy_unused_private = (
+                not preview and policy == "private-network"
+                and record.get("accessPolicy") == "loopback-only"
+                and record["status"] in {"stopped", "removed"}
+                and record["url"] is None and record.get("previousUrl") is None
+                and "releaseId" in record and record["releaseId"] is None
+                and "previousReleaseId" in record and record["previousReleaseId"] is None
+                and record.get("deployedReleaseIds") == []
+            )
+            if record.get("accessPolicy") != policy and not legacy_unused_private:
                 raise PublishingError("target_mismatch", "Returned access policy differs from the configured private target", receipt=receipt)
             url(record["url"], bind, receipt)
             if "previousUrl" in record:

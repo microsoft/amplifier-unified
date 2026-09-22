@@ -747,3 +747,92 @@ def test_private_service_projections_validate_preview_and_empty_site_lifecycle(p
         assert configured.request({'method': 'list', 'sessionId': 'session'}) == [removed['result']]
         receipts = configured.request({'method': 'receipts', 'sessionId': 'session'})
         assert configured.validate_result('receipts', receipts) is receipts
+
+
+def legacy_unused_site(**changes):
+    return {'id': 'example', 'sessionId': 'session', 'status': 'stopped', 'revision': 1,
+            'url': None, 'releaseId': None, 'previousReleaseId': None,
+            'accessPolicy': 'loopback-only', 'deployedReleaseIds': [], **changes}
+
+
+@pytest.mark.parametrize('legacy_action', ['stop', 'remove'])
+@pytest.mark.parametrize('preview_only', [False, True])
+def test_retained_private_unused_site_and_receipts_survive_upgrade(paths, monkeypatch, legacy_action, preview_only):
+    root, sock = paths
+    request = {'method': legacy_action, 'sessionId': 'session', 'siteId': 'example',
+               'requestId': 'legacy-end', 'expectedRevision': 0}
+    with PublishingService(root, sock, bind='10.1.2.3') as service:
+        if preview_only:
+            release = unix_request(sock, imported())
+            call(sock, 'preview', releaseId=release['id'], requestId='preview')
+        unix_request(sock, request)
+        # Persist the exact pre-f7ed shape: the old _new_site hardcoded this
+        # label, and old _end retained it in both the site and audit receipts.
+        retained = service.publisher._get('site', 'example')
+        retained['accessPolicy'] = 'loopback-only'
+        service.publisher._put('site', retained)
+        fingerprint, body = service.publisher._db.execute(
+            'SELECT fingerprint,body FROM receipts WHERE session=? AND request=?',
+            ('session', 'legacy-end')).fetchone()
+        native = json.loads(body)
+        native['result']['accessPolicy'] = 'loopback-only'
+        service.publisher._save_receipt(native, fingerprint)
+        rpc = call(sock, 'receipt', requestId='legacy-end')
+        rpc['result']['accessPolicy'] = 'loopback-only'
+        service._save_rpc(rpc)
+        def saved_bodies(owner):
+            return (owner.publisher._db.execute('SELECT body FROM receipts WHERE session=? AND request=?', ('session', 'legacy-end')).fetchone()[0],
+                    owner._db.execute('SELECT body FROM rpc_receipts WHERE session=? AND request=?', ('session', 'legacy-end')).fetchone()[0])
+        original_bodies = saved_bodies(service)
+        original_site = service.publisher._db.execute('SELECT body FROM records WHERE kind=? AND id=?', ('site', 'example')).fetchone()[0]
+    with PublishingService(root, sock, bind='10.1.2.3') as restarted:
+        configured = SSHClient(hostname='private-host', python='/python', socket_path=str(sock), expected_bind='10.1.2.3', expected_service_id=restarted.service_id)
+        monkeypatch.setattr(configured, '_send', lambda payload: remote.unix_request(sock, payload))
+        assert configured.request({'method': 'status', 'sessionId': 'session', 'siteId': 'example'}) == retained
+        assert configured.request({'method': 'list', 'sessionId': 'session'}) == [retained]
+        assert configured.request(request) == rpc  # Exact historical retry; no new effect.
+        old = configured.request({'method': 'receipt', 'sessionId': 'session', 'requestId': 'legacy-end'})
+        assert configured.validate_result('receipt', old) == rpc
+        rows = configured.request({'method': 'receipts', 'sessionId': 'session'})
+        assert configured.validate_result('receipts', rows) is rows
+        assert saved_bodies(restarted) == original_bodies
+        assert restarted.publisher._db.execute('SELECT body FROM records WHERE kind=? AND id=?', ('site', 'example')).fetchone()[0] == original_site
+        for revision, action in [(1, 'stop'), (2, 'remove')]:
+            current = configured.request({'method': action, 'sessionId': 'session', 'siteId': 'example', 'requestId': 'current-' + action, 'expectedRevision': revision})
+            assert current['result']['accessPolicy'] == 'private-network'
+            assert current['result']['url'] is None
+        assert saved_bodies(restarted) == original_bodies
+        assert configured.request(request) == rpc
+        assert configured.request({'method': 'status', 'sessionId': 'session', 'siteId': 'example'})['revision'] == 3
+        assert not restarted.publisher._sites and not restarted.publisher._previews
+
+
+@pytest.mark.parametrize('change', [
+    {'url': 'http://10.1.2.3:12345/'}, {'url': False},
+    {'previousUrl': 'http://10.1.2.3:12345/'}, {'previousUrl': ''},
+    {'releaseId': 'deployed'}, {'previousReleaseId': 'deployed'},
+    {'deployedReleaseIds': ['deployed']}, {'deployedReleaseIds': None},
+    {'status': 'running'}, {'status': 'interrupted'}, {'status': 'unknown'},
+    {'accessPolicy': 'untrusted-policy'},
+])
+def test_retained_private_policy_exception_rejects_endpoints_and_deployment_history(private_client, change):
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('status', legacy_unused_site(**change))
+    assert rejected.value.code == 'target_mismatch'
+
+
+@pytest.mark.parametrize('missing', ['releaseId', 'previousReleaseId', 'deployedReleaseIds'])
+def test_retained_private_policy_exception_requires_explicit_empty_history(private_client, missing):
+    site = legacy_unused_site()
+    del site[missing]
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('status', site)
+    assert rejected.value.code == 'target_mismatch'
+
+
+def test_retained_private_policy_exception_never_applies_to_previews(private_client):
+    receipt = {'requestId': 'preview', 'action': 'preview', 'state': 'unknown',
+               'result': legacy_unused_site(accessPolicy='private-network')}
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('receipt', receipt)
+    assert rejected.value.code == 'target_mismatch'

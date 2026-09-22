@@ -125,6 +125,14 @@ The error response preserves the original unknown receipt and its diagnostic;
 the UI retains the exact pending request regardless of HTTP status until an
 authoritative outcome is observed or the user explicitly acknowledges unknown.
 
+Older private-target stop/remove records can contain a `loopback-only` label for
+a site that was never deployed. Compatibility accepts that label only on a
+stopped/removed non-preview site with no current or historical URL, explicit null
+current/previous release IDs and an empty deployment history. Those audit
+records remain unchanged; a new stop/remove records the configured policy.
+Any serving endpoint, deployment history or preview still requires its exact
+target policy.
+
 `publishing.target.remove` unregisters an unused, unselected configuration and
 retains its history. A target with retained lifecycle requests cannot be removed
 or edited into another endpoint; use a new target ID. A used target's inspection
