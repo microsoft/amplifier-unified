@@ -97,6 +97,16 @@ class RuntimeControls:
         self.prepared = self.coordinator.get_capability("web.prepared")
         self.lock = asyncio.Lock()
         self.selection = None
+        # Session preparation has already applied the new-chat root choice.
+        # Adopt that explicit choice before readback/persistence; a budget-only
+        # wrapper is still automatic provider selection. Saved controls below
+        # take precedence, including an explicit reset to bundle defaults.
+        from .host.session import SelectedProvider
+        root_provider = getattr(self.coordinator.get("orchestrator"), "root_provider", None)
+        if (isinstance(root_provider, SelectedProvider)
+                and root_provider.selection.get("instance") and root_provider.selection.get("model")):
+            self.selection = {key:copy.deepcopy(root_provider.selection[key])
+                              for key in ("instance", "model", "effort") if key in root_provider.selection}
         self.selection_cleared = False
         self.max_output_tokens = None
         self.logins = {}
@@ -149,6 +159,8 @@ class RuntimeControls:
             await self._perform("budget.set", budget)
         if saved.get("selection"):
             await self._perform("provider.select", await self.restore_selection(saved["selection"]))
+        elif "selection" in saved:
+            await self._perform("provider.reset", {})
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
 
