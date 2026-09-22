@@ -457,7 +457,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies'} or (
+        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -475,7 +475,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "delivery"}:
+        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -634,6 +634,18 @@ class RuntimeManager:
             return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
         try:
             return {**await self._request(session_id, 'dependencies', **({'verifyImports': True} if verify else {})), 'sessionId': session_id}
+        except RuntimeError:
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
+
+    async def desktop_readiness(self, session_id):
+        """Inspect only the mounted worker; do not revive retired conversations."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'No ready conversation runtime. Start the conversation normally, then check again.'}
+        if row['ready'].exception() is not None:
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Conversation runtime did not finish loading.'}
+        try:
+            return {**await self._request(session_id, 'desktop.readiness'), 'sessionId': session_id}
         except RuntimeError:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 

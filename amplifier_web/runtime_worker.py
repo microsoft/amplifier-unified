@@ -580,6 +580,12 @@ class Worker:
                 else:
                     from artifact_runtime import discover
                 result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
+            elif op == "desktop.readiness":
+                if not self.controls:
+                    result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}
+                else:
+                    from amplifier_web.desktop_readiness import worker_report
+                    result = worker_report(self.controls)
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
             elif op in {"delivery", "retry"} and (

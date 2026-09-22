@@ -8,6 +8,7 @@ export const settingsSections=[
  {id:'models',title:'Models & routing',group:'Configuration',scope:'Scope selected below',pages:[['providers','Connections'],['routing','Routing']]},
  {id:'bundles',title:'Bundles & modules',group:'Configuration',scope:'App or conversation',pages:[['app-bundles','Configured bundles'],['add-bundles','Discover'],['defaults','Defaults'],['loaded-modules','Conversation modules'],['share-bundle','Save & share']]},
  {id:'smart-tools',title:'Smart Tools',group:'Configuration',scope:'This host',pages:[['smart-tools','Smart Tools']]},
+ {id:'desktop',title:'Desktop & browser',group:'Configuration',scope:'App host and selected conversation',pages:[['desktop','Desktop & browser']]},
  {id:'updates',title:'Updates',group:'Application',scope:'This host',pages:[['updates','Updates']]},
  {id:'diagnostics',title:'Diagnostics',group:'Application',scope:'Unified app capture',pages:[['diagnostics','Diagnostics']]},
  {id:'history',title:'History & recovery',group:'Application',scope:'This host',pages:[['history','Import & export'],['recall','Recall & memory'],['conversation','Current conversation'],['outputs','Outputs & review'],['repair','Backup & repair'],['reset','Advanced recovery']]},

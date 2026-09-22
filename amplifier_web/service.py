@@ -42,6 +42,7 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
+    "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
     "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
     "terminal.prepare": ("Prepare a private, short-lived terminal setup download for a configured service address. Installs on the computer where the user runs it; does not install on the server.", schema({"server": string(500), "platform": {"enum": ["macos-arm64", "linux-arm64"]}, "name": string(80)}, ["server", "platform", "name"])),
     "terminal.devices": ("List enrolled terminal connections without revealing credentials.", schema({})),
@@ -856,6 +857,9 @@ class AppService:
         if action in {'session.deletePreview', 'session.delete'}:
             from .managed_deletion import dispatch as delete_managed_chat
             return await delete_managed_chat(self, action, args, origin, include_state)
+        if action == 'desktop.readiness':
+            from .desktop_readiness import dispatch as desktop_readiness
+            return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
         if action == 'runtime.dependencies':
             from .artifact_runtime import discover
             async with self.lock:
@@ -2415,6 +2419,10 @@ class AppService:
             if args['action'].startswith(('recall.','memory.')):
                 if action_args.get('sessionId',session_id) != session_id:
                     raise AppError('Recall actions must identify the calling conversation.',409)
+                action_args['sessionId'] = session_id
+            if args['action'] == 'desktop.readiness':
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Desktop readiness must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
             if args['action'].startswith('voice.visual.'):
                 if action_args.get('sessionId', session_id) != session_id:

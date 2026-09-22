@@ -13,6 +13,7 @@ import {MaintenanceSettings} from './maintenance';
 import {UpdateSettings} from './updates';
 import {WorkerRetentionSettings} from './worker-retention';
 import {RuntimeSettings} from './runtime-settings';
+import {DesktopReadiness} from './desktop-readiness';
 import {ConversationName} from './conversation-controls';
 import {RecallSettings} from './recall';
 import {ConversationExport} from './conversation-export.jsx';
@@ -54,6 +55,7 @@ export function SettingsExperience({state,session,act,open,close=()=>act('view.u
  else if(page==='ready-conversations')content=state.runtime?.retention?<WorkerRetentionSettings {...props}/>:<p>This host does not expose conversation readiness settings.</p>;
  else if(page==='install-app')content=<InstallAppSettings/>;
  else if(page==='runtime')content=<RuntimeSettings {...props}/>;
+ else if(page==='desktop')content=<DesktopReadiness {...props}/>;
  else if(page==='recall')content=<RecallSettings key={session?.id||'none'} {...props}/>;
  else if(page==='outputs')content=<OutputSettings key={session?.id} {...props}/>;
  else if(page==='conversation')content=<>{session?<><ConversationName key={session.id} session={session} act={act}/><ConversationExport {...props}/>{session.location?.kind==='managed'&&isTopLevelChat(session)&&<div className="a-dialog-actions"><button type="button" className="a-soft a-danger" data-action="view.update" onClick={()=>open('delete-session')}>Delete chat</button></div>}<h3>Conversation bundle</h3></>:<p>Choose a bundle to start a conversation.</p>}<BundleControl {...props} working={['working','starting','running','stopping','busy'].includes(session?.status)}/></>;
