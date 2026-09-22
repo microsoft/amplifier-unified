@@ -117,7 +117,8 @@ async def test_packaging_tracks_execution_folder_and_deletion_retains_ownership(
 async def test_agent_discovers_identical_action_schema(app):
     rows = await app.app_bridge('list_actions', {'prefix': 'publishing.'}, app._session()['id'])
     assert {row['name'] for row in rows} == {'publishing.' + op for op in (
-        'list', 'build', 'preview', 'review', 'deploy', 'rollback', 'status', 'logs', 'stop', 'remove')}
+        'list', 'build', 'preview', 'review', 'deploy', 'rollback', 'status', 'logs', 'stop', 'remove',
+        'target.list', 'target.save', 'target.inspect', 'target.select', 'target.remove')}
 
 
 async def test_full_backup_includes_consistent_publishing_snapshot(app):

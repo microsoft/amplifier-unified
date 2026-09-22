@@ -493,3 +493,56 @@ def test_stop_disconnects_already_accepted_slow_request(publisher, source):
         pass
     finally:
         connection.close()
+
+
+
+def test_export_release_reads_only_owned_immutable_snapshot(publisher, source):
+    import base64
+    (source / ".nojekyll").touch()
+    release = build(publisher, source)
+    expected = (source / "index.html").read_bytes()
+    (source / "index.html").write_text("later source version")
+    exported = publisher.export_release(release["id"], "session-one")
+    assert set(exported) == {"siteId", "sessionId", "manifest", "manifestDigest", "files"}
+    assert exported["manifest"] == release["files"]
+    assert exported["manifestDigest"] == release["manifestDigest"]
+    assert base64.b64decode(exported["files"]["index.html"], validate=True) == expected
+    assert exported["files"][".nojekyll"] == ""
+    assert "source" not in exported and str(source) not in json.dumps(exported)
+    with pytest.raises(PublishingError) as error:
+        publisher.export_release(release["id"], "other-session")
+    assert error.value.code == "not_found"
+
+
+@pytest.mark.parametrize("tamper", ["content", "symlink", "missing"])
+def test_export_release_rejects_tampered_or_unsafe_store_files(publisher, source, tmp_path, tamper):
+    release = build(publisher, source)
+    path = publisher.root / "releases" / release["id"] / "files" / "index.html"
+    if tamper == "content":
+        path.chmod(0o600)
+        path.write_text("altered immutable content")
+    elif tamper == "missing":
+        path.unlink()
+    else:
+        outside = tmp_path / "private.txt"
+        outside.write_text("must never export")
+        path.unlink()
+        path.symlink_to(outside)
+    with pytest.raises(PublishingError) as error:
+        publisher.export_release(release["id"], "session-one")
+    assert error.value.code == "integrity_error"
+
+
+def test_export_checks_bytes_again_if_store_changes_after_initial_verification(publisher, source, monkeypatch):
+    release = build(publisher, source)
+    original = publisher._verify
+    def concurrent_change(record):
+        original(record)
+        path = publisher.root / "releases" / release["id"] / "files" / "index.html"
+        before = path.read_bytes()
+        path.chmod(0o600)
+        path.write_bytes(b"x" * len(before))
+    monkeypatch.setattr(publisher, "_verify", concurrent_change)
+    with pytest.raises(PublishingError) as error:
+        publisher.export_release(release["id"], "session-one")
+    assert error.value.code == "integrity_error"

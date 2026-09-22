@@ -10,11 +10,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from empty_host_ui_server import Runtime
 
 
-async def main(home):
+async def main(home, remote_home):
     os.environ.update(AMPLIFIER_HOME=str(home / 'shared'), AMPLIFIER_WEB_HOME=str(home / 'app'),
                       AMPLIFIER_SESSION_STATE_HOME=str(home / 'sessions'))
     from aiohttp import web
     from amplifier_web.server import create_app
+    from amplifier_publishing.service import PublishingService
+
+    remote_socket = remote_home / 'admin' / 'publisher.sock'
+    remote = PublishingService(remote_home / 'store', remote_socket).__enter__()
+    remote_identity = remote._dispatch({'method': 'target'})
+    ssh_log = home / 'fixture-ssh.jsonl'
+    bin_dir = home / 'bin'
+    bin_dir.mkdir()
+    fake_ssh = bin_dir / 'ssh'
+    fake_ssh.write_text('#!' + sys.executable + '\n' + '''import json, os, shlex, subprocess, sys
+payload = sys.stdin.buffer.read()
+with open(os.environ['PUBLISHING_FIXTURE_SSH_LOG'], 'a') as log:
+    log.write(json.dumps({'argv': sys.argv[1:], 'method': json.loads(payload)['method']}) + '\\n')
+result = subprocess.run(shlex.split(sys.argv[-1]), input=payload, capture_output=True)
+sys.stdout.buffer.write(result.stdout)
+sys.stderr.buffer.write(result.stderr)
+sys.exit(result.returncode)
+''')
+    fake_ssh.chmod(0o700)
+    os.environ.update(PATH=str(bin_dir) + os.pathsep + os.environ['PATH'],
+                      PUBLISHING_FIXTURE_SSH_LOG=str(ssh_log),
+                      PYTHONPATH=str(Path(__file__).resolve().parents[2]) + os.pathsep + os.environ.get('PYTHONPATH', ''))
 
     workspace = home / 'workspace'
     output = workspace / 'dist'
@@ -40,15 +62,23 @@ async def main(home):
     service.dispatch = dispatch
 
     async def inspect(request):
-        listing = await original_dispatch('publishing.list', {'sessionId': sid})
+        targets = await original_dispatch('publishing.target.list', {'sessionId': sid})
+        listing = await original_dispatch('publishing.list', {'sessionId': sid, 'targetId': request.query.get('target', targets['result']['selectedTargetId'])})
         return web.json_response({'selected': service.state['selectedSessionId'],
                                  'draft': service.state['view']['draft'], 'sent': runtime.sent,
                                  'started': runtime.started, 'calls': calls,
-                                 'publishing': listing['result']})
+                                 'publishing': listing['result'], 'targets': targets['result'],
+                                 'sshCalls': [json.loads(line) for line in ssh_log.read_text().splitlines()] if ssh_log.exists() else []})
 
     async def change(request):
         (output / 'index.html').write_text('<!doctype html><title>Fixture release</title><h1>Second release</h1>')
         return web.json_response({'changed': True})
+
+    async def remote_change(request):
+        (output / 'index.html').write_text('<!doctype html><title>Fixture release</title><h1>Third release</h1>')
+        return web.json_response({'changed': True})
+
+    app.router.add_post('/fixture/remote-change', remote_change)
 
     async def fail_deploy(request):
         original_put = service.publishing.store._put
@@ -69,13 +99,17 @@ async def main(home):
     await site.start()
     url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins'] = app['allowed_origins'] | {url}
-    print(json.dumps({'url': url, 'sessionId': sid}), flush=True)
+    print(json.dumps({'url': url, 'sessionId': sid, 'remoteServiceId': remote_identity['serviceId'],
+                      'remoteConfig': {'targetId': 'private-fixture', 'label': 'Isolated remote fixture',
+                                       'hostname': 'fixture-host', 'python': sys.executable,
+                                       'socketPath': str(remote_socket), 'expectedBind': '127.0.0.1'}}), flush=True)
     try:
         await asyncio.Event().wait()
     finally:
         await runner.cleanup()
+        await asyncio.to_thread(remote.close)
 
 
 if __name__ == '__main__':
-    with tempfile.TemporaryDirectory(prefix='publishing-fixture-') as directory:
-        asyncio.run(main(Path(directory).resolve()))
+    with tempfile.TemporaryDirectory(prefix='publishing-fixture-') as directory, tempfile.TemporaryDirectory(prefix='pub-remote-', dir=Path('/tmp').resolve()) as remote_directory:
+        asyncio.run(main(Path(directory).resolve(), Path(remote_directory)))

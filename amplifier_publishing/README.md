@@ -51,6 +51,13 @@ publisher.close()
 - `list(session_id)`, `status(site_id, session_id)`, `releases(session_id)`, and
   `receipts(session_id)` return only that session's records. The list retains
   removed sites so their revision and audit history remain discoverable.
+- `export_release(release_id, session_id)` returns only `siteId`, `sessionId`,
+  `manifest`, `manifestDigest`, and canonical base64 `files`, suitable for a
+  transport import request. It reads the owned immutable snapshot through
+  no-follow descriptors and verifies the exact exported bytes, including a
+  second hash check after initial release validation. It accepts no source path
+  and exports no review, preview, listener, or storage metadata. A transport must
+  enforce its own message and transfer limits before sending this payload.
 - `snapshot(destination)` copies a consistent private database and all known
   immutable release files to a new directory. It excludes temporary staging and
   owner locks. It does not change live listeners. Restoring a copy never resumes
@@ -97,6 +104,17 @@ explicitly stop or remove the site at its current revision to clear the fence;
 the original unknown receipt remains unchanged. A process restart marks formerly
 running listeners interrupted and clears their live URLs, preserving old URLs
 as historical metadata. Only a new explicit operation can start a listener.
+
+The optional private service adds a separate durable RPC ledger. Its mutation
+receipts expose `serviceId` and `rpcPayloadDigest`, the SHA256 of the exact
+canonical request including `expectedServiceId`. Remote callers must compare
+that proof to their saved admission before adopting an outcome: matching only
+the request ID, action, or release can confuse an older request with changed
+arguments. Historical receipts do not acquire proof merely by being read.
+Their original exact-retry checks must verify the supplied arguments first.
+An interrupted RPC without a committed outcome stays unknown, even if an inner
+receipt has the same ID. See [the private service contract](../docs/PUBLISHING-TARGET.md)
+for the transport and legacy recovery boundaries.
 
 ## Exposure and storage boundaries
 

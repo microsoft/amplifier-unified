@@ -11,7 +11,7 @@ import uuid
 
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
 
-def _backup_files(data_dir, session_paths, publishing=None):
+def _backup_files(data_dir, session_paths, publishing=None, publishing_captures=()):
     folder=data_dir/'backups'/uuid.uuid4().hex
     folder.mkdir(parents=True,mode=0o700)
     database=folder/'app.sqlite3'
@@ -25,11 +25,15 @@ def _backup_files(data_dir, session_paths, publishing=None):
     database.chmod(0o600)
     if publishing is not None:
         publishing.snapshot(folder/'publishing')
+    for identity, capture in publishing_captures:
+        capture.snapshot(folder/'publishing-captures'/identity)
     archive=folder/'private-state.tar.gz'
     with tarfile.open(archive,'w:gz') as output:
         output.add(database,arcname='app.sqlite3')
         if publishing is not None:
             output.add(folder/'publishing',arcname='publishing',recursive=True)
+        if publishing_captures:
+            output.add(folder/'publishing-captures',arcname='publishing-captures',recursive=True)
         operations=data_dir/'operations.sqlite3'
         if operations.exists():
             snapshot=folder/'operations.sqlite3'
@@ -106,7 +110,7 @@ async def backup(service, *, publishing_locked=False):
                 include(session['workspace'],session.get('runtimeSessionId') or session['id'])
                 for worker in session.get('workers',[]):
                     if worker.get('id'):include(session['workspace'],worker['id'])
-        task=asyncio.create_task(asyncio.to_thread(_backup_files,service.data_dir,paths,service.publishing.store))
+        task=asyncio.create_task(asyncio.to_thread(_backup_files,service.data_dir,paths,service.publishing.store,tuple(service.publishing.captures.items())))
         try:return await asyncio.shield(task)
         except asyncio.CancelledError:
             await task

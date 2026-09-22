@@ -6,11 +6,14 @@ rollback, stop/remove, content verification and durable operation receipts.
 The `amplifier_publishing.remote.SSHClient` library sends one request at a time
 to that service over an existing SSH connection configuration.
 
-This target is staged. Local Unix-socket and HTTP acceptance is covered by
-`tests/test_publishing_remote.py`. No remote host, SSH account, private network,
-firewall, reverse proxy, TLS endpoint or production deployment has been verified.
-The Unified publishing actions/UI currently use their local publisher; this
-separate target is not automatically selected or installed by those actions.
+The app integrates this target through the shared controls documented in
+[Managed static publishing](PUBLISHING.md). Local Unix-socket, HTTP, app adapter
+and controlled-transport acceptance is covered by the publishing tests. Host
+installation, client reachability, private network, firewall, reverse proxy,
+TLS and production acceptance remain separate deployment responsibilities.
+A configured target is explicitly inspected and selected by its consuming
+application. Registration or inspection does not install a service or deploy
+a site. Keep local and remote records tied to their owning service identity.
 
 ## Explicit host configuration
 
@@ -60,7 +63,12 @@ canonicalized (including macOS `/var` aliases). Private leaf directories reject
 symlinks and non-owner permissions. Imported artifact paths are independently
 validated; they never name host filesystem inputs. Service import state lives
 in the sibling `.publishing-store-service` directory outside the Publisher
-store. Keep both stores together when planning private retention/backups.
+store. Its `imports.sqlite3` also holds a service UUID, generated once on first
+initialization and preserved across restarts. Keep both stores together when
+planning private retention/backups. The returned `serviceId` identifies this
+managed service state; it is not a password or an authorization credential.
+A restored identity represents the same service and must have one authoritative
+active owner, rather than being copied into independent live service instances.
 
 SIGINT and SIGTERM close listeners and remove the service's own admin socket.
 A crash/SIGKILL can leave a stale socket. Startup refuses any existing socket
@@ -78,9 +86,18 @@ The optional receipt supplies a durable identity/outcome when available.
 Unknown or extra fields and duplicate JSON keys are rejected. No arbitrary
 Python method, build command, local source path or backup destination is an RPC.
 
-| Method | Required fields besides `method` |
+`target` without other fields is the only unbound discovery request. It returns
+the durable `serviceId`. Every other request requires `expectedServiceId` equal
+to that inspected UUID, including reads and receipt lookups. A bound `target`
+request may also include this guard. The service checks identity at request
+admission, before reading session data, reserving a request ID, or performing
+effects. A missing guard returns `service_identity_required`; a mismatched guard
+returns `target_mismatch`. A separate preflight alone is insufficient because
+the service at a socket may change between preflight and the actual request.
+
+| Method | Required fields besides `method` and the identity guard |
 | --- | --- |
-| `target` | none |
+| `target` | none; `expectedServiceId` is optional for discovery |
 | `list`, `releases`, `receipts` | `sessionId` |
 | `status` | `sessionId`, `siteId` |
 | `receipt` | `sessionId`, `requestId` |
@@ -94,6 +111,13 @@ Python method, build command, local source path or backup destination is an RPC.
 does not establish that a lost request never reached another target. `receipts`
 provides operation outcomes/error codes for audit and diagnosis. HTTP access
 logs, credentials, chat transcripts and query strings are not retained.
+
+`Publisher.export_release(release_id, session_id)` supplies the exact
+`siteId`, `sessionId`, `manifest`, `manifestDigest`, and base64 `files` fields
+from an owned immutable release. The caller adds `method: "import"`, a new
+`requestId`, and the expected service identity. No mutable build directory,
+source path, review notes, previews, or runtime-store metadata are transferred.
+Check the receiving target limits before sending the exported payload.
 
 An import contains a path-sorted manifest of `{path,size,sha256}` entries and a
 `files` object mapping those same paths to canonical base64 bytes. The manifest
@@ -110,12 +134,36 @@ store, then asks Publisher to snapshot them. No compilation or uploaded program
 executes. Successful and failed imports retain their canonical request digest
 and durable receipt; transient staged bytes are removed after a known attempt.
 
-The service reserves the request ID and full request digest before staging.
-An exact retry returns its stored result. Reusing that ID with changed metadata,
-manifest or file bytes fails with `request_conflict`, including after restart.
-Interrupted imports are reconciled against an existing Publisher receipt when
-possible; otherwise they remain `unknown` and are never automatically replayed.
-Use a new request ID only for a new deliberate operation after reconciliation.
+Every newly admitted mutation has a durable RPC receipt in the service-private
+`rpc_receipts` table before effects begin. Its `rpcPayloadDigest` is SHA256 of
+the exact canonical request JSON, **including `expectedServiceId`**, using the
+same UTF-8 canonicalization as the manifest. The receipt also carries `serviceId`.
+This proof covers every argument, including review notes, expected revisions,
+and imported bytes. A matching request ID, action, site, or release alone does
+not prove that a receipt belongs to the requested operation.
+
+The caller persists that same digest before transport and compares both proof
+fields before adopting a remotely observed outcome. A lost conflict response
+must not turn an older operation with the same ID and different arguments into
+a successful new request. Exact retries return the stored outcome; changed
+payloads fail with `request_conflict`. A service crash before the exact RPC
+outcome was committed leaves the RPC receipt `unknown`. Recovery never borrows
+a bare inner Publisher receipt to assert success or automatically replays it.
+
+Historical receipts without RPC proof remain unproven on read. An explicit
+legacy retry can gain proof only after the original Publisher/import retry
+checks verify its exact arguments and return the historical outcome. A
+mismatched retry does not relabel or overwrite that older receipt. Callers with
+an unknown operation and missing or mismatched proof retain uncertainty; merely
+reading matching request IDs is not sufficient reconciliation.
+
+The older import layer retains its payload digest excluding the admission-only
+`expectedServiceId` for exact-retry compatibility with prior versions; the new
+RPC proof above includes identity. Pending inner imports may recover a known
+build success only when action, session, site, and a durably recorded expected
+manifest all match. Older pending imports without that evidence remain
+`unknown`. Use a new request ID only for a new deliberate operation after
+reconciliation.
 
 Send a read-only request from the host's stdin with:
 
@@ -138,6 +186,7 @@ target = SSHClient(
     python="/absolute/env/bin/python",
     socket_path="/absolute/private/publishing-admin/control.sock",
     expected_bind="10.0.0.25",  # must be the deliberately configured interface
+    expected_service_id=inspected_service_id,  # UUID returned by prior discovery
     timeout=30,
 )
 capabilities = target.verify_target()
@@ -147,13 +196,21 @@ sites = target.request({"method": "list", "sessionId": "task-identifier"})
 The bind in this example is illustrative, not a discovered host configuration.
 SSH runs without a local shell; every remote argument is separately shell-quoted.
 Requests travel on stdin, never in command arguments. Host-key checking is strict
-and SSH is noninteractive. A mutation first checks the target's protocol, bind
-and access policy. The client bounds stdout at 16 MiB and discards bounded stderr
+and SSH is noninteractive. A mutation first checks the target's protocol, bind,
+access policy, and persistent service identity. The client also sends the pinned
+identity on the actual operation, so a replacement service cannot receive it
+after a successful preflight. All reads carry the same guard. If
+`expected_service_id` is omitted, the first successful `verify_target()` pins
+the discovered UUID for that client instance; subsequent discovery cannot
+silently retarget it. Applications should require the inspected identity when
+persisting and selecting target profiles.
+
+The client bounds stdout at 16 MiB and discards bounded stderr
 (64 KiB); it kills the local SSH process on output overflow or timeout. This
 cannot establish whether a remote operation completed.
 
 A lost, malformed or oversized response returns `unknown_outcome`, retaining
-the request ID and deterministic receipt ID where provided. The transport makes
+the request ID, pinned service ID, and deterministic receipt ID where provided. The transport makes
 no automatic retry and labels its synthetic reconciliation reference
 `remoteReceiptVerified: false`. Read the server's `receipt`, `status` and
 `releases` before any further mutation. The original request ID remains the

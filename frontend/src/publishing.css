@@ -14,3 +14,4 @@
 .a-publishing details { margin-block: 16px; }
 .a-publishing summary { cursor: pointer; }
 .a-publishing li { margin-block: 8px; }
+.a-publishing-targets dl { grid-template-columns: minmax(112px,1fr) minmax(0,3fr); }

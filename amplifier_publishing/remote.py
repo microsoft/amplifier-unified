@@ -16,6 +16,8 @@ import shlex
 import socket
 import subprocess
 import time
+import threading
+import uuid
 from urllib.parse import urlsplit
 
 from .publisher import PublishingError
@@ -101,6 +103,16 @@ def private_bind(value):
     raise PublishingError("invalid_bind", "Bind must be a numeric IPv4 loopback or RFC1918 address")
 
 
+def service_identity(value):
+    """Require a canonical UUID instead of accepting arbitrary target labels."""
+    try:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+            raise ValueError("not a canonical UUID")
+    except (ValueError, AttributeError) as exc:
+        raise PublishingError("invalid_service_id", "Service identity must be a canonical UUID") from exc
+    return value
+
+
 def timeout_value(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 120:
         raise PublishingError("invalid_argument", "Timeout must be greater than zero and at most 120 seconds")
@@ -147,7 +159,7 @@ def unknown_outcome(request):
     return PublishingError(
         "unknown_outcome", "Transport ended without a verified response; inspect the receipt before any further mutation. Nothing was replayed.",
         receipt={"id": digest([session_id, request_id]) if session_id and request_id else None,
-                 "sessionId": session_id, "requestId": request_id, "state": "unknown", "remoteReceiptVerified": False},
+                 "sessionId": session_id, "requestId": request_id, "serviceId": request.get("expectedServiceId"), "state": "unknown", "remoteReceiptVerified": False},
     )
 
 
@@ -192,7 +204,7 @@ class SSHClient:
     argv item because OpenSSH executes the remote command using a shell.
     """
 
-    def __init__(self, *, hostname, python, socket_path, expected_bind, username=None, timeout=30):
+    def __init__(self, *, hostname, python, socket_path, expected_bind, expected_service_id=None, username=None, timeout=30):
         if not isinstance(hostname, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}", hostname):
             raise PublishingError("invalid_target", "An explicit SSH hostname or address is required")
         if username is not None and (not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", username)):
@@ -204,6 +216,9 @@ class SSHClient:
         self.username = username
         self.bind, self.access_policy = private_bind(expected_bind)
         self.timeout = timeout_value(timeout)
+        self.expected_service_id = service_identity(expected_service_id) if expected_service_id is not None else None
+        self.service_id = self.expected_service_id
+        self._mutex = threading.RLock()
 
     def command(self):
         remote = shlex.join([self.python, "-m", "amplifier_publishing.service", "request", "--socket", self.socket_path, "--timeout", str(self.timeout)])
@@ -227,29 +242,56 @@ class SSHClient:
             raise
 
     def verify_target(self):
-        target = self._send({"method": "target"})
-        if not isinstance(target, dict) or target.get("protocol") != "static-publishing-v1" or target.get("adminTransport") != "owner-unix-socket" or target.get("bind") != self.bind or target.get("accessPolicy") != self.access_policy or target.get("authentication") != "none" or target.get("publicPublishing") is not False or target.get("previewAccessPolicy") != "loopback-only":
-            raise PublishingError("target_mismatch", "Service bind, access policy or protocol differs from the explicit target configuration")
-        return target
+        """Discover once or verify the already pinned durable service identity."""
+        with self._mutex:
+            request = {"method": "target"}
+            if self.service_id is not None:
+                request["expectedServiceId"] = self.service_id
+            target = self._send(request)
+            if not isinstance(target, dict) or target.get("protocol") != "static-publishing-v1" or target.get("adminTransport") != "owner-unix-socket" or target.get("bind") != self.bind or target.get("accessPolicy") != self.access_policy or target.get("authentication") != "none" or target.get("publicPublishing") is not False or target.get("previewAccessPolicy") != "loopback-only":
+                raise PublishingError("target_mismatch", "Service bind, access policy or protocol differs from the explicit target configuration")
+            try:
+                discovered = service_identity(target.get("serviceId"))
+            except PublishingError as exc:
+                raise PublishingError("target_mismatch", "Service did not report a valid durable identity") from exc
+            if self.service_id is not None and discovered != self.service_id:
+                raise PublishingError("target_mismatch", "Service identity differs from the inspected target")
+            self.service_id = discovered
+            return target
 
     def request(self, request):
         if not isinstance(request, dict):
             raise PublishingError("invalid_message", "Request must be a JSON object")
-        if request.get("method") in MUTATIONS:
-            self.verify_target()
-        result = self._send(request)
-        if request.get("method") in {"preview", "deploy", "rollback", "status"} and isinstance(result, dict):
-            record = result.get("result", result)
-            if isinstance(record, dict) and record.get("url"):
-                bind, policy = ("127.0.0.1", "loopback-only") if request.get("method") == "preview" else (self.bind, self.access_policy)
-                try:
-                    parsed = urlsplit(record["url"])
-                    valid = parsed.scheme == "http" and parsed.hostname == bind and parsed.port is not None and parsed.username is None and parsed.password is None and parsed.path == "/" and not parsed.query and not parsed.fragment and record.get("accessPolicy") == policy
-                except (ValueError, TypeError):
-                    valid = False
-                if not valid:
-                    raise PublishingError("target_mismatch", "Returned URL or access policy differs from the configured private target", receipt=result if "requestId" in result else None)
-        return result
+        with self._mutex:
+            supplied_identity = request.get("expectedServiceId")
+            if "expectedServiceId" in request:
+                service_identity(supplied_identity)
+                if self.service_id is not None and supplied_identity != self.service_id:
+                    raise PublishingError("target_mismatch", "Request identity differs from this client's pinned service")
+                if self.service_id is None:
+                    self.service_id = supplied_identity
+            if request.get("method") == "target":
+                if set(request) - {"method", "expectedServiceId"}:
+                    raise PublishingError("invalid_argument", "Target discovery does not accept extra request fields")
+                return self.verify_target()
+            if self.service_id is None or request.get("method") in MUTATIONS:
+                self.verify_target()
+            # The server checks this identity on the actual operation request,
+            # not merely on a separate preflight susceptible to a target swap.
+            guarded = {**request, "expectedServiceId": self.service_id}
+            result = self._send(guarded)
+            if request.get("method") in {"preview", "deploy", "rollback", "status"} and isinstance(result, dict):
+                record = result.get("result", result)
+                if isinstance(record, dict) and record.get("url"):
+                    bind, policy = ("127.0.0.1", "loopback-only") if request.get("method") == "preview" else (self.bind, self.access_policy)
+                    try:
+                        parsed = urlsplit(record["url"])
+                        valid = parsed.scheme == "http" and parsed.hostname == bind and parsed.port is not None and parsed.username is None and parsed.password is None and parsed.path == "/" and not parsed.query and not parsed.fragment and record.get("accessPolicy") == policy
+                    except (ValueError, TypeError):
+                        valid = False
+                    if not valid:
+                        raise PublishingError("target_mismatch", "Returned URL or access policy differs from the configured private target", receipt=result if "requestId" in result else None)
+            return result
 
     def verify_site(self, *, session_id, site_id):
         """Verify exact served entrypoint bytes from this client's network.

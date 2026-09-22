@@ -21,9 +21,10 @@ import sqlite3
 import stat
 import sys
 import threading
+import uuid
 
 from .publisher import Publisher, PublishingError
-from .remote import MAX_MESSAGE_BYTES, MUTATIONS, canonical, decode_message, digest, encode_message, private_bind, timeout_value, unix_request
+from .remote import MAX_MESSAGE_BYTES, MUTATIONS, canonical, decode_message, digest, encode_message, private_bind, service_identity, timeout_value, unix_request
 
 MAX_FILES = 2000
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -144,6 +145,10 @@ class PublishingService:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=FULL")
             self._db.execute("CREATE TABLE IF NOT EXISTS imports (session TEXT, request TEXT, fingerprint TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))")
+            self._db.execute("CREATE TABLE IF NOT EXISTS rpc_receipts (session TEXT, request TEXT, payload_digest TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))")
+            self._db.execute("CREATE TABLE IF NOT EXISTS identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), service_id TEXT NOT NULL)")
+            self._db.execute("INSERT OR IGNORE INTO identity VALUES (1, ?)", (str(uuid.uuid4()),))
+            self.service_id = service_identity(self._db.execute("SELECT service_id FROM identity WHERE singleton=1").fetchone()[0])
             self._recover()
             self._server = _AdminServer(str(self.socket_path), self)
             self.socket_path.chmod(0o600)
@@ -164,11 +169,81 @@ class PublishingService:
             record = decode_message(body)
             if record["state"] == "running":
                 previous = next((r for r in self.publisher.receipts(session_id) if r["requestId"] == request_id), None)
-                if previous:
-                    record.update(state=previous["state"], result=previous["result"], error=previous["error"], completedAt=previous["completedAt"])
+                result = previous.get("result") if previous else None
+                proven_build = (previous and previous.get("action") == "build" and previous.get("state") == "succeeded"
+                                and previous.get("siteId") == record["siteId"] and previous.get("sessionId") == session_id
+                                and record.get("manifestDigest") and isinstance(result, dict)
+                                and result.get("siteId") == record["siteId"] and result.get("sessionId") == session_id
+                                and result.get("manifestDigest") == record["manifestDigest"])
+                if proven_build:
+                    record.update(state="succeeded", result=result, error=None, completedAt=previous["completedAt"])
                 else:
                     record.update(state="unknown", completedAt=_now(), error={"code": "unknown_outcome", "message": "Import ended before its outcome was recorded; it was not replayed"})
                 self._save(record, fingerprint)
+        for (body,) in self._db.execute("SELECT body FROM rpc_receipts").fetchall():
+            receipt = decode_message(body)
+            if receipt["state"] == "running":
+                # A matching inner receipt ID is insufficient proof of arguments.
+                # Keep uncertainty if the exact RPC outcome was not committed.
+                receipt.update(state="unknown", completedAt=_now(), error={"code": "unknown_outcome", "message": "Process ended before the exact RPC outcome was recorded; it was not replayed"})
+                self._save_rpc(receipt)
+
+    def _save_rpc(self, receipt):
+        self._db.execute("INSERT OR REPLACE INTO rpc_receipts VALUES (?,?,?,?)", (receipt["sessionId"], receipt["requestId"], receipt["rpcPayloadDigest"], canonical(receipt)))
+
+    @staticmethod
+    def _rpc_result(receipt):
+        if receipt["state"] != "succeeded":
+            error = receipt.get("error") or {"code": "unknown_outcome", "message": "RPC outcome is not confirmed; it was not replayed"}
+            raise PublishingError(error["code"], error["message"], receipt=receipt)
+        return receipt["result"] if receipt["action"] == "import" else receipt
+
+    def _rpc_mutation(self, request):
+        """Bind an exact RPC payload to its outcome without relabeling history."""
+        sid, rid = request["sessionId"], request["requestId"]
+        payload_digest = digest(request)  # Includes expectedServiceId.
+        previous = self._db.execute("SELECT payload_digest,body FROM rpc_receipts WHERE session=? AND request=?", (sid, rid)).fetchone()
+        if previous:
+            if previous[0] != payload_digest:
+                raise PublishingError("request_conflict", "requestId was already admitted with another exact RPC payload")
+            return self._rpc_result(decode_message(previous[1]))
+
+        legacy = next((row for row in self._base_receipts(sid) if row["requestId"] == rid), None)
+        receipt = {"id": digest([sid, rid]), "sessionId": sid, "requestId": rid, "serviceId": self.service_id,
+                   "rpcPayloadDigest": payload_digest, "action": request["method"], "siteId": request.get("siteId"),
+                   "releaseId": request.get("releaseId"), "state": "running", "createdAt": _now(),
+                   "completedAt": None, "result": None, "error": None}
+        if legacy is None:
+            self._save_rpc(receipt)  # Durable reservation before any effect.
+        # A legacy receipt already reserves this ID. Do not reserve or stamp it
+        # for a new payload until the original exact-retry path proves a match.
+        try:
+            result = self._mutate(request)
+            proven = (next((row for row in self._base_receipts(sid) if row["requestId"] == rid), None)
+                      if request["method"] == "import" else result)
+            if not self._matches_rpc(proven, request):
+                raise RuntimeError("RPC returned an unrelated operation receipt")
+            receipt = {**proven, "serviceId": self.service_id, "rpcPayloadDigest": payload_digest}
+        except PublishingError as exc:
+            if legacy is not None and not self._matches_rpc(exc.receipt, request):
+                # Includes request_conflict: keep the original unproven receipt
+                # intact rather than claim its outcome for different arguments.
+                raise
+            if self._matches_rpc(exc.receipt, request):
+                receipt = {**exc.receipt, "serviceId": self.service_id, "rpcPayloadDigest": payload_digest}
+            else:
+                receipt.update(state="unknown" if exc.code == "unknown_outcome" else "failed", completedAt=_now(), error={"code": exc.code, "message": str(exc)})
+        except Exception as exc:
+            if legacy is not None:
+                raise PublishingError("unknown_outcome", "Historical RPC outcome could not be proven; it was not relabeled or replayed") from exc
+            receipt.update(state="unknown", completedAt=_now(), error={"code": "unknown_outcome", "message": "RPC outcome could not be proven; it was not replayed"})
+        self._save_rpc(receipt)
+        return self._rpc_result(receipt)
+
+    @staticmethod
+    def _matches_rpc(receipt, request):
+        return (isinstance(receipt, dict) and receipt.get("sessionId") == request["sessionId"]
+                and receipt.get("requestId") == request["requestId"] and receipt.get("action") == request["method"])
 
     @staticmethod
     def _import_result(receipt):
@@ -179,7 +254,9 @@ class PublishingService:
 
     def _import(self, request):
         sid, rid = request["sessionId"], request["requestId"]
-        fingerprint = digest(request)
+        # Keep historical import fingerprints compatible: identity is an
+        # admission guard, while the persisted payload remains its exact bytes.
+        fingerprint = digest({key: value for key, value in request.items() if key != "expectedServiceId"})
         previous = self._db.execute("SELECT fingerprint,body FROM imports WHERE session=? AND request=?", (sid, rid)).fetchone()
         if previous:
             if previous[0] != fingerprint:
@@ -187,7 +264,7 @@ class PublishingService:
             return self._import_result(decode_message(previous[1]))
         if any(r["requestId"] == rid for r in self.publisher.receipts(sid)):
             raise PublishingError("request_conflict", "requestId was already used by another publishing action")
-        receipt = {"id": digest([sid, rid]), "sessionId": sid, "requestId": rid, "siteId": request["siteId"], "action": "import", "state": "running", "createdAt": _now(), "completedAt": None, "result": None, "error": None}
+        receipt = {"id": digest([sid, rid]), "sessionId": sid, "requestId": rid, "siteId": request["siteId"], "manifestDigest": request["manifestDigest"], "action": "import", "state": "running", "createdAt": _now(), "completedAt": None, "result": None, "error": None}
         self._save(receipt, fingerprint)  # Durable reservation before any staged bytes.
         staging = self.staging / receipt["id"]
         try:
@@ -214,12 +291,19 @@ class PublishingService:
             shutil.rmtree(staging)
         return self._import_result(receipt)
 
-    def _receipts(self, session_id):
+    def _base_receipts(self, session_id):
         merged = {r["requestId"]: r for r in self.publisher.receipts(session_id)}
         for (body,) in self._db.execute("SELECT body FROM imports WHERE session=? ORDER BY rowid", (session_id,)):
             receipt = decode_message(body)
             merged[receipt["requestId"]] = receipt
         return sorted(merged.values(), key=lambda r: (r["createdAt"], r["requestId"]))
+
+    def _receipts(self, session_id):
+        merged = {receipt["requestId"]: receipt for receipt in self._base_receipts(session_id)}
+        for (body,) in self._db.execute("SELECT body FROM rpc_receipts WHERE session=? ORDER BY rowid", (session_id,)):
+            receipt = decode_message(body)
+            merged[receipt["requestId"]] = receipt
+        return sorted(merged.values(), key=lambda receipt: (receipt["createdAt"], receipt["requestId"]))
 
     def handle(self, request):
         """Return a bounded JSON envelope. Arbitrary methods/paths are not RPCs."""
@@ -249,18 +333,25 @@ class PublishingService:
             "remove": {"sessionId", "requestId", "siteId", "expectedRevision"},
         }
         method = request.get("method")
-        if not isinstance(method, str) or method not in fields or set(request) != {"method"} | fields[method]:
+        if not isinstance(method, str) or method not in fields:
+            raise PublishingError("invalid_argument", "Unknown method or missing/extra request fields")
+        unbound_discovery = method == "target" and set(request) == {"method"}
+        if not unbound_discovery:
+            if "expectedServiceId" not in request:
+                raise PublishingError("service_identity_required", "Inspect the target and include its expectedServiceId before requesting service data or operations")
+            if service_identity(request["expectedServiceId"]) != self.service_id:
+                raise PublishingError("target_mismatch", "Service identity differs from the inspected target; no operation was admitted")
+        expected_fields = {"method"} | fields[method] | (set() if unbound_discovery else {"expectedServiceId"})
+        if set(request) != expected_fields:
             raise PublishingError("invalid_argument", "Unknown method or missing/extra request fields")
         for name in ("sessionId", "requestId", "siteId", "releaseId"):
             if name in request:
                 _identifier(request[name], name)
         if method == "target":
-            return {"protocol": "static-publishing-v1", "adminTransport": "owner-unix-socket", "bind": self.bind, "accessPolicy": self.access_policy, "authentication": "none", "publicPublishing": False, "previewAccessPolicy": "loopback-only", "limits": {"messageBytes": MAX_MESSAGE_BYTES, "files": MAX_FILES, "fileBytes": MAX_FILE_BYTES, "totalBytes": MAX_TOTAL_BYTES}}
+            return {"serviceId": self.service_id, "protocol": "static-publishing-v1", "adminTransport": "owner-unix-socket", "bind": self.bind, "accessPolicy": self.access_policy, "authentication": "none", "publicPublishing": False, "previewAccessPolicy": "loopback-only", "limits": {"messageBytes": MAX_MESSAGE_BYTES, "files": MAX_FILES, "fileBytes": MAX_FILE_BYTES, "totalBytes": MAX_TOTAL_BYTES}}
         sid = request["sessionId"]
-        if method == "import":
-            return self._import(request)
-        if method in MUTATIONS and self._db.execute("SELECT 1 FROM imports WHERE session=? AND request=?", (sid, request["requestId"])).fetchone():
-            raise PublishingError("request_conflict", "requestId was already used by an import")
+        if method in MUTATIONS:
+            return self._rpc_mutation(request)
         if method == "list":
             return self.publisher.list(sid)
         if method == "releases":
@@ -271,6 +362,14 @@ class PublishingService:
             return next((r for r in self._receipts(sid) if r["requestId"] == request["requestId"]), None)
         if method == "status":
             return self.publisher.status(request["siteId"], sid)
+        raise PublishingError("invalid_argument", "Unknown service request")
+
+    def _mutate(self, request):
+        method, sid = request["method"], request["sessionId"]
+        if method == "import":
+            return self._import(request)
+        if self._db.execute("SELECT 1 FROM imports WHERE session=? AND request=?", (sid, request["requestId"])).fetchone():
+            raise PublishingError("request_conflict", "requestId was already used by an import")
         args = {"session_id": sid, "request_id": request["requestId"]}
         if method in {"deploy", "rollback", "stop", "remove"}:
             args["expected_revision"] = request["expectedRevision"]

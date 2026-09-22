@@ -6,6 +6,7 @@ built; no source code, build command, or deployment command is executed here.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
@@ -661,6 +662,29 @@ class Publisher:
                     if kind == "site":
                         record["revision"] += 1
                     self._put(kind, record)
+
+    def export_release(self, release_id, session_id):
+        """Return verified immutable bytes as a portable import payload.
+
+        This read-only operation accepts an owned release identity, never a
+        caller filesystem path. The transport applies its own smaller limits.
+        """
+        with self._mutex:
+            self._check_open()
+            release = self._release(release_id, session_id)
+            self._verify(release)
+            files = {}
+            try:
+                for entry in release["files"]:
+                    data = _read_file(self._content / release["id"] / "files", entry["path"], entry["size"])
+                    # Recheck the bytes being exported, including concurrent
+                    # same-account disk changes after the initial verification.
+                    if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+                        raise PublishingError("integrity_error", "Release bytes changed during export")
+                    files[entry["path"]] = base64.b64encode(data).decode("ascii")
+            except OSError as exc:
+                raise PublishingError("integrity_error", "Release content is missing or unsafe") from exc
+            return {"siteId": release["siteId"], "sessionId": release["sessionId"], "manifest": release["files"], "manifestDigest": release["manifestDigest"], "files": files}
 
     def snapshot(self, destination):
         """Copy a consistent private audit/store backup without live listeners.
