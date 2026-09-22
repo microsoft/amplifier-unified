@@ -12,6 +12,7 @@ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42
 try{
  await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
  assert.equal(await page.locator('.a-modality').count(),0);
+ assert.equal(await page.locator('.a-conversation .a-operations,.a-conversation .a-computation').count(),0);
  const initial=await page.locator('.a-composer').boundingBox();assert.ok(initial.y>250&&initial.y<650);
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
  await page.locator('#chat-provider').waitFor();
