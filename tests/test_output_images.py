@@ -61,7 +61,7 @@ async def test_pixels_require_exact_receipt_vision_and_current_input(saved):
         return await app.app_bridge(operation,args,sid)
     receipt=await bridge('dispatch',{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}})
     delivery=OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge),bridge),bridge)
-    delivery.remember_output(receipt)
+    receipt=delivery.remember_output(receipt)
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps({'success':True,'output':receipt}))],tools=[ToolSpec(name='app_control',parameters={})])
     provider=SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=['vision']))
     result=await delivery.prepare(request,provider)
@@ -88,7 +88,7 @@ async def test_cached_image_is_checked_again_before_transport(saved):
         if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
         return await app.app_bridge(operation,args,sid)
     receipt=await bridge('dispatch',{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}})
-    delivery=OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge),bridge),bridge);delivery.remember_output(receipt)
+    delivery=OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge),bridge),bridge);receipt=delivery.remember_output(receipt)
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(receipt))],tools=[ToolSpec(name='app_control',parameters={})])
     class Provider:
         def get_info(self):return SimpleNamespace(capabilities=['vision'])
@@ -121,25 +121,43 @@ async def test_exact_model_catalog_advertises_vision_when_provider_metadata_does
     assert not await catalog.supports(request.model_copy(update={'model':'visual'}),provider)
 
 
-@pytest.mark.parametrize('serialization', ['direct', 'model_dump', 'observed_loop_envelope'])
+@pytest.mark.parametrize('serialization', ['direct', 'model_dump', 'observed_loop_envelope', 'kernel_hooks', 'live_loop_hooks'])
 async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved,serialization):
-    from amplifier_core import ProviderInfo
+    from amplifier_core import ProviderInfo, HookRegistry, HookResult
     from amplifier_web.app_guidance import install_app_access
     from amplifier_web.host.session import SelectedProvider
     app,sid,row,image,path=saved
     capabilities={};tools={}
     async def mount(kind,tool,name):tools[name]=tool
-    coordinator=SimpleNamespace(get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,
-        hooks=SimpleNamespace(register=lambda *args,**kwargs:None))
+    hooks=HookRegistry()
+    async def unchanged(event,data):return HookResult()
+    hooks.register('tool:post',unchanged,name='pass-through')
+    coordinator=SimpleNamespace(get_capability=capabilities.get,register_capability=capabilities.__setitem__,mount=mount,hooks=hooks)
     async def bridge(operation,args):
         if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
-        return await app.app_bridge(operation,args,sid)
+        result=await app.app_bridge(operation,args,sid)
+        if operation=='dispatch':
+            # The real Rust hook registry changes this incidental timestamp by
+            # one ULP. It must not make an exact saved-image receipt unusable.
+            result['state']['createdAt']=1789888171.4219217
+        return result
     await install_app_access(coordinator,bridge)
-    tool_result=await tools['app_control'].execute({'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}})
+    arguments={'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}}
+    tool_result=await tools['app_control'].execute(arguments)
+    assert 'state' not in tool_result.output
     # Cover Core's direct serialization, its full envelope, and the output/error
     # envelope actually retained by the natural Work run's hook-processed loop.
     content=(tool_result.get_serialized_output() if serialization=='direct' else
              json.dumps(tool_result.model_dump(exclude={'success'} if serialization=='observed_loop_envelope' else set())))
+    if serialization=='kernel_hooks':
+        emitted=await hooks.emit('tool:post',{'tool_name':'app_control','result':tool_result.model_dump()})
+        content=json.dumps(emitted.data['result'])
+    elif serialization=='live_loop_hooks':
+        from amplifier_core.message_models import ToolCall
+        loop=pytest.importorskip('amplifier_module_loop_live').BundleLiveOrchestrator({})
+        loop._tool_calls_this_turn=0
+        _,name,content=await loop._execute_tool_only(ToolCall(id='one',name='app_control',arguments=arguments),tools,hooks,None)
+        assert name=='app_control'
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=content)],tools=[ToolSpec(name='app_control',parameters={})])
     calls=[]
     class Provider:
@@ -176,7 +194,7 @@ async def test_failed_serialized_tool_receipt_never_delivers_saved_pixels(saved)
         return await app.app_bridge(operation,args,sid)
     receipt=await bridge('dispatch',{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}})
     delivery=OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge),bridge),bridge)
-    delivery.remember_output(receipt)
+    receipt=delivery.remember_output(receipt)
     failed=ToolResult(success=False,output=receipt,error={'message':'denied'})
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(failed.model_dump(exclude={'success'})))],tools=[ToolSpec(name='app_control',parameters={})])
     provider=SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=['vision']))

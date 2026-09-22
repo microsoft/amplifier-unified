@@ -13,6 +13,13 @@ class VoiceVisualDelivery:
         return getattr(self.surfaces, name)
 
     def remember(self, receipt):
+        # Stable capture identity/provenance crosses tool hooks. Permission,
+        # capture age and current pixels are re-read from the host below.
+        result = {key: copy.deepcopy(receipt['result'][key]) for key in (
+            'id', 'sessionId', 'callId', 'grantId', 'sha256', 'width', 'height',
+            'source', 'observation', 'untrustedData', 'nativeForeground', 'scope',
+        ) if key in receipt['result']}
+        receipt = {'accepted': receipt['accepted'], 'result': result}
         self.capture = {"id": receipt["result"]["id"], "receipt": copy.deepcopy(receipt), "epoch": copy.deepcopy(self.surfaces.epoch)}
         return receipt
 

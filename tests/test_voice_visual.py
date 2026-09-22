@@ -103,22 +103,35 @@ async def test_error_delivery_does_not_invent_image_and_request_not_replayed(vis
     with pytest.raises(AppError,match='Nothing was replayed'):
         await app.dispatch('voice.visual.capture',target,command_id='capture-one')
 
-@pytest.mark.parametrize('serialization',['direct','model_dump','observed_loop_envelope'])
+@pytest.mark.parametrize('serialization',['direct','model_dump','observed_loop_envelope','kernel_hooks'])
 async def test_agent_receipt_delivers_typed_pixels_only_while_exact_and_fresh(visual,serialization):
-    from amplifier_core import ToolResult
+    from amplifier_core import ToolResult, HookRegistry, HookResult
     app,target=visual
     await grant(app,target);task=await begin(app,target,agent=True);await complete(app,target);receipt=await task
     async def bridge(operation,args): return await app.app_bridge(operation,args,target['sessionId'])
-    delivery=VoiceVisualDelivery(SurfaceDelivery(bridge),bridge);delivery.remember(receipt)
+    receipt['result']['capturedAt']=1789888171.4219217
+    receipt['result']['receivedAt']=1789888171.4219217
+    delivery=VoiceVisualDelivery(SurfaceDelivery(bridge),bridge);receipt=delivery.remember(receipt)
+    assert not {'capturedAt','receivedAt','attachment'}.intersection(receipt['result'])
     result=ToolResult(success=True,output=receipt)
     content=(result.get_serialized_output() if serialization=='direct' else
              json.dumps(result.model_dump(exclude={'success'} if serialization=='observed_loop_envelope' else set())))
+    if serialization=='kernel_hooks':
+        hooks=HookRegistry()
+        async def unchanged(event,data):return HookResult()
+        hooks.register('tool:post',unchanged,name='pass-through')
+        emitted=await hooks.emit('tool:post',{'tool_name':'app_control','result':result.model_dump()})
+        content=json.dumps(emitted.data['result'])
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=content)],tools=[ToolSpec(name='app_control',parameters={})])
     provider=SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=['vision']))
     prepared=await delivery.prepare(request,provider)
     assert prepared.messages[-1].content[-1].type=='image'
     assert prepared.messages[-1].content[-1].source['data']==PNG
     assert len(request.messages)==1
+    for key in ['id','sessionId','callId','grantId','sha256','width']:
+        changed=copy.deepcopy(receipt);changed['result'][key]='changed'
+        forged=request.model_copy(update={'messages':[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(changed))]})
+        assert len((await delivery.prepare(forged,provider)).messages)==1
     denied=ToolResult(success=False,output=receipt,error={'message':'denied'})
     for envelope in [denied.model_dump(),denied.model_dump(exclude={'success'})]:
         failure=request.model_copy(update={'messages':[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(envelope))]})
@@ -181,7 +194,7 @@ async def test_budget_cached_pixels_revalidated_before_provider_transport(visual
     app,target=visual
     await grant(app,target);task=await begin(app,target,agent=True);await complete(app,target);receipt=await task
     async def bridge(operation,args):return await app.app_bridge(operation,args,target['sessionId'])
-    delivery=VoiceVisualDelivery(SurfaceDelivery(bridge),bridge);delivery.remember(receipt)
+    delivery=VoiceVisualDelivery(SurfaceDelivery(bridge),bridge);receipt=delivery.remember(receipt)
     request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(receipt))],tools=[ToolSpec(name='app_control',parameters={})])
     class Provider:
         def get_info(self):return SimpleNamespace(capabilities=['vision'])

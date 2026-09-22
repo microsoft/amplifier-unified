@@ -13,6 +13,10 @@ class OutputImageDelivery:
         return getattr(self.previous, name)
 
     def remember_output(self, receipt):
+        # A dispatch's unrelated app state contains floating timestamps which
+        # may change by one ULP in the kernel hook JSON roundtrip. Retain only
+        # this operation's receipt; image identity and evidence stay exact.
+        receipt = {key: copy.deepcopy(receipt[key]) for key in ('accepted', 'effects', 'result') if key in receipt}
         self.observation = {'receipt': copy.deepcopy(receipt), 'epoch': copy.deepcopy(self.previous.epoch)}
         return receipt
 
