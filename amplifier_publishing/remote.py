@@ -280,18 +280,128 @@ class SSHClient:
             # not merely on a separate preflight susceptible to a target swap.
             guarded = {**request, "expectedServiceId": self.service_id}
             result = self._send(guarded)
-            if request.get("method") in {"preview", "deploy", "rollback", "status"} and isinstance(result, dict):
-                record = result.get("result", result)
-                if isinstance(record, dict) and record.get("url"):
-                    bind, policy = ("127.0.0.1", "loopback-only") if request.get("method") == "preview" else (self.bind, self.access_policy)
-                    try:
-                        parsed = urlsplit(record["url"])
-                        valid = parsed.scheme == "http" and parsed.hostname == bind and parsed.port is not None and parsed.username is None and parsed.password is None and parsed.path == "/" and not parsed.query and not parsed.fragment and record.get("accessPolicy") == policy
-                    except (ValueError, TypeError):
-                        valid = False
-                    if not valid:
-                        raise PublishingError("target_mismatch", "Returned URL or access policy differs from the configured private target", receipt=result if "requestId" in result else None)
-            return result
+            method = request.get("method")
+            # Receipt reads must reach the caller's reconciliation layer intact:
+            # one rejected row must not hide its locally retained unknown intent.
+            if method == "receipt":
+                if result is not None and not isinstance(result, dict):
+                    raise PublishingError("invalid_response", "Receipt lookup must return an object or null")
+                return result
+            if method == "receipts":
+                if not isinstance(result, list):
+                    raise PublishingError("invalid_response", "Receipt list must return an array")
+                return result
+            try:
+                validated = self.validate_result(method, result)
+                if method in MUTATIONS - {"import"} and result.get("state") != "succeeded":
+                    raise PublishingError("invalid_response", "Mutation success response has no successful receipt")
+                return validated
+            except PublishingError as exc:
+                if method in MUTATIONS and (exc.code == "invalid_response" or exc.receipt is None):
+                    # Neither a malformed success nor a rejected raw import
+                    # result proves that the mutation had no effect.
+                    raise unknown_outcome(guarded) from exc
+                raise
+
+    def validate_result(self, method, result):
+        """Validate URL-bearing results or receipt projections without IO.
+
+        Live and historical deployment URLs use the configured target. Preview
+        URLs always use loopback. Receipt reads defer this check to their caller
+        so rejected rows can remain visible as local unknown diagnostics.
+        """
+        def invalid(message, receipt=None):
+            raise PublishingError("invalid_response", message, receipt=receipt)
+
+        def url(value, bind, receipt=None):
+            if value is None:
+                return
+            try:
+                parsed = urlsplit(value) if isinstance(value, str) else None
+                port = parsed.port if parsed else None
+                valid = (type(value) is str and type(port) is int and 0 < port <= 65535
+                         and value == f"http://{bind}:{port}/")
+            except (ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise PublishingError("target_mismatch", "Returned URL differs from the configured private target", receipt=receipt)
+
+        def site(record, *, preview=False, receipt=None, successful_action=None):
+            if not isinstance(record, dict) or not isinstance(record.get("id"), str) or not record["id"]:
+                invalid("Site or preview result must be an identified object", receipt)
+            allowed = {"running", "stopped", "removed", "interrupted", "unknown"}
+            if not isinstance(record.get("status"), str) or record["status"] not in allowed or "url" not in record:
+                invalid("Site or preview result has an invalid status or missing URL field", receipt)
+            if not preview and (type(record.get("revision")) is not int or record["revision"] < 0):
+                invalid("Site result has an invalid revision", receipt)
+            bind, policy = ("127.0.0.1", "loopback-only") if preview else (self.bind, self.access_policy)
+            if record.get("accessPolicy") != policy:
+                raise PublishingError("target_mismatch", "Returned access policy differs from the configured private target", receipt=receipt)
+            url(record["url"], bind, receipt)
+            if "previousUrl" in record:
+                url(record["previousUrl"], bind, receipt)
+            if record["status"] == "running" and record["url"] is None:
+                invalid("Running site or preview result has no URL", receipt)
+            expected = {"preview": "running", "deploy": "running", "rollback": "running", "stop": "stopped", "remove": "removed"}.get(successful_action)
+            if expected is not None and record["status"] != expected:
+                invalid("Successful lifecycle receipt has an inconsistent result status", receipt)
+
+        def release(record, receipt=None):
+            if not isinstance(record, dict) or not isinstance(record.get("id"), str) or not record["id"]:
+                invalid("Release result must be an identified object", receipt)
+            if not isinstance(record.get("files"), list) or not isinstance(record.get("manifestDigest"), str):
+                invalid("Release result must include its manifest and digest", receipt)
+            if not isinstance(record.get("previewStatus"), str) or record["previewStatus"] not in {"none", "running", "stopped", "interrupted"} or "previewUrl" not in record:
+                invalid("Release result has invalid preview metadata", receipt)
+            url(record["previewUrl"], "127.0.0.1", receipt)
+            if record["previewStatus"] == "running" and record["previewUrl"] is None:
+                invalid("Running release preview has no URL", receipt)
+
+        def receipt(row, expected_action=None):
+            if not isinstance(row, dict) or not isinstance(row.get("requestId"), str) or not row["requestId"]:
+                invalid("Receipt must be an identified object")
+            action = row.get("action")
+            if not isinstance(action, str) or action not in MUTATIONS | {"build"} or not isinstance(row.get("state"), str) or row["state"] not in {"running", "unknown", "succeeded", "failed"}:
+                invalid("Receipt has an invalid action or outcome", row)
+            if expected_action is not None and action != expected_action and {action, expected_action} != {"build", "import"}:
+                invalid("Receipt action differs from the requested operation", row)
+            body = row.get("result")
+            if row["state"] != "succeeded" and body is None:
+                return
+            if not isinstance(body, dict):
+                invalid("Successful receipt must contain an object result", row)
+            if action in {"import", "build", "review"}:
+                release(body, row)
+            else:
+                site(body, preview=action == "preview", receipt=row, successful_action=action if row["state"] == "succeeded" else None)
+
+        if method == "receipt":
+            if result is not None:
+                receipt(result)
+        elif method == "receipts":
+            if not isinstance(result, list):
+                invalid("Receipt list must return an array")
+            for row in result:
+                receipt(row)
+        elif method == "list":
+            if not isinstance(result, list):
+                invalid("Site list must return an array")
+            for row in result:
+                site(row)
+        elif method == "releases":
+            if not isinstance(result, list):
+                invalid("Release list must return an array")
+            for row in result:
+                release(row)
+        elif method == "status":
+            site(result)
+        elif method == "import":
+            release(result)
+        elif method == "build" and isinstance(result, dict) and "state" not in result:
+            release(result)
+        elif method in MUTATIONS | {"build"}:
+            receipt(result, method)
+        return result
 
     def verify_site(self, *, session_id, site_id):
         """Verify exact served entrypoint bytes from this client's network.

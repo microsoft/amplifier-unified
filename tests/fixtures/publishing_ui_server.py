@@ -20,6 +20,9 @@ async def main(home, remote_home):
     remote_socket = remote_home / 'admin' / 'publisher.sock'
     remote = PublishingService(remote_home / 'store', remote_socket).__enter__()
     remote_identity = remote._dispatch({'method': 'target'})
+    alternate_socket = remote_home / 'admin-b' / 'publisher.sock'
+    alternate = PublishingService(remote_home / 'store-b', alternate_socket).__enter__()
+    alternate_identity = alternate._dispatch({'method': 'target'})
     ssh_log = home / 'fixture-ssh.jsonl'
     bin_dir = home / 'bin'
     bin_dir.mkdir()
@@ -100,6 +103,7 @@ sys.exit(result.returncode)
     url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins'] = app['allowed_origins'] | {url}
     print(json.dumps({'url': url, 'sessionId': sid, 'remoteServiceId': remote_identity['serviceId'],
+                      'alternateServiceId': alternate_identity['serviceId'], 'alternateSocketPath': str(alternate_socket),
                       'remoteConfig': {'targetId': 'private-fixture', 'label': 'Isolated remote fixture',
                                        'hostname': 'fixture-host', 'python': sys.executable,
                                        'socketPath': str(remote_socket), 'expectedBind': '127.0.0.1'}}), flush=True)
@@ -108,6 +112,7 @@ sys.exit(result.returncode)
     finally:
         await runner.cleanup()
         await asyncio.to_thread(remote.close)
+        await asyncio.to_thread(alternate.close)
 
 
 if __name__ == '__main__':

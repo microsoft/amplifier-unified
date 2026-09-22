@@ -92,7 +92,11 @@ The Publishing page and agent action catalog expose identical controls:
 3. `publishing.target.select` explicitly selects the inspected configuration
    revision and service UUID. New mutations require that selection. Read actions
    can name an inspected target without changing the task's selection.
-4. The existing lifecycle actions accept an optional `targetId`. Every mutation
+4. The existing lifecycle actions accept an optional `targetId`. A new remote
+   mutation also requires `targetRevision` and `serviceId` from the caller's
+   inspection. The server checks those observed values before admission; a
+   target ID reused for a changed configuration cannot receive a stale panel's
+   files. UI and agent callers use the same fence. Every mutation
    freezes the target configuration and service identity in the app database
    before capturing bytes or contacting SSH. UI actions include the target ID;
    omitted IDs use the selected target for a new request. Exact retries always
@@ -114,6 +118,12 @@ Reconciliation also requires the service's durable digest of the exact submitted
 RPC, including that UUID. A matching request ID, site or release alone cannot
 prove matching review notes, revisions or bytes. Older unknown records without
 that proof remain unknown; their identity is never relabeled using new arguments.
+Receipt adoption also rechecks the returned URL and access policy against the
+original target, including loopback-only previews. A failed reconciliation read
+or malformed result cannot turn an uncertain operation into a known failure.
+The error response preserves the original unknown receipt and its diagnostic;
+the UI retains the exact pending request regardless of HTTP status until an
+authoritative outcome is observed or the user explicitly acknowledges unknown.
 
 `publishing.target.remove` unregisters an unused, unselected configuration and
 retains its history. A target with retained lifecycle requests cannot be removed

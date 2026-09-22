@@ -197,10 +197,11 @@ ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
 
 
 class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None):
+    def __init__(self, message, status=400, *, code=None, receipt=None):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.receipt = receipt
 
 
 def validate_theme(css):
@@ -945,7 +946,7 @@ class AppService:
                 result = await self.publishing.dispatch(action, args, origin, command_id)
             except ValueError as exc:
                 code = getattr(exc, 'code', None)
-                raise AppError(str(exc), 503 if code == 'unknown_outcome' else 409, code=code) from None
+                raise AppError(str(exc), 503 if code == 'unknown_outcome' else 409, code=code, receipt=getattr(exc, 'receipt', None)) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)

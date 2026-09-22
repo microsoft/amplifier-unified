@@ -7,6 +7,8 @@ const requests=new Map();
 function requestState(sid){if(!requests.has(sid))requests.set(sid,{pending:null,busy:false,listeners:new Set()});return requests.get(sid)}
 function notify(record){record.listeners.forEach(fn=>fn())}
 const description=value=>typeof value==='string'?value:value?.message||JSON.stringify(value||'The action failed.');
+const actionError=(response,fallback)=>Object.assign(Error(response?.error?description(response.error):fallback),{code:response?.code,state:response?.state,receipt:response?.receipt,status:response?.status});
+const uncertain=value=>value?.code==='unknown_outcome'||['unknown','running'].includes(value?.state)||['unknown','running'].includes(value?.receipt?.state);
 const safeLink=value=>{try{const url=new URL(value);return ['http:','https:'].includes(url.protocol)?url.href:null}catch{return null}};
 
 const emptyTarget={targetId:'',label:'',hostname:'',username:'',python:'',socketPath:'',expectedBind:'127.0.0.1'};
@@ -27,7 +29,7 @@ export function PublishingSettings({session,act}){
  function displayTarget(value){if(targetRef.current!==value){targetRef.current=value;update(()=>{setTargetId(value);setData(null);setSiteId('');setReleaseId('');setNote('');setInspection(null)})}}
  async function read(action,args={},target=targetRef.current){
   const response=await act(action,{sessionId:sid,...(!action.startsWith('publishing.target.')?{targetId:target}:{}),...args});
-  if(!response?.accepted)throw Error(response?.error||'The server did not confirm this request.');
+  if(!response?.accepted)throw actionError(response,'The server did not confirm this request.');
   return response.result;
  }
  async function refresh({reconcile=false,followSelection=false,target=targetRef.current}={}){
@@ -38,9 +40,9 @@ export function PublishingSettings({session,act}){
   const value=await read('publishing.list',{},target);update(()=>setData(value));
   if(reconcile&&record.pending&&record.pending.args.targetId===target){
    const receipt=value.receipts?.find(row=>row.requestId===record.pending.args.requestId);
-   if(receipt?.state==='unknown'){
+   if(['unknown','running'].includes(receipt?.state)){
     record.pending={...record.pending,receipt};notify(record);
-    update(()=>setNotice('The saved receipt records an unknown outcome. Nothing was replayed.'));
+    update(()=>setNotice(receipt.state==='unknown'?'The saved receipt records an unknown outcome. Nothing was replayed.':'The saved receipt is still running. Nothing was replayed.'));
    }else if(receipt&&['succeeded','failed'].includes(receipt.state)){
     record.pending=null;notify(record);
     update(()=>receipt.state==='failed'?setError(description(receipt.error)):setNotice('The saved receipt confirms this request succeeded.'));
@@ -59,13 +61,13 @@ export function PublishingSettings({session,act}){
   if(record.busy||readFlight.current||(!retry&&record.pending))return;
   const targetAction=action?.startsWith('publishing.target.');
   if(!retry&&!targetAction&&!targetReady){setError('Inspect and select this exact target before starting another publishing action.');return}
-  const command=retry?record.pending:{action,args:{sessionId:sid,...(!targetAction?{targetId:targetRef.current,requestId:crypto.randomUUID()}:{}),...args}};
+  const command=retry?record.pending:{action,args:{sessionId:sid,...(!targetAction?{targetId:targetRef.current,...(currentTarget?.kind==='ssh'?{targetRevision:currentTarget.revision,serviceId:currentTarget.inspection.serviceId}:{}),requestId:crypto.randomUUID()}:{}),...args}};
   if(!command)return;
   const isTarget=command.action.startsWith('publishing.target.');
   record.pending=command;record.busy=true;notify(record);setError('');setNotice('');
   try{
    const response=await act(command.action,command.args);
-   if(!response?.accepted)throw Error(response?.error||'The connection ended before the outcome was confirmed.');
+   if(!response?.accepted)throw actionError(response,'The connection ended before the outcome was confirmed.');
    const result=response.result;
    if(isTarget){
     if(!Array.isArray(result?.targets))throw Error('The server returned no complete target state.');
@@ -74,16 +76,23 @@ export function PublishingSettings({session,act}){
     if(command.action==='publishing.target.select'){displayTarget(result.selectedTargetId);await refresh({target:result.selectedTargetId})}
    }else{
     if(!result||(command.action==='publishing.build'?!result.id:!['succeeded','failed','unknown','running'].includes(result.state)))throw Error('The server returned no complete publishing receipt.');
-    if(result?.state==='unknown'||result?.state==='running')update(()=>setError(description(result.error||'The outcome is not confirmed. Inspect receipts before continuing.')));
+    if(result?.state==='unknown'||result?.state==='running'){record.pending={...command,receipt:result};update(()=>setError(description(result.error||'The outcome is not confirmed. Inspect receipts before continuing.')))}
     else if(result?.state==='failed'){record.pending=null;update(()=>setError(description(result.error)))}
     else{record.pending=null;update(()=>{setNotice(command.action.slice(11)+' completed.');if(command.action==='publishing.build'){setSiteId(result.siteId);setReleaseId(result.id);setNote('')}})}
     try{await refresh({target:command.args.targetId})}catch(e){update(()=>setError('The action returned, but the list could not refresh. '+e.message))}
    }
   }catch(e){
-   // Exact target and arguments stay bound to the pending command, even if
+   // Exact target identity and arguments stay bound to the pending command, even if
    // another client changes the selected target while the response is missing.
-   if(e.status>=400&&e.status<500&&e.status!==408){
-    record.pending=null;update(()=>setError(e.message));
+   // A rejection status cannot override uncertainty from an earlier attempt.
+   // Only a final receipt can resolve a lifecycle retry whose response was lost.
+   // Target configuration controls use their separate revision contract.
+   const finalReceipt=['succeeded','failed'].includes(e.receipt?.state);
+   if(uncertain(e)||(retry&&command.args.requestId&&!finalReceipt)){
+    if(['unknown','running'].includes(e.receipt?.state))record.pending={...command,receipt:e.receipt};
+    update(()=>setError(e.message+' Keep this request unchanged until its outcome is known.'));
+   }else if(finalReceipt||(e.status>=400&&e.status<500&&e.status!==408)){
+    record.pending=null;update(()=>e.receipt?.state==='succeeded'?setNotice('The saved receipt confirms this request succeeded.'):setError(e.message));
     try{if(isTarget){const value=await read('publishing.target.list');update(()=>setRegistry(value))}else await refresh({target:command.args.targetId})}catch{}
    }else update(()=>setError(e.message+' Keep this request unchanged until its outcome is known.'));
   }finally{record.busy=false;notify(record)}

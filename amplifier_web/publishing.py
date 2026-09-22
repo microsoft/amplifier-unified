@@ -31,8 +31,12 @@ def definitions(schema, string):
         'publishing.stop': ('Stop this site’s target listeners, retaining immutable releases and durable receipts. Requires current revision.', schema({**site, **request, **revision})),
         'publishing.remove': ('Remove this target deployment and previews, retaining releases and receipts for audit. Source files are preserved. Requires current revision.', schema({**site, **request, **revision})),
     }
-    for _description, spec in actions.values():
+    for name, (description, spec) in list(actions.items()):
         spec['properties']['targetId'] = {**string(100), 'minLength': 1}
+        if name not in {'publishing.list', 'publishing.status', 'publishing.logs'}:
+            spec['properties']['targetRevision'] = {'type': 'integer', 'minimum': 0}
+            spec['properties']['serviceId'] = {**string(200), 'minLength': 1}
+            actions[name] = (description + ' New remote requests must include the targetRevision and serviceId returned by target inspection; exact retries keep their original arguments.', spec)
     actions.update(target_definitions(schema, string))
     return actions
 

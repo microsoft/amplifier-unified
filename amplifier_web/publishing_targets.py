@@ -264,6 +264,14 @@ class PublishingTargets:
         if fallback_target_id and args.get('targetId', fallback_target_id) != fallback_target_id:
             raise PublishingError('request_conflict', 'This request already belongs to the original local target')
         target = self.resolve(sid, fallback_target_id or args.get('targetId'), require_selected=True)
+        if target['id'] != 'loopback':
+            # This is the UI/agent's observation, not values resolved on its
+            # behalf at submission. An unused target ID may have been edited and
+            # selected for another service since that observation was rendered.
+            if type(args.get('targetRevision')) is not int or not isinstance(args.get('serviceId'), str):
+                raise PublishingError('target_observation_required', 'New remote operations require the targetRevision and serviceId from the inspected target you observed; no operation was admitted')
+            if args['targetRevision'] != target['revision'] or args['serviceId'] != target['inspection']['serviceId']:
+                raise PublishingError('stale_target', 'The observed target revision or service identity changed; refresh and explicitly submit to the intended target. No operation was admitted')
         signature = digest({'action': action, 'args': {**args, 'sessionId': sid, 'targetId': target['id']}})
         record = {'id': digest([sid, rid]), 'sessionId': sid, 'requestId': rid, 'action': action.removeprefix('publishing.'),
                   'siteId': args.get('siteId'), 'releaseId': args.get('releaseId'), 'targetId': target['id'], 'targetRevision': target['revision'],
@@ -274,22 +282,64 @@ class PublishingTargets:
 
     @staticmethod
     def _receipt(record):
-        return {key: value for key, value in record.items() if key not in {'target', 'signature', 'transferDigest'}}
+        hidden = {'target', 'signature', 'transferDigest', 'rejectedResult'}
+        if record.get('remoteReceiptVerified') is not True:
+            hidden.add('remoteReceipt')
+        return {key: value for key, value in record.items() if key not in hidden}
 
     def receipts(self, sid, target_id=None):
-        return [self._receipt(r) for r in self._requests(sid) if r['targetId'] != 'loopback' and (target_id is None or r['targetId'] == target_id)]
+        result = []
+        for record in self._requests(sid):
+            if record['targetId'] == 'loopback' or (target_id is not None and record['targetId'] != target_id):
+                continue
+            try:
+                self._validate_cached_result(record)
+            except PublishingError:
+                pass  # Return the persisted unknown diagnostic.
+            result.append(self._receipt(record))
+        return result
 
     def owns_records(self, sid):
         return bool(self.app.db.execute('SELECT 1 FROM publishing_targets WHERE session=? LIMIT 1', (sid,)).fetchone() or self.app.db.execute('SELECT 1 FROM publishing_target_requests WHERE session=? LIMIT 1', (sid,)).fetchone())
 
-    @staticmethod
-    def _stored_result(record):
+    def _validate_cached_result(self, record):
+        if record['state'] != 'succeeded':
+            return
+        try:
+            self._client(record['target']).validate_result(record['action'], record['result'])
+        except PublishingError as exc:
+            # Retain the original evidence privately, while no longer projecting
+            # a pre-correction receipt as a successful, safe serving endpoint.
+            record['rejectedResult'] = record['result']
+            record['result'] = None
+            raise self._reconciliation_failure(record, exc) from exc
+
+    def _stored_result(self, record):
         if record['state'] == 'succeeded':
+            self._validate_cached_result(record)
             return record['result']
         error = record.get('error') or {'code': 'unknown_outcome', 'message': 'Remote outcome is not confirmed; no operation was replayed'}
-        raise PublishingError(error['code'], error['message'], receipt=PublishingTargets._receipt(record))
+        code = 'unknown_outcome' if record['state'] in {'running', 'unknown'} else error['code']
+        raise PublishingError(code, error['message'], receipt=PublishingTargets._receipt(record))
+
+    def _reconciliation_failure(self, record, exc):
+        """A failed read cannot turn an uncertain mutation into a known failure."""
+        if not (exc.code == 'unknown_outcome' and exc.receipt and record.get('reconciliationError') and exc.receipt.get('reconciliationError') == record['reconciliationError']):
+            record['reconciliationError'] = {'code': exc.code, 'message': str(exc)[:1000]}
+        record.update(state='unknown', remoteReceiptVerified=False,
+                      error={'code': 'unknown_outcome', 'message': 'The original operation remains unknown because its receipt could not be verified. No operation was replayed.'})
+        self._put_request(record)
+        return PublishingError('unknown_outcome', record['error']['message'], receipt=self._receipt(record))
 
     def _observe_receipt(self, record, receipt):
+        try:
+            return self._verify_receipt(record, receipt)
+        except PublishingError as exc:
+            if record['state'] in {'running', 'unknown'}:
+                raise self._reconciliation_failure(record, exc) from exc
+            raise
+
+    def _verify_receipt(self, record, receipt):
         if not isinstance(receipt, dict) or receipt.get('sessionId') != record['sessionId'] or receipt.get('requestId') != record['requestId'] or receipt.get('id') != record['id']:
             raise PublishingError('invalid_response', 'Remote receipt does not match the admitted request')
         if receipt.get('action') != ('import' if record['action'] == 'build' else record['action']):
@@ -309,6 +359,10 @@ class PublishingTargets:
             raise PublishingError('invalid_response', 'Remote receipt has an invalid outcome')
         if state == 'succeeded' and record['action'] == 'build' and (not isinstance(receipt.get('result'), dict) or receipt['result'].get('manifestDigest') != record.get('manifestDigest')):
             raise PublishingError('integrity_error', 'Remote import receipt differs from the admitted immutable manifest')
+        # Exact RPC proof cannot replace target-policy checks. Non-success
+        # receipts can also carry URL-bearing result metadata; validate it before
+        # marking any receipt verified or making that metadata visible.
+        self._client(record['target']).validate_result(record['action'], receipt)
         record['remoteReceipt'] = receipt
         record['remoteReceiptVerified'] = True
         record.pop('reconciliationError', None)
@@ -328,9 +382,14 @@ class PublishingTargets:
         record = json.loads(row[0])
         if record['targetId'] == 'loopback':
             raise PublishingError('invalid_target', 'Local receipts are owned by the local publisher')
-        receipt = await asyncio.to_thread(self._client(record['target']).request, {'method': 'receipt', 'sessionId': sid, 'requestId': request_id})
-        if receipt is not None:
-            self._observe_receipt(record, receipt)
+        try:
+            receipt = await asyncio.to_thread(self._client(record['target']).request, {'method': 'receipt', 'sessionId': sid, 'requestId': request_id})
+            if receipt is not None:
+                self._observe_receipt(record, receipt)
+        except PublishingError as exc:
+            if record['state'] in {'running', 'unknown'}:
+                raise self._reconciliation_failure(record, exc) from exc
+            raise
         return self._receipt(record)
 
     async def _execute(self, record, payload):
@@ -367,7 +426,9 @@ class PublishingTargets:
                 record['releaseId'] = (result.get('id') if record['action'] == 'build' else result.get('releaseId')) or record.get('releaseId')
         except PublishingError as exc:
             state = 'unknown' if exc.code == 'unknown_outcome' or (exc.receipt and exc.receipt.get('state') in {'running', 'unknown', 'succeeded'}) else 'failed'
-            record.update(state=state, completedAt=_now(), error={'code': exc.code, 'message': str(exc)})
+            record.update(state=state, completedAt=_now(), error={'code': 'unknown_outcome' if state == 'unknown' else exc.code, 'message': str(exc)})
+            if state == 'unknown' and exc.code != 'unknown_outcome':
+                record['reconciliationError'] = {'code': exc.code, 'message': str(exc)[:1000]}
             if exc.receipt:
                 record['remoteReceipt'] = exc.receipt
         except Exception:
@@ -396,9 +457,19 @@ class PublishingTargets:
         if not isinstance(remote_receipts, list):
             raise PublishingError('invalid_response', 'Remote receipts must be a list')
         indexed = {r['requestId']: r for r in remote_receipts if isinstance(r, dict) and isinstance(r.get('requestId'), str)}
+        owned = set()
         for record in self._requests(sid):
             if record['targetId'] != target['id'] or record['serviceId'] != target['inspection']['serviceId']:
                 continue
+            owned.add(record['requestId'])
+            if record['state'] == 'succeeded':
+                try:
+                    self._validate_cached_result(record)
+                except PublishingError:
+                    # Project the retained unknown record; do not immediately
+                    # replace it with another read of a rejected cached result.
+                    indexed[record['requestId']] = self._receipt(record)
+                    continue
             remote = indexed.get(record['requestId'])
             if remote and record['state'] in {'running', 'unknown'}:
                 try:
@@ -406,10 +477,12 @@ class PublishingTargets:
                 except PublishingError as exc:
                     # Keep the local request visible as unknown; an unrelated or
                     # unproven remote receipt cannot become its successful row.
-                    record['reconciliationError'] = {'code': exc.code, 'message': str(exc)}
-                    record['remoteReceiptVerified'] = False
-                    self._put_request(record)
+                    self._reconciliation_failure(record, exc)
             indexed[record['requestId']] = self._receipt(record)
+        client = self._client(target)
+        for request_id, record in indexed.items():
+            if request_id not in owned:
+                client.validate_result('receipt', record)
         return list(indexed.values())
 
     async def dispatch_remote(self, action, args, binding=None):

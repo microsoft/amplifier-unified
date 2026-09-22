@@ -603,3 +603,147 @@ def test_legacy_pending_import_cannot_borrow_unrelated_native_outcome(paths, inn
         assert still_unknown.value.code == 'unknown_outcome'
         assert still_unknown.value.receipt['state'] == 'unknown'
         assert still_unknown.value.receipt['result'] is None
+
+
+def test_saved_result_validation_preserves_preview_policy_for_private_target():
+    configured = SSHClient(hostname='private-host', python='/python', socket_path='/admin.sock', expected_bind='10.1.2.3', expected_service_id=SERVICE_ID)
+    preview = {'requestId': 'preview', 'action': 'preview', 'state': 'succeeded', 'result': {'id': 'preview', 'status': 'running', 'url': 'http://127.0.0.1:12345/', 'accessPolicy': 'loopback-only'}}
+    deployed = {'requestId': 'deploy', 'action': 'deploy', 'state': 'succeeded', 'result': {'id': 'site', 'status': 'running', 'revision': 1, 'url': 'http://10.1.2.3:12345/', 'accessPolicy': 'private-network'}}
+    assert configured.validate_result('preview', preview) is preview
+    assert configured.validate_result('deploy', deployed) is deployed
+    rolled = {**deployed, 'action': 'rollback'}
+    assert configured.validate_result('rollback', rolled) is rolled
+    for action, body in [('preview', deployed), ('deploy', preview), ('rollback', preview)]:
+        receipt = {**body, 'action': action}
+        if action != 'preview':
+            receipt = {**receipt, 'result': {**receipt['result'], 'revision': 1}}
+        with pytest.raises(PublishingError) as rejected:
+            configured.validate_result(action, receipt)
+        assert rejected.value.code == 'target_mismatch' and rejected.value.receipt == receipt
+
+
+@pytest.fixture
+def private_client():
+    return SSHClient(hostname='private-host', python='/python', socket_path='/admin.sock', expected_bind='10.1.2.3', expected_service_id=SERVICE_ID)
+
+
+def site_projection(**changes):
+    return {'id': 'site', 'status': 'running', 'revision': 1, 'url': 'http://10.1.2.3:12345/', 'accessPolicy': 'private-network', **changes}
+
+
+def release_projection(**changes):
+    manifest = imported()['manifest']
+    return {'id': 'release', 'files': manifest, 'manifestDigest': digest(manifest), 'previewStatus': 'running', 'previewUrl': 'http://127.0.0.1:12345/', **changes}
+
+
+@pytest.mark.parametrize('field', ['url', 'previousUrl'])
+@pytest.mark.parametrize('bad_url', ['http://8.8.8.8:12345/', 'http://127.0.0.1:12345/', 'https://10.1.2.3:12345/', 'http://10.1.2.3:12345/redirect', 'http://user@10.1.2.3:12345/', 'http://10.1.2.3:12345/?next=elsewhere', '\nhttp://10.1.2.3:12345/', 'http://10.1.2.3:0/', '', False, 1])
+def test_site_list_rejects_live_and_historical_urls_outside_exact_target(private_client, field, bad_url):
+    site = site_projection(**{field: bad_url})
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('list', [site])
+    assert rejected.value.code == 'target_mismatch'
+
+
+def test_stopped_site_retains_safe_historical_url_and_configured_policy(private_client):
+    site = site_projection(status='stopped', url=None, previousUrl='http://10.1.2.3:12345/')
+    assert private_client.validate_result('list', [site]) == [site]
+    assert private_client.validate_result('status', site) is site
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('list', [{**site, 'accessPolicy': 'loopback-only'}])
+    assert rejected.value.code == 'target_mismatch'
+
+
+@pytest.mark.parametrize('bad_url', ['http://10.1.2.3:12345/', 'http://8.8.8.8:12345/', 'http://localhost:12345/', 'http://127.0.0.1:12345/#external', False])
+def test_release_preview_urls_remain_loopback_in_every_projection(private_client, bad_url):
+    release = release_projection(previewUrl=bad_url)
+    review = {'requestId': 'review', 'action': 'review', 'state': 'succeeded', 'result': release}
+    for method, result in [('releases', [release]), ('import', release), ('build', release), ('review', review), ('receipt', review), ('receipts', [review])]:
+        with pytest.raises(PublishingError) as rejected:
+            private_client.validate_result(method, result)
+        assert rejected.value.code == 'target_mismatch'
+
+
+@pytest.mark.parametrize('method,result', [
+    ('list', {}), ('list', [None]), ('list', [site_projection(status={})]),
+    ('status', site_projection(revision=True)), ('status', site_projection(url=None)),
+    ('releases', {}), ('releases', [None]),
+    ('releases', [release_projection(previewStatus={})]),
+    ('releases', [release_projection(previewUrl=None)]),
+    ('receipts', {}), ('receipt', {}),
+    ('receipt', {'requestId': 'x', 'action': [], 'state': 'succeeded', 'result': {}}),
+    ('receipt', {'requestId': 'x', 'action': 'deploy', 'state': {}, 'result': {}}),
+    ('receipt', {'requestId': 'x', 'action': 'deploy', 'state': 'succeeded', 'result': None}),
+    ('receipt', {'requestId': 'x', 'action': 'deploy', 'state': 'succeeded', 'result': site_projection(status='stopped', url=None)}),
+])
+def test_projection_validation_rejects_malformed_shapes(private_client, method, result):
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result(method, result)
+    assert rejected.value.code == 'invalid_response'
+
+
+@pytest.mark.parametrize('state', ['unknown', 'failed', 'running'])
+def test_receipt_without_result_preserves_unresolved_or_failed_outcome(private_client, state):
+    receipt = {'requestId': 'x', 'action': 'deploy', 'state': state, 'result': None}
+    assert private_client.validate_result('receipt', receipt) is receipt
+    assert private_client.validate_result('receipts', [receipt]) == [receipt]
+
+
+def test_receipt_transport_defers_nested_checks_for_caller_diagnostics(private_client, monkeypatch):
+    unsafe = {'requestId': 'unknown-local', 'action': 'deploy', 'state': 'succeeded', 'result': site_projection(url='http://8.8.8.8:12345/')}
+    monkeypatch.setattr(private_client, '_send', lambda request: unsafe if request['method'] == 'receipt' else [unsafe])
+    assert private_client.request({'method': 'receipt', 'sessionId': 'session', 'requestId': 'unknown-local'}) is unsafe
+    assert private_client.request({'method': 'receipts', 'sessionId': 'session'}) == [unsafe]
+    with pytest.raises(PublishingError) as rejected:
+        private_client.validate_result('receipt', unsafe)
+    assert rejected.value.code == 'target_mismatch' and rejected.value.receipt is unsafe
+
+
+@pytest.mark.parametrize('method,result', [('list', [site_projection(url='http://8.8.8.8:12345/')]), ('releases', [release_projection(previewUrl='http://10.1.2.3:12345/')])])
+def test_collection_transport_validates_urls_before_returning(private_client, monkeypatch, method, result):
+    monkeypatch.setattr(private_client, '_send', lambda request: result)
+    with pytest.raises(PublishingError) as rejected:
+        private_client.request({'method': method, 'sessionId': 'session'})
+    assert rejected.value.code == 'target_mismatch'
+
+
+@pytest.mark.parametrize('method,result', [
+    ('import', None), ('import', {'id': 'release'}),
+    ('import', release_projection(previewUrl='http://8.8.8.8:12345/')),
+    ('review', []),
+    ('deploy', {'requestId': 'x', 'action': 'deploy', 'state': 'succeeded', 'result': None}),
+    ('deploy', {'requestId': 'x', 'action': 'deploy', 'state': 'failed', 'result': None}),
+    ('deploy', {'requestId': 'x', 'action': 'preview', 'state': 'succeeded', 'result': site_projection()}),
+    ('stop', {'requestId': 'x', 'action': 'stop', 'state': 'succeeded', 'result': site_projection(status={})}),
+])
+def test_malformed_success_response_leaves_mutation_unknown(private_client, monkeypatch, method, result):
+    monkeypatch.setattr(private_client, 'verify_target', lambda: {})
+    calls = []
+    def send(request):
+        calls.append(request)
+        return result
+    monkeypatch.setattr(private_client, '_send', send)
+    with pytest.raises(PublishingError) as rejected:
+        private_client.request({'method': method, 'sessionId': 'session', 'requestId': 'x'})
+    assert rejected.value.code == 'unknown_outcome'
+    assert rejected.value.receipt['requestId'] == 'x'
+    assert rejected.value.receipt['serviceId'] == SERVICE_ID
+    assert len(calls) == 1  # No retry follows the ambiguous response.
+
+
+def test_private_service_projections_validate_preview_and_empty_site_lifecycle(paths, monkeypatch):
+    root, sock = paths
+    with PublishingService(root, sock, bind='10.1.2.3') as service:
+        configured = SSHClient(hostname='private-host', python='/python', socket_path=str(sock), expected_bind='10.1.2.3', expected_service_id=service.service_id)
+        monkeypatch.setattr(configured, '_send', lambda request: remote.unix_request(sock, request))
+        release = configured.request(imported())
+        preview = configured.request({'method': 'preview', 'sessionId': 'session', 'requestId': 'preview', 'releaseId': release['id']})
+        assert read(preview['result']['url']) == b'<h1>First</h1>'
+        configured.request({'method': 'review', 'sessionId': 'session', 'requestId': 'review', 'releaseId': release['id'], 'note': 'reviewed'})
+        assert configured.request({'method': 'releases', 'sessionId': 'session'})[0]['previewStatus'] == 'running'
+        stopped = configured.request({'method': 'stop', 'sessionId': 'session', 'requestId': 'stop', 'siteId': 'example', 'expectedRevision': 0})
+        assert stopped['result']['accessPolicy'] == 'private-network' and stopped['result']['url'] is None
+        removed = configured.request({'method': 'remove', 'sessionId': 'session', 'requestId': 'remove', 'siteId': 'example', 'expectedRevision': 1})
+        assert configured.request({'method': 'list', 'sessionId': 'session'}) == [removed['result']]
+        receipts = configured.request({'method': 'receipts', 'sessionId': 'session'})
+        assert configured.validate_result('receipts', receipts) is receipts

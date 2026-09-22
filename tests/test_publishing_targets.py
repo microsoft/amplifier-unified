@@ -58,12 +58,25 @@ def exported(body=b'<h1>One</h1>', sid='task'):
     return {'sessionId': sid, 'siteId': 'site', 'manifest': manifest, 'manifestDigest': digest(manifest), 'files': {'index.html': base64.b64encode(body).decode()}}
 
 
-def build_args(request_id='build', **more):
-    return {'sessionId': 'task', 'siteId': 'site', 'sourcePath': 'dist', 'requestId': request_id, **more}
+def observed_args(registry, args):
+    """Model a caller retaining the target observation with its submitted args."""
+    previous = registry.lookup_request(args['sessionId'], args['requestId'])
+    target = previous['target'] if previous else registry.resolve(args['sessionId'], args.get('targetId'))
+    if target['id'] == 'loopback':
+        return args
+    return {'targetId': target['id'], 'targetRevision': target['revision'], 'serviceId': target['inspection']['serviceId'], **args}
+
+
+def build_args(registry, request_id='build', *, observe=True, **more):
+    args = {'sessionId': 'task', 'siteId': 'site', 'sourcePath': 'dist', 'requestId': request_id, **more}
+    return observed_args(registry, args) if observe else args
 
 
 async def operation(registry, method, **args):
-    return await registry.dispatch_remote('publishing.' + method, {'sessionId': 'task', **args})
+    request = {'sessionId': 'task', **args}
+    if method not in {'list', 'status', 'logs'}:
+        request = observed_args(registry, request)
+    return await registry.dispatch_remote('publishing.' + method, request)
 
 
 async def test_save_and_list_never_connect_and_task_scopes_are_distinct(environment):
@@ -118,7 +131,7 @@ async def test_inspection_selection_and_configuration_revision_guards(environmen
 async def test_real_remote_lifecycle_and_exact_transfer_retry(environment):
     registry, service, _, calls = environment
     await choose(registry, service)
-    args = build_args()
+    args = build_args(registry)
     binding = registry.bind_request('task', 'publishing.build', args)
     assert binding['serviceId'] == service.service_id and binding['state'] == 'bound'
     assert await registry.resume_request(binding) == (False, None)
@@ -130,7 +143,7 @@ async def test_real_remote_lifecycle_and_exact_transfer_retry(environment):
     assert preview['result']['accessPolicy'] == 'loopback-only'
     await operation(registry, 'review', releaseId=first['id'], requestId='review', note='Checked saved page')
     deployed = await operation(registry, 'deploy', siteId='site', releaseId=first['id'], expectedRevision=0, requestId='deploy')
-    second = await registry.import_release(build_args('build-2'), exported(b'<h1>Two</h1>'))
+    second = await registry.import_release(build_args(registry, 'build-2'), exported(b'<h1>Two</h1>'))
     await operation(registry, 'review', releaseId=second['id'], requestId='review-2', note='Checked update')
     await operation(registry, 'deploy', siteId='site', releaseId=second['id'], expectedRevision=1, requestId='deploy-2')
     rolled = await operation(registry, 'rollback', siteId='site', releaseId=first['id'], expectedRevision=2, requestId='rollback')
@@ -154,7 +167,7 @@ async def test_real_remote_lifecycle_and_exact_transfer_retry(environment):
 async def test_lost_success_reconciles_original_target_after_selection_change(environment, monkeypatch):
     registry, service, _, calls = environment
     await choose(registry, service)
-    first = await registry.import_release(build_args(), exported())
+    first = await registry.import_release(build_args(registry), exported())
     await operation(registry, 'review', releaseId=first['id'], requestId='review', note='Checked')
     original = SSHClient._send
 
@@ -165,7 +178,7 @@ async def test_lost_success_reconciles_original_target_after_selection_change(en
         return result
 
     monkeypatch.setattr(SSHClient, '_send', lost_response)
-    args = {'sessionId': 'task', 'siteId': 'site', 'releaseId': first['id'], 'expectedRevision': 0, 'requestId': 'uncertain'}
+    args = observed_args(registry, {'sessionId': 'task', 'siteId': 'site', 'releaseId': first['id'], 'expectedRevision': 0, 'requestId': 'uncertain'})
     with pytest.raises(PublishingError) as unknown:
         await registry.dispatch_remote('publishing.deploy', args)
     assert unknown.value.code == 'unknown_outcome'
@@ -193,7 +206,7 @@ async def test_unknown_absent_receipt_and_restart_never_replays(environment, mon
         return original(client, request)
 
     monkeypatch.setattr(SSHClient, '_send', disconnected)
-    args = build_args()
+    args = build_args(registry)
     with pytest.raises(PublishingError):
         await registry.import_release(args, exported())
     record = registry.lookup_request('task', 'build')
@@ -212,7 +225,7 @@ async def test_unknown_absent_receipt_and_restart_never_replays(environment, mon
 async def test_configuration_and_identity_cannot_replace_used_target(environment, monkeypatch):
     registry, service, second, _ = environment
     await choose(registry, service)
-    registry.bind_request('task', 'publishing.build', build_args())
+    registry.bind_request('task', 'publishing.build', build_args(registry))
     registry.select('task', {'targetId': 'loopback', 'expectedRevision': 0})
     for mutate in (
         lambda: registry.remove('task', {'targetId': 'private', 'expectedRevision': 1}),
@@ -232,7 +245,7 @@ async def test_configuration_and_identity_cannot_replace_used_target(environment
     assert replaced.value.code == 'target_mismatch'
     assert registry._row('task', 'private')['inspection']['serviceId'] == service.service_id
     with pytest.raises(PublishingError) as guarded:
-        await registry.import_release(build_args(), exported())
+        await registry.import_release(build_args(registry), exported())
     assert guarded.value.code == 'target_mismatch'
     assert second.publisher.releases('task') == []
 
@@ -246,28 +259,28 @@ async def test_unused_remove_tombstone_and_legacy_binding(environment):
         registry.save('task', config(service, revision=2))
     assert retained.value.code == 'target_removed' and calls == []
     await choose(registry, service, target_id='new-private')
-    legacy = registry.bind_request('task', 'publishing.build', build_args('old-build'), fallback_target_id='loopback')
+    legacy = registry.bind_request('task', 'publishing.build', build_args(registry, 'old-build', observe=False), fallback_target_id='loopback')
     assert legacy['targetId'] == 'loopback'
-    assert registry.bind_request('task', 'publishing.build', build_args('old-build'))['targetId'] == 'loopback'
+    assert registry.bind_request('task', 'publishing.build', build_args(registry, 'old-build'))['targetId'] == 'loopback'
     with pytest.raises(PublishingError) as conflict:
-        registry.bind_request('task', 'publishing.build', build_args('old-build', targetId='new-private'))
+        registry.bind_request('task', 'publishing.build', build_args(registry, 'old-build', targetId='new-private'))
     assert conflict.value.code == 'request_conflict'
 
 
 async def test_capture_failure_is_durable_and_never_imported(environment):
     registry, service, _, calls = environment
     await choose(registry, service)
-    binding = registry.bind_request('task', 'publishing.build', build_args())
+    binding = registry.bind_request('task', 'publishing.build', build_args(registry))
     failure = registry.capture_failed(binding, PublishingError('unsafe_source', 'Built output is outside the task workspace'))
     assert failure['state'] == 'failed' and failure['captureFailed'] is True
     with pytest.raises(PublishingError) as saved:
         await registry.resume_request(binding)
     assert saved.value.code == 'unsafe_source'
     with pytest.raises(PublishingError) as repeated:
-        await registry.import_release(build_args(), exported())
+        await registry.import_release(build_args(registry), exported())
     assert repeated.value.code == 'unsafe_source'
     assert all(request['method'] == 'target' for _, request in calls)
-    uncertain = registry.bind_request('task', 'publishing.build', build_args('uncertain-capture'))
+    uncertain = registry.bind_request('task', 'publishing.build', build_args(registry, 'uncertain-capture'))
     registry.capture_failed(uncertain, PublishingError('unknown_outcome', 'Capture interrupted before a result was recorded'))
     with pytest.raises(PublishingError) as unknown:
         await registry.resume_request(uncertain)
@@ -279,7 +292,7 @@ async def test_capture_failure_is_durable_and_never_imported(environment):
 async def test_receipt_reconciliation_rejects_wrong_remote_action(environment, monkeypatch):
     registry, service, _, _ = environment
     await choose(registry, service)
-    binding = registry.bind_request('task', 'publishing.build', build_args())
+    binding = registry.bind_request('task', 'publishing.build', build_args(registry))
     registry.capture_failed(binding, PublishingError('unknown_outcome', 'Interrupted'))
     original = SSHClient._send
 
@@ -291,7 +304,8 @@ async def test_receipt_reconciliation_rejects_wrong_remote_action(environment, m
     monkeypatch.setattr(SSHClient, '_send', wrong_receipt)
     with pytest.raises(PublishingError) as invalid:
         await registry.resume_request(binding)
-    assert invalid.value.code == 'request_conflict'
+    assert invalid.value.code == 'unknown_outcome'
+    assert invalid.value.receipt['reconciliationError']['code'] == 'request_conflict'
     assert registry.lookup_request('task', 'build')['state'] == 'unknown'
 
 
@@ -306,7 +320,7 @@ async def test_mismatched_import_response_requires_exact_receipt_reconciliation(
 
     monkeypatch.setattr(SSHClient, '_send', changed_response)
     with pytest.raises(PublishingError) as error:
-        await registry.import_release(build_args(), exported())
+        await registry.import_release(build_args(registry), exported())
     assert error.value.code == 'unknown_outcome'
     binding = registry.lookup_request('task', 'build')
     handled, release = await registry.resume_request(binding)
@@ -319,7 +333,7 @@ async def test_mismatched_import_response_requires_exact_receipt_reconciliation(
 async def test_lost_conflict_never_adopts_different_payload_receipt(environment, monkeypatch, action, legacy):
     registry, service, _, calls = environment
     await choose(registry, service)
-    release = await registry.import_release(build_args(), exported())
+    release = await registry.import_release(build_args(registry), exported())
     base = {'method': action, 'sessionId': 'task', 'requestId': 'collision', 'releaseId': release['id']}
     if action == 'review':
         old = {**base, 'note': 'Original review note'}
@@ -347,7 +361,7 @@ async def test_lost_conflict_never_adopts_different_payload_receipt(environment,
             raise
 
     monkeypatch.setattr(SSHClient, '_send', lost_conflict)
-    args = {key: value for key, value in desired.items() if key != 'method'}
+    args = observed_args(registry, {key: value for key, value in desired.items() if key != 'method'})
     with pytest.raises(PublishingError) as uncertain:
         await registry.dispatch_remote('publishing.' + action, args)
     assert uncertain.value.code == 'unknown_outcome'
@@ -382,13 +396,13 @@ async def test_legacy_unknown_local_admission_does_not_fabricate_payload_proof(e
 
     monkeypatch.setattr(SSHClient, '_send', lost_success)
     with pytest.raises(PublishingError):
-        await registry.import_release(build_args(), exported())
+        await registry.import_release(build_args(registry), exported())
     record = registry.lookup_request('task', 'build')
     record.pop('rpcPayloadDigest')
     registry._put_request(record)
     for _ in range(2):
         with pytest.raises(PublishingError) as unknown:
-            await registry.import_release(build_args(), exported())
+            await registry.import_release(build_args(registry), exported())
         assert unknown.value.code == 'unknown_outcome'
     assert 'rpcPayloadDigest' not in registry.lookup_request('task', 'build')
     assert sum(request['method'] == 'import' for _, request in calls) == 1
@@ -397,10 +411,10 @@ async def test_legacy_unknown_local_admission_does_not_fabricate_payload_proof(e
 async def test_legacy_remote_receipt_without_proof_stays_unknown_even_for_same_args(environment):
     registry, service, _, calls = environment
     await choose(registry, service)
-    release = await registry.import_release(build_args(), exported())
+    release = await registry.import_release(build_args(registry), exported())
     args = {'sessionId': 'task', 'requestId': 'legacy-review', 'releaseId': release['id'], 'note': 'Same review text'}
     service.publisher.review(release['id'], session_id='task', request_id='legacy-review', note=args['note'])
-    record = registry.bind_request('task', 'publishing.review', args)
+    record = registry.bind_request('task', 'publishing.review', observed_args(registry, args))
     record.update(state='unknown', rpcPayloadDigest=digest({'method': 'review', **args, 'expectedServiceId': service.service_id}))
     registry._put_request(record)
     before = sum(request['method'] == 'review' for _, request in calls)
@@ -420,3 +434,192 @@ def test_action_schemas_require_revision_but_keep_service_id_optional_for_loopba
     assert rows['publishing.target.save'][1]['required'] == ['sessionId', 'targetId', 'expectedRevision', 'label', 'hostname', 'python', 'socketPath']
     assert 'serviceId' not in rows['publishing.target.select'][1]['required']
     assert rows['publishing.target.select'][1]['properties']['expectedRevision']['minimum'] == 0
+
+
+@pytest.mark.parametrize('change,code', [
+    ({'targetRevision': None}, 'target_observation_required'),
+    ({'targetRevision': True}, 'target_observation_required'),
+    ({'serviceId': None}, 'target_observation_required'),
+    ({'targetRevision': 0}, 'stale_target'),
+    ({'serviceId': '00000000-0000-4000-8000-000000000000'}, 'stale_target'),
+])
+async def test_remote_first_admission_requires_observed_revision_and_identity(environment, change, code):
+    registry, service, _, calls = environment
+    await choose(registry, service)
+    args = {**build_args(registry), **change}
+    for field in ('targetRevision', 'serviceId'):
+        if args.get(field) is None:
+            args.pop(field, None)
+    before = len(calls)
+    with pytest.raises(PublishingError) as rejected:
+        registry.bind_request('task', 'publishing.build', args)
+    assert rejected.value.code == code and rejected.value.receipt is None
+    assert registry.lookup_request('task', 'build') is None and len(calls) == before
+
+
+async def test_stale_display_of_same_target_id_cannot_admit_first_request_to_replacement(environment):
+    registry, first, second, calls = environment
+    await choose(registry, first)
+    old_args = build_args(registry)
+    registry.save('task', config(second, revision=1))
+    await registry.inspect('task', {'targetId': 'private', 'expectedRevision': 2})
+    registry.select('task', {'targetId': 'private', 'expectedRevision': 2, 'serviceId': second.service_id})
+    before = len(calls)
+    with pytest.raises(PublishingError) as stale:
+        await registry.import_release(old_args, exported())
+    assert stale.value.code == 'stale_target' and stale.value.receipt is None
+    assert registry.lookup_request('task', 'build') is None and len(calls) == before
+    assert not first.publisher.releases('task') and not second.publisher.releases('task')
+    current = build_args(registry)
+    result = await registry.import_release(current, exported())
+    assert second.publisher.releases('task')[0]['id'] == result['id']
+    assert not first.publisher.releases('task')
+
+
+async def test_recorded_legacy_args_retry_without_fence_keeps_original_target(environment):
+    registry, service, _, _ = environment
+    await choose(registry, service)
+    old_args = build_args(registry, observe=False)
+    record = registry.bind_request('task', 'publishing.build', build_args(registry))
+    # This is a retained pre-fence admission, not a fresh request without a fence.
+    record['signature'] = digest({'action': 'publishing.build', 'args': {**old_args, 'targetId': 'private'}})
+    registry._put_request(record)
+    registry.select('task', {'targetId': 'loopback', 'expectedRevision': 0})
+    retried = await registry.import_release(old_args, exported())
+    assert service.publisher.releases('task')[0]['id'] == retried['id']
+    assert registry.lookup_request('task', 'build')['targetId'] == 'private'
+
+
+@pytest.mark.parametrize('code', ['invalid_response', 'request_conflict', 'integrity_error', 'target_mismatch'])
+async def test_reconciliation_read_failures_retain_unknown_outcome_and_diagnostic(environment, monkeypatch, code):
+    registry, service, _, _ = environment
+    await choose(registry, service)
+    record = registry.bind_request('task', 'publishing.build', build_args(registry))
+    registry.capture_failed(record, PublishingError('unknown_outcome', 'Capture outcome was lost'))
+    original = SSHClient._send
+
+    def failed_read(client, request):
+        if request['method'] == 'receipt':
+            raise PublishingError(code, 'Receipt could not be verified')
+        return original(client, request)
+
+    monkeypatch.setattr(SSHClient, '_send', failed_read)
+    with pytest.raises(PublishingError) as error:
+        await registry.resume_request(record)
+    assert error.value.code == 'unknown_outcome'
+    assert error.value.receipt['state'] == 'unknown'
+    assert error.value.receipt['reconciliationError']['code'] == code
+    assert registry.lookup_request('task', 'build')['error']['code'] == 'unknown_outcome'
+
+
+async def test_invalid_cached_success_is_checked_offline_before_retry_or_projection(environment):
+    registry, service, _, calls = environment
+    await choose(registry, service)
+    first = await registry.import_release(build_args(registry), exported())
+    await operation(registry, 'review', releaseId=first['id'], requestId='review', note='Reviewed')
+    await operation(registry, 'deploy', releaseId=first['id'], siteId='site', expectedRevision=0, requestId='deploy')
+    cached = registry.lookup_request('task', 'deploy')
+    cached['result']['result']['url'] = 'http://10.9.8.7:12345/'
+    registry._put_request(cached)
+    before = len(calls)
+    with pytest.raises(PublishingError) as rejected:
+        await registry.resume_request(cached)
+    assert rejected.value.code == 'unknown_outcome'
+    assert rejected.value.receipt['state'] == 'unknown'
+    assert rejected.value.receipt['result'] is None
+    assert rejected.value.receipt['reconciliationError']['code'] == 'target_mismatch'
+    assert '10.9.8.7' not in json.dumps(rejected.value.receipt)
+    assert len(calls) == before
+    registry._put_request(cached)  # Independently exercise list/log projection.
+    rows = registry._merge_receipts('task', registry.resolve('task'), [])
+    projected = next(r for r in rows if r['requestId'] == 'deploy')
+    assert projected['state'] == 'unknown' and projected['result'] is None
+    assert '10.9.8.7' not in json.dumps(projected) and len(calls) == before
+
+
+@pytest.mark.parametrize('action', ['preview', 'deploy', 'rollback'])
+@pytest.mark.parametrize('changed', [{'url': 'http://10.9.8.7:12345/'}, {'accessPolicy': 'private-network'}])
+async def test_invalid_target_result_stays_unknown_on_retry_list_and_logs(environment, monkeypatch, action, changed):
+    registry, service, _, calls = environment
+    await choose(registry, service)
+    first = await registry.import_release(build_args(registry), exported())
+    args = {'requestId': 'invalid-result', 'releaseId': first['id']}
+    if action != 'preview':
+        await operation(registry, 'review', releaseId=first['id'], requestId='review', note='Reviewed')
+        args.update(siteId='site', expectedRevision=0)
+    if action == 'rollback':
+        await operation(registry, 'deploy', releaseId=first['id'], siteId='site', expectedRevision=0, requestId='first-deploy')
+        second = await registry.import_release(build_args(registry, 'second-build'), exported(b'<h1>Two</h1>'))
+        await operation(registry, 'review', releaseId=second['id'], requestId='second-review', note='Reviewed two')
+        await operation(registry, 'deploy', releaseId=second['id'], siteId='site', expectedRevision=1, requestId='second-deploy')
+        args['expectedRevision'] = 2
+    original = SSHClient._send
+
+    def corrupt(receipt):
+        if isinstance(receipt, dict) and receipt.get('requestId') == args['requestId']:
+            return {**receipt, 'result': {**receipt['result'], **changed}}
+        return receipt
+
+    def changed_response(client, request):
+        result = original(client, request)
+        return [corrupt(row) for row in result] if request['method'] == 'receipts' else corrupt(result)
+
+    monkeypatch.setattr(SSHClient, '_send', changed_response)
+    for _ in range(2):
+        with pytest.raises(PublishingError) as rejected:
+            await operation(registry, action, **args)
+        assert rejected.value.code == 'unknown_outcome'
+        assert rejected.value.receipt['state'] == 'unknown'
+        assert registry.lookup_request('task', args['requestId'])['state'] == 'unknown'
+    for method in ('list', 'logs'):
+        listing = await operation(registry, method, **({'siteId': 'site'} if method == 'logs' else {}))
+        record = registry.lookup_request('task', args['requestId'])
+        assert record['state'] == 'unknown' and record['remoteReceiptVerified'] is False
+        assert record['reconciliationError']['code'] == 'target_mismatch'
+        # Preview initially has only releaseId, so it need not appear in site logs.
+        if action != 'preview' or method == 'list':
+            row = next(r for r in listing['receipts' if method == 'list' else 'items'] if r['requestId'] == args['requestId'])
+            assert row['state'] == 'unknown' and row['result'] is None
+    assert sum(request.get('requestId') == args['requestId'] and request['method'] == action for _, request in calls) == 1
+    # A later valid receipt may resolve the same effect, still without resending.
+    monkeypatch.setattr(SSHClient, '_send', original)
+    receipt = await operation(registry, action, **args)
+    assert receipt['state'] == 'succeeded'
+    assert sum(request.get('requestId') == args['requestId'] and request['method'] == action for _, request in calls) == 1
+
+
+@pytest.mark.parametrize('state', ['running', 'unknown', 'failed'])
+@pytest.mark.parametrize('changed', [{'url': 'http://10.9.8.7:12345/'}, {'accessPolicy': 'private-network'}])
+async def test_non_success_receipt_result_policy_is_checked_before_adoption(environment, monkeypatch, state, changed):
+    registry, service, _, calls = environment
+    await choose(registry, service)
+    release = await registry.import_release(build_args(registry), exported())
+    await operation(registry, 'review', releaseId=release['id'], requestId='review', note='Reviewed')
+    args = {'requestId': 'lost-deploy', 'siteId': 'site', 'releaseId': release['id'], 'expectedRevision': 0}
+    original = SSHClient._send
+
+    def corrupt(receipt):
+        if isinstance(receipt, dict) and receipt.get('requestId') == args['requestId']:
+            return {**receipt, 'state': state, 'result': {**receipt['result'], **changed}}
+        return receipt
+
+    def uncertain_response(client, request):
+        result = original(client, request)
+        if request['method'] == 'deploy':
+            raise PublishingError('unknown_outcome', 'Deployment response was lost')
+        return [corrupt(row) for row in result] if request['method'] == 'receipts' else corrupt(result)
+
+    monkeypatch.setattr(SSHClient, '_send', uncertain_response)
+    for _ in range(2):
+        with pytest.raises(PublishingError) as unknown:
+            await operation(registry, 'deploy', **args)
+        assert unknown.value.code == 'unknown_outcome'
+        assert unknown.value.receipt['state'] == 'unknown'
+    for method in ('list', 'logs'):
+        result = await operation(registry, method, **({'siteId': 'site'} if method == 'logs' else {}))
+        row = next(r for r in result['receipts' if method == 'list' else 'items'] if r['requestId'] == args['requestId'])
+        assert row['state'] == 'unknown' and row['result'] is None
+        assert row['remoteReceiptVerified'] is False
+        assert row['reconciliationError']['code'] == 'target_mismatch'
+        assert 'remoteReceipt' not in row and '10.9.8.7' not in json.dumps(row)
+    assert sum(request.get('requestId') == args['requestId'] and request['method'] == 'deploy' for _, request in calls) == 1

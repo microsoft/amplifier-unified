@@ -325,9 +325,8 @@ class Publisher:
         site["unknownRequestIds"] = sorted(set(site.get("unknownRequestIds", []) + [receipt["requestId"]]))
         self._put("site", site)
 
-    @staticmethod
-    def _new_site(site_id, session_id):
-        return {"id": site_id, "sessionId": session_id, "status": "stopped", "revision": 0, "url": None, "releaseId": None, "previousReleaseId": None, "accessPolicy": "loopback-only", "updatedAt": _now(), "deployedReleaseIds": []}
+    def _new_site(self, site_id, session_id):
+        return {"id": site_id, "sessionId": session_id, "status": "stopped", "revision": 0, "url": None, "releaseId": None, "previousReleaseId": None, "accessPolicy": self._access_policy, "updatedAt": _now(), "deployedReleaseIds": []}
 
     def _scope(self, record, session_id, noun):
         if record is None or record["sessionId"] != session_id:

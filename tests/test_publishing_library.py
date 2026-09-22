@@ -401,6 +401,18 @@ def test_private_configuration_is_explicit_and_preview_stays_loopback(tmp_path, 
         assert http(preview["result"]["url"])[0] == 200
 
 
+@pytest.mark.parametrize("action", ["stop", "remove"])
+def test_private_empty_site_declares_configured_policy_without_listener(tmp_path, action):
+    with Publisher(tmp_path / "private", bind_host="10.0.0.9") as publisher:
+        receipt = getattr(publisher, action)("never-deployed", session_id="session-one", expected_revision=0, request_id=action)
+        site = receipt["result"]
+        assert site["accessPolicy"] == "private-network"
+        assert site["status"] == ("stopped" if action == "stop" else "removed")
+        assert site["revision"] == 1 and site["url"] is None
+        assert not publisher._sites and not publisher._previews
+        assert publisher.status("never-deployed", "session-one") == site
+
+
 def test_dead_owned_listener_is_discarded_before_new_mutation(publisher, source):
     release = build(publisher, source)
     review(publisher, release)
