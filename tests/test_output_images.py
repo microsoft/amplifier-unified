@@ -121,7 +121,8 @@ async def test_exact_model_catalog_advertises_vision_when_provider_metadata_does
     assert not await catalog.supports(request.model_copy(update={'model':'visual'}),provider)
 
 
-async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved):
+@pytest.mark.parametrize('serialization', ['direct', 'model_dump', 'observed_loop_envelope'])
+async def test_selected_provider_keeps_typed_images_and_selection_on_every_boundary(saved,serialization):
     from amplifier_core import ProviderInfo
     from amplifier_web.app_guidance import install_app_access
     from amplifier_web.host.session import SelectedProvider
@@ -135,7 +136,11 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
         return await app.app_bridge(operation,args,sid)
     await install_app_access(coordinator,bridge)
     tool_result=await tools['app_control'].execute({'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}})
-    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(tool_result.model_dump()))],tools=[ToolSpec(name='app_control',parameters={})])
+    # Cover Core's direct serialization, its full envelope, and the output/error
+    # envelope actually retained by the natural Work run's hook-processed loop.
+    content=(tool_result.get_serialized_output() if serialization=='direct' else
+             json.dumps(tool_result.model_dump(exclude={'success'} if serialization=='observed_loop_envelope' else set())))
+    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=content)],tools=[ToolSpec(name='app_control',parameters={})])
     calls=[]
     class Provider:
         def get_info(self):return ProviderInfo(id='test',display_name='Test',credential_env_vars=[],capabilities=['vision'],defaults={'model':'base'})
@@ -161,3 +166,18 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
         assert kwargs['model']=='selected'
         assert sent.messages[-1].content[-1].type=='image'
         assert base64.b64decode(sent.messages[-1].content[-1].source['data'])==image
+
+
+async def test_failed_serialized_tool_receipt_never_delivers_saved_pixels(saved):
+    from amplifier_core import ToolResult
+    app,sid,row,image,path=saved
+    async def bridge(operation,args):
+        if operation=='context.manifest':return {'surfaces':[],'inputIds':['one']}
+        return await app.app_bridge(operation,args,sid)
+    receipt=await bridge('dispatch',{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}})
+    delivery=OutputImageDelivery(VoiceVisualDelivery(SurfaceDelivery(bridge),bridge),bridge)
+    delivery.remember_output(receipt)
+    failed=ToolResult(success=False,output=receipt,error={'message':'denied'})
+    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(failed.model_dump(exclude={'success'})))],tools=[ToolSpec(name='app_control',parameters={})])
+    provider=SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=['vision']))
+    assert len((await delivery.prepare(request,provider)).messages)==1

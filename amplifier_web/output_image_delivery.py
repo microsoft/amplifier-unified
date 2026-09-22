@@ -33,8 +33,14 @@ class OutputImageDelivery:
             if message.role == 'tool' and message.name == 'app_control' and isinstance(message.content, str):
                 try:
                     value = json.loads(message.content)
-                    if isinstance(value, dict) and value.get('success') is True:
-                        value = value.get('output')
+                    if isinstance(value, dict) and 'output' in value:
+                        # Hook-processed loop receipts can retain output/error
+                        # without model_dump()'s explicit success field. Direct
+                        # get_serialized_output() receipts are already unwrapped.
+                        if value.get('error') is None and (value.get('success') is True or (
+                            'success' not in value and 'error' in value
+                        )):
+                            value = value['output']
                     retained |= value == observation['receipt']
                 except ValueError:
                     pass
