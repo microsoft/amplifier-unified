@@ -174,6 +174,8 @@ try{
  await page.evaluate(()=>window.setSystemTheme(false));
  await reopen;
  await frame.locator('body[data-theme="light"]').waitFor();
+ // Keep controls beside the live view while exercising buttons at its top edge.
+ await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();
  await frame.locator('#count').filter({hasText:/^5$/}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-smart-tools-canvas.png'});
  // A saved view cannot silently acquire a replacement server configuration.
