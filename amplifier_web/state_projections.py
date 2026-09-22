@@ -20,6 +20,10 @@ class StateProjections:
             self.values[key] = build()
         return self.values[key]
 
+    def sessions(self, state):
+        from .browser_state import SessionIndex
+        return self.get(('session-index',), lambda: SessionIndex(state))
+
     def attention(self, state):
         from .attention import snapshot
         return self.get(('attention',), lambda: snapshot(state))
@@ -62,7 +66,7 @@ class StateProjections:
         # Layout/drafts do not affect navigation. Workspace controls belong to
         # their own explorer query, while worker history only affects this one.
         key = ('browser-navigation', *self.chat_scope(state), self.view_scope(state, ('subagentHistory',)))
-        navigation_state = self.get(key, lambda: navigation(scoped, chats=self.chats))
+        navigation_state = self.get(key, lambda: navigation(scoped, chats=self.chats, index=self.sessions(state)))
         return {**navigation_state, 'attention': attention, 'workspaceExplorer': self.workspaces(scoped)}
 
     def shell_key(self, state):
