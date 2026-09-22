@@ -103,17 +103,26 @@ async def test_error_delivery_does_not_invent_image_and_request_not_replayed(vis
     with pytest.raises(AppError,match='Nothing was replayed'):
         await app.dispatch('voice.visual.capture',target,command_id='capture-one')
 
-async def test_agent_receipt_delivers_typed_pixels_only_while_exact_and_fresh(visual):
+@pytest.mark.parametrize('serialization',['direct','model_dump','observed_loop_envelope'])
+async def test_agent_receipt_delivers_typed_pixels_only_while_exact_and_fresh(visual,serialization):
+    from amplifier_core import ToolResult
     app,target=visual
     await grant(app,target);task=await begin(app,target,agent=True);await complete(app,target);receipt=await task
     async def bridge(operation,args): return await app.app_bridge(operation,args,target['sessionId'])
     delivery=VoiceVisualDelivery(SurfaceDelivery(bridge),bridge);delivery.remember(receipt)
-    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps({'success':True,'output':receipt}))],tools=[ToolSpec(name='app_control',parameters={})])
+    result=ToolResult(success=True,output=receipt)
+    content=(result.get_serialized_output() if serialization=='direct' else
+             json.dumps(result.model_dump(exclude={'success'} if serialization=='observed_loop_envelope' else set())))
+    request=ChatRequest(messages=[Message(role='tool',name='app_control',tool_call_id='one',content=content)],tools=[ToolSpec(name='app_control',parameters={})])
     provider=SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=['vision']))
     prepared=await delivery.prepare(request,provider)
     assert prepared.messages[-1].content[-1].type=='image'
     assert prepared.messages[-1].content[-1].source['data']==PNG
     assert len(request.messages)==1
+    denied=ToolResult(success=False,output=receipt,error={'message':'denied'})
+    for envelope in [denied.model_dump(),denied.model_dump(exclude={'success'})]:
+        failure=request.model_copy(update={'messages':[Message(role='tool',name='app_control',tool_call_id='one',content=json.dumps(envelope))]})
+        assert len((await delivery.prepare(failure,provider)).messages)==1
     without=await delivery.prepare(request.model_copy(update={'messages':[]}),provider)
     assert not without.messages
     no_vision=await delivery.prepare(request,SimpleNamespace(get_info=lambda:SimpleNamespace(capabilities=[])))

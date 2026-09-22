@@ -34,8 +34,11 @@ class VoiceVisualDelivery:
             if message.role == "tool" and message.name == "app_control" and isinstance(message.content, str):
                 try:
                     value = json.loads(message.content)
-                    if isinstance(value, dict) and value.get("success") is True:
-                        value = value.get("output")
+                    if isinstance(value, dict) and "output" in value:
+                        if value.get("error") is None and (value.get("success") is True or (
+                            "success" not in value and "error" in value
+                        )):
+                            value = value["output"]
                     if value == capture["receipt"]:
                         retained = True
                 except ValueError:
