@@ -63,9 +63,9 @@ def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     state['pinnedSessionIds']=['old-pin','new-pin','child','gone']
     state['sessions'][0]['updatedAt']=99999
     page=chat_navigation.snapshot(state)
-    assert ids(page)==['new-pin','old-pin','newest','same-first','same-second','fork']
+    assert ids(page)==['old-pin','new-pin','newest','same-first','same-second','fork']
     assert page['scope']=={'mode':'all','workspaceId':None,'filter':'','selectedSessionId':None}
-    assert page['items'][0]['workspace']=='/projects/two/shared'
+    assert page['items'][0]['workspace']=='/projects/one/shared'
     assert page['items'][0]['pinned'] and not page['items'][2]['pinned']
     assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt'}
     state['view']['navChatScope']='workspace'
@@ -264,3 +264,64 @@ async def test_voice_responses_without_transcripts_count_as_activity_but_aggrega
     await app.record_voice_usage(session['id'],'call','session','fixture',{'output_tokens':12})
     await app.set_voice_status({'status':'ended'})
     assert session['recentActivityAt']==30
+
+
+@pytest.mark.parametrize('sort,expected', [('activity',['b','c','a']), ('created',['c','a','b']), ('name',['a','b','c'])])
+def test_sort_choices_keep_pin_order(sort, expected):
+    state=state_fixture()
+    state['sessions']=[chat('p1',recent=1),chat('p2',recent=999),
+        chat('a',recent=10,title='Alpha',createdAt=20),
+        chat('b',recent=30,title='beta',createdAt=10),chat('c',recent=20,title='Charlie',createdAt=30)]
+    state['pinnedSessionIds']=['p1','p2']
+    state['view']['navSort']=sort
+    assert ids(chat_navigation.snapshot(state))==['p1','p2',*expected]
+    with pytest.raises(ValueError):chat_navigation.view_patch({'navSort':'invalid'})
+
+
+async def test_progress_keeps_order_and_shell_key_until_ready(app_factory,monkeypatch):
+    app=app_factory();await app.dispatch('session.create',{})
+    root=app._session();root.update(recentActivityAt=10,navigationActivityAt=10)
+    clock=[20];monkeypatch.setattr(chat_navigation,'time',SimpleNamespace(time=lambda:clock[0]))
+    await app.dispatch('conversation.send',{'text':'Keep working'})
+    key=app.browser_state()['shellDataKey']
+    for kind,payload in [('assistant.delta',{'text':'Progress'}),
+        ('runtime.tool',{'tool':'read_file','phase':'pre'}),
+        ('runtime.tool',{'tool':'read_file','phase':'post'}),
+        ('assistant.message',{'text':'Still working'}),
+        ('runtime.generation',{'event':'generation.finished','text':'Still working','active_job_ids':['worker']})]:
+        clock[0]+=10
+        await app.on_runtime_event(kind,{'sessionId':root['id'],**payload})
+        assert chat_navigation.navigation_activity(root)==10
+        assert app.browser_state()['shellDataKey']==key
+    clock[0]=100
+    await app.on_runtime_event('runtime.status',{'sessionId':root['id'],'status':'idle'})
+    assert chat_navigation.navigation_activity(root)==100
+    assert app.browser_state()['shellDataKey']!=key
+    clock[0]=200
+    await app.on_runtime_event('runtime.status',{'sessionId':root['id'],'status':'idle'})
+    assert chat_navigation.navigation_activity(root)==100
+
+
+@pytest.mark.parametrize('kind,payload',[
+    ('runtime.error',{'error':'Provider failed'}),
+    ('runtime.status',{'status':'stopped'}),
+    ('approval.requested',{'id':'permission','tool':'write_file'}),
+])
+async def test_attention_boundaries_commit_activity(app_factory,monkeypatch,kind,payload):
+    app=app_factory();await app.dispatch('session.create',{})
+    root=app._session();root.update(recentActivityAt=10,navigationActivityAt=10)
+    clock=[20];monkeypatch.setattr(chat_navigation,'time',SimpleNamespace(time=lambda:clock[0]))
+    await app.dispatch('conversation.send',{'text':'Work'})
+    clock[0]=30
+    await app.on_runtime_event(kind,{'sessionId':root['id'],**payload})
+    assert chat_navigation.navigation_activity(root)==30
+
+
+async def test_history_refresh_does_not_move_running_chat(tmp_path,app_factory):
+    directory=native_session(tmp_path/'native','root')
+    transcript=directory/'transcript.jsonl';os.utime(transcript,(100,100))
+    app=app_factory();await app.history.refresh()
+    row=app._session(native_rows(app)[0]['id']);row.update(historyManaged=False,status='working')
+    os.utime(transcript,(200,200));await app.history.refresh()
+    assert row['recentActivityAt']==200
+    assert chat_navigation.navigation_activity(row)==100

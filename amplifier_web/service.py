@@ -1582,7 +1582,7 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection'})
+                allowed.update({'navArchive', 'navCollection', 'navSort'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -2056,6 +2056,7 @@ class AppService:
                 ]
                 if previous_activity is not None and current.get('recentActivityAt') == session.get('recentActivityAt'):
                     current['recentActivityAt'] = previous_activity
+                    current.pop('navigationActivityPending', None)
                 execution = current.get("execution", {})
                 execution["turns"] = [
                     row for row in execution.get("turns", []) if row.get("id") != input_id
@@ -2134,6 +2135,9 @@ class AppService:
                 'kind':'llm','phase':phase,'label':model+' · voice','provider':'OpenAI voice','model':model,
                 'startedAt':existing.get('startedAt',time.time()) if existing else time.time(),
                 **({'endedAt':time.time(),'usage':normalize_voice_usage(usage)} if phase=='completed' else {})})
+            if phase=='completed' and session.get('status') not in {'working', 'starting', 'running', 'stopping'}:
+                from .chat_navigation import settle_activity
+                settle_activity(session)
             if phase=='completed' and turn_id.startswith('voice:'):
                 for turn in session['execution']['turns']:
                     if turn['id']==turn_id:turn.update(phase='completed',endedAt=time.time())
@@ -2350,6 +2354,11 @@ class AppService:
                     activity["lastEvent"] = {"tool": payload.get("tool"), "phase": payload.get("phase"), "at": event["at"]}
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
+            if (kind == 'approval.requested' or kind == 'runtime.error' or
+                    kind == 'runtime.status' and not payload.get('activityOnly') and
+                    session.get('status') in {'idle', 'stopped', 'interrupted'}):
+                from .chat_navigation import settle_activity
+                settle_activity(session)
             progress = kind == 'assistant.delta' or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (

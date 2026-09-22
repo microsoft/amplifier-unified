@@ -245,3 +245,20 @@ async def test_shell_summaries_derive_current_unread_without_acknowledging_it(se
     assert row['activity']['kind'] == 'unread'
     assert result['attention']['sessions'][session['id']] == 1
     assert service.state.get('attentionRead', {}) == before
+
+
+async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(service):
+    for session in service.state['sessions']:
+        session.update(workspace=str(service.default_workspace), messages=[])
+    await command(service,'session.pin',id='alpha',pinned=True)
+    await command(service,'session.pin',id='beta',pinned=True)
+    await command(service,'shell.view.update',clientId='browser-one',instanceId='chats',patch={'navSort':'name','navChatScope':'all'})
+    await command(service,'shell.command',clientId='browser-one',instanceId='chats',action='session.pinOrder',args={'ids':['beta','alpha']})
+    first=service.shell.inspect('browser-one',snapshots=True)['snapshots']['chats']
+    second=service.shell.inspect('browser-two',snapshots=True)['snapshots']['chats']
+    assert first['pinnedSessionIds']==second['pinnedSessionIds']==['beta','alpha']
+    assert first['chatNavigation']['scope']['sort']=='name'
+    assert 'sort' not in second['chatNavigation']['scope']
+    assert [r['id'] for r in first['chatNavigation']['items']]==['beta','alpha']
+    with pytest.raises(AppError,match='every current ID'):
+        await command(service,'session.pinOrder',ids=['alpha'])

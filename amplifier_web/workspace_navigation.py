@@ -11,7 +11,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 import re
 
 from .session_navigation import is_top_level
-from .chat_navigation import recent_activity
+from .chat_navigation import navigation_activity
 from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
@@ -114,7 +114,7 @@ def _index(state):
         entry['workspaceSelections'][workspace['id']] = workspace
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
-        entry['recentActivityAt'] = max(entry['recentActivityAt'], recent_activity(session))
+        entry['recentActivityAt'] = max(entry['recentActivityAt'], navigation_activity(session))
         entry['activityCounts'][activity(session, bool(unread_sessions.get(session.get('id'))))['kind']] += 1
 
     root = _root(list(chats))

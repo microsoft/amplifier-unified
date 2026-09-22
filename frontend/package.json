@@ -69,6 +69,7 @@
     "test:settings-collections-browser": "node tests/settings-collections-browser.mjs",
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",
     "test:new-chat-recovery-browser": "node tests/new-chat-recovery-browser.mjs",
+    "test:composer-primary-action-browser": "node tests/composer-primary-action-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
     "test:registry-browser": "node tests/registry-validation-browser.mjs",
     "test:themes-browser": "node tests/theme-definitions-browser.mjs",
@@ -79,6 +80,7 @@
     "test:terminal-setup-browser": "node tests/terminal-setup-browser.mjs",
     "test:recovery-group-browser": "node tests/recovery-group-browser.mjs",
     "test:active-client-performance-browser": "node tests/active-client-performance-browser.mjs",
+    "test:sidebar-activity-browser": "node tests/sidebar-activity-browser.mjs",
     "test:appearance-library-browser": "node tests/appearance-library-browser.mjs"
   },
   "dependencies": {
