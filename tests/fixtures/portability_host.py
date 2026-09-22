@@ -22,7 +22,7 @@ async def seed(app):
     await app.dispatch('session.create', {})
     session = app._session()
     identity = session['id']
-    session.update(selection={'provider': 'portability-fixture', 'model': 'fixture-model'},
+    session.update(selection={'provider': 'portability-fixture', 'model': 'fixture-model', 'effort': 'high'},
         task={'id': 'task-original', 'revision': 4, 'objective': 'Finish the saved work', 'status': 'active'},
         messages=[{'id': 'typed-original', 'role': 'user', 'text': 'Keep this task'},
                   {'id': 'spoken-original', 'role': 'user', 'text': 'Spoken history', 'via': 'call',

@@ -24,18 +24,16 @@ if not __package__:
     bootstrap_app_package()
 
 from amplifier_web.provider_environment import (
-    close_provider,
     config_schema,
     construct_provider,
     materialize_provider_config,
     provider_class,
 )
+from amplifier_web.portability_policy import CAPABILITY, PROMPT, MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, completion_receipt, validate_policy
+from amplifier_worktrees.git import digest
 
 
-MAX_OUTPUT_TOKENS = 16
-REQUEST_TIMEOUT_SECONDS = 45
 MAX_REQUEST_BYTES = 65536
-PROMPT = "Reply with OK."
 
 
 class ProbeFailure(ValueError):
@@ -112,7 +110,7 @@ def _runtime_transfer_fence():
 
 def _validate_request(request):
     if (not isinstance(request, dict)
-            or set(request) - {"module", "config", "source", "registryHome", "model"}
+            or set(request) - {"module", "config", "source", "registryHome", "model", "readinessPolicy"}
             or not isinstance(request.get("module"), str)
             or not re.fullmatch(r"provider-[A-Za-z0-9_-]{1,120}", request["module"])
             or not isinstance(request.get("config"), dict)
@@ -123,10 +121,40 @@ def _validate_request(request):
                 not isinstance(request["source"], str) or not 1 <= len(request["source"]) <= 4000
                 or not isinstance(request.get("registryHome"), str) or not request["registryHome"]))):
         raise ProbeFailure("invalid_request")
+    try:
+        policy = validate_policy(request.get('readinessPolicy'))
+    except ValueError:
+        raise ProbeFailure('invalid_readiness_policy') from None
+    if policy['model'] != request['model'] or policy['providerModule'] != request['module']:
+        raise ProbeFailure('invalid_readiness_policy')
+    return policy
+
+
+async def _strict_close(provider):
+    close = getattr(provider, 'close', None) or getattr(provider, 'aclose', None)
+    if not callable(close):
+        raise ProbeFailure('provider_close_unsupported')
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await asyncio.wait_for(result, 3)
+    except Exception:
+        raise ProbeFailure('provider_close_failed') from None
+
+
+async def _bounded_info(provider):
+    info = provider.get_info()
+    if inspect.isawaitable(info):
+        info = await info
+    value = info.model_dump(mode='json') if hasattr(info, 'model_dump') else info
+    capabilities = value.get('capabilities', []) if isinstance(value, dict) else []
+    if not isinstance(capabilities, (list, tuple, set)) or CAPABILITY not in capabilities:
+        raise ProbeFailure('single_attempt_unsupported')
+    return info
 
 
 async def _probe(request):
-    _validate_request(request)
+    policy = _validate_request(request)
     _runtime_transfer_fence()
     if request.get("source"):
         from amplifier_foundation import Bundle
@@ -144,9 +172,10 @@ async def _probe(request):
     cls = provider_class(request["module"])
     schema_provider = construct_provider(cls, {})
     try:
-        schema = await config_schema(schema_provider)
+        info = await _bounded_info(schema_provider)
+        schema = await config_schema(schema_provider, info=info)
     finally:
-        await close_provider(schema_provider)
+        await _strict_close(schema_provider)
     config = materialize_provider_config(request["config"], schema)
     previous_copilot = os.environ.get("COPILOT_AGENT_TOKEN")
     copilot = request["module"] == "provider-github-copilot" and config.get("github_token")
@@ -155,40 +184,52 @@ async def _probe(request):
     provider = None
     try:
         provider = construct_provider(cls, config)
+        await _bounded_info(provider)
         complete = getattr(provider, "complete", None)
         if not callable(complete):
             raise ProbeFailure("inference_unsupported")
         from amplifier_core.message_models import ChatRequest, ChatResponse, Message
         prompt = ChatRequest(messages=[Message(role="user", content=PROMPT)], model=request["model"],
-            max_output_tokens=MAX_OUTPUT_TOKENS, tools=None, stream=False, timeout=REQUEST_TIMEOUT_SECONDS,
+            reasoning_effort=policy['reasoningEffort'], max_output_tokens=MAX_OUTPUT_TOKENS,
+            tools=None, stream=False, timeout=REQUEST_TIMEOUT_SECONDS,
             metadata={"purpose": "destination-execution-probe"})
-        # Older providers consume the model keyword; newer ones read ChatRequest.
-        # Match both public paths without wrapping a session or mounting tools.
-        parameters = inspect.signature(complete).parameters
-        kwargs = {"model": request["model"]} if "model" in parameters or any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()) else {}
         if not inspect.iscoroutinefunction(complete):
             raise ProbeFailure("inference_unsupported")
-        response = await asyncio.wait_for(complete(prompt, **kwargs), REQUEST_TIMEOUT_SECONDS)
+        try:
+            inspect.signature(complete).bind(prompt, request_options={'single_attempt': True})
+        except TypeError:
+            raise ProbeFailure('single_attempt_unsupported') from None
+        response = await asyncio.wait_for(complete(prompt, request_options={'single_attempt': True}), REQUEST_TIMEOUT_SECONDS)
         try:
             response = ChatResponse.model_validate(response)
         except Exception:
             raise ProbeFailure("invalid_response") from None
-        if (response.tool_calls or any(block.type in {"tool_call", "tool_result", "image"} for block in response.content)
+        metadata = response.metadata or {}
+        if (metadata.get('openai:status') != 'completed'
+                or any(metadata.get(key) for key in ('openai:refusal', 'refusal', 'openai:error', 'openai:incomplete_reason'))
+                or response.tool_calls or any(block.type not in {'text', 'thinking', 'reasoning'} for block in response.content)
                 or response.finish_reason not in {None, "stop", "end_turn", "stop_sequence", "completed"}
                 or not any(block.type == "text" and block.text.strip() for block in response.content)):
             raise ProbeFailure("invalid_response")
+        try:
+            receipt = completion_receipt(metadata.get('openai:single_attempt'), policy)
+        except ValueError:
+            raise ProbeFailure('invalid_completion_receipt') from None
         return {"runtimeTransferFence": True, "accountVerified": True, "method": "provider.complete",
                 "model": request["model"], "providerModule": request["module"],
+                "reasoningEffort": policy['reasoningEffort'], 'readinessPolicyHash': digest(policy),
+                'completionReceipt': receipt,
                 "accountVerificationScope": "selected-model-request-accepted"}
     finally:
-        if provider is not None:
-            await close_provider(provider)
-        if copilot:
-            if previous_copilot is None:
-                os.environ.pop("COPILOT_AGENT_TOKEN", None)
-            else:
-                os.environ["COPILOT_AGENT_TOKEN"] = previous_copilot
+        try:
+            if provider is not None:
+                await _strict_close(provider)
+        finally:
+            if copilot:
+                if previous_copilot is None:
+                    os.environ.pop("COPILOT_AGENT_TOKEN", None)
+                else:
+                    os.environ["COPILOT_AGENT_TOKEN"] = previous_copilot
 
 
 async def probe(request):

@@ -129,8 +129,7 @@ async def test_interrupted_activation_stays_unknown_after_disk_reload(released_h
 
 async def test_activation_authenticates_before_probe_and_active_retry_only_finishes_clear(released_hosts, monkeypatch, tmp_path):
     hosts = released_hosts
-    checks = {'runtimeVerified': True, 'accountVerified': True,
-              'nativeFenceVerified': True, 'credentialsOrigin': 'destination'}
+    checks = copy.deepcopy(hosts.staged['checks'])
     probe = AsyncMock(return_value=checks)
     monkeypatch.setattr(Portability, 'destination_checks', probe)
     certificate = read_capsule(Path(hosts.args['path']))
