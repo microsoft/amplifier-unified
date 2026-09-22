@@ -278,6 +278,10 @@ class AutomaticHistory:
                     return
                 async with self.service.lock:
                     state = self.service.state
+                    from .managed_deletion import tombstones
+                    deleted_projects = {row['project'] for row in tombstones(self.service.db)}
+                    snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
+                    snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}

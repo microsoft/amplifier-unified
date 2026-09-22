@@ -39,7 +39,8 @@ async def test_completions_are_durable_scoped_and_fingerprint_acknowledged(tmp_p
     app=AppService(tmp_path/'data',workspace=tmp_path)
     try:
         assert app.get_state()['attention']==state
-        await app.dispatch('session.delete',{'id':sid})
+        items=app.get_state()['attention']['items']
+        await app.dispatch('attention.read',{'ids':[i['id'] for i in items],'fingerprints':{i['id']:i['fingerprint'] for i in items}})
         assert app.get_state()['attention']['unread']==0
     finally:await app.close()
 

@@ -340,7 +340,7 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
 
 @pytest.mark.parametrize('action', [
     'canvas.close', 'canvas.select', 'canvas.tabClose', 'canvas.show',
-    'session.select', 'session.create', 'session.fork', 'session.delete', 'message.edit',
+    'session.select', 'session.create', 'session.fork', 'message.edit',
     'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove', 'smartTools.open',
 ])
 async def test_dirty_primary_blocks_parent_transitions_before_any_side_effect(app, action):
@@ -387,13 +387,14 @@ async def test_dirty_secondary_blocks_panel_close_but_survives_primary_and_chat_
     with pytest.raises(AppError, match='secondary viewer edit'):
         await command(app, 'canvas.close')
     await show(app, 'text', 'New primary')
-    await command(app, 'session.create')
+    await command(app, 'session.create', {'location': {'kind':'managed'}})
     assert target(view(app, 'secondary')) == target(secondary)
     assert view(app, 'secondary')['dirty']
     # Deleting this selected chat from another client would close the parent.
     sid = app.clients.records['one']['selectedSessionId']
+    reviewed=(await command(app, 'session.deletePreview', {'id':sid}, client='two'))['result']
     with pytest.raises(AppError, match='secondary viewer edit'):
-        await command(app, 'session.delete', {'id': sid}, client='two')
+        await command(app, 'session.delete', {'id': sid, 'confirmationToken':reviewed['confirmationToken']}, client='two')
     await command(app, 'canvas.views.recover', target(secondary))
     assert not view(app, 'secondary')['dirty']
     await command(app, 'canvas.close')

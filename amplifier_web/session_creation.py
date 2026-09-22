@@ -34,12 +34,17 @@ def template(service, source):
 
 def prepare(service, args, origin, caller_session_id):
     identity = args.get('id')
+    from .managed_deletion import removed
+    if removed(service.db, identity, args.get('workspace')):
+        raise ValueError('This conversation was permanently deleted. Start a new chat instead.')
     if identity:
         if str(uuid.UUID(identity)) != identity: raise ValueError('Use a canonical UUID for a new conversation')
         from .session_files import amplifier_home
         native_exists = any((amplifier_home() / 'projects').glob('*/sessions/' + identity))
         if native_exists or (service.data_dir / 'sessions' / identity).exists() or any(row['id'] == identity for row in service.state['sessions']):
             raise ValueError('This conversation identity already exists; reuse the original creation command receipt')
+    if any(row.get('_deleting') and row.get('workspace') == args.get('workspace') for row in service.state['sessions']):
+        raise ValueError('This chat folder is being deleted. Start a new chat instead.')
     inheritance = args.get('inheritConfiguration')
     if not inheritance: return None
     source_id = inheritance['sessionId']

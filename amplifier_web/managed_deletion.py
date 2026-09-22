@@ -1,0 +1,667 @@
+"""Reviewed, recoverable deletion of explicitly allocated managed conversations.
+
+The journal records ownership, not chat content. A confirmed tombstone is saved
+before any files move. Startup resumes incomplete cleanup before hydrating views.
+Managed folders are storage organization, not a security sandbox.
+"""
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import stat
+import time
+import uuid
+from types import SimpleNamespace
+
+from .managed_chats import is_managed, metadata
+from .session_files import amplifier_home, project_slug, validate_id
+
+ACTIVE = {'working', 'running', 'starting', 'ready', 'queued', 'pending', 'stopping', 'cancel_requested'}
+BUSY = 'Finish or stop this chat’s active work and pending interactions before deleting it.'
+UNOWNED = 'The saved chat ownership could not be verified. Its files were preserved.'
+
+
+def initialize(db):
+    db.execute('CREATE TABLE IF NOT EXISTS managed_deletions (id TEXT PRIMARY KEY, token TEXT UNIQUE, phase TEXT NOT NULL, value TEXT NOT NULL)')
+
+
+def tombstones(db):
+    return [json.loads(row[0]) for row in db.execute("SELECT value FROM managed_deletions WHERE phase IN ('confirmed','done')")]
+
+
+def removed(db, identity=None, workspace=None):
+    return any(identity in row['ids'] or workspace == row['workspace'] for row in tombstones(db))
+
+
+def _tables(db):
+    return {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def _json(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'))
+
+
+def _mentions(value, identifiers):
+    if isinstance(value, dict):
+        return any(key in identifiers or _mentions(item, identifiers) for key, item in value.items())
+    if isinstance(value, list):
+        return any(_mentions(item, identifiers) for item in value)
+    return isinstance(value, str) and value in identifiers
+
+
+def _owned(value, ids):
+    return isinstance(value, dict) and any(value.get(key) in ids for key in ('sessionId', 'session_id', 'rootSessionId', 'ownerSessionId'))
+
+
+def _safe(path):
+    """No symlink ancestor, including an otherwise in-root symlink."""
+    path = Path(path).absolute()
+    for part in (*reversed(path.parents), path):
+        if part.is_symlink():
+            raise ValueError('This chat contains a symbolic link. Remove the link before deleting the chat; its files were preserved.')
+    return path
+
+
+def _inventory(path):
+    path = _safe(path)
+    if not path.exists():
+        return None
+    rows = []
+    def visit(item):
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise ValueError('This chat contains a symbolic link or special file. Its files were preserved.')
+        if info.st_dev != path.stat().st_dev:
+            raise ValueError('This chat contains a mounted filesystem. Its files were preserved.')
+        rows.append([str(item.relative_to(path)), info.st_ino, info.st_size if item.is_file() else 0, info.st_mtime_ns, item.is_file()])
+        if item.is_dir():
+            for child in sorted(item.iterdir()):
+                visit(child)
+    visit(path)
+    return {'path': str(path), 'device': path.stat().st_dev, 'inode': path.stat().st_ino,
+            'stamp': hashlib.sha256(_json(rows).encode()).hexdigest(),
+            'fileCount': sum(1 for row in rows if row[4]), 'fileBytes': sum(row[2] for row in rows)}
+
+
+def _scope(app, sid):
+    row = app._session(sid)
+    if not is_managed(row):
+        raise ValueError('Only chats created without a workspace can be deleted. Archive this workspace chat instead.')
+    folder = Path(row.get('workspace', '')).absolute()
+    marker = metadata(folder)
+    if marker is None or folder != app.data_dir.resolve()/'chats'/marker['id']/'files':
+        raise ValueError(UNOWNED)
+    root = folder.parent
+    _safe(root/'managed-chat.json')
+    native_id = row.get('nativeIdentity') or row.get('runtimeSessionId') or row['id']
+    from .session_navigation import is_top_level
+    if native_id != marker['id'] or not is_top_level(row):
+        raise ValueError('Delete the managed conversation that owns this worker instead.')
+    sessions = [item for item in app.state['sessions'] if item.get('workspace') == str(folder)]
+    ids = {row['id'], marker['id']}
+    for item in sessions:
+        if item['id'] != row['id'] and is_top_level(item):
+            raise ValueError('Another conversation uses this chat folder. Archive it instead; no files were removed.')
+        ids.update(filter(None, (item['id'], item.get('nativeIdentity'), item.get('runtimeSessionId'))))
+    for item in app.state['sessions']:
+        if item.get('parentId') in ids and not is_top_level(item) and item.get('workspace') != str(folder):
+            raise ValueError('A worker uses a separate folder. Archive this chat until that worker is detached.')
+    return row, marker, sessions, ids
+
+
+def _idle(app, sessions, ids):
+    if app.recall.task and not app.recall.task.done():
+        raise ValueError('Wait for history indexing to finish before deleting this chat.')
+    for row in sessions:
+        if row.get('naming', {}).get('status') == 'working':
+            raise ValueError(BUSY)
+        if row.get('status') in ACTIVE or row.get('configurationBusy') or row.get('_deleting') or row.get('ownership', {}).get('status') in {'blocked','yielding','yielded','yield-failed','taking-over'}:
+            raise ValueError(BUSY)
+        if any(item.get('status') in ACTIVE or item.get('persistent') and item.get('status') == 'idle' for item in row.get('workers', [])):
+            raise ValueError(BUSY)
+        if any(item.get('status') == 'pending' for item in row.get('approvals', []) + row.get('questions', [])):
+            raise ValueError(BUSY)
+        if row.get('worktrees') or row.get('worktreeHandoffs') or row.get('workingDirectory') not in {None, row.get('workspace')}:
+            raise ValueError('This chat has a separate worktree. Archive it instead; external worktree files are preserved.')
+    # Scheduling can create new conversations. Until its ownership is explicitly
+    # detached, refuse instead of deleting an independent destination or replaying.
+    for record in app.schedules.store.list():
+        if record.get('sessionId') in ids and record.get('status') != 'cancelled':
+            raise ValueError('Cancel this chat’s schedules before deleting it, or archive the chat.')
+    from amplifier_scheduling.store import ACTIVE_RUNS
+    for encoded, in app.schedules.store.db.execute('SELECT value FROM schedule_runs'):
+        run = json.loads(encoded)
+        if run.get('sessionId') in ids and run.get('phase') in ACTIVE_RUNS:
+            raise ValueError(BUSY)
+    journal = app.operations.journal
+    with journal.lock:
+        for encoded, in journal.db.execute('SELECT value FROM operations WHERE session_id IN ('+','.join('?'*len(ids))+')', tuple(ids)):
+            if json.loads(encoded).get('state', json.loads(encoded).get('status')) in ACTIVE | {'outcome_unknown'}:
+                raise ValueError(BUSY)
+    if 'smart_tool_operations' in _tables(app.db):
+        for encoded, in app.db.execute('SELECT value FROM smart_tool_operations'):
+            item = json.loads(encoded)
+            if _owned(item, ids) and item.get('status', item.get('phase')) in ACTIVE:
+                raise ValueError(BUSY)
+    if (_owned(app.state.get('voice'), ids) and app.state['voice'].get('status') not in {'disconnected','error'}) or any(_owned(item, ids) for item in app.state.get('voice', {}).get('calls', [])):
+        raise ValueError(BUSY)
+
+
+def _paths(app, marker, sessions, ids):
+    folder = Path(marker['workspace'])
+    project = project_slug(folder)
+    native = _safe(amplifier_home()/'projects'/project/'sessions')
+    paths = [folder.parent]
+    native_ids = {marker['id']}
+    native_meta = {}
+    if native.exists():
+        for directory in native.iterdir():
+            # Foundation keeps stable metadata locks beside session directories.
+            # They contain no chat content and must keep their lock inode.
+            if directory.name.startswith('.') and directory.name.endswith('.metadata.lock'):
+                identity = directory.name[1:-len('.metadata.lock')]
+                validate_id(identity)
+                if not _safe(directory).is_file() or not (native/identity).is_dir():
+                    raise ValueError(UNOWNED)
+                continue
+            validate_id(directory.name)
+            _safe(directory)
+            if not directory.is_dir():
+                raise ValueError(UNOWNED)
+            meta_path = directory/'metadata.json'
+            if meta_path.exists():
+                info = json.loads(_safe(meta_path).read_text())
+                if info.get('working_dir', info.get('workspace')) != str(folder):
+                    raise ValueError(UNOWNED)
+                native_meta[directory.name] = info
+            elif directory.name not in ids:
+                raise ValueError(UNOWNED)
+            native_ids.add(directory.name)
+        for identity, info in native_meta.items():
+            seen = {identity}
+            while identity != marker['id']:
+                identity = native_meta.get(identity, {}).get('parent_id')
+                if not identity or identity in seen:
+                    raise ValueError('Unrelated history uses this folder. Archive the chat instead; its history was preserved.')
+                seen.add(identity)
+        paths.extend(native/identity for identity in native_ids)
+    ids.update(native_ids)
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    for identity in ids:
+        validate_id(identity)
+        paths.append(app.data_dir/'sessions'/identity)
+    for identity in native_ids:
+        store = SharedSessionStore(folder, identity)
+        _safe(store.checkpoint_path)
+        if store.checkpoint_path.exists():
+            store.read()  # validates workspace/session identity before deletion
+            paths.append(store.checkpoint_path)
+    ci_root = os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', '').strip()
+    if ci_root:
+        ci = _safe(Path(ci_root).expanduser().absolute()/project/'sessions')
+        if ci != native:
+            # Only this chat's native IDs; a foreign capture directory is a blocker.
+            if ci.exists() and any(item.name not in native_ids for item in ci.iterdir()):
+                raise ValueError('Unexpected capture history uses this folder. Its files were preserved.')
+            paths.extend(ci/identity for identity in native_ids)
+    return list(dict.fromkeys(paths)), project, native_ids
+
+
+def _scrub_local(record, ids, artifacts):
+    result = copy.deepcopy(record)
+    for key in ('drafts', 'attachments', 'canvasTabs'):
+        value = result.get(key)
+        if isinstance(value, dict):
+            result[key] = {k:v for k,v in value.items() if k not in ids}
+    if result.get('selectedSessionId') in ids:
+        result['selectedSessionId'] = None
+        result['selectedWorkspaceId'] = None
+        result['canvas'] = {}
+        result['view'] = {**result.get('view', {}), 'draft': '', 'panel': None}
+    if result.get('canvas', {}).get('id') in artifacts or _owned(result.get('canvas'), ids):
+        result['canvas'] = {}
+    for key in ('canvasViews', 'canvasTabs'):
+        if key in result:
+            result[key] = _prune(result[key], ids, artifacts)
+    return result
+
+
+def _prune(value, ids, artifacts):
+    if isinstance(value, list):
+        return [_prune(row, ids, artifacts) for row in value if not _owned(row, ids) and not (isinstance(row, dict) and row.get('id') in artifacts) and not (isinstance(row, str) and row in ids | artifacts)]
+    if isinstance(value, dict):
+        return {key: _prune(item, ids, artifacts) for key, item in value.items() if key not in ids and key not in artifacts and key.partition(':')[-1] not in artifacts}
+    return None if isinstance(value, str) and value in ids | artifacts else value
+
+
+def scrub_state(state, plan):
+    ids, artifacts = set(plan['ids']), set(plan['artifactIds'])
+    state['sessions'] = [row for row in state.get('sessions', []) if row['id'] not in ids and row.get('workspace') != plan['workspace']]
+    state['pinnedSessionIds'] = [sid for sid in state.get('pinnedSessionIds', []) if sid not in ids]
+    library = state.get('conversationOrganization', {})
+    library['archived'] = {sid:v for sid,v in library.get('archived', {}).items() if sid not in ids}
+    for row in library.get('collections', []):
+        row['sessionIds'] = [sid for sid in row['sessionIds'] if sid not in ids]
+    state['canvasArtifacts'] = [row for row in state.get('canvasArtifacts', []) if row.get('id') not in artifacts]
+    for key in ('runtimeControl', 'events', 'canvasApps', 'smartTools'):
+        if key in state:
+            state[key] = _prune(state[key], ids, artifacts)
+    state['events'] = [row for row in state.get('events', []) if not _mentions(row, ids)]
+    for key, value in _scrub_local(state, ids, artifacts).items():
+        if key in ('selectedSessionId', 'selectedWorkspaceId', 'view', 'canvas', 'canvasTabs', 'canvasViews'):
+            state[key] = value
+
+
+def _app_rows(app, ids):
+    rows = []
+    for table in ('conversation_shares', 'questions', 'output_records'):
+        if table in _tables(app.db):
+            rows += [[table, identity, json.loads(value)] for identity, value in app.db.execute('SELECT id,value FROM '+table+' WHERE session_id IN ('+','.join('?'*len(ids))+')', tuple(ids))]
+    if 'smart_tool_operations' in _tables(app.db):
+        rows += [['smart_tool_operations', identity, json.loads(value)] for identity, value in app.db.execute('SELECT id,value FROM smart_tool_operations') if _owned(json.loads(value), ids)]
+    return rows
+
+
+def _resources(app, removed_values, retained):
+    from .resource_files import references, retained_references
+    from .state_storage import resource
+    def expand(pending):
+        seen = set()
+        while pending:
+            identity = pending.pop()
+            if identity in seen:
+                continue
+            if not re.fullmatch('[a-f0-9]{64}', identity):
+                raise ValueError('An artifact reference is invalid. Its files were preserved.')
+            seen.add(identity)
+            pending.extend(references(resource(app.db, identity)))
+        return seen
+    candidates = expand(list(references(removed_values)))
+    if not candidates:
+        return []
+    # Owned DB rows are omitted explicitly; other durable stores keep references.
+    retained_values = [retained]
+    tables = _tables(app.db)
+    for table in ('client_views', 'smart_tool_operations', 'conversation_shares', 'output_records'):
+        if table in tables:
+            retained_values.extend(json.loads(value) for value, in app.db.execute('SELECT value FROM '+table) if value not in app._delete_removed_values)
+    kept = expand(list(references(retained_values)))
+    return sorted(candidates - kept)
+
+
+def plan(app, sid):
+    row, marker, sessions, ids = _scope(app, sid)
+    paths, project, native_ids = _paths(app, marker, sessions, ids)
+    artifacts = [item for item in app.state.get('canvasArtifacts', []) if _owned(item, ids)]
+    artifact_ids = [item['id'] for item in artifacts]
+    owned_rows = _app_rows(app, ids)
+    provisional = {'ids': sorted(ids), 'workspace': marker['workspace'], 'artifactIds': artifact_ids}
+    retained = copy.deepcopy(app._state)
+    scrub_state(retained, provisional)
+    retained_clients = [_scrub_local(value, ids, set(artifact_ids)) for value in app.clients.records.values()]
+    values = [sessions, artifacts, [item[2] for item in owned_rows], [value for value in app.clients.records.values() if value.get('selectedSessionId') in ids]]
+    # Resource graph retention is evaluated using scrubbed client values.
+    removed_encoded = set()
+    for table, identity, _ in owned_rows:
+        removed_encoded.add(app.db.execute('SELECT value FROM '+table+' WHERE id=?', (identity,)).fetchone()[0])
+    removed_encoded.update(value for value, in app.db.execute('SELECT value FROM client_views'))
+    app._delete_removed_values = removed_encoded
+    try:
+        resources = _resources(app, values, [retained, retained_clients])
+    finally:
+        del app._delete_removed_values
+    paths.extend(app.data_dir/'artifacts'/(identity+'.json') for identity in resources)
+    # Attachments are shared globally. Preserve references in other chat records,
+    # immutable bodies and native transcripts, including independent copies.
+    encoded = _json(values)
+    candidates = {identity for identity in re.findall(r'(?<![a-f0-9])[a-f0-9]{32}(?![a-f0-9])', encoded)
+                  if (app.data_dir/'attachments'/identity).exists()}
+    retained_tables = []
+    for table, column in (('feedback_attachments','metadata'), ('feedback_requests','payload'), ('feedback_requests','receipt'), ('feedback_followups','payload'), ('feedback_followups','receipt')):
+        if table in _tables(app.db):
+            retained_tables.extend(value for value, in app.db.execute('SELECT '+column+' FROM '+table))
+    keep_text = _json([retained, retained_clients, retained_tables])
+    shared = {identity for identity in candidates if identity in keep_text}
+    if candidates - shared:
+        for source in (amplifier_home()/'projects').glob('*/sessions/*'):
+            if source in paths:
+                continue
+            for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'unified/view.json'):
+                path = _safe(source/name)
+                if path.exists():
+                    content = path.read_text(errors='replace')
+                    shared.update(identity for identity in candidates if identity in content)
+        for identity, value in app.db.execute('SELECT id,value FROM state_resources'):
+            if identity not in resources:
+                from .resource_files import resolve
+                content = _json(resolve(app.db, identity, json.loads(value)))
+                shared.update(candidate for candidate in candidates if candidate in content)
+    attachments = sorted(candidates-shared)
+    for identity in attachments:
+        from .attachments import metadata as attachment_metadata
+        attachment_metadata(app.data_dir, identity)
+        paths.append(app.data_dir/'attachments'/identity)
+    entries = [entry for path in paths if (entry := _inventory(path))]
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    coordination = [str(SharedSessionStore(marker['workspace'], identity).checkpoint_path.with_name('session.lock')) for identity in sorted(native_ids)]
+    return {**provisional, 'id': sid, 'title': row['title'], 'rootId': marker['id'], 'project': project, 'coordinationLocks': coordination,
+        'nativeIds': sorted(native_ids), 'paths': entries,
+        'contentStamp': hashlib.sha256(_json([sessions, artifacts, owned_rows]).encode()).hexdigest(), 'resourceIds': resources, 'attachmentIds': attachments,
+        'rows': [[table, identity] for table, identity, _ in owned_rows],
+        'summary': {'conversationCount': 1, 'workerCount': max(0, len(native_ids)-1),
+                    'fileCount': sum(item['fileCount'] for item in entries), 'fileBytes': sum(item['fileBytes'] for item in entries),
+                    'attachmentCount': len(attachments), 'artifactCount': len(artifact_ids),
+                    'shareCount': sum(table == 'conversation_shares' for table, _, _ in owned_rows)}}
+
+
+def _cleanup_db(db, plan):
+    ids, tables = set(plan['ids']), _tables(db)
+    for table, identity in plan['rows']:
+        if table in tables:
+            if table == 'output_records' and 'output_comments' in tables:
+                db.execute('DELETE FROM output_comments WHERE output_id=?', (identity,))
+            db.execute('DELETE FROM '+table+' WHERE id=?', (identity,))
+    for identity in plan['resourceIds']:
+        db.execute('DELETE FROM state_resources WHERE id=?', (identity,))
+    for identity, value in db.execute('SELECT id,value FROM client_views').fetchall() if 'client_views' in tables else []:
+        db.execute('UPDATE client_views SET value=? WHERE id=?', (_json(_scrub_local(json.loads(value), ids, set(plan['artifactIds']))), identity))
+    for identity, value in db.execute('SELECT id,receipt FROM commands').fetchall():
+        if _mentions(json.loads(value), ids):
+            db.execute('UPDATE commands SET receipt=? WHERE id=?', (_json({'accepted': False, 'deleted': True, 'error': 'This conversation was permanently deleted. Its work was not replayed.'}), identity))
+    for table, column in (('output_receipts','value'), ('feedback_requests','receipt'), ('feedback_followups','receipt')):
+        if table not in tables:
+            continue
+        for identity, value in db.execute('SELECT id,'+column+' FROM '+table).fetchall():
+            if _mentions(json.loads(value), ids | set(plan['artifactIds'])):
+                db.execute('UPDATE '+table+' SET '+column+'=? WHERE id=?', (_json({'deleted': True}), identity))
+
+
+def _cleanup_aux(home, plan):
+    ids = plan['ids']; marks = ','.join('?'*len(ids))
+    def connect(path):
+        _safe(path)
+        return sqlite3.connect(path, timeout=10)
+    operation = home/'operations.sqlite3'
+    if operation.exists():
+        with connect(operation) as db:
+            for table in ('operation_events', 'operation_output'):
+                db.execute('DELETE FROM '+table+' WHERE operation_id IN (SELECT id FROM operations WHERE session_id IN ('+marks+'))', ids)
+            db.execute('DELETE FROM operations WHERE session_id IN ('+marks+')', ids)
+            if 'operation_requests' in _tables(db):
+                db.execute('DELETE FROM operation_requests WHERE session_id IN ('+marks+')', ids)
+    recall = home/'recall.sqlite3'
+    if recall.exists():
+        with connect(recall) as db:
+            db.execute('DELETE FROM sources WHERE id IN ('+marks+')', ids)
+            db.execute('DELETE FROM messages WHERE session_id IN ('+marks+')', ids)
+            memories = [row[0] for row in db.execute("SELECT id FROM memories WHERE (scope='task' AND target IN ("+marks+")) OR (scope='workspace' AND target=?)", [*ids, plan['workspace']])]
+            for identity in memories:
+                db.execute('DELETE FROM memory_versions WHERE id=?', (identity,))
+                db.execute('DELETE FROM memories WHERE id=?', (identity,))
+            for identity, encoded in db.execute('SELECT id,result FROM memory_receipts').fetchall():
+                if _mentions(json.loads(encoded), set(ids+memories)):
+                    db.execute('UPDATE memory_receipts SET result=? WHERE id=?', (_json({'deleted':True}), identity))
+    schedules = home/'schedules.sqlite3'
+    if schedules.exists():
+        with connect(schedules) as db:
+            db.execute('DELETE FROM schedule_runs WHERE session_id IN ('+marks+')', ids)
+            db.execute('DELETE FROM schedules WHERE session_id IN ('+marks+')', ids)
+            for identity, encoded in db.execute('SELECT id,result FROM schedule_commands').fetchall():
+                if _mentions(json.loads(encoded), set(ids)):
+                    db.execute('UPDATE schedule_commands SET result=? WHERE id=?', (_json({'deleted': True}), identity))
+    diagnostics = home/'diagnostics'/'events.sqlite3'
+    if diagnostics.exists():
+        with connect(diagnostics) as db:
+            db.execute('DELETE FROM deliveries WHERE record_id IN (SELECT id FROM records WHERE session IN ('+marks+') OR workspace=?)', [*ids, plan['workspace']])
+            db.execute('DELETE FROM records WHERE session IN ('+marks+') OR workspace=?', [*ids, plan['workspace']])
+            for path, in db.execute('SELECT path FROM captures').fetchall():
+                if any(Path(path).is_relative_to(item['path']) for item in plan['paths']):
+                    db.execute('DELETE FROM captures WHERE path=?', (path,))
+
+
+def _hold(plan):
+    from amplifier_foundation.session.shared_state import SharedSessionStore
+    held = []
+    try:
+        for identity in plan['nativeIds']:
+            store = SharedSessionStore(plan['workspace'], identity)
+            _safe(store.checkpoint_path)
+            held.append(store.acquire(app='amplifier-unified', operation='managed-chat-delete'))
+        return held
+    except Exception:
+        for item in reversed(held):
+            item.release()
+        raise ValueError('Another application owns this conversation. Close it there before deleting this chat.') from None
+
+
+class _RecoveryLock:
+    """Reacquire an existing stable lock after its workspace was quarantined."""
+    def __init__(self, path):
+        import fcntl
+        self.fd = os.open(_safe(path), os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(self.fd)
+            raise
+
+    def release(self):
+        import fcntl
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+
+
+def _recovery_hold(plan):
+    # SharedSessionStore requires an existing workspace. Recreating the deleted
+    # workspace just to acquire its lock would reintroduce resume/import paths.
+    held = []
+    try:
+        for path in plan['coordinationLocks']:
+            held.append(_RecoveryLock(path))
+        return held
+    except BaseException:
+        for item in reversed(held):
+            item.release()
+        raise
+
+
+def _done_value(plan):
+    return _json({key:plan[key] for key in ('id','ids','rootId','workspace','project')})
+
+
+def _stage(plan):
+    # Called under the app action lock. Content-addressed resource creation can
+    # now safely create a new original path while old bytes purge off-loop.
+    for item in plan['paths']:
+        path = _safe(item['path'])
+        target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
+        current = target if target.exists() else path
+        if not current.exists():
+            continue
+        info = current.stat()
+        if (info.st_dev, info.st_ino) != (item['device'], item['inode']):
+            raise ValueError('A chat folder changed during deletion; remaining files were preserved.')
+        if current == path:
+            os.rename(path, target)
+
+
+def _purge(home, plan):
+    _stage(plan)  # idempotent on restart; never replaces a newly created file
+    for item in plan['paths']:
+        path = Path(item['path'])
+        target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
+        if not target.exists():
+            continue
+        info = target.stat()
+        if (info.st_dev, info.st_ino) != (item['device'], item['inode']):
+            raise ValueError('A chat folder changed during deletion; remaining files were preserved.')
+        _inventory(target)
+        if target.is_dir():
+            if not shutil.rmtree.avoids_symlink_attacks:
+                raise ValueError('This host cannot safely remove chat folders.')
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    _cleanup_aux(home, plan)
+
+
+def recover(home, db, state):
+    """Resume only already-confirmed plans, before any saved view can reappear."""
+    initialize(db)
+    for plan_value, in db.execute("SELECT value FROM managed_deletions WHERE phase='confirmed'").fetchall():
+        value = json.loads(plan_value)
+        scrub_state(state, value)
+        _cleanup_db(db, value)
+        db.execute('UPDATE state SET value=? WHERE id=1', (_json(state),))
+        db.commit()
+        held = []
+        try:
+            held = _recovery_hold(value)
+            _purge(Path(home), value)
+        except (OSError, ValueError, sqlite3.Error):
+            continue  # durable tombstone still prevents resume/reimport/replay
+        finally:
+            for item in reversed(held):
+                item.release()
+        db.execute("UPDATE managed_deletions SET phase='done', value=? WHERE id=?", (_done_value(value), value['id']))
+        db.commit()
+
+
+def _read_plan(home, state, clients, sid):
+    db = sqlite3.connect(home/'app.sqlite3')
+    try:
+        db.execute('BEGIN')
+        context = SimpleNamespace(data_dir=home, db=db, state=state, _state=state,
+            clients=SimpleNamespace(records=clients))
+        context._session = lambda identity: next(row for row in state['sessions'] if row['id'] == identity)
+        return plan(context, sid)
+    finally:
+        db.close()
+
+
+async def reviewed_plan(app, sid):
+    async with app.lock:
+        _, _, sessions, ids = _scope(app, sid)
+        _idle(app, sessions, ids)
+        state, clients = copy.deepcopy(app._state), copy.deepcopy(app.clients.records)
+    return await asyncio.to_thread(_read_plan, app.data_dir, state, clients, sid)
+
+
+async def dispatch(app, action, args, origin, include_state):
+    from .service import AppError
+    sid = args['id']
+    held = []
+    fenced_ids = set()
+    try:
+        async with app.lock:
+            if action == 'session.delete':
+                saved = app.db.execute('SELECT token,phase,value FROM managed_deletions WHERE id=?', (sid,)).fetchone()
+                if not saved or saved[0] != args.get('confirmationToken'):
+                    raise ValueError('Review this chat with session.deletePreview before confirming deletion.')
+                value = json.loads(saved[2])
+                if saved[1] in {'confirmed', 'done'}:
+                    return {'accepted': True, 'result': {'id':sid, 'deleted':True, 'cleanupPending':saved[1]=='confirmed'}, **({'state':app.browser_state()} if include_state else {})}
+                if value['expiresAt'] < time.time():
+                    raise ValueError('The deletion preview expired. Review this chat again.')
+        current = await reviewed_plan(app, sid)
+        async with app.lock:
+            # State may have changed while file enumeration yielded. The next
+            # confirmed preview also rechecks the full scope and byte stamps.
+            _, _, sessions, ids = _scope(app, sid)
+            _idle(app, sessions, ids)
+            ids = set(current['ids'])
+            if hashlib.sha256(_json([sessions, [item for item in app.state.get('canvasArtifacts', []) if _owned(item, ids)], _app_rows(app, ids)]).encode()).hexdigest() != current['contentStamp']:
+                raise ValueError('The chat changed during review. Review it again.')
+            if action == 'session.deletePreview':
+                value = {**current, 'token': uuid.uuid4().hex, 'expiresAt':time.time()+600}
+                app.db.execute('INSERT OR REPLACE INTO managed_deletions VALUES (?,?,?,?)', (sid,value['token'],'preview',_json(value)))
+                app.db.commit()
+                result = {key:value[key] for key in ('id','title','expiresAt','summary')}
+                result.update(confirmationToken=value['token'],
+                    description='Permanently delete this chat, its managed files, saved history, and unshared attachments and artifacts. Published links from this chat stop working.',
+                    preserved=['Independent copies and files saved outside this chat', 'Separately saved global memories, exports, and existing backups'])
+                return {'accepted':True, 'result':result}
+            if current != {key:value[key] for key in current}:
+                raise ValueError('The chat changed since this preview. Review it again before deleting.')
+            for identity in current['ids']:
+                app.canvas_views.guard_transition('session.delete', {'id': identity})
+            # Admission fence takes effect before awaiting worker retirement.
+            fenced_ids = set(current['ids'])
+            for row in app.state['sessions']:
+                if row['id'] in fenced_ids:
+                    row['_deleting'] = True
+        for identity in current['ids']:
+            task = app.warmup.pending.get(identity)
+            if task:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if app.runtime:
+                await app.runtime.stop(identity)
+        held = await asyncio.to_thread(_hold, value)
+        # A runtime may checkpoint during retirement. Any changed content needs
+        # a fresh user preview; stable shared locks keep other hosts out now.
+        for item in value['paths']:
+            if await asyncio.to_thread(_inventory, item['path']) != item:
+                raise ValueError('The chat changed while closing its runtime. Review it again before deleting.')
+        if app.operations.pending:
+            await asyncio.gather(*list(app.operations.pending), return_exceptions=True)
+        async with app.diagnostics.flush_lock:
+            app.diagnostics.pending = [item for item in app.diagnostics.pending if item[3] not in current['ids'] and item[4] != current['workspace']]
+        async with app.lock:
+            final_revision = app.state['revision']
+            final_state, final_clients = copy.deepcopy(app._state), copy.deepcopy(app.clients.records)
+            for row in final_state['sessions']:
+                row.pop('_deleting', None)
+        final_plan = await asyncio.to_thread(_read_plan, app.data_dir, final_state, final_clients, sid)
+        async with app.lock:
+            if app.state['revision'] != final_revision or final_plan != current:
+                raise ValueError('The chat or shared files changed during confirmation. Review deletion again.')
+            app.db.execute("UPDATE managed_deletions SET phase='confirmed' WHERE id=?", (sid,))
+            app.db.commit()  # deletion authorization survives process interruption
+            app._deleted_session_ids.update(value['ids'])
+            scrub_state(app._state, value)
+            for identity, record in list(app.clients.records.items()):
+                app.clients.records[identity] = _scrub_local(record, set(value['ids']), set(value['artifactIds']))
+                app.clients.dirty.add(identity)
+            _cleanup_db(app.db, value)
+            app.questions.store.version += 1
+            for path in list(app._view_cache):
+                if any(Path(path).is_relative_to(item['path']) for item in value['paths']):
+                    app._view_cache.pop(path, None)
+            app._save()
+            # Confirmed deletion stays durable even if staging is interrupted.
+            staging_error = None
+            try:
+                _stage(value)
+            except (OSError, ValueError) as exc:
+                staging_error = str(exc)
+            app._publish()
+        error = staging_error
+        try:
+            if not error:
+                await asyncio.to_thread(_purge, app.data_dir, value)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            error = str(exc)
+        async with app.lock:
+            if not error:
+                app.db.execute("UPDATE managed_deletions SET phase='done', value=? WHERE id=?", (_done_value(value), sid))
+                app.db.commit()
+            result = {'id':sid, 'deleted':True, 'cleanupPending':bool(error)}
+            if error:
+                result['warning'] = 'The chat is deleted, but some file cleanup is pending: '+error
+            return {'accepted':True, 'result':result, **({'state':app.browser_state()} if include_state else {})}
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        raise AppError(str(exc), 409) from None
+    finally:
+        for row in app.state['sessions']:
+            if row['id'] in fenced_ids:
+                row.pop('_deleting', None)
+        for item in reversed(held):
+            item.release()

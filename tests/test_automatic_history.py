@@ -399,7 +399,11 @@ async def test_hidden_chats_and_workspaces_are_not_resurrected_by_refresh_or_res
     await app.history.refresh()
     hidden_chat = next(row for row in native_rows(app) if row['nativeIdentity'] == 'hide-chat')
     hidden_workspace = next(row for row in app.state['workspaces'] if row.get('path') == str(tmp_path / 'hidden-workspace'))
-    await app.dispatch('session.delete', {'id': hidden_chat['id']})
+    # Compatibility with an already-hidden pre-upgrade registration. New
+    # workspace chats expose Archive; session.delete no longer hides history.
+    app.history.hide_session(hidden_chat)
+    app.state['sessions'].remove(hidden_chat)
+    app._save()
     await app.dispatch('workspace.remove', {'id': hidden_workspace['id']})
     await finish_actions(app)
     await app.history.refresh()
