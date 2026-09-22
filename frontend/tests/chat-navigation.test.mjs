@@ -204,3 +204,15 @@ test('subagent projection keeps complete counts and waits for changed searches a
  state.view.subagentHistory.index=1;assert.equal(subagentPage(state,parent).pending,true);
  const other={id:'different-root',subagentCount:5};assert.equal(subagentCount(state,other),5,'a previously browsed parent cannot hide the current parent’s workers');
 });
+
+
+test('managed chats are reachable without workspace rows and location filters cannot reuse a stale page',()=>{
+ const state={sessions:[{id:'managed',title:'My chat',workspace:'/app/chats/id/files',location:{kind:'managed'}},{id:'project',workspace:'/project',workspaceId:'project'}],workspaces:[{id:'project',path:'/project',available:true}],view:{navChatScope:'all'},selectedWorkspaceId:'project'};
+ assert.deepEqual(new Set(chatPage(state).items.map(row=>row.id)),new Set(['managed','project']));
+ assert.equal(chatPage(state).items.find(row=>row.id==='managed').workspaceLabel,'No workspace');
+ state.view.navLocationFilter='managed';const managed=chatPage(state);assert.deepEqual(managed.items.map(row=>row.id),['managed']);
+ state.chatNavigation=managed;state.library={bounded:true};state.view.navLocationFilter='all';
+ assert.equal(chatPage(state).pending,true);
+ state.library={};delete state.chatNavigation;state.view.navChatScope='workspace';
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['project']);
+});

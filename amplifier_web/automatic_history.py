@@ -11,7 +11,7 @@ import time
 import uuid
 
 from .session_files import amplifier_home, project_slug
-from .managed_chats import metadata as managed_metadata
+from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
@@ -273,6 +273,7 @@ class AutomaticHistory:
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
                 snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known)
+                managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return
                 async with self.service.lock:
@@ -293,7 +294,7 @@ class AutomaticHistory:
                             previous['available'] = row['available']
                             changed = True
                     for row in snapshot['workspaces']:
-                        if row.get('path') and managed_metadata(row['path']):
+                        if row.get('path') in managed_paths:
                             continue
                         unresolved_id = uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
                         if row.get('path') and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
@@ -349,7 +350,7 @@ class AutomaticHistory:
                                  s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
                     hidden = set(state.get('hiddenNativeSessions', []))
                     for row in snapshot['sessions']:
-                        managed = bool(row.get('workspace') and managed_metadata(row['workspace']))
+                        managed = row.get('workspace') in managed_paths
                         if managed:
                             row = {**row, 'workspaceId': None}
                         key = (row['nativeProject'], row['nativeIdentity'])
@@ -360,7 +361,7 @@ class AutomaticHistory:
                             previous = {'id': row['id'], 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
                                         'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
-                                        'workspaceAvailable': Path(row['workspace']).is_dir() if managed else workspaces.get(row['workspaceId'], {}).get('available', False),
+                                        'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False),
                                         'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
                                         'status': 'idle', 'messages': [], 'workers': [], 'approvals': [],
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
@@ -379,7 +380,7 @@ class AutomaticHistory:
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
-                                                    'workspaceAvailable': Path(row['workspace']).is_dir() if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
+                                                    'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
                             if row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual'):

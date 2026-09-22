@@ -39,7 +39,7 @@ class Management:
         rows=manager.provider_rows(workspace)
         async with self.service.lock:
             setup=self.service.state.setdefault('setup',{})
-            if setup.get('providersWorkspace')!=workspace:return
+            if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
             valid={row['id'] for row in rows if row.get('enabled',True)}
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
             for field in ('modelCatalogs','providerCatalogs'):
@@ -53,7 +53,7 @@ class Management:
                 return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'), 'loadedAt':self.provider_catalog.loaded_at.get(cache_key), **values}
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
+                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 # Only the exact configuration key may supply cached values.
                 entry=catalog_entry(cached,phase='ready' if self.provider_catalog.fresh(cache_key) else 'working')
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
@@ -69,7 +69,7 @@ class Management:
             if manager.catalog_key(args,workspace)!=key:return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
+                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
@@ -380,11 +380,11 @@ class Management:
             if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if action in {'providers.models','providers.schema'} and setup.get('providersWorkspace') not in {None,session['workspace']}:return
+                if action in {'providers.models','providers.schema'} and (setup.get('providersWorkspace') not in {None,session['workspace']} or (setup.get('providersLocation',{}).get('kind')=='managed')!=managed_draft):return
                 if command_id and action.startswith('providers.'):
                     key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
                     if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
-                if action=='providers.list' and setup.get('providersWorkspace')!=result.get('providersWorkspace'):
+                if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
                 setup.update(result)
                 if result.get('providerMetadata'):

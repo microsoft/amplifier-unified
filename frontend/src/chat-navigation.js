@@ -50,9 +50,10 @@ export function chatPage(state,workspace){
  if(view.navArchive&&view.navArchive!=='active')scope.archive=view.navArchive;
  if(view.navCollection)scope.collectionId=view.navCollection;
  const projection=state.chatNavigation;
- const saved=view.navChatPage,matches=saved&&Object.entries(scope).every(([key,value])=>saved[key]===value);
+ const sameLocation=value=>(value?.locationFilter||'all')===(scope.locationFilter||'all');
+ const saved=view.navChatPage,matches=saved&&sameLocation(saved)&&Object.entries(scope).every(([key,value])=>saved[key]===value);
  const requestedIndex=matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
- if(projection?.scope&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
+ if(projection?.scope&&sameLocation(projection.scope)&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};

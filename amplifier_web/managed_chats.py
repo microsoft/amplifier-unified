@@ -11,7 +11,7 @@ LOCATION = {"type": "object", "properties": {"kind": {"enum": ["workspace", "man
 
 
 def is_managed(value):
-    return isinstance(value, dict) and value.get("location", {}).get("kind") == "managed"
+    return isinstance(value, dict) and isinstance(value.get("location"), dict) and value["location"].get("kind") == "managed"
 
 
 def metadata(workspace):
@@ -23,7 +23,7 @@ def metadata(workspace):
         if str(uuid.UUID(path.parent.name)) != path.parent.name:
             return None
         value = json.loads((path.parent / "managed-chat.json").read_text())
-        if value.get("version") == 1 and value.get("id") == path.parent.name and value.get("workspace") == str(path):
+        if isinstance(value, dict) and value.get("version") == 1 and value.get("id") == path.parent.name and value.get("workspace") == str(path):
             return value
     except (OSError, ValueError, TypeError):
         pass
@@ -64,5 +64,8 @@ def allocate(home, identity, receipt):
     return str(files)
 
 
-def public_location(workspace):
-    return {"kind": "managed"} if metadata(workspace) else {"kind": "workspace"}
+def catalog_locations(snapshot):
+    """Resolve each managed native root once, off the server event loop."""
+    paths = {row.get('path') for row in snapshot.get('workspaces', [])}
+    paths.update(row.get('workspace') for row in snapshot.get('sessions', []))
+    return {path: Path(path).is_dir() for path in paths if path and metadata(path)}

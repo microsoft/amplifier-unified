@@ -85,3 +85,20 @@ test('provider aliases share one choice and model selection retains the correct 
  assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{instance:'astra',model:'astra-model'});
  await renderAct(async()=>root.unmount());
 });
+
+
+test('managed drafts do not retain a prior location default while discovery loads',async()=>{
+ const calls=[];let state={settings:{workspace:'/prior'},view:{newSessionDraft:{workspace:'/prior',bundle:'',selection:{}}},draftDefaults:{'["/prior",""]':{phase:'ready',bundle:'work',effective:{instance:'private',model:'workspace-model'},providers:[{id:'private',info:{defaults:{model:'workspace-model'}}}]}}};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
+ const render=()=>React.createElement(ModelControl,{state,act,working:false});
+ await renderAct(async()=>{root=create(render())});
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('workspace-model'));
+ state={...state,view:{newSessionDraft:{workspace:'',location:{kind:'managed'},bundle:'',selection:{}}}};
+ await renderAct(async()=>root.update(render()));
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('Loading model…'));
+ await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+ assert.deepEqual(calls.find(row=>row.name==='configuration.defaults').args,{workspace:'',bundle:'',location:{kind:'managed'}});
+ assert.deepEqual(calls.find(row=>row.name==='providers.list').args,{workspace:'',location:{kind:'managed'}});
+ assert.equal(calls.some(row=>row.name==='session.create'),false);
+ await renderAct(async()=>root.unmount());
+});

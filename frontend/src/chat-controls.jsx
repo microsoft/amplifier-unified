@@ -24,9 +24,10 @@ export function ModelControl({state,session,act,working}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  // A bundle change validates defaults in the background. Keep the current
  // workspace's resolved choices visible until the new result is ready.
+ const defaultsContext=JSON.stringify([setup.location?.kind||'workspace',setup.workspace]);
  const previousDefaults=useRef(null);
- if(isDraft&&defaults.phase==='ready')previousDefaults.current={workspace:setup.workspace,value:defaults};
- const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.workspace===setup.workspace?previousDefaults.current.value:defaults;
+ if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
+ const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
  const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
  const unavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
  const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState('');
