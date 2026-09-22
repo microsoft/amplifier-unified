@@ -76,6 +76,13 @@ Keep these catalog loops allocation-light: small per-row costs multiply across
 large libraries and every active client. The active-client performance gate
 exercises these paths with 22,915 sessions, four browsers, and a Terminal stream.
 
+Attached-client geometry updates (`navExpanded`, pinning, dimensions and Canvas
+control disclosure) save only the client's presentation and command receipt.
+They reuse unchanged catalog projections and notify only that client; they do
+not rewrite conversation or artifact storage. Pending runtime progress retains
+its normal scheduled publication. Mixed view changes, drafts, and legacy actions
+without an attached client continue through the existing shared action path.
+
 ## Shared actions and shell modules
 
 The `builtin.workspaces` and `builtin.chats` instances keep their public host,

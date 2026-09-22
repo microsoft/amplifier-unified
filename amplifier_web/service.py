@@ -1050,6 +1050,10 @@ class AppService:
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+            if action == 'view.update' and client_id is not None:
+                from .client_layout import accepts, update
+                if accepts(args['patch']):
+                    return update(self, args['patch'], command_id, fingerprint, include_state=include_state)
             if action == 'canvas.visibility':
                 from .canvas_visibility import update
                 return update(self, args, command_id, fingerprint, include_state=include_state)
