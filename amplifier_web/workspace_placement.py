@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import unicodedata
 import uuid
 
@@ -52,6 +53,20 @@ def _directory(service):
 
 def _revision(service):
     return hashlib.sha256(defaults(service).encode()).hexdigest()
+
+
+def _validate_created_directory(receipt):
+    """A placement receipt may need recovery before the app commits registration."""
+    path = Path(receipt['path'])
+    try:
+        info = path.lstat()
+        unchanged = (stat.S_ISDIR(info.st_mode)
+                     and [info.st_dev, info.st_ino] == receipt.get('directoryIdentity')
+                     and path.resolve(strict=True) == path)
+    except (OSError, RuntimeError):
+        unchanged = False
+    if not unchanged:
+        raise ValueError('The created folder changed. Inspect it before attaching it again.')
 
 
 def prepare(service, args):
@@ -102,6 +117,7 @@ def create(service, plan_id, command_id):
                 raise ValueError('This command already belongs to a different workspace plan.')
             if receipt['outcome'] != 'created':
                 raise ValueError('Workspace creation was interrupted. Inspect the destination and use existing folder; creation was not repeated.')
+            _validate_created_directory(receipt)
             return receipt
         # A browser retry can have a fresh transport command ID after a lost
         # acknowledgment. One reviewed plan still allocates at most one folder.
@@ -110,10 +126,7 @@ def create(service, plan_id, command_id):
             saved = json.loads(previous.read_text())
             if saved.get('outcome') != 'created':
                 raise ValueError('Workspace creation was interrupted. Inspect the destination before trying again.')
-            path = Path(saved['path'])
-            info = path.stat()
-            if path.is_symlink() or [info.st_dev, info.st_ino] != saved.get('directoryIdentity'):
-                raise ValueError('The created folder changed. Inspect it before attaching it again.')
+            _validate_created_directory(saved)
             atomic(receipt_path, saved)
             return saved
         if plan['configRevision'] != _revision(service):
