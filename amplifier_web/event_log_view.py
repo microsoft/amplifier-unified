@@ -285,10 +285,19 @@ class EventIndex:
         self.association_revision, self.association_cache = revision, result
         return result
 
-    def rows(self):
+    def rows(self, model_binding=None):
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
         app = [row for row in rows if row.get('_appModel')]
+        if model_binding:
+            for row in app:
+                binding = model_binding(row)
+                if binding and binding.get('kind') == 'llm':
+                    # The host completion can precede its lifecycle log flush.
+                    # Pair with its latest state, retaining native session IDs
+                    # here; full accounting metadata is joined later by ID.
+                    row.update({key: copy.deepcopy(binding[key]) for key in
+                                ('provider', 'model', 'startedAt', 'endedAt', 'phase', 'usage') if key in binding})
         pairs = []
         for row in rows:
             if row['kind'] != 'llm' or row.get('_appModel'):
@@ -380,7 +389,6 @@ class EventLogView:
             if not available:
                 continue
             indexes.append(index)
-            nodes.extend(index.rows())
             workers.update(index.children)
             queue.extend(index.children)
         while len(self.indexes) > max(64, len(seen)):
@@ -405,6 +413,8 @@ class EventLogView:
         bound_sessions.update(row.get('sessionId') for row in session.get('workers', []) if row.get('sessionId'))
         bindings = {model_key(row): row for row in accounting
                     if row.get('rootSessionId') == session['id'] and row.get('sessionId') in bound_sessions}
+        for index in indexes:
+            nodes.extend(index.rows(lambda row: bindings.get(model_key(row))))
         def call_key(row):
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))

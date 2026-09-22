@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -370,6 +371,114 @@ def test_live_completion_usage_survives_delayed_log_flush(source):
     node,=EventLogView(None).read(session)['nodes']
     assert node['phase']=='completed' and node['endedAt']==12
     assert node['usage']['totalTokens']==120 and node['usage']['costUsd']==.004
+
+
+@pytest.mark.parametrize('receipt_location', ['nodes', 'retiredUsageNodes'])
+def test_completed_receipts_pair_before_delayed_app_log_flush(source, receipt_location):
+    """Captured race: the last native response flushes before its app completion."""
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, start, end, inputs, outputs, cost in (
+        ('first', 1790114695.062343, 1790114703.596118, 25625, 401, .0110674),
+        ('last', 1790114704.501729, 1790114708.916924, 26075, 185, .0090629),
+    ):
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'turnId':'turn', 'producerId':'worker', 'revision':2, 'liveObservation':True,
+                'provider':'test', 'model':'fixture', 'phase':'completed',
+                'startedAt':start, 'endedAt':end, 'usage':{'inputTokens':inputs,
+                'outputTokens':outputs, 'totalTokens':inputs+outputs, 'costUsd':cost, 'costType':'reported'}}
+        calls.append(call)
+        append(path, 'llm:request', {'provider':'test', 'model':'fixture', 'raw':{'input':identity}}, start+.4)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+               'revision':1, 'endedAt':None, 'usage':{}}, start+.01)
+        append(path, 'llm:response', {'provider':'test', 'model':'fixture', 'usage':{
+               'input_tokens':inputs, 'output_tokens':outputs, 'cost_usd':cost}}, end-.003)
+        if identity == 'first':
+            append(path, 'llm:response', {**call, 'sessionId':'native'}, end+.001)
+    session['execution'] = {'nodes':[], 'turns':[{'id':'turn', 'anchorMessageId':'user'}],
+                            receipt_location:copy.deepcopy(calls)}
+    original = session['execution']
+    before = copy.deepcopy(original)
+    original_log = path.read_bytes()
+    original_capacity = usage_snapshot(session)
+    view = EventLogView(None)
+    for delayed in (True, False):
+        if not delayed:
+            append(path, 'llm:response', {**calls[-1], 'sessionId':'native'}, calls[-1]['endedAt']+.001)
+        for _ in range(2):
+            session['execution'] = view.read(session)
+            tree = session['execution']
+            assert [row['id'] for row in tree['nodes']] == ['first', 'last']
+            assert tree['aggregateUsage']['calls'] == 2
+            assert tree['aggregateUsage']['costUsd'] == pytest.approx(.0201303)
+            assert tree['aggregateUsage']['totalTokens'] == 52286
+            capacity = usage_snapshot(session)
+            assert capacity['receipts'] == original_capacity['receipts']
+            assert capacity['metrics'] == original_capacity['metrics']
+            for node in tree['nodes']:
+                assert node['requestDetail']['id'] == node['id']
+                assert json.loads(read_text(session, {**node['requestDetail'], 'complete':'true'})['value']) == {'input':node['id']}
+        if delayed:
+            # Projection must not upgrade the cached native evidence in place.
+            indexed = view.indexes[str(path)].nodes['last']
+            assert indexed['phase'] == 'running' and indexed['endedAt'] is None
+            assert indexed['usage'] == {} and path.read_bytes() == original_log
+    assert original == before
+
+
+def test_latest_accounting_pairing_keeps_parallel_calls_and_earlier_retry(source):
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, end in [('one', 12.01), ('two', 12.11)]:
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+                'startedAt':9, 'endedAt':end, 'phase':'completed',
+                'usage':{'inputTokens':4, 'outputTokens':2, 'totalTokens':6, 'costUsd':.01}}
+        calls.append(call)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'endedAt':None,
+               'phase':'running', 'usage':{}}, 9)
+    for request, end in [('retry', 11.5), ('one', 12), ('two', 12.1)]:
+        append(path, 'llm:request', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'raw':{'input':request}}, 10)
+        append(path, 'llm:response', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'status':'error' if request == 'retry' else 'ok', 'error':request+' details',
+               'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, end)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':calls}
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = {node['id']:node for node in session['execution']['nodes']}
+        assert set(nodes) == {'one', 'two', 'llm:native:retry'}
+        for identity, request in [('one','one'), ('two','two'), ('llm:native:retry','retry')]:
+            assert nodes[identity]['error'] == request+' details'
+            assert json.loads(read_text(session, {**nodes[identity]['requestDetail'], 'complete':'true'})['value']) == {'input':request}
+        assert session['execution']['aggregateUsage']['calls'] == 3
+        assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(.03)
+        assert usage_snapshot(session)['calls'] == 2
+        assert usage_snapshot(session)['metrics']['costUsd']['value'] == pytest.approx(.02)
+
+
+@pytest.mark.parametrize('field,value', [('rootSessionId','other'), ('sessionId','other'),
+                                        ('id','other'), ('kind','worker')])
+def test_model_pairing_does_not_borrow_unrelated_accounting(source, field, value):
+    session, path = source
+    call = {'id':'call', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+            'startedAt':10, 'endedAt':12, 'phase':'completed',
+            'usage':{'inputTokens':4, 'outputTokens':2, 'costUsd':.01}}
+    append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+           'endedAt':None, 'usage':{}}, 10)
+    append(path, 'llm:request', {'request_id':'native-call', 'provider':'test', 'model':'fixture'}, 10.1)
+    append(path, 'llm:response', {'request_id':'native-call', 'provider':'test', 'model':'fixture',
+           'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, 12)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':[{**call, field:value}]}
+    tree = EventLogView(None).read(session)
+    assert {node['id'] for node in tree['nodes']} == {'call', 'llm:native:native-call'}
+    node = next(node for node in tree['nodes'] if node['id'] == 'call')
+    assert node['endedAt'] is None and node['usage'] == {}
+    assert tree['aggregateUsage']['costUsd'] == pytest.approx(.01)
 
 
 def test_native_model_keeps_observed_identity_across_repeated_reads(source):
