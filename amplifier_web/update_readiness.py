@@ -1,4 +1,4 @@
-"""Confirm a replacement host through its listener, never a package probe.
+"""Confirm a replacement host through its listener and qualified installation.
 
 Identity is captured before this process can replace its installation. Restart
 receipts belong to one attempt; a healthy newer host does not retroactively
@@ -7,6 +7,7 @@ turn an old failed systemctl command into a successful command.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from importlib import metadata
 from pathlib import Path
@@ -47,9 +48,13 @@ def valid_target(value):
 
 def recovery_candidate(manager):
     state = manager.service.state['updates']
+    from .app_replacement import pending as replacement_pending, qualified
+    if replacement_pending(state):
+        target = state['pendingReplacement']
+        return copy.deepcopy(target) if valid_target(target) and qualified(target) else None
     pending = state.get('pendingRestart')
     if pending:
-        return dict(pending) if valid_target(pending) else None
+        return copy.deepcopy(pending) if valid_target(pending) else None
     # Older updaters erase the marker after systemd terminates their child.
     # Recover only that precise failure, corroborated by its validation receipt
     # and successful replacement probe. Never infer readiness from version alone.
@@ -101,7 +106,7 @@ def recovery_candidate(manager):
 
 def same_target(first, second):
     return bool(first and second and all(first.get(key) == second.get(key)
-                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest')))
+                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification')))
 
 
 async def confirm_readiness(manager, health, expected=None, command_id=None):
@@ -119,6 +124,13 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 or target.get('sourceInstanceId') == identity['instanceId']):
             return False
         selected = target.get('featureSelection')
+        if 'qualification' in target:
+            from .app_replacement import matches_running
+            try:
+                if not matches_running(manager, target):
+                    return False
+            except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
+                return False
         if selected:
             # Same app version/revision alone cannot attest an added feature.
             from .app_features import validate_selection
@@ -129,8 +141,27 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                     return False
             except (ValueError, OSError):
                 return False
+        from .app_replacement import pending as replacement_pending, verify_running
+        uncertain = replacement_pending(manager.service.state['updates'])
+        if uncertain:
+            try:
+                if not await verify_running(manager, target):
+                    return False
+            except (AttributeError, ValueError, OSError, RuntimeError, metadata.PackageNotFoundError):
+                return False
         async with manager.service.lock:
             state = manager.service.state['updates']
+            # The isolated import check awaited another process. A changed
+            # receipt or package inventory must never inherit its success.
+            if (not same_target(recovery_candidate(manager), target)
+                    or replacement_pending(state) != uncertain):
+                return False
+            if uncertain:
+                try:
+                    if not matches_running(manager, target):
+                        return False
+                except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
+                    return False
             manager.diagnostics.begin('application', target['revision'], target['attemptId'])
             if target.get('legacy'):
                 # Keep the historical failure in the receipt; this is current
@@ -150,7 +181,7 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 application.update(status='current', current=identity['version'])
             state['items'] = [application if row.get('id') == 'application' else row for row in state.get('items', [])]
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
-            state.update(phase='installed', pendingRestart=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
+            state.update(phase='installed', pendingRestart=None, pendingReplacement=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
                          installedAt=time.time(), error=None, detail=detail)
             if selected:
                 row = state.setdefault('featureResults', {}).setdefault(selected['requestId'], {})

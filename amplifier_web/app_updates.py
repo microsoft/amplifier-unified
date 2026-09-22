@@ -342,7 +342,17 @@ async def _activate(manager):
             validate_selection(manager, selected, extras)
             if components.installed_graph()!=host_graph:
                 raise ValueError('The serving components changed during activation; qualify a new feature candidate')
-        manager.service.state['updates'].update(phase='activating',detail='Installing the app update and restarting…')
+        replacement = {'version':validated['version'], 'revision':revision,
+            'attemptId':manager.diagnostics.state['attemptId'],
+            'sourceInstanceId':manager.running_identity['instanceId'], 'requestedAt':time.time()}
+        if graph is not None:
+            replacement['qualification'] = {'app':next(row for row in graph if row['name']=='amplifier-unified'),
+                'extras':extras, 'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])}
+        if selected:
+            replacement.update(featureSelection=selected, dependencyDigest=replacement['qualification']['dependencyDigest'])
+        # Persist this marker before uv can change the active environment. Every
+        # error, cancellation and process exit must retain the admission fence.
+        manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
         manager.service._publish()
     try:
         if selected:
@@ -361,25 +371,28 @@ async def _activate(manager):
                 raise ValueError('Installed components do not match the qualified application generation')
     except asyncio.CancelledError:
         if selected:
-            await record(manager, selected['requestId'], 'interrupted', detail='Installation was interrupted. Inspect the installation before any retry.')
-        await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')
+            await record(manager, selected['requestId'], 'interrupted', detail='Installation was interrupted and its outcome is unknown. Work remains paused until the qualified installation is verified on a new host.')
+        await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Its files may have changed; work remains paused. Repair the qualified installation and restart before verification.',
+                              detail='The replacement outcome is unknown. No installation or conversation work will be replayed.')
         raise
     except Exception as error:
         if selected:
-            await record(manager, selected['requestId'], 'error', detail='Feature replacement failed. The running host was retained; inspect update diagnostics before retrying.')
+            await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
         last=manager.diagnostics.state.get('latest',{})
         phase=last.get('phase','activation')
         if last.get('status')!='failed':
             from .update_diagnostics import exception_type
             manager.diagnostics.record(phase,'failed',errorType=exception_type(error))
-        await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained; review the diagnostic receipt before retrying.')
+        await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. Its files may have changed; work remains paused. Review the diagnostic receipt and repair the qualified installation before restarting.',
+                              detail='The replacement outcome is unknown. Package presence is not verified installation success.')
         return
     # Keep the work gate closed until this process exits. Publishing installed
     # here would permit a new conversation between the helper spawn and SIGTERM.
     manager.diagnostics.clear_failure()
-    await manager.publish(phase='activating',pendingApp=None,appAvailable=False,error=None,
+    await manager.publish(phase='activating',pendingApp=None,pendingReplacement=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
                         'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
+                        **({'qualification':replacement['qualification']} if 'qualification' in replacement else {}),
                         **({'featureSelection':selected,'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])} if selected else {})},detail='Application installed. Restarting the local host…')
     if selected:
         await record(manager, selected['requestId'], 'restart_pending', detail='Feature installed; awaiting the restarted host and exact component validation.')

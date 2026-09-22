@@ -93,7 +93,7 @@ def valid_restart_selection(target):
             and app.get('revision') == target.get('revision') and app['version'] == target.get('version')
             and isinstance(target.get('dependencyDigest'), str)
             and re.fullmatch('[a-f0-9]{64}', target['dependencyDigest']) is not None)
-    except (ValueError, TypeError):
+    except (AttributeError, ValueError, TypeError):
         return False
 
 
@@ -109,7 +109,7 @@ async def record(manager, request_id, phase, **details):
 
 def reconcile_requests(state):
     """An interrupted qualification is not replayed or marked installed."""
-    pending = state.get('pendingRestart') or state.get('pendingApp') or {}
+    pending = state.get('pendingReplacement') or state.get('pendingRestart') or state.get('pendingApp') or {}
     selected = pending.get('featureSelection') if isinstance(pending, dict) else None
     request_id = selected.get('requestId') if isinstance(selected, dict) else None
     rows = state.get('featureResults', {})

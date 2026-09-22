@@ -22,6 +22,28 @@ Application activation also verifies that the running host and the executable on
 
 ## Optional app features
 
+Before replacing an active app installation, the updater durably records
+`pendingReplacement`: the source process identity and exact qualified app,
+optional extras and dependency digest. This marker closes admission independently
+of the displayed error phase. Cancellation, failed replacement verification and
+process exits retain it; a package appearing on disk cannot satisfy installation
+or permit another feature request. Updates shows **Installation needs
+verification** and disables additional installs while this outcome is unknown.
+
+Successful replacement verification atomically converts the marker to the normal
+pending restart. If the process exits earlier, a healthy new host can reconcile a
+complete marker only by proving the exact app source/revision, extras, dependency
+graph and authenticated listener/data identity, and repeating the isolated
+package/import verification in that new host's interpreter. The receipt and
+installed inventory are rechecked after the probe before work resumes. This
+verification does not install packages or capture desktop content. The original process cannot
+acknowledge its own in-place replacement. Repair a damaged installation to the
+retained qualified candidate before restarting; no installer or task input is
+automatically replayed. An older `activating` application receipt with missing or
+invalid restart evidence stays blocked as unqualified replacement uncertainty.
+It cannot be cleared by inferred success or package presence; incomplete evidence
+requires operator qualification. Ecosystem rollback does not repair app code.
+
 **Settings → Desktop & browser** offers an explicit **Install native screen
 observation** action after checking the current host. The shared action is
 `updates.featureInstall` with `feature="native-desktop"` and the checked

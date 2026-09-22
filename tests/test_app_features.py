@@ -454,7 +454,9 @@ async def test_failed_replacement_probe_retains_host_and_records_feature_error(m
     await app_updates.activate(managed.manager)
     assert managed.service.state["updates"]["featureResults"]["request-one"]["phase"] == "error"
     assert not managed.service.state["updates"].get("pendingRestart")
-    assert not work_paused(managed.service.state)
+    assert managed.service.state["updates"].get("pendingReplacement")
+    assert work_paused(managed.service.state)
+    assert managed.manager.awaiting_restart()
     managed.restart.assert_not_awaited()
 
 
@@ -544,6 +546,7 @@ async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_re
     assert first["accepted"] and second["accepted"]
     assert len(scheduled) == 1 and scheduled[0]["phase"] == "queued"
     assert managed.calls == []
+    await service.close()
     reopened = AppService(service.data_dir, workspace=service.default_workspace)
     try:
         reopened.update_manager = UpdateManager(reopened)
@@ -720,10 +723,11 @@ async def test_malformed_feature_restart_marker_is_retired_on_startup_without_cr
     manager = UpdateManager(managed.service)
     managed.service.update_manager = manager
     state = managed.service.state["updates"]
-    assert state["phase"] == "interrupted"
+    assert state["phase"] == "activating"
     assert state["pendingRestart"] is None and state["pendingApp"] is None
+    assert state["pendingReplacement"]["unqualified"] is True
     assert state["featureResults"]["request-one"]["phase"] == "interrupted"
-    assert not manager.awaiting_restart() and not work_paused(managed.service.state)
+    assert manager.awaiting_restart() and work_paused(managed.service.state)
     assert managed.calls == []
     saved = json.loads(managed.service.db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])
     assert saved["updates"]["pendingRestart"] is None

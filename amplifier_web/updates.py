@@ -23,7 +23,8 @@ from .host.config import write_private
 
 def work_paused(state):
     updates = state.get('updates', {})
-    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart'))
+    from .app_replacement import pending
+    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
 
 
 def active_release(home):
@@ -378,9 +379,19 @@ class UpdateManager:
         from .update_readiness import running_identity,valid_target
         self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
+        from .app_replacement import pending as replacement_pending
+        # An older process may have died after replacing its files but before
+        # recording a restart target. Preserve uncertainty, never infer rollback.
+        if not replacement_pending(state) and not valid_target(state.get('pendingRestart')) and state.get('phase') == 'activating' and state.get('pendingApp'):
+            state['pendingReplacement'] = {'unqualified': True, 'detail': 'An older app replacement was interrupted without complete qualification evidence.'}
         restarted=state.get('pendingRestart')
         restart_repair=restarted is not None and not valid_target(restarted)
-        if restart_repair:
+        if replacement_pending(state):
+            if restart_repair:
+                state.update(pendingRestart=None, error='The saved restart receipt was invalid. No restart success was inferred; replacement uncertainty remains fenced.')
+            state.update(phase='activating', pendingApp=None,
+                         detail='Application replacement may have changed this installation. Work remains paused until a healthy new host proves the qualified app and dependencies. If evidence is incomplete, repair and qualify the installation before reopening admission.')
+        elif restart_repair:
             state.update(phase='interrupted',pendingRestart=None,pendingApp=None,
                          error='The saved restart receipt was invalid and has been retired. No restart success was inferred.',
                          detail='The interrupted restart was not acknowledged. Review the diagnostic receipt before retrying updates.')
@@ -429,7 +440,8 @@ class UpdateManager:
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates
         # another update; an actual pending handoff remains gated until verified.
-        return bool(self.service.state['updates'].get('pendingRestart') or
+        from .app_replacement import pending
+        return bool(pending(self.service.state['updates']) or self.service.state['updates'].get('pendingRestart') or
                     (self.readiness_task and not self.readiness_task.done() and recovery_candidate(self)))
 
     async def publish(self, **values):
