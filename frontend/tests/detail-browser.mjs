@@ -21,7 +21,7 @@ try{
  await first.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-message-id] p')?.textContent.length>5000);assert.ok((await first.innerText()).length>before.length);
  await page.getByRole('button',{name:'Load earlier activity',exact:true}).click();
  await page.locator('.a-execution-turn-line').first().click();await page.locator('.a-execution-node').first().waitFor();assert.equal(await page.locator('.a-execution-node').count(),200);
- const node=page.locator('.a-execution-node').first();await node.locator('.a-execution-line').first().click();await node.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.a-execution-node .a-execution-body')?.textContent.includes('x'.repeat(10000)));assert.ok((await node.innerText()).length>10000);
+ const node=page.locator('.a-execution-node').first();await node.locator('.a-execution-line').first().click();await node.getByRole('button',{name:'Show all 10,000 characters',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.a-execution-node .a-execution-body')?.textContent.includes('x'.repeat(10000)));assert.ok((await node.innerText()).length>10000);
  // New live revisions preserve explicitly requested earlier history.
  await page.evaluate(async()=>window.amplifier.dispatch('view.update',{patch:{notice:'fixture update'}}));assert.equal(await page.locator('[data-message-id]').count(),120);
  await page.screenshot({path:'/tmp/amplifier-browser-detail.png',fullPage:false});
