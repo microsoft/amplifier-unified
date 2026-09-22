@@ -485,3 +485,56 @@ def test_provider_retry_attempts_keep_unique_ids_and_their_own_error_details(sou
         if already_aliased and iteration == 0:
             # Recover the old bad projection without rewriting any native log.
             by_id['llm:native:first']['id'] = 'host-call'
+
+
+@pytest.mark.parametrize('phase', ['running', 'queued', 'retrying'])
+def test_later_observed_member_reopens_only_its_own_turn_summary(source, phase):
+    from amplifier_web.execution import ingest
+    session, path = source
+    session['status'] = 'working'
+    session['execution'] = {'turns':[
+        {'id':'finished', 'anchorMessageId':'user', 'phase':'completed', 'startedAt':1, 'endedAt':2},
+        {'id':'continuing', 'anchorMessageId':'user', 'phase':'running', 'startedAt':10}], 'nodes':[]}
+    for identity, turn, start, end in [('old','finished',1,2),('first','continuing',10,11)]:
+        call = {'id':identity, 'kind':'llm', 'sessionId':'native', 'turnId':turn,
+                'model':'fixture', 'startedAt':start, 'endedAt':end, 'phase':'completed'}
+        append(path, 'llm:response', call, end)
+    view = EventLogView(None)
+    session['execution'] = view.read(session)
+    assert session['execution']['turns'][1]['endedAt'] == 11
+    later = {'id':'later', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app', 'turnId':'continuing',
+             'model':'fixture', 'startedAt':12, 'phase':phase, 'liveObservation':True, 'revision':1}
+    ingest(session, later)
+    append(path, 'provider:request', later, 12)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        finished, continuing = session['execution']['turns']
+        assert finished['phase'] == 'completed' and finished['endedAt'] == 2
+        assert continuing['phase'] == 'running' and 'endedAt' not in continuing
+        assert continuing['startedAt'] == 10
+        assert session['status'] == 'working'
+    completed = {**later, 'phase':'completed', 'endedAt':15, 'revision':2}
+    ingest(session, completed)
+    append(path, 'llm:response', completed, 15)
+    session['execution'] = view.read(session)
+    assert session['execution']['turns'][1]['phase'] == 'completed'
+    assert session['execution']['turns'][1]['endedAt'] == 15
+
+
+@pytest.mark.parametrize('session_status,observed', [('working',False),('idle',True),('stopped',True),('error',True)])
+def test_unfinished_history_does_not_reopen_a_terminal_turn(source, session_status, observed):
+    session, path = source
+    session['status'] = session_status
+    earlier = {'id':'old', 'kind':'llm', 'sessionId':'native', 'turnId':'old-turn', 'model':'fixture',
+               'startedAt':10, 'endedAt':11, 'phase':'completed'}
+    orphan = {'id':'orphan', 'kind':'llm', 'sessionId':'native', 'turnId':'old-turn', 'model':'fixture',
+              'startedAt':12, 'phase':'running', 'liveObservation':observed}
+    session['execution'] = {'turns':[{'id':'old-turn', 'phase':'completed', 'endedAt':11}],
+                            'nodes':[earlier, orphan]}
+    append(path, 'llm:response', earlier, 11)
+    append(path, 'provider:request', orphan, 12)
+    session['execution'] = EventLogView(None).read(session)
+    turn, = session['execution']['turns']
+    assert turn['phase'] == 'completed' and turn['endedAt'] == 11
+    assert session['execution']['nodes'][1]['phase'] == 'recorded'
+    assert session['status'] == session_status

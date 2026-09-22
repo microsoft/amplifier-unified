@@ -541,7 +541,12 @@ class EventLogView:
             starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
             ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
             if starts:turn['startedAt'] = min(starts)
-            if ends and not any(row.get('phase') in {'running', 'working', 'retrying'} and not row.get('endedAt') for row in members):
+            if any(row.get('phase') in LIVE_PHASES and not row.get('endedAt') for row in members):
+                # A later observed call can continue this input after an earlier
+                # projection saw only completed members. Discard that old end.
+                turn['phase'] = 'running'
+                turn.pop('endedAt', None)
+            elif ends:
                 turn.update(endedAt=max(ends), phase='completed')
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
