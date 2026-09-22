@@ -2479,6 +2479,9 @@ class AppService:
         if operation == "outputs.image.read":
             async with self.lock:
                 return self.outputs.image(session_id, args.get('id'), args.get('sha256'))
+        if operation == "outputs.images.read":
+            async with self.lock:
+                return self.outputs.images(session_id, args.get('images'))
         if operation in {'context.manifest', 'context.read'}:
             bindings = args.get('_contextBindings', [])
             async with self.lock:
