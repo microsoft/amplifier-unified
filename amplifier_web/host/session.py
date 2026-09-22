@@ -163,8 +163,10 @@ class SelectedProvider:
         return method
     def get_info(self):
         info = self.original.get_info()
-        return info.model_copy(update={"defaults": {**info.defaults, **{key:self.selection[key]
-            for key in ("model", "max_output_tokens") if key in self.selection}}})
+        overrides = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
+        if self.selection.get("effort") is not None:
+            overrides["reasoning_effort"] = self.selection["effort"]
+        return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
         self._selected_requests = [row for row in self._selected_requests if row[0] is not request]
 
