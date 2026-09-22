@@ -2191,6 +2191,17 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
+            if kind == 'worker.updated' and payload.get('activityOnly'):
+                worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
+                # Progress is not lifecycle authority. Delayed hooks cannot
+                # create workers, reopen settled/unknown work, or change runs.
+                if not worker or worker.get('status') not in {'starting', 'running', 'working', 'stopping'}:
+                    return
+                if payload.get('runId') != worker.get('runId'):
+                    return
+                payload = {**{key: payload[key] for key in (
+                    'sessionId', 'id', 'phase', 'detail', 'updatedAt', 'retryAttempt', 'retryMax') if key in payload},
+                    'status': worker['status'], 'activityOnly': True}
             self.diagnostics.runtime_event(kind,payload,session)
             from .chat_navigation import runtime_activity
             runtime_activity(session, kind, payload)
@@ -2335,7 +2346,7 @@ class AppService:
                 self.schedules.worker(session, payload)
                 worker = next((w for w in session["workers"] if w["id"] == payload.get("id")), None)
                 if worker:
-                    worker.update(payload)
+                    worker.update({key: value for key, value in payload.items() if key != 'activityOnly'})
                 else:
                     worker = copy.deepcopy(payload)
                     task = self.coordination.task(session["id"])

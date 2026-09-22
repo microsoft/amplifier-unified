@@ -96,11 +96,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "callId": event.get("call_id"), "name": event.get("agent") or "Delegated work",
             "kind": "job", "event": kind, "updatedAt": event.get("time")}
     if kind == "worker.activity":
-        return "worker.updated", {**base, "id": event.get("workerId"), "status": "running",
+        return "worker.updated", {**base, "id": event.get("workerId"), "activityOnly": True,
             "phase": event.get("phase"), "detail": event.get("detail"),
             "callId": event.get("callId"), "name": event.get("name", "Worker"),
             "kind": "session", "updatedAt": event.get("time"),
-            **{key:event[key] for key in ("retryAttempt", "retryMax") if key in event}}
+            **{key:event[key] for key in ("runId", "retryAttempt", "retryMax") if key in event}}
     if kind == "child.updated":
         return "worker.updated", {**base, "id": event.get("sessionId"),
             "status": event.get("status", "running"), "name": event.get("agent", "Worker"),

@@ -201,7 +201,8 @@ class Worker:
                 registry = coordinator.get_capability("live.children")
                 row = registry.rows.get(identity, {}) if registry else {}
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
-                    "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"), "time": time.time(), **retry})
+                    "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
+                    "runId": row.get("runId"), "time": time.time(), **retry})
             return HookResult()
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
