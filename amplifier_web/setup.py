@@ -80,9 +80,10 @@ def validate_matrix(value):
     return copy.deepcopy(value)
 
 class SetupManager:
-    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None,catalog=None,allow_missing_workspace=False):
+    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None,catalog=None,allow_missing_workspace=False,global_only=False):
         from .provider_catalog import ProviderCatalog
         self.catalog=catalog or ProviderCatalog()
+        self.global_only=global_only
         self.allow_missing_workspace=allow_missing_workspace
         self.home=Path(home); self.store=store or SettingsStore(home)
         self.runtime_operation=runtime_operation
@@ -93,7 +94,7 @@ class SetupManager:
             workspace=Path(workspace).expanduser().resolve()
             while not workspace.is_dir() and workspace.parent!=workspace:
                 workspace=workspace.parent
-        return load_config(workspace,home=self.home)
+        return load_config(workspace,home=self.home,global_only=self.global_only)
 
     def provider_rows(self,workspace):
         config=self.config(workspace)

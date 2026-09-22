@@ -143,7 +143,8 @@ class SmartCanvas:
         key = configuration_key(server)
         session = self.service._session(args.get('sessionId'))
         sid = session['id']
-        workspace = next(w for w in state['workspaces'] if w['path'] == session['workspace'])
+        from .managed_chats import is_managed
+        workspace = ({'id': None} if is_managed(session) else next(w for w in state['workspaces'] if w['path'] == session['workspace']))
         operation = None
         if args.get('operationId'):
             operation = self.service.smart_tools.operation(args['operationId'])

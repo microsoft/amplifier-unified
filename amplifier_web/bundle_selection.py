@@ -38,13 +38,13 @@ def defaults(home, workspace, app_bundle=None):
     from .shared_settings import read_yaml, settings_paths
     paths = settings_paths(workspace)
     values = {key: read_yaml(path).get('bundle', {}).get('active') for key, path in paths.items()}
-    workspace_bundle = values['local'] or values['project']
+    workspace_bundle = values.get('local') or values.get('project')
     effective = workspace_bundle or app_bundle or values['global'] or 'work'
     source = 'workspace' if workspace_bundle else 'app' if app_bundle else 'shared'
     return {'app': app_bundle or None, 'workspace': workspace_bundle or None,
             'shared': values['global'] or None, 'effective': effective, 'source': source,
             'workspacePath': str(Path(workspace).expanduser().resolve()),
-            'workspaceInherited': values['project'] or None}
+            'workspaceInherited': values.get('project') or None}
 
 
 def reset_controls(value, *, reset_model=False):

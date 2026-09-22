@@ -34,15 +34,17 @@ function orderedChats(state,workspace,mode='workspace'){
  const organization=state.conversationOrganization||{},archived=organization.archived||{},view=state.view||{},archive=view.navArchive||'active',collection=organization.collections?.find(row=>row.id===view.navCollection);
  const pinOrder=new Map((state.pinnedSessionIds||[]).map((id,index)=>[id,index])),collectionOrder=new Map((collection?.sessionIds||[]).map((id,index)=>[id,index]));
  return (state.sessions||[]).map((chat,position)=>({chat,position,workspace:byId.get(chat.workspaceId)||byPath.get(chat.workspace)}))
-  .filter(row=>isTopLevelChat(row.chat)&&row.workspace&&(mode==='all'||row.workspace.id===workspace?.id))
+  .filter(row=>isTopLevelChat(row.chat)&&(row.workspace||row.chat.location?.kind==='managed')&&(mode==='all'||row.chat.location?.kind!=='managed'&&row.workspace?.id===workspace?.id))
+  .filter(({chat})=>mode!=='all'||view.navLocationFilter!=='managed'||chat.location?.kind==='managed')
   .filter(({chat})=>(archive==='all'||(archive==='archived')===Object.hasOwn(archived,chat.id))&&(!view.navCollection||collectionOrder.has(chat.id)))
-  .map(row=>({...row.chat,workspace:row.workspace.path,workspaceId:row.workspace.id,workspaceName:row.workspace.name||'',pinned:pinned.has(row.chat.id),recentActivityAt:recentActivity(row.chat),position:row.position}))
+  .map(row=>({...row.chat,workspace:row.workspace?.path||row.chat.workspace,workspaceId:row.chat.location?.kind==='managed'?null:row.workspace.id,workspaceName:row.chat.location?.kind==='managed'?'No workspace':row.workspace.name||'',workspaceLabel:row.chat.location?.kind==='managed'?'No workspace':row.workspace?.label,pinned:pinned.has(row.chat.id),recentActivityAt:recentActivity(row.chat),position:row.position}))
   .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(a.pinned&&state.pinOrderCustomized?pinOrder.get(a.id)-pinOrder.get(b.id):!a.pinned&&view.navCollection?collectionOrder.get(a.id)-collectionOrder.get(b.id):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
 }
 export function chatPage(state,workspace){
  const view=state.view||{},mode=view.navChatScope==='all'?'all':'workspace',filter=view.navFilter||'',selectedSessionId=state.selectedSessionId??null;
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
+ if(mode==='all'&&view.navLocationFilter==='managed')scope.locationFilter='managed';
  const statusFilter=view.navStatusFilter||'all';
  if(statusFilter!=='all')scope.statusFilter=statusFilter;
  if(view.navArchive&&view.navArchive!=='active')scope.archive=view.navArchive;

@@ -95,8 +95,11 @@ def migrate_settings(home, workspaces):
         for workspace in sorted({str(Path(w).expanduser().resolve()) for w in workspaces}):
             if workspace in state['workspaces'] or not Path(workspace).is_dir():
                 continue
+            paths = settings_paths(workspace)
             for scope in ('project', 'local'):
-                target = settings_paths(workspace)[scope]
+                if scope not in paths:
+                    continue
+                target = paths[scope]
                 promote(Path(workspace) / '.amplifier-unified' / target.name, target)
             state['workspaces'].append(workspace)
         atomic_write(marker, json.dumps(state, indent=2), private=True)

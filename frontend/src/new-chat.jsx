@@ -1,10 +1,12 @@
 import React from 'react';
-import {FolderOpen} from 'lucide-react';
-import {PathField} from './settings-ui';
+import {ChatLocation} from './chat-location';
 import './new-chat.css';
 
 export function newChatSetup(state){
  const workspace=state?.workspaces?.find(row=>row.id===state.selectedWorkspaceId);
+ const current=state?.sessions?.find(row=>row.id===state.selectedSessionId);
+ const managed=current?.location?.kind==='managed'||state?.view?.navLocationFilter==='managed';
+ if(managed&&!state?.view?.newSessionDraft)return {title:'',workspace:'',location:{kind:'managed'},bundle:'',selection:{}};
  return {title:'',workspace:workspace?.path||state?.settings?.workspace||'',bundle:'',selection:{},...state?.view?.newSessionDraft};
 }
 
@@ -18,8 +20,6 @@ export function NewChatSetup({state,act}){
  const edit=patch=>act('view.update',{patch:{newSessionDraft:{...setup,...patch}}});
  return <section className="a-new-chat-setup" aria-label="New chat settings">
   <h2>New chat</h2><p>Choose where and how to work. Your chat starts when you send a message.</p>
-  <div className="a-new-chat-workspace"><label htmlFor="new-chat-workspace"><FolderOpen/>Workspace</label>
-   <PathField id="new-chat-workspace" value={setup.workspace} directory state={state} act={act} onChange={workspace=>edit({workspace})}/>
-  </div>
+  <ChatLocation state={state} act={act} setup={setup} onChange={edit}/>
  </section>;
 }

@@ -198,19 +198,19 @@ def prepare_registry(config):
         _import_registry(config.home, config.config_home or amplifier_home())
 
 
-def load_config(workspace, *, home=None, legacy_home=None, session_id=None):
+def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False):
     workspace = Path(workspace).expanduser().resolve(strict=True)
     shared = Path(legacy_home or amplifier_home()).expanduser().resolve()
     _load_keys(shared / "keys.env")
-    return read_config(workspace, home=home, shared_home=shared, session_id=session_id)
+    return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only)
 
 
-def read_config(workspace, *, home=None, shared_home=None, session_id=None):
+def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False):
     """Read runtime settings without loading keys, preparing caches or writing."""
     home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
     shared = Path(shared_home or amplifier_home()).expanduser().resolve()
-    settings = read_settings(workspace, shared_home=shared, session_id=session_id)
+    settings = read_settings(workspace, shared_home=shared, session_id=session_id, global_only=global_only)
     from ..updates import foundation_home
     registry_home = foundation_home(home)
     # Keep explicit app-cache source overrides aligned with the active snapshot.

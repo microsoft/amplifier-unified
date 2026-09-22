@@ -329,6 +329,15 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
         copied["configuration.json"] = effective.read_text()
     if prepare_only:
         return {'messages': visible, 'context': messages, 'throughTurn': through_turn}
+    from .managed_chats import is_managed, allocate
+    managed = is_managed(source)
+    target_workspace = (allocate(home, target_id, 'fork-' + target_id) if managed
+                        else source.get('workspace') or Path.cwd())
+    if managed:
+        # Fork history/artifact references; do not move or replay the original
+        # chat's files, tools, jobs, or interpreter state.
+        store = SessionStore.for_app(home, target_workspace)
+        metadata['working_dir'] = target_workspace
     store.save(target_id,messages,metadata,preserve_system=not bool(bundle or recovery))
     for name,value in copied.items():
         write_private(target_dir / name,value)
@@ -338,7 +347,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     stamp = (store.directory(target_id) / 'transcript.jsonl').stat()
     return {"messages":visible,"parentId":source["id"],"forkContext":False,
             **({"recovery": {"sourceSessionId": source["id"], "mode": "readable_history", "workReplayed": False}, "deferRuntimeUntilInteraction": True} if recovery else {}),
-            'runtimeSessionId': target_id, 'nativeIdentity': target_id, 'nativeProject': project_slug(source.get('workspace') or Path.cwd()),
+            'runtimeSessionId': target_id, 'nativeIdentity': target_id, 'nativeProject': project_slug(target_workspace),
+            **({'workspace': target_workspace, 'location': {'kind': 'managed'}, 'workspaceId': None} if managed else {}),
             'nativeRevision': [stamp.st_mtime_ns, stamp.st_size], 'historyLoaded': True, 'historyManaged': False,
             'shared': True, 'sharedHistoryOffset': 0, 'sharedHistoryUserTurnOffset': 0,
             'sharedHistoryTotal': sum(row.get('role') in {'user', 'assistant'} and bool(text_content(row))

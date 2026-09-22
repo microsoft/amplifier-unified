@@ -77,7 +77,7 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -291,7 +291,9 @@ class ShellModules:
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
-        if scope.get('mode') == 'all':
+        from .managed_chats import is_managed
+        selected = next((s for s in state.get('sessions', []) if s['id'] == state.get('selectedSessionId')), {})
+        if scope.get('mode') == 'all' or scope.get('mode') != 'pinned' and is_managed(selected) and view.get('navChatScope', 'workspace') == 'workspace' and not view.get('navWorkspaceList'):
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
