@@ -49,9 +49,9 @@ async def test_large_catalog_bounded_receipts_publications_and_complete_agent_ac
     queue = app.subscribe()
     builds = []
     original = browser_state.snapshot
-    def observed(*args):
+    def observed(*args, **kwargs):
         builds.append(1)
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(browser_state, 'snapshot', observed)
     monkeypatch.setattr(app, 'get_state', lambda: pytest.fail('A browser action copied the complete catalog'))
     receipt = await app.dispatch('view.update', {'patch': {'panel':'settings'}})
@@ -129,7 +129,7 @@ async def test_selected_worker_count_reuses_unfiltered_navigation_and_keeps_othe
     for history, expected_scans in [
         ({'sessionId': selected, 'filter': '', 'index': 1}, 0),
         ({'sessionId': selected, 'filter': 'no matching workers', 'index': 0}, 0),
-        ({'sessionId': other, 'filter': '', 'index': 0}, len(rows)),
+        ({'sessionId': other, 'filter': '', 'index': 0}, 60),
     ]:
         monkeypatch.setattr(browser_state, 'direct_child', original)
         app.state['view']['subagentHistory'] = history

@@ -512,7 +512,7 @@ class AppService:
                 derived = self.projections.browser(self.state)
                 if session_id is not None:
                     self._session(session_id)
-                cached = self.clients.project(snapshot(self.state, derived, session_id=session_id))
+                cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state)))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
@@ -523,25 +523,25 @@ class AppService:
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
             derived = self.projections.browser(self.state)
-            self._browser_snapshot = snapshot(self.state, derived)
+            self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state))
             self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
         if session_id is not None:
             self._session(session_id)
             from .browser_state import snapshot
             derived = {key: self._browser_snapshot[key] for key in ('attention', 'workspaceExplorer',
                 'chatNavigation', 'headerChatNavigation', 'subagentNavigation')}
-            return snapshot(self.state, derived, session_id=session_id)
+            return snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state))
         return self._browser_snapshot
 
     def session_state(self, session_id):
         """Single-session transport projection, independent of browser navigation."""
-        row = next((row for row in self.state['sessions'] if row['id'] == session_id), None)
+        index = self.projections.sessions(self.state)
+        row = index.by_id.get(session_id)
         if row is None:
             return {'revision': self.state['revision'], 'sessions': []}
         session = copy.deepcopy(row)
         if session_id == self.state.get('selectedSessionId'):
-            from .browser_state import direct_child
-            session['subagentCount'] = sum(direct_child(child, row) for child in self.state['sessions'])
+            session['subagentCount'] = len(index.children(row))
         session['workers'] = [{key: value for key, value in worker.items() if key != 'reportReceipts'}
                               for worker in session.get('workers', [])]
         record = self.clients.record()

@@ -95,3 +95,7 @@ pre-migration database and old app session files, then run the older release.
 That database represents the migration-time snapshot, not subsequent work. Do not
 roll back or delete shared CLI files as part of an app-only rollback. The settings
 rollback button changes ecosystem dependencies, not application storage versions.
+
+### Shared session projection index
+
+Each saved generation builds one transient index of session IDs, direct/native parent candidates, active chats and bounded notification previews. Browser and Terminal projections share those catalog facts while applying their own selection, drafts and notification visibility. Cross-project native aliases still use the canonical parent-matching rules. Every save invalidates this index, even without a revision increment; cached views must never outlive their saved state generation.

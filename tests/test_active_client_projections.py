@@ -258,3 +258,47 @@ def test_shared_workspace_index_preserves_duplicate_registration_selection():
     assert second['selected']['workspaceId'] == second['rows'][0]['workspaceId'] == 'two'
     assert first == workspace_navigation.snapshot({**state, 'selectedWorkspaceId': 'one'})
     assert second == workspace_navigation.snapshot(state)
+
+
+async def test_shared_session_index_matches_parent_identity_rules(app_factory):
+    from amplifier_web.browser_state import SessionIndex, direct_child
+    app, rows = fixture(app_factory, count=20)
+    parent, other = rows[:2]
+    parent.update(nativeIdentity="same-native-id", nativeProject="project-a")
+    other.update(nativeIdentity="same-native-id", nativeProject="project-b")
+    rows.extend([
+        {"id": "native-a", "nativeParentId": "same-native-id", "nativeProject": "project-a", "workspace": parent["workspace"]},
+        {"id": "native-b", "nativeParentId": "same-native-id", "nativeProject": "project-b", "workspace": other["workspace"]},
+        {"id": "explicit", "workspace": parent["workspace"], "parentId": parent["id"], "nativeParentId": "same-native-id", "nativeProject": "project-b"},
+        {"id": "workspace-fallback", "nativeParentId": "same-native-id", "workspace": parent["workspace"]},
+    ])
+    app.state['sessions'] = rows
+    index = SessionIndex(app.state)
+    for owner in rows:
+        assert index.children(owner) == [row for row in rows if direct_child(row, owner)]
+    assert index.children(None) == []
+
+
+async def test_shared_session_index_refreshes_messages_and_busy_offpage_rows(app_factory):
+    app, rows = fixture(app_factory)
+    target = rows[-3]
+    for sequence in range(105):
+        target.setdefault('messages', []).append({'id': str(sequence), 'role': 'assistant', 'via': 'text',
+                                                'createdAt': sequence, 'text': 'Private notification ' + str(sequence)})
+    target['status'] = 'working'
+    app.state['notificationSettings'] = {'preview': False}
+    app._save()
+    with app.clients.bind('client-0'):
+        first = app.browser_state()
+        assert len(first['notificationMessages']) == 100
+        assert first['notificationMessages'][0]['id'] == '5'
+        assert all('text' not in item for item in first['notificationMessages'])
+        assert target['id'] in {item['id'] for item in first['sessions']}
+    target['messages'].append({'id': 'latest', 'role': 'assistant', 'via': 'text', 'createdAt': 1000, 'text': 'Latest'})
+    target['status'] = 'idle'
+    app.state['notificationSettings']['preview'] = True
+    app._save()
+    with app.clients.bind('client-0'):
+        latest = app.browser_state()
+        assert latest['notificationMessages'][-1]['text'] == 'Latest'
+        assert target['id'] not in app.projections.sessions(app.state).active
