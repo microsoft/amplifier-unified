@@ -326,7 +326,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         bridge = 'canvas_app_bridge.js' if canvas.get('app') else 'canvas_bridge.js'
         bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / bridge).read_text().replace("__CANVAS_ID__", identity) + "</script>"
         return web.Response(text=bootstrap + canvas_source(canvas,service.db), content_type="text/html", headers={
-            "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+            "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})
 
     async def smart_canvas_tools(request):

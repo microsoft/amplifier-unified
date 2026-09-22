@@ -157,6 +157,8 @@ async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_
     assert "sandbox allow-scripts;" in csp and 'allow-same-origin' not in csp
     assert "connect-src 'none'" in csp and "form-action 'none'" in csp
     assert "default-src 'none'" in csp
+    media = next(part.strip() for part in csp.split(";") if part.strip().startswith("media-src "))
+    assert media == "media-src data: blob:"
     assert 'canvas-render' in await response.text()
     parent = await client.get('/')
     assert "script-src 'self' 'wasm-unsafe-eval'" in parent.headers['Content-Security-Policy']
