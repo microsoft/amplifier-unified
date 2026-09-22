@@ -18,8 +18,8 @@ export function reopenCanvas(state,act){
  return act('canvas.visibility',{open:true});
 }
 export function CanvasToggle({state,act,layout}){
- const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight;
- return <button type="button" className="a-icon a-canvas-toggle" disabled={!state.selectedSessionId} title={!state.selectedSessionId?'Send a message to start a chat before opening Canvas':undefined} aria-label={state.canvas?.open?'Close canvas':'Open canvas'} aria-pressed={!!state.canvas?.open} aria-controls="workspace-canvas" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:!state.canvas?.open})}><Icon/></button>;
+ const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight,canvasOpen=!!state.selectedSessionId&&!!state.canvas?.open;
+ return <button type="button" className="a-icon a-canvas-toggle" disabled={!state.selectedSessionId} title={!state.selectedSessionId?'Send a message to start a chat before opening Canvas':undefined} aria-label={canvasOpen?'Close canvas':'Open canvas'} aria-pressed={canvasOpen} aria-controls="workspace-canvas" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:!state.canvas?.open})}><Icon/></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell}){
  const layout=usePanelLayout(state,act);
@@ -70,7 +70,7 @@ export function AgentCanvas({state,act,dispatch=act}){
  },[canvas.open]);
  const mounted=useRef(false);
  if(canvas.open)mounted.current=true;
- const focused=!!canvas.open&&!!view.canvasFocused,controls=(!!view.canvasControlsPinned||!!view.canvasControlsExpanded)&&(hasContent||hasArtifacts||!!draft.open||!!draft.browser);
+ const focused=!!state.selectedSessionId&&!!canvas.open&&!!view.canvasFocused,controls=(!!view.canvasControlsPinned||!!view.canvasControlsExpanded)&&(hasContent||hasArtifacts||!!draft.open||!!draft.browser);
  const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},canvasControlsExpanded:true});
  const controlRegions='.a-canvas-chrome,.a-canvas-toolbar,.a-canvas-result.success,.a-browser-note';
  const inControls=target=>!!target?.closest?.(controlRegions)&&!!panel.current?.contains(target);
