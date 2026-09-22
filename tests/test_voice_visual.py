@@ -160,6 +160,7 @@ async def test_restart_does_not_restore_consent_or_replay_pending_request(visual
     await grant(app,target)
     app.db.execute('INSERT INTO commands VALUES (?,?,?)',('interrupted',json.dumps(['voice.visual.capture',target['sessionId'],target['callId']]),json.dumps({'accepted':False,'status':'pending'})))
     app._save()
+    await app.close()
     reopened=AppService(app.data_dir,workspace=app.default_workspace)
     try:
         assert reopened.voice_visual.grant is None
