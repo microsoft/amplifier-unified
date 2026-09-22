@@ -45,6 +45,13 @@ META_KEYS = {'id','sessionId','rootSessionId','parentId','turnId','inputId','mes
 SECRET_KEY = re.compile(r'(?i)(api.?key|password|secret|authorization|cookie|credential|access.?token|refresh.?token)')
 
 
+def metadata_fields(data):
+    selected = {key: value for key, value in data.items() if key in META_KEYS}
+    if data.get('kind') == 'llm' and data.get('label') == 'Context compaction':
+        selected['label'] = 'Context compaction'
+    return selected
+
+
 def clean(value, depth=0):
     """Best-effort content redaction; explicit content opt-in is still sensitive."""
     if depth > 12: return '[depth limit]'
@@ -200,7 +207,7 @@ class Diagnostics:
         if not self.storage_ready:self.dropped+=1;return
         if len(self.pending)>=2000: self.dropped+=1;return
         data=event.get('data',{})
-        if stream!='conversation': data={k:v for k,v in data.items() if k in META_KEYS}
+        if stream!='conversation': data=metadata_fields(data)
         data=clean(data)
         for key in ('usage','probe'):
             if isinstance(data.get(key),dict):data[key]={k:v for k,v in data[key].items() if k in META_KEYS}
@@ -266,7 +273,7 @@ class Diagnostics:
                 if not cfg['enabled'] or at<self.route_since:continue
                 # Forward a selected projection of new hook records. Reading
                 # historical CLI captures never backfills any destination.
-                selected=clean({k:v for k,v in data.items() if k in META_KEYS or (stream=='conversation' and k in {'prompt','response','text','content'})})
+                selected=clean({**metadata_fields(data), **({k:v for k,v in data.items() if k in {'prompt','response','text','content'}} if stream=='conversation' else {})})
                 selected.update(session_id=session,event_id=data.get('event_id') or identity,
                                 timestamp=data.get('timestamp') or datetime.fromtimestamp(at,timezone.utc).isoformat())
                 if data.get('parent_id'):selected['parent_id']=data['parent_id']
@@ -466,7 +473,7 @@ class Diagnostics:
             if item['id'].startswith('capture-'):
                 # Local CLI capture may contain full tool arguments/results.
                 # Inspect only the user's chosen metadata/content projection.
-                item['data']=clean(item['data'] if item['stream']=='conversation' else {k:v for k,v in item['data'].items() if k in META_KEYS})
+                item['data']=clean(item['data'] if item['stream']=='conversation' else metadata_fields(item['data']))
             size+=len(json.dumps(item))
             if items and size>24000:break
             items.append(item)
@@ -507,6 +514,16 @@ class Diagnostics:
             # manufacture a second provider/tool event from a UI progress card.
             return
         data={k:v for k,v in payload.items() if k in META_KEYS}
+        if kind == 'execution.event' and payload.get('kind') == 'llm' and payload.get('label') == 'Context compaction':
+            data['label'] = 'Context compaction'
+        # Retain only safe exception categories from the host observer. Raw
+        # messages/payloads remain excluded from metadata-only diagnostics.
+        failure = payload.get('failure')
+        if isinstance(failure, dict):
+            for source, target in (('errorType', 'errorType'), ('category', 'errorCode')):
+                value = failure.get(source)
+                if isinstance(value, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,99}', value):
+                    data[target] = value
         if isinstance(payload.get('error_type'),str):data['errorType']=payload['error_type'][:100]
         root=session.get('runtimeSessionId') or session['id']
         actual=payload.get('sessionId') or root

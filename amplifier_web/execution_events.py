@@ -120,6 +120,20 @@ class ExecutionEvents:
         complete(), but still consume model capacity. Retain only their usage
         and call identity, exactly like ordinary completion calls.
         """
+        metadata = getattr(request, "metadata", None) or {}
+        purpose_token = None
+        if isinstance(metadata, dict) and metadata.get("purpose") == "context-compaction":
+            # Auxiliary output must never appear as a conversational response.
+            # Keep its measured usage in the owning turn with a distinct label.
+            purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction"})
+            label = "Context compaction"
+        try:
+            return await self._observed_provider_call(sid, provider, request, invoke, label=label)
+        finally:
+            if purpose_token is not None:
+                CALL_PURPOSE.reset(purpose_token)
+
+    async def _observed_provider_call(self, sid, provider, request, invoke, *, label=None):
         row = await self._begin_provider_call(sid, provider, request, label=label)
         token = CURRENT_CALL.set(row["id"])
         owner = CURRENT_PROVIDER.set(id(provider))
@@ -157,6 +171,11 @@ class ExecutionEvents:
             if CURRENT_PROVIDER.get() == id(provider):
                 return await original(request, **kwargs)
             return await self.provider_call(sid, provider, request, lambda: original(request, **kwargs))
+
+        original_compact = getattr(provider, "compact_context", None)
+        async def compact_context(request, **kwargs):
+            return await self.provider_call(sid, provider, request,
+                lambda: original_compact(request, **kwargs), label="Context compaction")
 
         original_stream = getattr(provider, "stream", None)
         async def stream(request, **kwargs):
@@ -218,6 +237,8 @@ class ExecutionEvents:
         # protocol. No SDK internals or request payloads are inspected.
         try:
             provider.complete = complete
+            if callable(original_compact):
+                provider.compact_context = compact_context
             if callable(original_stream):
                 provider.stream = stream
             provider._amplifier_web_observed = True
@@ -230,6 +251,8 @@ class ExecutionEvents:
             wrapper = ObservedProvider()
             wrapper.original = provider
             wrapper.complete = complete
+            if callable(original_compact):
+                wrapper.compact_context = compact_context
             if callable(original_stream):
                 wrapper.stream = stream
             self.provider_wrappers[id(provider)] = wrapper
