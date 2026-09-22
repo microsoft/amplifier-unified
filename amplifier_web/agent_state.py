@@ -15,20 +15,20 @@ def _size(value):
     return len(json.dumps(value, ensure_ascii=False))
 
 
-def _preview(value, path, budget=2500, depth=0):
+def _preview(value, path, budget=2500, depth=0, *, reference_key='$statePath'):
     if _size(value) <= budget:
         return value
-    ref = {'$statePath':path,'type':type(value).__name__,'size':len(value) if isinstance(value,(dict,list,str)) else None}
+    ref = {reference_key:path,'type':type(value).__name__,'size':len(value) if isinstance(value,(dict,list,str)) else None}
     if depth >= 4 or budget < 250:
         return ref
     if isinstance(value, str):
         return {**ref,'preview':value[:max(0,budget-180)]}
     if isinstance(value, list):
         count = min(5,len(value))
-        return {**ref,'preview':[_preview(v,_pointer(path,i),max(100,(budget-250)//count),depth+1) for i,v in enumerate(value[:count])]}
+        return {**ref,'preview':[_preview(v,_pointer(path,i),max(100,(budget-250)//count),depth+1,reference_key=reference_key) for i,v in enumerate(value[:count])]}
     if isinstance(value, dict):
         keys=list(value)[:10]
-        return {**ref,'preview':{k:_preview(value[k],_pointer(path,k),max(100,(budget-250)//len(keys)),depth+1) for k in keys}}
+        return {**ref,'preview':{k:_preview(value[k],_pointer(path,k),max(100,(budget-250)//len(keys)),depth+1,reference_key=reference_key) for k in keys}}
     return ref
 
 
@@ -67,7 +67,7 @@ def overview(state, session_id):
     return core
 
 
-def read_state(state, args, *, session_id=None, resolve=None):
+def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath'):
     if not isinstance(args,dict):
         raise ValueError('State arguments must be an object.')
     path=args.get('path')
@@ -100,7 +100,7 @@ def read_state(state, args, *, session_id=None, resolve=None):
         items=list(value.items()) if isinstance(value,dict) else list(enumerate(value))
         selected=items[offset:offset+min(limit,50)];rows=[];used=0
         for key,item in selected:
-            preview=_preview(item,_pointer(path,key),2500)
+            preview=_preview(item,_pointer(path,key),2500,reference_key=reference_key)
             row={'key':key,'path':_pointer(path,key),'value':preview};size=_size(row)
             if rows and used+size>24000:break
             rows.append(row);used+=size

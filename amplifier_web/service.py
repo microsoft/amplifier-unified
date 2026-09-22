@@ -838,6 +838,17 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action == 'smartTools.readResult':
+            if not self.smart_tools:
+                raise AppError('Smart Tools service is unavailable.')
+            async with self.lock:
+                if expected_revision is not None and expected_revision != self.state['revision']:
+                    raise AppError('The app changed. Refresh its state and retry.', 409)
+                try:
+                    value = self.smart_tools.read_operation(args)
+                except ValueError as exc:
+                    raise AppError(str(exc)) from None
+                return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': value}
         if action in {'theme.list', 'theme.read'}:
             from . import theme_library
             value = await asyncio.to_thread(theme_library.listing, self) if action == 'theme.list' else await asyncio.to_thread(theme_library.read, self, args['id'])
@@ -2411,9 +2422,15 @@ class AppService:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
-            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
+            compact_smart_tool = args['action'].startswith('smartTools.')
+            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
             await self._flush_pending_progress()
-            if args['action'].startswith('canvas.apps.'):
+            if compact_smart_tool:
+                context = {'revision': self.state['revision'], 'sessionId': session_id,
+                           '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}
+                if result.get('operationId'):
+                    result['read'] = {'action': 'smartTools.readResult', 'args': {'operationId': result['operationId']}}
+            elif args['action'].startswith('canvas.apps.'):
                 from .agent_state import surface_context
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:
