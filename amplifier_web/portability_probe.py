@@ -29,8 +29,7 @@ from amplifier_web.provider_environment import (
     materialize_provider_config,
     provider_class,
 )
-from amplifier_web.portability_policy import CAPABILITY, PROMPT, MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, completion_receipt, validate_policy
-from amplifier_worktrees.git import digest
+from amplifier_web.portability_policy import CAPABILITY, PROMPT, MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, completion_receipt, policy_digest, validate_policy
 
 
 MAX_REQUEST_BYTES = 65536
@@ -218,7 +217,7 @@ async def _probe(request):
             raise ProbeFailure('invalid_completion_receipt') from None
         return {"runtimeTransferFence": True, "accountVerified": True, "method": "provider.complete",
                 "model": request["model"], "providerModule": request["module"],
-                "reasoningEffort": policy['reasoningEffort'], 'readinessPolicyHash': digest(policy),
+                "reasoningEffort": policy['reasoningEffort'], 'readinessPolicyHash': policy_digest(policy),
                 'completionReceipt': receipt,
                 "accountVerificationScope": "selected-model-request-accepted"}
     finally:

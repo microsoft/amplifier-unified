@@ -3,13 +3,15 @@ import hashlib
 import json
 import re
 
-from amplifier_worktrees.git import digest
-
-
 CAPABILITY = 'completion:single_attempt:v1'
 MAX_OUTPUT_TOKENS = 1024
 REQUEST_TIMEOUT_SECONDS = 45
 PROMPT = 'Reply with OK.'
+
+
+def policy_digest(value):
+    """Match the host protocol's JSON bytes without importing host packages."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def readiness_policy(module, instance, model, effort):
@@ -29,7 +31,7 @@ def validate_policy(policy, expected_hash=None):
         expected = readiness_policy(policy['providerModule'], policy['providerInstance'],
                                     policy['model'], policy['reasoningEffort'])
         # Hash comparison also distinguishes bools from ints, unlike dict equality.
-        if digest(policy) != digest(expected) or (expected_hash is not None and expected_hash != digest(policy)):
+        if policy_digest(policy) != policy_digest(expected) or (expected_hash is not None and expected_hash != policy_digest(policy)):
             raise ValueError()
     except (KeyError, TypeError, ValueError):
         raise ValueError('Unsupported or changed readiness policy; existing attempts cannot be upgraded') from None
