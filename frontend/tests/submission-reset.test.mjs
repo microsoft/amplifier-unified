@@ -7,6 +7,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ConversationLibrary}=await server.ssrLoadModule('/src/conversation-library.jsx');
 const {ScheduleControls}=await server.ssrLoadModule('/src/schedules.jsx');
+const {MaintenanceSettings}=await server.ssrLoadModule('/src/maintenance.jsx');
 test.after(()=>server.close());
 const event={preventDefault(){}};
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
@@ -54,5 +55,26 @@ test('schedule completion preserves newer drafts and stale previews never become
   holdPreview=true;await fill('Preview this');await act(()=>{submitted=click('schedule.preview')});await fill('Changed before preview');
   await act(async()=>{request.resolve({result:{previewHash:'old',binding:{prompt:'Preview this',spec:{timezone:'UTC'}},occurrences:[{utc:'one',dueAt:1}]}});await submitted});
   assert.equal(renderer.root.findAllByProps({'data-part':'schedule-preview'}).length,0);
+ }finally{await act(()=>renderer.unmount())}
+});
+
+test('notification secrets clear per field only after an accepted unchanged save',async()=>{
+ let renderer,request;
+ const send=()=>{request=deferred();return request.promise};
+ await act(async()=>{renderer=create(React.createElement(MaintenanceSettings,{state:{view:{settingsSection:'maintenance',settingsExpanded:['notifications']}},act:send}))});
+ const inputs=()=>renderer.root.findAllByType('input').filter(row=>row.props.type==='password');
+ const fill=(index,value)=>act(()=>inputs()[index].props.onChange({target:{value}}));
+ const save=()=>renderer.root.findAllByType('button').find(row=>row.children.includes('Save notifications')).props.onClick();
+ try{
+  await fill(0,'fixture-topic');await fill(1,'fixture-token');let submitted;
+  for(const result of [undefined,{accepted:false}]){
+   await act(()=>{submitted=save()});await act(async()=>{request.resolve(result);await submitted});
+   assert.deepEqual(inputs().map(row=>row.props.value),['fixture-topic','fixture-token']);
+  }
+  await act(()=>{submitted=save()});await fill(0,'changed');await fill(0,'fixture-topic');
+  await act(async()=>{request.resolve({accepted:true});await submitted});
+  assert.deepEqual(inputs().map(row=>row.props.value),['fixture-topic',''],'Only the unchanged field clears');
+  await act(()=>{submitted=save()});await act(async()=>{request.resolve({accepted:true});await submitted});
+  assert.deepEqual(inputs().map(row=>row.props.value),['','']);
  }finally{await act(()=>renderer.unmount())}
 });
