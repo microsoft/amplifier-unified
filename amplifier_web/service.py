@@ -2197,7 +2197,7 @@ class AppService:
                 # create workers, reopen settled/unknown work, or change runs.
                 if not worker or worker.get('status') not in {'starting', 'running', 'working', 'stopping'}:
                     return
-                if payload.get('runId') != worker.get('runId'):
+                if not payload.get('runId') or payload['runId'] != worker.get('runId'):
                     return
                 payload = {**{key: payload[key] for key in (
                     'sessionId', 'id', 'phase', 'detail', 'updatedAt', 'retryAttempt', 'retryMax') if key in payload},

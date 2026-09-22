@@ -59,9 +59,9 @@ async def test_real_new_run_starts_but_old_run_activity_cannot_overwrite_it(serv
     assert session["workers"][0]["status"] == "running"
 
 
-@pytest.mark.parametrize("activity_run", [None, "old"])
-async def test_unbound_or_old_run_activity_is_quiet(service, activity_run):
-    session = await emit(service, {"type": "child.updated", "sessionId": "child", "runId": "new", "status": "running"})
+@pytest.mark.parametrize(("worker_run", "activity_run"), [("new", None), ("new", "old"), (None, None), (None, "new")])
+async def test_unbound_or_old_run_activity_is_quiet(service, worker_run, activity_run):
+    session = await emit(service, {"type": "child.updated", "sessionId": "child", "runId": worker_run, "status": "running"})
     before = copy.deepcopy(session)
     revision = service.state["revision"]
     await emit(service, {"type": "worker.activity", "workerId": "child", "runId": activity_run, "phase": "tools"})
