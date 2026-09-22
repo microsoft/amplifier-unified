@@ -41,6 +41,10 @@ try{
  </script>`;
  await action('canvas.show',{kind:'html',title:'Embedded media review',content});
  async function checkPlayback(){
+  // Decoder readiness can precede the host's render acknowledgement. With
+  // controls pinned, moving the status into the toolbar shifts the iframe;
+  // wait for that lifecycle transition before clicking inside it.
+  await expect(page.getByText('Isolated HTML preview',{exact:true})).toBeVisible();
   const frame=page.frames().find(frame=>frame.url().includes('/document'));
   assert.ok(frame,'HTML document must be mounted');
   await expect.poll(()=>frame.evaluate(()=>[...document.querySelectorAll('video,audio')].filter(m=>m.readyState>=2&&!m.error&&m.duration>0).length)).toBe(4);
