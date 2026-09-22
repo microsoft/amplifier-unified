@@ -15,7 +15,7 @@ export function NavigationStatus({activity}){
 }
 export function ActivityTime({at,now}){
  const age=relativeActivity(at,now);
- return <span className="a-navigation-age" title={age.long} aria-label={'Last activity: '+age.long}>{age.short}</span>;
+ return <span className="a-navigation-age" data-view-source="activity-time" title={age.long} aria-label={'Last activity: '+age.long}>{age.short}</span>;
 }
 export function CopyDetail({label,value}){
  const [status,setStatus]=useState('');

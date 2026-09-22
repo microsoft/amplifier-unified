@@ -27,7 +27,22 @@ def recent_activity(session):
 
 
 def touch(session):
+    # Preserve the last ready position while a turn makes progress. Raw recency
+    # remains available to history/reconciliation and diagnostics.
+    session.setdefault('navigationActivityAt', recent_activity(session))
+    session['navigationActivityPending'] = True
     session['recentActivityAt'] = max(recent_activity(session), time.time())
+
+
+def navigation_activity(session):
+    saved = timestamp(session.get('navigationActivityAt'))
+    return saved if saved is not None else recent_activity(session)
+
+
+def settle_activity(session):
+    """Commit activity once the conversation is ready for the user's attention."""
+    if session.pop('navigationActivityPending', False):
+        session['navigationActivityAt'] = max(navigation_activity(session), recent_activity(session), time.time())
 
 
 def runtime_activity(session, kind, payload):
@@ -64,9 +79,14 @@ def initialize(state):
         state['view']['navChatScope'] = 'workspace'
     for session in state.get('sessions', []):
         session['recentActivityAt'] = recent_activity(session)
+        if session.get('navigationActivityPending') and session.get('status') == 'interrupted':
+            session['navigationActivityAt'] = recent_activity(session)
+            session.pop('navigationActivityPending', None)
 
 
 def view_patch(patch):
+    if 'navSort' in patch and patch['navSort'] not in ('activity', 'created', 'name'):
+        raise ValueError('Choose recent activity, newest created, or name.')
     if 'navArchive' in patch and patch['navArchive'] not in ('active', 'archived', 'all'):
         raise ValueError('Choose active, archived or all conversations.')
     if 'navCollection' in patch and patch['navCollection'] is not None and (not isinstance(patch['navCollection'], str) or len(patch['navCollection']) > 200):
@@ -139,6 +159,9 @@ def catalog(state, *, indexed=None):
     query = query if isinstance(query, str) else ''
     scope = {'mode': mode, 'workspaceId': selected['id'] if mode == 'workspace' and selected else None,
              'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
+    sort = view.get('navSort', 'activity')
+    if sort != 'activity':
+        scope['sort'] = sort
     location_filter = view.get('navLocationFilter', 'all') if mode == 'all' else 'all'
     if location_filter != 'all':
         scope['locationFilter'] = location_filter
@@ -186,11 +209,12 @@ def catalog(state, *, indexed=None):
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
                      **({'archived': True} if is_archived else {}),
-                     'recentActivityAt': recent_activity(session)})
+                     'recentActivityAt': navigation_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
     rows.sort(key=lambda row: (not row['pinned'],
-        pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
-        else -row['recentActivityAt']))
+        pin_order.get(row['id'], 0) if row['pinned'] else
+        (row['title'].lower() if sort == 'name' else
+         -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'])))
     return rows, scope, counts
 
 
@@ -200,7 +224,7 @@ def snapshot(state, *, indexed=None):
     mode = scope['mode']
     view = state.get('view', {})
     saved = view.get('navChatPage')
-    matched = isinstance(saved, dict) and all(saved.get(key) == value for key, value in scope.items())
+    matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(key) == value for key, value in scope.items())
     inferred = next((i // PAGE_SIZE for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0
     requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)

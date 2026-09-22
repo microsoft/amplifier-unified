@@ -51,10 +51,22 @@ export function applyIconTooltips(root) {
     }
   }
 }
-export function visibleView(root, clientId) {
+// Repeated browser observations describe client-owned UI. Conversation text and
+// elapsed progress already have an authoritative, session-scoped server view.
+// Keep full rendered text for explicit window.amplifier.getState() inspection.
+function interfaceText(root){
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT,{acceptNode(node){
+    if(node.nodeType===Node.ELEMENT_NODE){const style=getComputedStyle(node);return node.dataset.viewSource||style.display==='none'||style.visibility==='hidden'?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_SKIP;}
+    return node.textContent.trim()?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_SKIP;
+  }});
+  let node,text='';
+  while((node=walker.nextNode())&&text.length<60000)text+=node.textContent.trim()+'\n';
+  return text.slice(0,60000);
+}
+export function visibleView(root, clientId, {interfaceOnly=false}={}) {
   if(!root)return {clientId};
   const visible=el=>!!el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden';
-  const controls=[...root.querySelectorAll('button,input,textarea,select,a,[role=separator]')].filter(visible).map(el=>({id:el.id||null,action:el.dataset.action||el.closest('[data-action]')?.dataset.action||null,...(el.closest('[data-shell-component]')?{component:{instanceId:el.closest('[data-shell-component]').dataset.shellComponent,slot:el.closest('[data-shell-component]').dataset.shellSlot,command:el.dataset.shellCommand||null}}:{}),label:el.getAttribute('aria-label')||el.labels?.[0]?.textContent||el.textContent?.trim().slice(0,160),type:el.getAttribute('role')||el.type||el.tagName.toLowerCase(),...(el.getAttribute('role')==='separator'?{minimum:Number(el.getAttribute('aria-valuemin')),maximum:Number(el.getAttribute('aria-valuemax')),current:Number(el.getAttribute('aria-valuenow'))}:{}),value:(el.type==='password'||el.dataset.private==='true')?'[redacted]':el.value,disabled:!!el.disabled||!!el.closest('[inert]'),focused:document.activeElement===el}));
+  const controls=[...root.querySelectorAll('button,input,textarea,select,a,[role=separator]')].filter(visible).map(el=>({id:el.id||null,action:el.dataset.action||el.closest('[data-action]')?.dataset.action||null,...(el.closest('[data-shell-component]')?{component:{instanceId:el.closest('[data-shell-component]').dataset.shellComponent,slot:el.closest('[data-shell-component]').dataset.shellSlot,command:el.dataset.shellCommand||null}}:{}),label:el.dataset.viewLabel||el.getAttribute('aria-label')||el.labels?.[0]?.textContent||el.textContent?.trim().slice(0,160),type:el.getAttribute('role')||el.type||el.tagName.toLowerCase(),...(el.getAttribute('role')==='separator'?{minimum:Number(el.getAttribute('aria-valuemin')),maximum:Number(el.getAttribute('aria-valuemax')),current:Number(el.getAttribute('aria-valuenow'))}:{}),value:(el.type==='password'||el.dataset.private==='true')?'[redacted]':el.value,disabled:!!el.disabled||!!el.closest('[inert]'),...(el.hasAttribute('aria-expanded')?{expanded:el.getAttribute('aria-expanded')==='true'}:{}),focused:document.activeElement===el}));
   const panes=Object.fromEntries(['navigation','conversation','canvas'].flatMap(name=>{const el=root.querySelector(`[data-part="${name}"]`);if(!el)return [];const box=el.getBoundingClientRect();return [[name,{x:Math.round(box.x),y:Math.round(box.y),width:Math.round(box.width),height:Math.round(box.height),visible:visible(el),interactive:visible(el)&&!el.closest('[inert]')}]]}));
-  return {clientId,panes,webApp:{standalone:!!(window.matchMedia?.('(display-mode: standalone)').matches||navigator.standalone),secureContext:window.isSecureContext,serviceWorkerControlled:!!navigator.serviceWorker?.controller,online:navigator.onLine},visibleText:root.innerText.slice(0,60000),controls,selectedText:window.getSelection()?.toString().slice(0,10000)||'',viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},url:location.pathname};
+  return {clientId,panes,webApp:{standalone:!!(window.matchMedia?.('(display-mode: standalone)').matches||navigator.standalone),secureContext:window.isSecureContext,serviceWorkerControlled:!!navigator.serviceWorker?.controller,online:navigator.onLine},visibleText:interfaceOnly?interfaceText(root):root.innerText.slice(0,60000),...(interfaceOnly?{visibleTextScope:'interface',conversationSource:'Selected session messages, execution and activity in app state'}:{}),controls,selectedText:window.getSelection()?.toString().slice(0,10000)||'',viewport:{width:innerWidth,height:innerHeight,scrollX,scrollY},url:location.pathname};
 }

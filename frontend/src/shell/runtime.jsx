@@ -28,7 +28,9 @@ export function useShell(state,dispatch,clientId){
  const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false);
  latest.current.dispatch=dispatch;latest.current.state=state;
  const refresh=useCallback(()=>{
+  if(document.hidden){again.current=true;return Promise.resolve()}
   if(inflight.current){again.current=true;return inflight.current}
+  again.current=false;
   inflight.current=request('/api/shell?clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(next=>{
    latest.current.data=next;setData(next);setError('');
    for(const host of hosts.current.values()){
@@ -46,8 +48,9 @@ export function useShell(state,dispatch,clientId){
  useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
   const onShell=e=>{if(e.detail.shellClientId===clientId)refresh()};
-  window.addEventListener('amplifier-shell',onShell);
-  return()=>window.removeEventListener('amplifier-shell',onShell);
+  const resume=()=>{if(!document.hidden)refresh()};
+  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',resume);document.addEventListener('visibilitychange',resume);
+  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',resume);document.removeEventListener('visibilitychange',resume)};
  },[clientId,refresh]);
  const hostFor=useCallback(instance=>{
   const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;

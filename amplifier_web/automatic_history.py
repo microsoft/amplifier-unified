@@ -17,7 +17,7 @@ from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
-                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
+                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
@@ -377,10 +377,13 @@ class AutomaticHistory:
                                         'historyManaged': True, 'historyLoaded': False}
                             state['sessions'].append(previous); existing[key] = previous; changed = True
                         else:
-                            from .chat_navigation import recent_activity
+                            from .chat_navigation import recent_activity, navigation_activity
+                            previous.setdefault('navigationActivityAt', navigation_activity(previous))
                             recent = max(recent_activity(previous), row.get('recentActivityAt', 0))
                             if previous.get('recentActivityAt') != recent:
                                 previous['recentActivityAt'] = recent; changed = True
+                                if previous.get('historyManaged') and previous.get('status') not in BUSY:
+                                    previous['navigationActivityAt'] = recent
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
