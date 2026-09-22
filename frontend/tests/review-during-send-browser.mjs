@@ -32,7 +32,7 @@ try{
   return receipt(route);
  });
  const emit=async()=>{state.revision++;await page.evaluate(state=>window.emitState(state),state)};
- await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Send message',exact:true}).waitFor();
+ await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this send bound to conversation A.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();await until(()=>heldSend,'Send request should be held');
  state.attention.items=[{id:'completion:b',sessionId:'b',title:'Work finished',label:'Conversation b',fingerprint:'completion-1',read:false}];await emit();
