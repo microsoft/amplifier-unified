@@ -5,7 +5,7 @@ export function readOutbox(storage){
 }
 export function outboxMessages(messages,entries,sessionId){
  const pending=entries.filter(row=>row.sessionId===(sessionId??null));
- const confirmed=messages.map(message=>{const entry=pending.find(row=>row.commandId===message.inputId);return entry&&message.delivery?.status!=='accepted'?{...message,localDelivery:entry}:message});
+ const confirmed=messages.map(message=>{const entry=pending.find(row=>row.commandId===message.inputId);return entry&&message.delivery?.status!=='accepted'?{...message,localDelivery:{...entry,...(message.delivery?.status==='failed'?{status:'failed'}:{})}}:message});
  return [...confirmed,...pending.filter(row=>!messages.some(message=>message.inputId===row.commandId)).map(row=>({id:row.id,inputId:row.commandId,role:'user',text:row.text,via:row.via,createdAt:row.createdAt,attachments:row.attachments,localDelivery:row}))];
 }
 export function useMessageOutbox(){

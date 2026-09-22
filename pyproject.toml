@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.20.7"
+version = "0.20.8"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -18,6 +18,7 @@ dependencies = [
     "tinycss2>=1.4,<2",
     "pyyaml>=6.0.3,<7",
     "filelock>=3.20,<4",
+    "watchfiles>=1.1,<2",
     "mcp>=2.2,<3",
     "httpx>=0.28,<1",
     "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",

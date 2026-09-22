@@ -23,6 +23,12 @@ def update(service, patch, command_id, fingerprint, *, include_state):
             raise AppError('Layout switches must be true or false.')
     identity = service.clients.current.get()
     client = service.clients.record()
+    if all(client['view'].get(key) == value for key, value in patch.items()):
+        receipt = {'accepted': True, 'revision': service._state['revision'], 'effects': []}
+        if command_id:
+            service.db.execute('INSERT INTO commands VALUES (?,?,?)', (command_id, fingerprint, json.dumps(receipt)))
+            service.db.commit()
+        return {**receipt, **({'state': service.browser_state()} if include_state else {})}
     previous = copy.deepcopy(client)
     revision = service._state['revision']
     cached = service._client_snapshots.get(identity)

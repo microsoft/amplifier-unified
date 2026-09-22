@@ -14,6 +14,13 @@ def update(service, args, command_id, fingerprint, *, include_state):
         raise AppError('The selected chat or artifact changed. Retry in the intended Canvas.', 409)
     if args['open'] and client.get('selectedSessionId') is None:
         raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
+    if (canvas.get('open') == args['open'] and client.get('canvasViews', {}).get('retained')
+            and (args['open'] or not client['view'].get('canvasFocused'))):
+        receipt = {'accepted': True, 'revision': service._state['revision'], 'effects': []}
+        if command_id:
+            service.db.execute('INSERT INTO commands VALUES (?,?,?)', (command_id, fingerprint, json.dumps(receipt)))
+            service.db.commit()
+        return {**receipt, **({'state': service.browser_state()} if include_state else {})}
     cached = service._client_snapshots.get(identity)
     previous = copy.deepcopy(client)
     revision = service._state['revision']

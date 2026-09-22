@@ -39,6 +39,14 @@ async def main():
         service.state.update(selectedSessionId=sessions[0]['id'], selectedWorkspaceId=sessions[0]['workspaceId'])
         service.state['view'].update(navPinned=True, navChatScope='all')
         service.state.setdefault('setup', {}).update(providersLoadedAt=time.time(), providersWorkspace=sessions[0]['workspace'])
+        if os.environ.get('AMPLIFIER_TRANSPORT_FIXTURE'):
+            # Simulate large settings/catalog sections without credentials or
+            # model calls. These values must not ride along with view changes.
+            service.state['setup']['fixtureDocumentation'] = 'Saved provider documentation. ' * 80_000
+            sessions[0]['execution'] = {'nodes': [], 'turns': [], 'retiredUsageNodes': [
+                {'id': 'historical-'+str(i), 'kind': 'llm', 'phase': 'completed',
+                 'provider': 'fixture', 'model': 'fixture', 'detail': 'Historical accounting ' * 40}
+                for i in range(1000)]}
         service._publish()
         progress = None
         ticks = 0

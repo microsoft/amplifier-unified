@@ -234,7 +234,7 @@ class AutomaticHistory:
     def __init__(self, service):
         from .native_history import NativeHistory
         self.service = service
-        self.index = NativeHistory()
+        self.index = NativeHistory(watch=True)
         self.lock = asyncio.Lock()
         self.loads = {}
         self.task = None
@@ -248,10 +248,13 @@ class AutomaticHistory:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        await asyncio.to_thread(self.index.close)
 
     async def loop(self):
         while not self.service.closed:
-            await self.refresh()
+            known = copy.deepcopy(self.service.state['workspaces'])
+            if await asyncio.to_thread(self.index.needs_scan, known):
+                await self.refresh(force=False)
             await asyncio.sleep(15)
 
     def hide_session(self, session):
@@ -266,13 +269,13 @@ class AutomaticHistory:
         if workspace['id'] not in hidden:
             hidden.append(workspace['id'])
 
-    async def refresh(self):
+    async def refresh(self, *, force=True):
         async with self.lock:
             try:
                 known = copy.deepcopy(self.service.state['workspaces'])
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
-                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known)
+                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known, force=force)
                 managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return

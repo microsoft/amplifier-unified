@@ -109,7 +109,7 @@ def project(session):
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
-        result['execution']={**session['execution'],'nodes':nodes.pop('items'),'turns':nodes.pop('turns'),'segments':nodes.pop('segments')}
+        result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':nodes.pop('items'),'turns':nodes.pop('turns'),'segments':nodes.pop('segments')}
         result['executionWindow']=nodes
     # Reports and completed generation bodies are not activity badges.
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]

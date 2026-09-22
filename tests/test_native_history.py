@@ -104,6 +104,94 @@ def test_unchanged_files_are_not_read_and_external_changes_refresh(tmp_path):
     assert changed_transcript['sessions'][0]['transcriptRevision'] != revision
 
 
+def test_unchanged_projects_skip_rebuild_but_discover_workers_and_late_files(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    directory = session(home, workspace, 'root', {'working_dir': str(workspace), 'name': 'Root'})
+    history = NativeHistory(home)
+    history.scan()
+    history.scan()  # Establish the workspace paths learned from native metadata.
+    original = history._scan_project
+    rebuilt = []
+    def scan(*args):
+        rebuilt.append(args[0].name)
+        return original(*args)
+    monkeypatch.setattr(history, '_scan_project', scan)
+    for _ in range(5):
+        history.scan()
+    assert not rebuilt
+    session(home, workspace, 'root_child', {'parent_id': 'root'})
+    assert history.scan()['workerSessionCount'] == 1
+    assert len(rebuilt) == 1
+    write_json(directory / 'context-intelligence' / 'metadata.json', {'description': 'New capture metadata'})
+    changed = history.scan()
+    assert next(row for row in changed['sessions'] if row['nativeIdentity'] == 'root')['description'] == 'New capture metadata'
+    assert len(rebuilt) == 2
+
+
+def test_watch_invalidates_changed_project_and_reconciles_missed_notifications(tmp_path, monkeypatch):
+    import time
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    directory = session(home, workspace, 'root', {'working_dir': str(workspace), 'name': 'Root'})
+    history = NativeHistory(home, watch=True)
+    try:
+        history.scan()
+        deadline = time.monotonic() + 5
+        while not history._watch.ready and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert history._watch.ready
+        history.scan()
+        probes = []
+        original = history._project_stamp
+        def probe(*args):
+            probes.append(args[0].name)
+            return original(*args)
+        monkeypatch.setattr(history, '_project_stamp', probe)
+        for _ in range(4):
+            history.scan()
+        assert not probes
+        assert not history.needs_scan([])
+        write_json(directory / 'metadata.json', {'working_dir': str(workspace), 'name': 'Changed'})
+        deadline = time.monotonic() + 5
+        while not history._watch.dirty and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert history.needs_scan([])
+        assert history.scan()['sessions'][0]['title'] == 'Changed'
+        assert probes == [project_slug(workspace)]
+        # Runtime event traffic must not invalidate the native catalog.
+        (directory / 'events.jsonl').write_text('many events')
+        time.sleep(.4)
+        assert history._watch.take()[1] == set()
+        # The timer still detects changes if a platform notification is lost.
+        write_json(directory / 'metadata.json', {'working_dir': str(workspace), 'name': 'Reconciled'})
+        monkeypatch.setattr(history, '_invalidations', lambda: (True, set()))
+        history._reconcile_at = 0
+        assert history.needs_scan([])
+        assert history.scan()['sessions'][0]['title'] == 'Reconciled'
+    finally:
+        watcher = history._watch
+        history.close()
+        assert not watcher.thread.is_alive()
+
+
+def test_watch_failure_and_new_root_fall_back_to_file_discovery(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    history = NativeHistory(home, watch=True)
+    assert history.scan()['sessions'] == []
+    directory = session(home, workspace, 'root', {'working_dir': str(workspace), 'name': 'Root'})
+    import watchfiles
+    def unavailable(*args, **kwargs):
+        raise OSError('native watches unavailable')
+    monkeypatch.setattr(watchfiles, 'watch', unavailable)
+    try:
+        assert history.scan()['sessions'][0]['title'] == 'Root'
+        write_json(directory / 'metadata.json', {'working_dir': str(workspace), 'name': 'Stat fallback'})
+        assert history.scan()['sessions'][0]['title'] == 'Stat fallback'
+        session(home, workspace, 'root_child', {'parent_id': 'root'})
+        assert history.scan()['workerSessionCount'] == 1
+    finally:
+        history.close()
+
+
 def test_partial_or_missing_metadata_keeps_last_good_summary(tmp_path):
     home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
     directory = session(home, workspace, 'root', {'working_dir': str(workspace), 'name': 'Keep me'})
