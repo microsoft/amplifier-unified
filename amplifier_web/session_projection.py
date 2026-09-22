@@ -94,6 +94,7 @@ def accounting_projection(tree):
 
 def persist(home, state, cache):
     """SQLite keeps only the session list; presentation files change on demand."""
+    from .automatic_history import INDEX_FIELDS
     result = dict(state)
     canvas = state.get('canvas', {})
     artifact = next((a for a in state.get('canvasArtifacts', []) if a['id'] == canvas.get('id')), None)
@@ -107,7 +108,6 @@ def persist(home, state, cache):
     retained.update(sid for row in library.get('collections', []) for sid in row['sessionIds'])
     for session in state.get('sessions', []):
         if session.get('historyManaged'):
-            from .automatic_history import INDEX_FIELDS
             # Rebuild native catalog rows from their source. Persist only local
             # presentation overrides and startup selection/pin references.
             native_id = session.get('_catalogId') or uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-session:{session.get('nativeProject')}/{session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']}").hex

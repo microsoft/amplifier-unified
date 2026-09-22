@@ -68,6 +68,14 @@ retain the ancestors needed to distinguish them. Folder selection and browsing
 remain separate for a workspace that contains nested workspaces. Missing folders
 remain hidden without removing their registrations or saved histories.
 
+Registry path labels are cached by the complete set of paths, with a bounded
+cache and a fresh result per caller. Activity changes do not recompute suffixes;
+adding or removing a registry path does. Progress projections also avoid creating
+workspace summary dictionaries for each chat already grouped under a workspace.
+Keep these catalog loops allocation-light: small per-row costs multiply across
+large libraries and every active client. The active-client performance gate
+exercises these paths with 22,915 sessions, four browsers, and a Terminal stream.
+
 ## Shared actions and shell modules
 
 The `builtin.workspaces` and `builtin.chats` instances keep their public host,
