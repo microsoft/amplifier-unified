@@ -851,12 +851,16 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        transfer_sid = None
         if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
                       'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
             transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
-            if transfer_sid and self.portability.fenced(transfer_sid):
-                raise AppError('This task is fenced for transfer. Inspect its portability receipt on the execution owner.', 409)
+            if transfer_sid:
+                # Snapshot without yielding; final admission below checks it
+                # under the mutation lock without changing its queue ordering.
+                try: transfer_context = self.portability.write_context(transfer_sid)
+                except ValueError as exc: raise AppError(str(exc), 409) from exc
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')
@@ -1065,6 +1069,15 @@ class AppService:
                 raise AppError(str(exc), 409) from exc
         pending = []
         async with self.lock:
+            if transfer_sid:
+                try:
+                    current_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
+                    if current_sid != transfer_sid:
+                        raise ValueError('The selected task changed while this request was waiting; inspect and retry.')
+                    if self.portability.write_context(transfer_sid) != transfer_context:
+                        raise ValueError('The task moved while this request was waiting; inspect and retry.')
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from exc
             # Flush and compare under the same lock: a queued runtime event
             # must not mutate progress between a read barrier and CAS admission.
             if expected_revision is not None and getattr(self, '_progress_dirty', False):
@@ -1722,6 +1735,8 @@ class AppService:
                 call_args = dict(args)
                 if action == "call.start":
                     session = self._session()
+                    try: self.portability.write_context(session['id'])
+                    except ValueError as exc: raise AppError(str(exc), 409) from exc
                     if self.voice_service and not self.voice_service.api_key:
                         raise AppError("Set OPENAI_API_KEY in the terminal environment to enable calls.")
                     session["historyManaged"] = False
@@ -2114,11 +2129,12 @@ class AppService:
             await self.runtime.stop(sid)
         await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
 
-    async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed'):
+    async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
         async with self.lock:
             try:session=self._session(session_id)
             except AppError:return
+            self._check_voice_owner(session['id'], transfer_id)
             identity='voice:'+call_id+':'+response_id
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
@@ -2533,9 +2549,17 @@ class AppService:
         # Rendered controls are live observations, reset on startup. Agents read
         # them directly; no durable command or browser projection changed.
 
-    async def record_voice_transcript(self, role, text, *, voice_id, item_id, append=False, session_id=None):
+    def _check_voice_owner(self, session_id, transfer_id):
+        try:
+            if self.portability.write_context(session_id) != transfer_id:
+                raise ValueError('This voice call predates the task transfer; its late events cannot change the task.')
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from exc
+
+    async def record_voice_transcript(self, role, text, *, voice_id, item_id, append=False, session_id=None, transfer_id=None):
         async with self.lock:
             session = self._session(session_id)
+            self._check_voice_owner(session['id'], transfer_id)
             existing = next((m for m in session["messages"] if m.get("voiceId") == voice_id and m.get("voiceItemId") == item_id), None)
             if existing:
                 existing["text"] = existing["text"] + text if append else text
@@ -2552,14 +2576,17 @@ class AppService:
                 self.voice_visual.revoke()
             self.voice_visual.publish()
 
-    async def voice_delegate(self, text, command_id, session_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
+        async with self.lock:
+            self._check_voice_owner(self._session(session_id)['id'], transfer_id)
         input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
             session = self._session(session_id)
+            self._check_voice_owner(session['id'], transfer_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)
             fingerprint = hashlib.sha256(json.dumps(["voice_delegate", session["id"], text]).encode()).hexdigest()
             previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()

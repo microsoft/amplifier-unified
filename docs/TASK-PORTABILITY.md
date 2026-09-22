@@ -99,6 +99,10 @@ execution stays blocked. Inspect both receipts before any further action:
 
 - Repeating the same command/package returns its receipt; it does not repeat
   provider checks, task inputs or uncertain effects.
+- Destination activation records its attempt before the provider check. A failed
+  or interrupted check leaves an `unknown` receipt. Repeating that exact signed
+  release and original ready revision returns the saved uncertainty without
+  making another provider request.
 - An interrupted source release may be explicitly continued with the current
   revision and exact readiness receipt. It confirms the permanent native fence
   and verifies each archived original before issuing the release certificate.
@@ -134,6 +138,11 @@ Evidence sections are `operations`, `operationRequests`, `liveJobs`, `workers`,
 idempotence receipts are restored: retrying an unknown request returns that
 saved uncertainty rather than resubmitting its effect. Schedules, worker
 processes, approval tokens and native live jobs are not installed as live work.
+After writer quiescence, export waits up to 30 seconds for pending operation
+journal writes. Failure or timeout leaves the transfer fenced and `unknown`.
+Hash-only output-event records retain their sequence, event identity and digest;
+the bounded output archive retains the original chunks. An unsettled operation
+admission receipt remains `outcome_unknown` on import and cannot replay its work.
 
 ## Boundaries and implementation
 
@@ -166,6 +175,14 @@ attachments and external resources are not automatically rewritten or fetched.
 Missing referenced stored resources block transfer. Prior destination-local
 session settings are archived on a return hop so they cannot override imported
 configuration intent. Both sides retain original evidence.
+
+Active, connecting and closing voice calls block export. Voice events and
+delayed output or conversation writes recheck ownership when they commit. Events
+from a call or request started before a transfer remain stale after cancellation
+or a return hop; a deliberate new call or request can use the current owner.
+Import verifies existing stored resource bytes before publishing task data and
+rejects conflicting output receipts, including matching request fingerprints
+with a different saved result. Imported questions refresh the session projection.
 
 Tasks with **any retained managed publishing state** cannot be exported. This
 includes stopped/removed sites, immutable releases, previews, receipts and remote

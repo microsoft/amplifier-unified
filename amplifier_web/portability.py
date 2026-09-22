@@ -50,9 +50,28 @@ class Portability:
         if self.node.fenced(sid):
             return True
         session = next((row for row in self.app.state['sessions'] if row['id'] == sid), None)
-        if session and self.node.records(sid):
-            return native_store(session).transfer_fence() is not None
+        if session:
+            from amplifier_foundation.session import SharedSessionStore
+            if hasattr(SharedSessionStore, 'transfer_fence'):
+                store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+                return store.transfer_fence() is not None
         return False
+
+    def write_context(self, sid):
+        """Capture without yielding; compare under the app lock before writing."""
+        if self.fenced(sid):
+            raise ValueError('This task is fenced for transfer; it cannot change or start work here.')
+        rows = self.node.records(sid)
+        return max(rows, key=lambda row: (row['generation'], row['createdAt']))['id'] if rows else None
+
+    def require_voice_closed(self, sid):
+        voice = self.app.state.get('voice', {})
+        manager = getattr(self.app, 'voice_service', None)
+        call = getattr(manager, 'call', None)
+        live_call = (call and call.session_id == sid and
+            (not call.closed or (getattr(call, 'closing', False) and not getattr(call, 'close_result', None))))
+        if live_call or (voice.get('sessionId') == sid and voice.get('status') not in {None, 'disconnected', 'idle', 'ended', 'error', 'failed'}):
+            raise ValueError('End the active voice call before moving the task')
 
     def sync(self):
         self.app.state['portability'] = {'host': self.node.identity, 'receipts': self.node.records()}
@@ -135,8 +154,8 @@ class Portability:
         native_store(session)  # Capability preflight before changing admission.
         if session.get('executionRevision', 0) != args['expectedExecutionRevision']:
             raise ValueError('The execution association changed; inspect it again')
-        if any(row.get('sessionId') == session['id'] and row.get('status') not in {'ended', 'failed'} for row in self.app.state.get('calls', [])):
-            raise ValueError('End the active voice call before moving the task')
+        async with self.app.lock:
+            self.require_voice_closed(session['id'])
         if session.get('configurationBusy') and not self.node.records(session['id']):
             raise ValueError('Another task configuration change is unresolved')
         # Reject known nonportable contents before stopping a writer. A second
@@ -147,6 +166,9 @@ class Portability:
             async with self.app.lock:
                 data.capture(self.app, session)
         async with self.app.lock:
+            # Voice connect claims state.voice under this same lock. Recheck
+            # after the awaited history/Git preflight, then fence atomically.
+            self.require_voice_closed(session['id'])
             row = self.node.begin(session['id'], args['destination'], command_id, args)
             if row.get('duplicate'):
                 return row
@@ -165,6 +187,12 @@ class Portability:
             evidence = await self.app.runtime.quiesce_for_handoff(session, row['id'], transfer_destination=row['destination'])
             if not evidence.get('quiesced') or not evidence.get('transferFenced'):
                 raise ValueError('The native writer did not confirm a durable transfer fence')
+            # Quiescence stops producers, but cancelled bridge callers can leave
+            # shielded journal writes queued. Include their evidence before the
+            # snapshot; timeout/failure keeps this transfer unknown and fenced.
+            pending = tuple(self.app.operations.pending)
+            if pending:
+                await asyncio.wait_for(asyncio.gather(*(asyncio.shield(task) for task in pending)), 30)
             await self.app.history.ensure_loaded(session['id'])
             workspace = await asyncio.to_thread(capture_workspace, session.get('workingDirectory') or session['workspace'], args['sourceRevision'], args['mode'])
             async with self.app.lock:
@@ -358,6 +386,13 @@ class Portability:
         self.node.match(row, authorization)
         if authorization['readyHash'] != digest(row['readyReceipt']):
             raise ValueError('Source release does not acknowledge this exact destination readiness')
+        if row['phase'] == 'unknown' and row.get('previousPhase') == 'activating':
+            # Activation and its unknown outcome each advance the ready
+            # revision once. Only the exact saved attempt can be acknowledged;
+            # an uncertain provider request must never be submitted again.
+            if row.get('releaseCertificate') != certificate or args['expectedRevision'] != row['revision'] - 2:
+                raise ValueError('This activation attempt has different contents; inspect its uncertain receipt')
+            return {**row, 'duplicate': True}
         # Recheck destination credentials/runtime immediately before ownership
         # admission. Import readiness is not a permanent account guarantee.
         destination = row['destinationState']
@@ -377,12 +412,16 @@ class Portability:
         if row['phase'] != 'ready' or row['revision'] != args['expectedRevision']:
             raise ValueError('Inspect the current ready transfer before activation')
         capture_workspace(destination['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
-        await self.destination_checks(payload, Path(destination['workspace']))
-        capture_workspace(destination['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
         async with self.app.lock:
             data.preflight_install(self.app, payload)
+        # Record the attempt before a provider probe can have external effects.
+        # A crash here recovers as unknown, never as another ready admission.
         row = self.node.activating(row['id'], certificate, args['expectedRevision'])
         try:
+            await self.destination_checks(payload, Path(destination['workspace']))
+            capture_workspace(destination['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
+            async with self.app.lock:
+                data.preflight_install(self.app, payload)
             from .session_files import project_slug
             previous = next((s for s in self.app.state['sessions'] if s['id'] == row['sessionId']), {})
             session = {**copy.deepcopy(payload['session']), 'workspace': destination['workspace'],

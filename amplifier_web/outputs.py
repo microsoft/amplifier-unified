@@ -130,6 +130,8 @@ class Outputs:
                             result.update(text=text[offset:offset+limit],offset=offset,nextOffset=offset+limit if offset+limit<len(text) else None)
                         except UnicodeDecodeError:result['binary']=True
                     return {'accepted':True,'result':result}
+                portability = getattr(self.app, 'portability', None)
+                transfer_context = portability.write_context(session['id']) if portability else None
                 request=[action,args,origin];identity=command_id or uuid.uuid4().hex
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
@@ -183,7 +185,13 @@ class Outputs:
                 review=await git_snapshot(workspace,args['mode'],args.get('base'),path)
                 data=review.pop('text').encode();value.update(review=review,filename='review.diff',versionEvidence='snapshot')
             async with self.app.lock:
-                self.app._session(session['id'])
+                current = self.app._session(session['id'])
+                # File/Git reads above can outlive a task transfer. Recheck
+                # authority under the same lock that commits its source fence.
+                if portability and portability.write_context(session['id']) != transfer_context:
+                    raise ValueError('The task moved while reading the output; inspect and retry.')
+                if current.get('executionRevision', 0) != session.get('executionRevision', 0):
+                    raise ValueError('The task execution folder changed while reading the output; inspect and retry.')
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
                 if action in {'outputs.unlink','outputs.relink'}:

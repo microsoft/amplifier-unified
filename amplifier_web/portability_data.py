@@ -60,6 +60,17 @@ def native_directory(app, session):
     return SessionStore.for_app(app.data_dir, session['workspace']).directory(identity)
 
 
+def _operation_event(sequence, event_id, value):
+    if value.startswith('sha256:'):
+        digest_value = value.removeprefix('sha256:')
+        if len(digest_value) != 64 or any(char not in '0123456789abcdef' for char in digest_value):
+            raise ValueError('Saved operation event has an invalid evidence digest')
+        # The journal keeps output bytes in operation_output and only their
+        # event identity/digest here. Preserve both without inventing an event.
+        return {'sequence': sequence, 'eventId': event_id, 'sha256': digest_value}
+    return json.loads(value)
+
+
 def capture(app, session):
     identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
     native = native_directory(app, session)
@@ -94,7 +105,7 @@ def capture(app, session):
         for (value,) in db.execute('SELECT value FROM operations WHERE session_id=?', (session['id'],)):
             row = json.loads(value)
             observations['operations'].append({'record': row,
-                'events': [json.loads(x[0]) for x in db.execute('SELECT value FROM operation_events WHERE operation_id=? ORDER BY sequence', (row['id'],))],
+                'events': [_operation_event(*x) for x in db.execute('SELECT sequence,event_id,value FROM operation_events WHERE operation_id=? ORDER BY sequence', (row['id'],))],
                 'output': [json.loads(x[0]) for x in db.execute('SELECT value FROM operation_output WHERE operation_id=? ORDER BY cursor', (row['id'],))]})
     previous_transfer = session.get('portabilityEvidence', {}).get('transferId')
     if previous_transfer:
@@ -149,6 +160,23 @@ def validate(value):
         raise ValueError('Malformed task transfer data') from exc
 
 
+def _receipt_belongs(record, sid, output_ids, comment_outputs):
+    # Output commands save full output records; comment commands save a result
+    # bound through outputId. Neither command kind has an unscoped receipt.
+    return (isinstance(record, dict)
+            and ('sessionId' not in record or (record['sessionId'] == sid and record.get('id') in output_ids))
+            and ('outputId' not in record or (record['outputId'] in output_ids
+                 and record.get('id') in comment_outputs and comment_outputs[record['id']] == record['outputId']))
+            and (record.get('sessionId') == sid or record.get('outputId') in output_ids))
+
+
+def _validate_output_receipts(receipts, sid, output_ids, comment_outputs):
+    if len({row['id'] for row in receipts}) != len(receipts):
+        raise ValueError('Duplicate output receipt identities')
+    if any(not _receipt_belongs(row['value'], sid, output_ids, comment_outputs) for row in receipts):
+        raise ValueError('Output receipt must belong to the transferred task or its outputs')
+
+
 def _validate(value):
     validate_public(value)
     if len(json.dumps(value).encode()) > MAX_BYTES:
@@ -193,6 +221,10 @@ def _validate(value):
     output_ids = {row['id'] for row in value['outputs']}
     if len(output_ids) != len(value['outputs']):
         raise ValueError('Duplicate output identities')
+    comment_outputs = {row['id']: row['outputId'] for row in value['comments']}
+    if len(comment_outputs) != len(value['comments']):
+        raise ValueError('Duplicate output comment identities')
+    _validate_output_receipts(value['outputReceipts'], session['id'], output_ids, comment_outputs)
     for row in value['outputs']:
         if row['sessionId'] != session['id'] or (row.get('parentId') and row['parentId'] not in output_ids) or any(key not in output_ids for key in row.get('evidenceIds', [])):
             raise ValueError('Output lineage must remain in the transferred task')
@@ -215,7 +247,36 @@ def _validate(value):
 
 def preflight_install(app, value):
     """Reject destination identity conflicts before publishing any imported data."""
+    from .resource_files import root
+    directory = root(app.db)
+    for key, resource in value['resources'].items():
+        raw = json.dumps(resource, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+        if digest(raw) != key:
+            raise ValueError('Saved output resource integrity check failed')
+        existing = app.db.execute('SELECT value FROM state_resources WHERE id=?', (key,)).fetchone()
+        if existing:
+            try:
+                indexed = json.loads(existing[0])
+            except (ValueError, TypeError) as exc:
+                raise ValueError('Existing output resource index is invalid; recover it before transfer') from exc
+            blob = indexed == {'$blob': key} and directory is not None
+            if not blob and json.dumps(indexed, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode() != raw:
+                raise ValueError('Existing output resource index conflicts with transferred evidence')
+        if directory is not None:
+            try:
+                saved, _ = _regular_bytes(directory / (key + '.json'), MAX_BYTES)
+            except FileNotFoundError:
+                # An absent file can be restored exactly by put(). A conflicting
+                # file must be retained, including files missing from the index.
+                continue
+            if saved != raw:
+                raise ValueError('Existing output resource file conflicts with transferred evidence')
     sid = value['session']['id']
+    output_ids = {row['id'] for row in value['outputs']}
+    comment_outputs = {row['id']: row['outputId'] for row in value['comments']}
+    if len(comment_outputs) != len(value['comments']):
+        raise ValueError('Duplicate output comment identities')
+    _validate_output_receipts(value['outputReceipts'], sid, output_ids, comment_outputs)
     for row in value['outputs']:
         existing = app.db.execute('SELECT session_id FROM output_records WHERE id=?', (row['id'],)).fetchone()
         if existing and existing[0] != sid: raise ValueError('An output identity belongs to another task')
@@ -226,9 +287,17 @@ def preflight_install(app, value):
         if any(current['id'] == row['id'] and current.get('sessionId') != sid for current in app.state.get('canvasArtifacts', [])):
             raise ValueError('A canvas identity belongs to another task')
     for row in value['outputReceipts']:
-        existing = app.db.execute('SELECT fingerprint FROM output_receipts WHERE id=?', (row['id'],)).fetchone()
-        if existing and existing[0] != row['fingerprint']:
-            raise ValueError('An output command identity already has different contents')
+        existing = app.db.execute('SELECT fingerprint,value FROM output_receipts WHERE id=?', (row['id'],)).fetchone()
+        if existing:
+            try:
+                saved = json.loads(existing[1])
+            except (ValueError, TypeError) as exc:
+                raise ValueError('Existing output receipt is invalid; recover it before transfer') from exc
+            if not _receipt_belongs(saved, sid, output_ids, comment_outputs):
+                raise ValueError('An output receipt identity belongs to another task or output')
+            if (existing[0] != row['fingerprint']
+                    or json.dumps(saved, sort_keys=True) != json.dumps(row['value'], sort_keys=True)):
+                raise ValueError('An output receipt identity already has different contents')
     for question in value['observations']['questions']:
         if question['sessionId'] != sid:
             raise ValueError('Question belongs to another task')
@@ -276,4 +345,4 @@ def install_receipts(app, value):
         existing = app.db.execute('SELECT session_id FROM questions WHERE id=?', (question['id'],)).fetchone()
         if existing and existing[0] != sid:
             raise ValueError('Question identity belongs to another task')
-        app.db.execute('INSERT OR REPLACE INTO questions VALUES (?,?,?,?)', (question['id'], sid, question['createdAt'], json.dumps(question)))
+        app.questions.store.put(question)
