@@ -43,7 +43,7 @@ try{
  const browse=path=>page.getByRole('button',{name:'Browse '+path,exact:true});
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const waitPath=path=>page.waitForFunction(path=>window.amplifier.getShellState()?.snapshots?.workspaces?.workspaceExplorer?.path===path,path);
- const showPath=async path=>{await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await waitPath(path)};
+ const showPath=async path=>{await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await waitPath(path)};
 
  await page.goto(vite.resolvedUrls.local[0]);
  await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();
@@ -125,29 +125,41 @@ try{
  await page.setViewportSize({width:1280,height:900});
  assert.deepEqual((await info()).runtimeStarts,[],'browsing saved workspaces never mounts their runtimes');
 
- // Creating a workspace opens a configurable draft without saving an empty chat.
- await showPath(paths.dev);
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
- await page.locator('#nav-workspace-path').fill(paths.new);
- await page.getByRole('button',{name:'Create workspace',exact:true}).click();
- await page.waitForFunction(path=>window.amplifier.getState().settings.workspace===path,paths.new);
- let current=await info(),newWorkspace=current.state.workspaces.find(workspace=>workspace.path===paths.new);
+ // The folder chooser prepares the new-chat draft without registering a chat.
+ const registrations=(await info()).state.workspaces.map(row=>row.id);
+ await page.getByRole('button',{name:'New chat',exact:true}).click();
+ await page.getByRole('button',{name:'Workspace',exact:true}).click();
+ assert.equal(await page.getByRole('button',{name:'New workspace',exact:true}).count(),0);
+ await page.getByRole('button',{name:'Browse',exact:true}).click();
+ const folderPath=page.getByRole('textbox',{name:'Folder path',exact:true});
+ const parent=paths.new.slice(0,paths.new.lastIndexOf('/'));
+ await folderPath.fill(paths.dev);await page.getByRole('button',{name:'Go',exact:true}).click();
+ await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.dev);
+ await page.getByRole('button',{name:'New folder',exact:true}).click();
+ await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('new-parent');
+ await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,parent);
+ await page.getByRole('button',{name:'New folder',exact:true}).click();
+ await page.getByRole('textbox',{name:'New folder name',exact:true}).fill(paths.new.slice(paths.new.lastIndexOf('/')+1));
+ await page.getByRole('button',{name:'Create folder',exact:true}).click();
+ await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.new);
+ await page.getByRole('button',{name:'Use this folder',exact:true}).click();
+ await page.waitForFunction(path=>window.amplifier.getState().view.newSessionDraft.workspace===path,paths.new);
+ let current=await info();
  assert.equal(current.directories.new,true);
- assert.ok(newWorkspace);
+ assert.deepEqual(current.state.workspaces.map(row=>row.id),registrations);
  assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.new&&chat.sessionKind!=='worker').length,0);
- assert.equal(current.state.selectedWorkspaceId,newWorkspace.id);
- assert.equal(current.state.view.newSessionDraft.workspace,paths.new);
  assert.equal(current.state.selectedSessionId,null);
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
- await page.locator('#nav-workspace-path').fill(paths.existing);
- await page.getByRole('button',{name:'Create workspace',exact:true}).click();
- await page.waitForFunction(path=>window.amplifier.getState().settings.workspace===path,paths.existing);
+ await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await folderPath.fill(paths.existing);await page.getByRole('button',{name:'Go',exact:true}).click();
+ await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.existing);
+ await page.getByRole('button',{name:'Use this folder',exact:true}).click();
+ await page.waitForFunction(path=>window.amplifier.getState().view.newSessionDraft.workspace===path,paths.existing);
  current=await info();
  assert.equal(current.existingContents,'Existing workspace contents must stay intact.\n');
  assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,0);
- assert.equal(current.state.view.newSessionDraft.workspace,paths.existing);
  assert.equal(current.state.selectedSessionId,null);
- // Agent creation is the same action; repeating it must not commit a chat.
+ // Explicit agent workspace creation remains compatible and does not commit a chat.
  await agent('workspace.create',{path:paths.existing});
  current=await info();
  assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,0);

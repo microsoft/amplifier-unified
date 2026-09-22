@@ -68,10 +68,7 @@ try{
  assert.deepEqual((await info()).runtimeStarts,[]);
  assert.deepEqual((await info()).runtimeSends,[]);
 
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
- await page.locator('#nav-workspace-path').waitFor();
- await page.getByRole('button',{name:'Cancel navigation edit'}).click();
- await page.locator('#nav-workspace-path').waitFor({state:'detached'});
+ assert.equal(await page.getByRole('button',{name:'New workspace',exact:true}).count(),0);
 
  // Bounded paging does not change the selected chat. Pinning from page three returns to page one.
  await page.getByRole('button',{name:'Show more conversations'}).click();await waitPage(1);assert.equal(await rows().count(),100);
@@ -151,6 +148,7 @@ try{
 
  // Long paths and icon controls remain accessible inside a narrow navigation panel.
  await page.setViewportSize({width:390,height:844});
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),'document stays inside narrow viewport');
  const overflow=await rows().evaluateAll(elements=>elements.filter(element=>element.scrollWidth>element.clientWidth+1).length);
  assert.equal(overflow,0,'chat labels truncate without horizontal row overflow');
@@ -194,6 +192,7 @@ try{
  const touchPage=await touchContext.newPage();touchPage.on('pageerror',error=>errors.push(error.message));
  try{
   await touchPage.goto(vite.resolvedUrls.local[0]);
+  await touchPage.getByRole('button',{name:'Open navigation',exact:true}).tap();
   await touchPage.getByRole('group',{name:'Chat view'}).waitFor();
   await touchPage.getByRole('button',{name:'All chats',exact:true}).tap();
   await touchPage.waitForFunction(()=>window.amplifier.getShellState()?.snapshots?.chats?.view.navChatScope==='all');
