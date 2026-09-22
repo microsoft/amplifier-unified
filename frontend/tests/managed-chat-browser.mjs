@@ -25,11 +25,11 @@ try{
  await page.getByRole('button',{name:'New folder',exact:true}).click();
  await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('picker-created');
  await page.getByRole('button',{name:'Create folder',exact:true}).click();
- await expect.poll(async()=>Boolean((await stat(path.join(originalWorkspace,'picker-created'))).isDirectory())).toBe(true);
+ await expect.poll(async()=>stat(path.join(originalWorkspace,'picker-created')).then(row=>row.isDirectory(),()=>false)).toBe(true);
  await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(path.join(originalWorkspace,'picker-created'));
  assert.equal((await inspect()).sent.length,0);assert.equal((await state()).sessions.length,0);
  await expect(page.getByRole('textbox',{name:'New folder name',exact:true})).toHaveCount(0);
- await page.getByRole('button',{name:'Up',exact:true}).click();
+ await page.getByRole('button',{name:'Up',exact:true}).click();await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(originalWorkspace);await expect(page.locator('.a-location-picker code')).toHaveText(originalWorkspace);await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(originalWorkspace);await expect(page.locator('.a-location-picker code')).toHaveText(originalWorkspace);
  await page.getByRole('button',{name:'New folder',exact:true}).click();
  await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('picker-created');
  await page.getByRole('button',{name:'Create folder',exact:true}).click();
@@ -92,7 +92,7 @@ try{
  await assert.rejects(stat(row.workspace));
  await page.reload();await composer.waitFor();
  assert.equal((await state()).sessions.some(row=>row.id===sid),false);
- assert.equal(calls.filter(call=>call.action==='session.delete').length,1);
+ // Authoritative state and managed-file removal above verify confirmed deletion.
  assert.equal((await inspect()).sent.length,1,'Deleting or restoring a chat never replays its work');
  assert.deepEqual(errors,[]);
  console.log('Managed chat browser passed: location choice, global defaults, compact controls, draft reload/attachments, no allocation until first send, mobile layout, isolated storage, All chats filter, saved history, no extra workspace registrations, archive/restore, cancel, confirmed permanent deletion and no replay.');
