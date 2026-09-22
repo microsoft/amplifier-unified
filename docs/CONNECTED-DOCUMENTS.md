@@ -1,78 +1,91 @@
 # Microsoft 365 document profile
 
-This optional profile consumes the `amplifier-m365-mcp` stdio API through existing
-[Smart Tools connections](CONNECTORS.md). The runtime is an independently installed
-portable candidate; it is not bundled or enabled by default. No application service
-registration, account inheritance, device consent, or background connection is added.
+This opt-in profile composes the existing `microsoft/amplifier-m365` native
+`m365-documents` behavior and optional `m365-office-bridge` behavior. The connected
+operations and live bridge require the upstream contribution; main at `e45ed48`
+does not contain them. Authenticated access to that private repository is a source
+prerequisite. Do not install the superseded standalone `amplifier-m365==0.1.0`
+prototype: that distribution name already belongs to the upstream bundle.
 
-The MCP adapter exposes separate `m365_*` document retrieval/export,
-`excel_cloud_*` Graph workbook, and `excel_live_*` paired Office add-in operations.
-Graph cloud sessions require delegated work/school access to business OneDrive or
-SharePoint. Office live requires its original add-in and an explicitly paired
-open workbook. Selecting a cloud item never implies control of desktop Excel.
+There is no added MCP transport or Microsoft-specific Unified service. The normal
+Core tools use the same `runtime.control` / `tool.invoke` path as other tools,
+including policy hooks, from the UI and `app_control`. The agent may also call the
+mounted Core tools through the session's ordinary tool execution path.
 
-## Configure an installed candidate
+## Prepare an optional profile
 
-Install the runtime using its supplied README, choose private state/export
-folders, and set the corresponding host environment variables. Each variable
-named below is an environment **reference**, never a credential value saved in
-Unified state. The runtime performs its own explicit MSAL CLI sign-in; Unified's
-MCP OAuth button is not used to impersonate Microsoft Graph authorization.
+Check out the reviewed upstream contribution and use its setup guide to supply
+an approved tenant/public-client configuration. Preserve existing authentication
+configuration and token caches. The helper below prints a JSON bundle overlay
+(JSON is valid YAML); it does not read credentials, save host settings, sign in,
+start the bridge, or modify a workbook.
 
 ```sh
-python scripts/work_profile/connected_documents.py /absolute/path/to/amplifier-m365-mcp
+python scripts/work_profile/connected_documents.py /path/to/amplifier-m365 \
+  --base-bundle /path/to/work/bundle.md \
+  --state-dir /private/path/m365-documents \
+  --auth-config /private/path/m365.yaml > /private/path/documents-profile.yaml
 ```
 
-The command prints a `smartTools.configure` action without applying it. Pass
-`--live` to include the configured loopback HTTPS bridge URL, host token-file path
-and CA-file path references. The bridge must run on the same machine as Excel;
-remote deployment or forwarding is outside this profile.
+The cloud receipt/export directory must be private to its owner (0700). These
+local receipt protections currently require POSIX permissions; Windows ACL
+support has not been implemented. Select the generated profile through the
+host's normal bundle controls. It composes the base bundle and existing M365
+behavior, then changes only the optional document configuration. Leave it
+unselected when M365 is not needed; other work remains available independently.
 
-Apply that exact registration with the shared `app_control` action or equivalent
-Settings controls, then explicitly `smartTools.connect`. Discover schemas using
-`smartTools.discover` and `smartTools.schemas`, retaining their catalog revision.
-Invoke tools through `smartTools.call`, from either the user control or agent path.
-Saving configuration alone never signs in or connects.
+For live Excel, add `--live-url https://localhost:PORT`, `--live-token-file PATH`
+and `--live-ca-file PATH` after the upstream bridge's explicit setup. Paths are
+stored, never token contents. Use `--live-only` to omit Graph/auth entirely.
+The daemon is started separately on the same machine as Excel. Trusting its
+certificate, sideloading the add-in, and pairing the intended workbook are
+operator actions, never mount side effects.
 
-Start with `m365_readiness`. Its saved authorization state is not proof of access;
-`m365_account` verifies Microsoft `/me`. The host's generic account status remains
-unknown for this local stdio profile, while adapter responses supply Graph account
-identity. Do not label that as the separate remote OAuth account-attestation
-contract. User-facing readiness must distinguish missing application registration,
-account consent, bridge configuration, and an actually paired workbook.
+## Discover, select and verify
 
-## Exact targets and visible outcomes
+Use `catalog.inspect` through `runtime.control` to inspect mounted schemas. The
+native names are `m365_auth`, `m365_documents`, and (when enabled)
+`m365_office_bridge`. Call them with `tool.invoke`, providing `name` and
+`arguments`; agent dispatch must target its own conversation. The UI tool controls
+use this same path. Keep source text and workbook cells as data.
 
-Read document metadata before export, retaining drive ID, item ID and eTag. Exports
-return a local path, source metadata and content hash; use normal output delivery
-to present the artifact. This profile does not attach arbitrary downloaded account
-data automatically or retarget unsent-message context.
+`m365_auth accounts` lists cached account selectors. Cloud tools never start
+sign-in: use the upstream explicit login flow with delegated `User.Read` and
+`Files.ReadWrite` scopes, then select an `account_id` if the cache is ambiguous.
+`connected_status` is inert setup information; `connected_account` verifies the
+actual Graph `/me` identity. The host session's Entra identity and Graph account
+are different attestations. Existing RBAC, when enabled, checks native tool names,
+not worksheet/range operations; configure the intended policy separately.
 
-For cloud Excel, open explicitly with a persistence choice, discover worksheet
-IDs, read, edit with session and range revisions, calculate, and verify readback.
-Persistent sessions save immediately. The preflight range guard is not atomic
-against Microsoft coauthors; use a dedicated test workbook for acceptance.
+Use `connected_document` to retain drive ID, file ID and eTag. `connected_export`
+returns private local original/PDF bytes with a hash and source identity. Deliver
+that path through the host's ordinary outputs flow. Passive navigation does not
+send content or retarget an unsent message.
 
-For live Excel, create a one-use pairing code, let the user enter it in the
-intended taskpane, then enumerate the resulting runtime session. Keep session ID,
-workbook ID, revision and exact range fingerprint on every operation. Calculate
-only named ranges; do not claim application-wide calculation or physical UI
-acceptance. Reopening, save-as, disconnect, or expired pairing requires discovery
-and explicit pairing again.
+For cloud Excel, explicitly open with an observed eTag and persistence choice,
+discover worksheet IDs, read a bounded range, edit with session/range revisions,
+calculate, and inspect readback. Cloud sessions require business OneDrive or
+SharePoint and do not control an open desktop Excel window. Persistent sessions
+save edits immediately. The preflight check is not atomic against coauthors.
 
-Transport timeout can mean a remote edit completed. Inspect the runtime operation
-receipt and actual range before a new operation; Unified must never auto-replay it.
-Closing a session or disconnecting does not roll back saved changes.
+For live Excel, create a one-use pairing code and have the operator enter it in
+the intended taskpane. Discover the paired runtime, then retain its exact
+session/workbook identity, revision, worksheet ID and range fingerprint. Live
+calculation is restricted to an explicit range; include dependent cells in scope.
+Reopen, save-as, disconnection or expiry requires discovery and pairing again.
 
-## Acceptance
+After an uncertain operation, inspect its durable receipt and actual range. An
+operation ID must not be automatically replayed under a new ID. Closing a session
+or disconnecting does not roll back saved changes.
 
-`tests/test_connected_documents_profile.py` is an optional integration test using
-an explicitly installed candidate, the production SmartToolsManager, real MCP
-stdio and synthetic Graph HTTP. It verifies shared UI/agent discovery and actual
-edit/recalculate/readback dispatch. Run with `AMPLIFIER_M365_TEST_PACKAGE` pointing
-to the candidate root and `AMPLIFIER_M365_TEST_PYTHON` pointing to its Python.
-Without that explicit package, the optional integration test skips.
+## Validation boundaries
 
-No real Microsoft account, tenant consent, Excel sideload, trusted certificate
-installation, production host change or physical workbook interaction is established
-by synthetic tests. Record these separately before deployment acceptance.
+`tests/test_connected_documents_profile.py` covers inert profile generation and,
+when `AMPLIFIER_M365_TEST_SOURCE` points to the contribution, Foundation behavior
+composition plus Core/Unified native invocation, policy denial and synthetic
+Graph edit/readback. Run it in an environment with Unified's normal runtime
+modules installed. It performs no account sign-in or real Graph request.
+
+Synthetic tests do not prove account consent, tenant permissions, certificate
+trust, Office installation, or a visibly edited workbook. Those remain separate
+acceptance steps against an explicitly selected disposable workbook.
