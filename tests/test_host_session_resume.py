@@ -44,7 +44,7 @@ def mounted_host(tmp_path, monkeypatch):
                                create_session=AsyncMock(return_value=session))
     loaded = SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
-    registry = SimpleNamespace(list_registered=lambda: {}, register=Mock(), save=Mock(),
+    registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
     monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
