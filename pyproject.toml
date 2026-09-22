@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
-    "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@8b704f610584d32fc58b1e287dbf62eef4e7a880",
+    "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=1.6.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
