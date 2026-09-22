@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 import uuid
 
@@ -14,16 +15,46 @@ def is_managed(value):
     return isinstance(value, dict) and isinstance(value.get("location"), dict) and value["location"].get("kind") == "managed"
 
 
+MAX_MARKER_BYTES = 4096
+
+
 def metadata(workspace):
-    """Read the host allocation marker outside the chat's files directory."""
+    """Read only a bounded, regular allocation record at a canonical chat path.
+
+    Catalog/default/deletion callers may run under the app lock. A substituted
+    FIFO must never wait for a writer, and a link must never redirect this read.
+    Validate the expected UUID layout before touching the filesystem.
+    """
     path = Path(workspace).expanduser().absolute()
     if path.name != "files" or path.parent.parent.name != "chats":
         return None
     try:
         if str(uuid.UUID(path.parent.name)) != path.parent.name:
             return None
-        value = json.loads((path.parent / "managed-chat.json").read_text())
-        if isinstance(value, dict) and value.get("version") == 1 and value.get("id") == path.parent.name and value.get("workspace") == str(path):
+        for part in (path, *path.parents):
+            if part.is_symlink():
+                return None
+        marker = path.parent / "managed-chat.json"
+        before = marker.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_MARKER_BYTES:
+            return None
+        # NONBLOCK also protects the open if a regular marker becomes a FIFO
+        # between lstat and open. NOFOLLOW rejects a replaced final symlink.
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(marker, flags)
+        try:
+            opened = os.fstat(fd)
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_MARKER_BYTES
+                    or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+                return None
+            encoded = os.read(fd, MAX_MARKER_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(encoded) > MAX_MARKER_BYTES:
+            return None
+        value = json.loads(encoded)
+        if (isinstance(value, dict) and value.get("version") == 1
+                and value.get("id") == path.parent.name and value.get("workspace") == str(path)):
             return value
     except (OSError, ValueError, TypeError):
         pass

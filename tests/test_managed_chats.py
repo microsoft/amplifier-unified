@@ -214,3 +214,68 @@ async def test_agent_bridge_creates_and_inspects_same_managed_location(app):
     observed=await app.app_bridge('get_state', {'path':'/sessions'}, source)
     assert row['id'] in str(observed) and 'managed' in str(observed)
     assert not app.runtime.started and not app.runtime.sent
+
+
+@pytest.mark.parametrize('kind', ['fifo', 'directory', 'oversized', 'symlink'])
+def test_managed_marker_reader_rejects_special_or_unbounded_files(tmp_path, kind, monkeypatch):
+    import os
+    home = tmp_path/'app'; home.mkdir()
+    identity = str(uuid.uuid4())
+    files = Path(allocate(home, identity, 'marker-test'))
+    marker = files.parent/'managed-chat.json'
+    assert metadata(files)['id'] == identity
+    marker.unlink()
+    if kind == 'fifo':
+        if not hasattr(os, 'mkfifo'):
+            pytest.skip('FIFO fixtures require POSIX')
+        os.mkfifo(marker)
+    elif kind == 'directory':
+        marker.mkdir()
+    elif kind == 'oversized':
+        marker.write_bytes(b' ' * 4097)
+    else:
+        target = tmp_path/'outside-marker.json'; target.write_text('{}')
+        marker.symlink_to(target)
+    # None of these may even be opened, including a FIFO with no writer.
+    def forbidden_open(*args, **kwargs):
+        raise AssertionError('Invalid marker was opened')
+    monkeypatch.setattr(os, 'open', forbidden_open)
+    assert metadata(files) is None
+
+
+def test_managed_marker_reader_bounds_read_and_rejects_replacement(tmp_path, monkeypatch):
+    import os
+    if not hasattr(os, 'mkfifo') or not hasattr(os, 'O_NOFOLLOW'):
+        pytest.skip('No-follow FIFO race fixture requires POSIX')
+    home=tmp_path/'app';home.mkdir()
+    files=Path(allocate(home,str(uuid.uuid4()),'marker-race'))
+    marker=files.parent/'managed-chat.json'
+    original_open=os.open; original_read=os.read; opened=[]
+    def replace_on_open(path, flags):
+        # Keep the expected inode alive, so the replacement cannot reuse it.
+        marker.rename(marker.with_name('old-marker.json'))
+        os.mkfifo(marker)
+        opened.append(flags)
+        return original_open(path, flags)
+    monkeypatch.setattr(os, 'open', replace_on_open)
+    def forbidden_read(*args):
+        raise AssertionError('A substituted FIFO was read')
+    monkeypatch.setattr(os, 'read', forbidden_read)
+    assert metadata(files) is None
+    assert opened[0] & os.O_NONBLOCK and opened[0] & os.O_NOFOLLOW
+    monkeypatch.setattr(os,'open',original_open)
+    marker.unlink();marker.with_name('old-marker.json').rename(marker)
+    def bounded_read(fd, count):
+        assert count == 4097
+        return original_read(fd,count)
+    monkeypatch.setattr(os,'read',bounded_read)
+    assert metadata(files) is not None
+
+
+def test_managed_marker_rejects_noncanonical_layout_before_filesystem_access(monkeypatch):
+    def forbidden(*args):
+        raise AssertionError('Unrecognized chat layout touched the filesystem')
+    monkeypatch.setattr(Path,'is_symlink',forbidden)
+    assert metadata('/app/chats/not-a-uuid/files') is None
+    assert metadata('/app/chats/00000000000000000000000000000000/files') is None
+    assert metadata('/app/workspaces/00000000-0000-0000-0000-000000000000/files') is None

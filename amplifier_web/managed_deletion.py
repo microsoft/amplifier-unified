@@ -95,6 +95,13 @@ def _scope(app, sid):
     if not is_managed(row):
         raise ValueError('Only chats created without a workspace can be deleted. Archive this workspace chat instead.')
     folder = Path(row.get('workspace', '')).absolute()
+    try:
+        canonical = str(uuid.UUID(folder.parent.name)) == folder.parent.name
+    except ValueError:
+        canonical = False
+    if not canonical or folder != app.data_dir.resolve()/'chats'/folder.parent.name/'files':
+        raise ValueError(UNOWNED)
+    _safe(folder)
     marker = metadata(folder)
     if marker is None or folder != app.data_dir.resolve()/'chats'/marker['id']/'files':
         raise ValueError(UNOWNED)
