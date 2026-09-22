@@ -25,6 +25,21 @@ def test_unique_path_suffixes_include_ancestors_only_when_needed():
     assert len(set(labels.values())) == len(labels)
 
 
+def test_path_labels_refresh_on_registry_changes_and_cannot_be_mutated_by_callers():
+    paths = ['/work/team/app']
+    labels = path_labels(paths)
+    assert labels == {'/work/team/app': 'app'}
+    labels['/work/team/app'] = 'caller edit'
+    assert path_labels(iter(paths)) == {'/work/team/app': 'app'}
+    paths.append('/personal/team/app')
+    assert path_labels(paths) == {
+        '/work/team/app': 'work/team/app',
+        '/personal/team/app': 'personal/team/app',
+    }
+    paths.pop()
+    assert path_labels(paths) == {'/work/team/app': 'app'}
+
+
 def test_activity_filters_cover_the_full_library_before_pagination_and_keep_metadata_bounded():
     state = state_fixture()
     state['view'] = {'navChatScope': 'all', 'navStatusFilter': 'attention'}

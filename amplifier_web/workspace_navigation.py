@@ -108,7 +108,9 @@ def _index(state):
         if workspace is None:
             continue
         path = _path(workspace['path'])
-        entry = chats.setdefault(path, {'workspace': workspace, 'workspaceSelections': {}, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)})
+        entry = chats.get(path)
+        if entry is None:
+            entry = chats[path] = {'workspace': workspace, 'workspaceSelections': {}, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)}
         entry['workspaceSelections'][workspace['id']] = workspace
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
