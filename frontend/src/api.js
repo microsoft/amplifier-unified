@@ -22,7 +22,7 @@ export function attachClient(signal){
 let hostClock;
 export function hostNow(){return hostClock?hostClock.seconds+(performance.now()-hostClock.received)/1000:Date.now()/1000}
 export async function request(path, options = {}) {
-  const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId}:{}), ...options.headers };
+  const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
   const res=await fetch(path,{...options,body,headers,credentials:'same-origin'});

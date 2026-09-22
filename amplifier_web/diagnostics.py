@@ -377,12 +377,35 @@ class Diagnostics:
                 rows.append({'id':dest['id'],'counts':counts,'last':dict(last) if last else None,'error':json.loads(failure[0]) if failure else None,'credentialAvailable':bool(os.environ.get(dest['apiKeyEnv'])) if dest['authMode']=='static' else None})
             return {'config':copy.deepcopy(self.config),'local':local,'destinations':rows,'results':copy.deepcopy(self.results)}
 
-    async def publish(self):
+    def observed(self):
+        """Saved settings selection is not demand after its client disconnects."""
+        for queue, identity in self.service.queue_clients.items():
+            if self.service.queue_sessions.get(queue) is not None:
+                continue
+            record = self.service._state if identity is None else self.service.clients.records.get(identity, {})
+            view = record.get('view', {})
+            expanded = view.get('settingsExpanded')
+            if view.get('panel') == 'settings' and isinstance(expanded, list) and 'diagnostics' in expanded:
+                return True
+        return False
+
+    @staticmethod
+    def health(summary):
+        # Capture timestamps and record counts are useful in Diagnostics, but
+        # must not drive whole-app saves and stream events while it is closed.
+        # Errors, dropped records and destination delivery health still do.
+        return {**summary, 'local': {key: value for key, value in summary.get('local', {}).items()
+                                    if key not in {'records', 'oldest', 'newest'}}}
+
+    async def publish(self, *, background=False):
         try:summary=await asyncio.to_thread(self._summary)
         except Exception:
             self._storage_failed();summary=self._unavailable_summary()
         if summary!=self._last_summary and not self.service.closed:
             async with self.service.lock:
+                if (background and self._last_summary is not None and not self.observed()
+                        and self.health(summary) == self.health(self._last_summary)):
+                    return
                 self.service.state['diagnostics'].update(summary)
                 self.service._publish()
             self._last_summary=summary
@@ -396,7 +419,7 @@ class Diagnostics:
                         previous=self.delivery_tasks.get(dest['id'])
                         if self.storage_ready and dest['enabled'] and (previous is None or previous.done()):
                             self.delivery_tasks[dest['id']]=asyncio.create_task(self.deliver(copy.deepcopy(dest)))
-                    await self.publish()
+                    await self.publish(background=True)
                 except Exception:
                     # Diagnostics must not terminate its loop (or a chat) when
                     # storage disappears temporarily. Try again next cycle.

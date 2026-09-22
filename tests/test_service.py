@@ -588,19 +588,20 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         await app.dispatch('session.create', {})
         await runtime.close()
         request = {'text': 'Keep this unsent request'}
-        with pytest.raises(RuntimeError, match='host is closing'):
+        with pytest.raises(AppError, match='did not send your message') as failure:
             await app.dispatch('conversation.send', request, command_id='failed-start')
+        assert failure.value.status == 503 and failure.value.code == 'worker_startup_failed'
         session = app.get_state()['sessions'][0]
         assert session['status'] == 'error'
-        assert 'not automatically replayed' in session['error']
+        assert 'message has been saved' in session['error']
         message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
         assert message['text'] == request['text']
-        assert message['delivery']['status'] == 'unknown'
+        assert message['delivery']['status'] == 'failed'
         assert session['execution']['turns'][-1]['phase'] == 'error'
         assert not UpdateManager(app).busy()
         duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
         assert duplicate['duplicate'] is True
-        assert duplicate['delivery'] == 'unknown'
+        assert duplicate['accepted'] is False and duplicate['delivery'] == 'failed'
         assert not runtime.workers
     finally:
         await app.close()

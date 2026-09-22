@@ -419,3 +419,44 @@ async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnost
     assert {r['data']['runtimeSessionId'] for r in rows}=={'root:worker-1','historical-root'}
     assert not native_root.exists()
     assert not (tmp_path/'unavailable-cli-folder').exists()
+
+
+async def test_background_capture_counts_do_not_publish_until_observed_but_health_does(service, monkeypatch):
+    collector = service.diagnostics
+    current = {'config': {}, 'local': {'records': 1, 'oldest': 1, 'newest': 1,
+        'dropped': 0, 'storageError': False}, 'destinations': [], 'results': {}}
+    monkeypatch.setattr(collector, '_summary', lambda: copy.deepcopy(current))
+    await collector.publish(background=True)
+    revision = service.state['revision']
+    for number in range(2, 12):
+        current['local'].update(records=number, oldest=number, newest=number)
+        await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    assert service.state['diagnostics']['local']['records'] == 1
+    # Opening another settings page or a disconnected client's retained view
+    # is not a subscription to diagnostics counters.
+    record = service.clients.attach('diagnostics-client')
+    record['view'].update(panel='settings', settingsExpanded=['diagnostics'])
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    with service.clients.bind('diagnostics-client'):
+        queue = service.subscribe()
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    assert service.state['diagnostics']['local']['records'] == 11
+    record['view']['settingsExpanded'] = ['appearance']
+    current['local']['newest'] = 12
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    current['local']['storageError'] = True
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 2
+    assert service.state['diagnostics']['local']['storageError'] is True
+    current['local'].update(storageError=False, dropped=1)
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 3
+    service.unsubscribe(queue)
+    # Explicit inspection remains available to agent callers without UI demand.
+    current['local']['records'] = 20
+    await collector.publish()
+    assert service.state['diagnostics']['local']['records'] == 20

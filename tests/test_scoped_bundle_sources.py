@@ -25,6 +25,17 @@ def write(path, data):
     path.write_text(yaml.safe_dump(data))
 
 
+@pytest.fixture(autouse=True, params=['current', 'legacy'])
+def registry_api(request, monkeypatch):
+    """Exercise the older constructor and its eager cleanup save path too."""
+    if request.param == 'legacy':
+        class LegacyRegistry(BundleRegistry):
+            def __init__(self, home=None, *, strict=False, include_source_resolver=None):
+                super().__init__(home, strict=strict, include_source_resolver=include_source_resolver)
+                self.save()
+        monkeypatch.setattr('amplifier_foundation.BundleRegistry', LegacyRegistry)
+
+
 @pytest.fixture
 def source_fixture(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
