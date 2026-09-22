@@ -65,7 +65,7 @@ ACTION_DEFINITIONS = {
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
-    "canvas.select": ("Reopen a saved artifact by ID from canvasArtifacts", schema({"id":string(100)})),
+    "canvas.select": ("Reopen a saved artifact in the calling chat. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100)}, ["id"])),
     "canvas.visibility": ("Show or hide this client's retained Canvas viewer without discarding edits. Bind sessionId and canvasId from the current state; optionally address an attached clientId.", schema({"open":{"type":"boolean"},"sessionId":{"type":["string","null"]},"canvasId":{"type":["string","null"]},"clientId":string(200)},["open","sessionId","canvasId"])),
     "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
@@ -896,10 +896,10 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
-                    return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state)
+                    return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
         if action.startswith("kernels."):
@@ -1069,6 +1069,8 @@ class AppService:
                 from .canvas_visibility import update
                 return update(self, args, command_id, fingerprint, include_state=include_state)
             opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose', 'canvas.views.open'} or (action == 'canvas.show' and not args.get('sessionId'))
+            if action == 'canvas.select' and origin == 'agent' and caller_session_id and self.state.get('selectedSessionId') != caller_session_id:
+                raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
             if opens_selected_canvas and self.state.get('selectedSessionId') is None:
                 raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
             from .canvas_library import remember, restore, fork_artifacts
@@ -1168,9 +1170,9 @@ class AppService:
                         'content':content,'filename':'canvas.'+extension,'mime':'text/plain','canvasId':args['id']})
                 elif action=='canvas.show':
                     sid=args.get('sessionId',self.state.get('selectedSessionId'))
-                    owner=self._session(sid) if sid else None
-                    workspace=next((w for w in self.state['workspaces'] if owner and w['path']==owner['workspace']),None)
-                    scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace['id'] if workspace else self.state['selectedWorkspaceId']}
+                    from .agent_canvas import scope
+                    workspace_id=scope(self,sid)[1] if sid else self.state['selectedWorkspaceId']
+                    scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace_id}
                     canvas_command(scoped,action,args,origin)
                     remember(scoped,self.db)
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
@@ -2376,7 +2378,8 @@ class AppService:
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state
-            return read_state(self.state_context(), args, session_id=session_id, resolve=self.state_resource)
+            from .agent_canvas import state
+            return read_state(state(self, session_id, args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
             actions = self.get_actions()
             prefix = args.get('prefix', '')
@@ -2429,7 +2432,16 @@ class AppService:
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
             compact_smart_tool = args['action'].startswith('smartTools.')
-            result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
+            canvas_client = None
+            if args['action'] == 'canvas.select':
+                from .agent_canvas import selection_target
+                canvas_client = selection_target(self, session_id, action_args)
+                if canvas_client is not None:
+                    action_args['clientId'] = canvas_client
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
+            else:
+                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
             await self._flush_pending_progress()
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,
@@ -2440,7 +2452,8 @@ class AppService:
                 from .agent_state import surface_context
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:
-                context = read_state(self.state_context(), {}, session_id=session_id, resolve=self.state_resource)
+                from .agent_canvas import state
+                context = read_state(state(self, session_id, canvas_client), {}, session_id=session_id, resolve=self.state_resource)
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 
