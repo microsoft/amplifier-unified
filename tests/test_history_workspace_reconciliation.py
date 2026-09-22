@@ -1,6 +1,7 @@
 """Workspace refresh indexes placeholders without rescanning the full registry."""
 import asyncio
 import copy
+import sqlite3
 import uuid
 from types import SimpleNamespace
 
@@ -22,6 +23,16 @@ class ReconciliationService:
 
     def _publish(self):
         self.publications += 1
+
+
+@pytest.fixture(autouse=True)
+def deletion_ledger(monkeypatch):
+    from amplifier_web.managed_deletion import initialize
+    db = sqlite3.connect(':memory:')
+    initialize(db)
+    monkeypatch.setattr(ReconciliationService, 'db', db, raising=False)
+    yield
+    db.close()
 
 
 def workspace(identity, project, path=None, **extra):
