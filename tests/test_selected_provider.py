@@ -221,3 +221,73 @@ async def test_strict_budget_protocol_receives_selection_in_request_options(surf
     assert options['model'] == 'stale' and request == Request()
     await selected.complete(request)
     assert provider.request.model == 'fable-model' and provider.kwargs['model'] == 'fable-model'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('strict_budget', [False, True])
+@pytest.mark.parametrize('purpose, requested, expected', [
+    ('context-compaction', 'low', 'low'),
+    ('context-compaction', 'none', 'none'),
+    ('context-compaction', None, 'xhigh'),
+    ('other-auxiliary', 'low', 'xhigh'),
+    (None, 'low', 'xhigh'),
+])
+async def test_summary_effort_agrees_across_budget_and_dispatch(stream, strict_budget, purpose, requested, expected):
+    from amplifier_core.message_models import ChatRequest
+
+    class BudgetProvider(StreamingProvider):
+        def request_budget(self, request, **kwargs):
+            self.budget_request, self.options = request, kwargs
+            return {'fits': True}
+
+    class StrictBudgetProvider(BudgetProvider):
+        def request_budget(self, request, *, context_estimate, request_options=None):
+            self.budget_request, self.options = request, request_options
+            return {'fits': True}
+
+    provider = StrictBudgetProvider() if strict_budget else BudgetProvider()
+    choices = {'model': 'pinned-model', 'effort': 'xhigh'}
+    selected = SelectedProvider(provider, choices)
+    request = ChatRequest(messages=[], reasoning_effort=requested,
+                          metadata={'purpose': purpose} if purpose else {})
+    before = request.model_copy(deep=True)
+    options = {'model': 'stale', 'reasoning_effort': 'high'}
+    budget_args = {'request_options': options} if strict_budget else dict(options)
+    assert selected.request_budget(request, context_estimate=20, **budget_args) == {'fits': True}
+    if stream:
+        assert [chunk async for chunk in selected.stream(request, **options)] == ['first', 'last']
+    else:
+        assert await selected.complete(request, **options) == 'done'
+    assert provider.request is provider.budget_request
+    assert provider.request.reasoning_effort == provider.options['reasoning_effort'] == provider.kwargs['reasoning_effort'] == expected
+    assert provider.request.model == provider.options['model'] == provider.kwargs['model'] == 'pinned-model'
+    assert request == before
+    assert options == {'model': 'stale', 'reasoning_effort': 'high'}
+    assert choices == {'model': 'pinned-model', 'effort': 'xhigh'}
+
+
+async def test_summary_effort_reaches_keyword_providers_without_a_user_effort_pin():
+    from amplifier_core.message_models import ChatRequest
+
+    provider = Provider()
+    selected = SelectedProvider(provider, {'model': 'pinned-model'})
+    request = ChatRequest(messages=[], reasoning_effort='low', metadata={'purpose': 'context-compaction'})
+    await selected.complete(request, reasoning_effort='high')
+    assert provider.request.reasoning_effort == provider.kwargs['reasoning_effort'] == 'low'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+async def test_summary_effort_keeps_budget_and_surface_dispatch_on_one_request(stream):
+    selected, request, lookups, budgets, dispatched, commits, _ = surface_selection()
+    request.metadata = {'purpose': 'context-compaction'}
+    request.reasoning_effort = 'low'
+    await selected.request_budget(request, context_estimate=20)
+    if stream:
+        assert [chunk async for chunk in selected.stream(request)] == ['done']
+    else:
+        assert await selected.complete(request) == 'done'
+    assert len(lookups) == len(commits) == 1
+    assert dispatched[0][0] is budgets[0][0]
+    assert dispatched[0][0].reasoning_effort == 'low'
+    assert dispatched[0][1]['reasoning_effort'] == budgets[0][1]['reasoning_effort'] == 'low'
+    assert selected.selection['effort'] == 'high'

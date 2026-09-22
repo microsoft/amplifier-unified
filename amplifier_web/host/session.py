@@ -176,9 +176,15 @@ class SelectedProvider:
         # portable request field. Supply both without changing worker defaults.
         if "model" in self.selection:
             kwargs["model"] = self.selection["model"]
-        if self.selection.get("effort") is not None:
-            updates["reasoning_effort"] = self.selection["effort"]
-            kwargs["reasoning_effort"] = self.selection["effort"]
+        effort = self.selection.get("effort")
+        metadata = getattr(request, "metadata", None) or {}
+        if metadata.get("purpose") == "context-compaction" and request.reasoning_effort is not None:
+            # Summaries have their own effort budget. Keep the same explicit
+            # value in preflight and dispatch, including keyword-only providers.
+            effort = request.reasoning_effort
+        if effort is not None:
+            updates["reasoning_effort"] = effort
+            kwargs["reasoning_effort"] = effort
         # Budget and dispatch must share one selected request so the host's
         # surface adapter can reuse its prepared observation. Retain a bounded
         # snapshot to reject in-place input/selection changes, then consume the
