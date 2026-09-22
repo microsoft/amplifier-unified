@@ -41,8 +41,20 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
 - `smartTools.resources {id,kind?,cursor?}` lists resources or templates one page
   at a time; `smartTools.readResource {id,uri}` reads through that server.
 - `smartTools.open {id,tool,operationId?,sessionId?}` attaches a standard view.
-- `smartTools.result {operationId}` exposes a retained receipt at
-  `/smartTools/inspectedOperation`, including pageable references for large results.
+- `smartTools.readResult {operationId,path?,offset?,limit?,operationRevision?}` reads
+  a retained receipt synchronously, without creating another operation or changing
+  a shared inspection slot. Follow `$operationPath` previews with the same operation
+  ID and a relative JSON Pointer (for example `/result/structuredContent`). Continue
+  pages with `nextOffset` and the returned `operationRevision`; changed receipts
+  reject stale pages. `format: "json"` pages the whole original operation without
+  a path. Oversized object keys automatically use this lossless fallback so keys
+  cannot create unreadable pointers or unbounded previews.
+  Receipt IDs remain valid after the recent-operation list rolls
+  over, until configured result retention removes them. Agent action responses are
+  compact receipts; read full app state separately when needed.
+- The legacy `smartTools.result {operationId}` action still exposes a receipt at
+  `/smartTools/inspectedOperation` for older clients. That shared slot and indices in
+  `/smartTools/operations` are not stable identities for parallel agent reads.
 - `smartTools.appCall` is scoped to the current canvas's server and granted tool names.
   Agent callers still obey model visibility; views obey app visibility.
 - `smartTools.context` records bounded view context. It is observation, not an instruction
