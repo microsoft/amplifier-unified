@@ -69,8 +69,11 @@ class SurfaceDelivery:
                     if identity in message.content:
                         try:
                             value = json.loads(message.content)
-                            if isinstance(value, dict) and value.get('success') is True:
-                                value = value.get('output')
+                            if isinstance(value, dict) and 'output' in value:
+                                if value.get('error') is None and (value.get('success') is True or (
+                                    'success' not in value and 'error' in value
+                                )):
+                                    value = value['output']
                             if value == row['result']:
                                 retained.add(identity)
                         except ValueError:
