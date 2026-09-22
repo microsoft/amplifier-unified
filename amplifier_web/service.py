@@ -242,6 +242,8 @@ from .recall import definitions as recall_definitions
 ACTION_DEFINITIONS.update(recall_definitions(schema, string))
 from .outputs import definitions as output_definitions
 ACTION_DEFINITIONS.update(output_definitions(schema, string))
+from .publishing import definitions as publishing_definitions
+ACTION_DEFINITIONS.update(publishing_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
@@ -440,6 +442,8 @@ class AppService:
         self.schedules = Schedules(self)
         from .worktrees import Worktrees
         self.worktrees = Worktrees(self)
+        from .publishing import Publishing
+        self.publishing = Publishing(self)
         self._refresh_shared_preferences()
         from .operations import Operations
         self.operations = Operations(self)
@@ -916,6 +920,15 @@ class AppService:
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
             return await self.outputs.dispatch(action,args,origin,command_id)
+        if action.startswith('publishing.'):
+            if origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
+                raise AppError('Publishing actions must target the calling conversation.', 409)
+            try:
+                result = await self.publishing.dispatch(action, args, origin, command_id)
+            except ValueError as exc:
+                code = getattr(exc, 'code', None)
+                raise AppError(str(exc), 503 if code == 'unknown_outcome' else 409, code=code) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         if action.startswith('terminal.'):
@@ -2436,6 +2449,10 @@ class AppService:
                 if action_args.get('sessionId',session_id)!=session_id:
                     raise AppError('Output actions must target the calling conversation.',409)
                 action_args['sessionId']=session_id
+            if args['action'].startswith('publishing.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Publishing actions must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open','runtime.dependencies','session.sharePreview','session.shareList'}:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
@@ -2568,6 +2585,7 @@ class AppService:
         await self.voice_visual.close()
         await self.schedules.close()
         await self.worktrees.close()
+        await self.publishing.close()
         async with self.runtime_lifecycle_lock:
             if self.runtime:
                 await self.runtime.close()

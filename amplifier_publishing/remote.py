@@ -1,0 +1,291 @@
+"""Explicit, single-attempt transport to a separately managed private service."""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timezone
+from http.client import HTTPConnection, HTTPException
+import ipaddress
+import json
+import math
+import os
+from pathlib import PurePosixPath
+import re
+import selectors
+import shlex
+import socket
+import subprocess
+import time
+from urllib.parse import urlsplit
+
+from .publisher import PublishingError
+
+MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+MUTATIONS = {"import", "preview", "review", "deploy", "rollback", "stop", "remove"}
+MAX_STDERR_BYTES = 64 * 1024
+
+
+def _run_bounded(command, data, timeout):
+    """Multiplex all pipes without unbounded communicate()/capture_output."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, bufsize=0)
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    error_bytes = 0
+    sent = 0
+    deadline = time.monotonic() + timeout
+    try:
+        for stream, events, name in ((process.stdin, selectors.EVENT_WRITE, "in"), (process.stdout, selectors.EVENT_READ, "out"), (process.stderr, selectors.EVENT_READ, "err")):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, events, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            for key, _events in selector.select(min(remaining, 0.2)):
+                stream = key.fileobj
+                if key.data == "in":
+                    try:
+                        sent += os.write(stream.fileno(), memoryview(data)[sent:sent + 65536])
+                    except BrokenPipeError:
+                        sent = len(data)
+                    except BlockingIOError:
+                        continue
+                    if sent == len(data):
+                        selector.unregister(stream)
+                        stream.close()
+                    continue
+                try:
+                    chunk = os.read(stream.fileno(), 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                elif key.data == "out":
+                    if len(output) + len(chunk) > MAX_MESSAGE_BYTES:
+                        raise ValueError("SSH output exceeds protocol bound")
+                    output.extend(chunk)
+                else:
+                    error_bytes += len(chunk)
+                    if error_bytes > MAX_STDERR_BYTES:
+                        raise ValueError("SSH diagnostic output exceeds bound")
+        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return subprocess.CompletedProcess(command, process.returncode, bytes(output), b"")
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def private_bind(value):
+    """Accept only explicit numeric IPv4 loopback or RFC1918 interfaces."""
+    try:
+        address = ipaddress.IPv4Address(value)
+    except (ipaddress.AddressValueError, TypeError) as exc:
+        raise PublishingError("invalid_bind", "Bind must be a numeric IPv4 loopback or RFC1918 address") from exc
+    if str(address) == "127.0.0.1":
+        return str(address), "loopback-only"
+    if any(address in ipaddress.IPv4Network(cidr) for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")):
+        return str(address), "private-network"
+    raise PublishingError("invalid_bind", "Bind must be a numeric IPv4 loopback or RFC1918 address")
+
+
+def timeout_value(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 120:
+        raise PublishingError("invalid_argument", "Timeout must be greater than zero and at most 120 seconds")
+    return float(value)
+
+
+def encode_message(value):
+    try:
+        data = canonical(value).encode() + b"\n"
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise PublishingError("invalid_message", "Request must be JSON data") from exc
+    if len(data) > MAX_MESSAGE_BYTES:
+        raise PublishingError("size_limit", "RPC message exceeds its byte limit")
+    return data
+
+
+def decode_message(data):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate key")
+            result[key] = value
+        return result
+
+    def constant(_value):
+        raise ValueError("nonfinite number")
+
+    if len(data) > MAX_MESSAGE_BYTES:
+        raise PublishingError("size_limit", "RPC message exceeds its byte limit")
+    try:
+        value = json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+        return value
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PublishingError("invalid_message", "RPC message must be one unambiguous JSON object") from exc
+
+
+def unknown_outcome(request):
+    """A reconciliation reference; this does not assert the server received it."""
+    session_id = request.get("sessionId")
+    request_id = request.get("requestId")
+    return PublishingError(
+        "unknown_outcome", "Transport ended without a verified response; inspect the receipt before any further mutation. Nothing was replayed.",
+        receipt={"id": digest([session_id, request_id]) if session_id and request_id else None,
+                 "sessionId": session_id, "requestId": request_id, "state": "unknown", "remoteReceiptVerified": False},
+    )
+
+
+def response_result(response):
+    if response.get("ok") is True and set(response) == {"ok", "result"}:
+        return response["result"]
+    error = response.get("error")
+    if response.get("ok") is False and isinstance(error, dict) and isinstance(error.get("code"), str) and isinstance(error.get("message"), str):
+        raise PublishingError(error["code"], error["message"], receipt=error.get("receipt"))
+    raise PublishingError("invalid_response", "Service returned an invalid response")
+
+
+def unix_request(socket_path, request, *, timeout=20):
+    """Send once to an owner-controlled Unix socket; never retry on loss."""
+    data = encode_message(request)
+    timeout = timeout_value(timeout)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout)
+            connection.connect(str(socket_path))
+            connection.sendall(data)
+            with connection.makefile("rb") as stream:
+                raw = stream.readline(MAX_MESSAGE_BYTES + 1)
+        if not raw.endswith(b"\n"):
+            raise ValueError("incomplete response")
+        response = decode_message(raw)
+    except (OSError, ValueError, PublishingError) as exc:
+        raise unknown_outcome(request) from exc
+    try:
+        return response_result(response)
+    except PublishingError as exc:
+        if exc.code == "invalid_response":
+            raise unknown_outcome(request) from exc
+        raise
+
+
+class SSHClient:
+    """Configured transport only: no install, SSH consent, forwarding or replay.
+
+    The target account must already have this package and a running service.
+    Host keys must already be trusted. Shell quoting is applied to each remote
+    argv item because OpenSSH executes the remote command using a shell.
+    """
+
+    def __init__(self, *, hostname, python, socket_path, expected_bind, username=None, timeout=30):
+        if not isinstance(hostname, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}", hostname):
+            raise PublishingError("invalid_target", "An explicit SSH hostname or address is required")
+        if username is not None and (not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", username)):
+            raise PublishingError("invalid_target", "SSH username is invalid")
+        for value in (python, socket_path):
+            if not isinstance(value, str) or not PurePosixPath(value).is_absolute() or any(ord(c) < 32 for c in value) or ".." in PurePosixPath(value).parts:
+                raise PublishingError("invalid_target", "Remote Python and socket paths must be explicit absolute paths")
+        self.hostname, self.python, self.socket_path = hostname, python, socket_path
+        self.username = username
+        self.bind, self.access_policy = private_bind(expected_bind)
+        self.timeout = timeout_value(timeout)
+
+    def command(self):
+        remote = shlex.join([self.python, "-m", "amplifier_publishing.service", "request", "--socket", self.socket_path, "--timeout", str(self.timeout)])
+        target = f"{self.username}@{self.hostname}" if self.username else self.hostname
+        return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "--", target, remote]
+
+    def _send(self, request):
+        data = encode_message(request)
+        try:
+            completed = _run_bounded(self.command(), data, self.timeout)
+            if completed.returncode != 0:
+                raise ValueError("transport failed")
+            response = decode_message(completed.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired, PublishingError) as exc:
+            raise unknown_outcome(request) from exc
+        try:
+            return response_result(response)
+        except PublishingError as exc:
+            if exc.code == "invalid_response":
+                raise unknown_outcome(request) from exc
+            raise
+
+    def verify_target(self):
+        target = self._send({"method": "target"})
+        if not isinstance(target, dict) or target.get("protocol") != "static-publishing-v1" or target.get("adminTransport") != "owner-unix-socket" or target.get("bind") != self.bind or target.get("accessPolicy") != self.access_policy or target.get("authentication") != "none" or target.get("publicPublishing") is not False or target.get("previewAccessPolicy") != "loopback-only":
+            raise PublishingError("target_mismatch", "Service bind, access policy or protocol differs from the explicit target configuration")
+        return target
+
+    def request(self, request):
+        if not isinstance(request, dict):
+            raise PublishingError("invalid_message", "Request must be a JSON object")
+        if request.get("method") in MUTATIONS:
+            self.verify_target()
+        result = self._send(request)
+        if request.get("method") in {"preview", "deploy", "rollback", "status"} and isinstance(result, dict):
+            record = result.get("result", result)
+            if isinstance(record, dict) and record.get("url"):
+                bind, policy = ("127.0.0.1", "loopback-only") if request.get("method") == "preview" else (self.bind, self.access_policy)
+                try:
+                    parsed = urlsplit(record["url"])
+                    valid = parsed.scheme == "http" and parsed.hostname == bind and parsed.port is not None and parsed.username is None and parsed.password is None and parsed.path == "/" and not parsed.query and not parsed.fragment and record.get("accessPolicy") == policy
+                except (ValueError, TypeError):
+                    valid = False
+                if not valid:
+                    raise PublishingError("target_mismatch", "Returned URL or access policy differs from the configured private target", receipt=result if "requestId" in result else None)
+        return result
+
+    def verify_site(self, *, session_id, site_id):
+        """Verify exact served entrypoint bytes from this client's network.
+
+        This is a read-only, bounded HTTP probe, not browser acceptance. A remote
+        loopback URL cannot identify that host from this client's network; no
+        forwarding or alternate hostname is invented to make it reachable.
+        """
+        self.verify_target()
+        if self.bind == "127.0.0.1" and self.hostname != "127.0.0.1":
+            raise PublishingError("url_unreachable", "Remote loopback URL is host-local; client reachability cannot be verified without an explicitly configured serving route")
+        status = self.request({"method": "status", "sessionId": session_id, "siteId": site_id})
+        if not isinstance(status, dict) or status.get("status") != "running" or not status.get("url"):
+            raise PublishingError("url_unreachable", "Site has no current running URL")
+        releases = self.request({"method": "releases", "sessionId": session_id})
+        release = next((item for item in releases if isinstance(item, dict) and item.get("id") == status.get("releaseId") and item.get("siteId") == site_id), None) if isinstance(releases, list) else None
+        if not release or not isinstance(release.get("files"), list) or digest(release["files"]) != release.get("manifestDigest"):
+            raise PublishingError("integrity_error", "Current release manifest could not be verified")
+        entry = next((item for item in release["files"] if isinstance(item, dict) and item.get("path") == "index.html"), None)
+        if not entry or type(entry.get("size")) is not int or not 0 <= entry["size"] <= MAX_MESSAGE_BYTES:
+            raise PublishingError("integrity_error", "Current release entrypoint is missing or exceeds verification limits")
+        parsed = urlsplit(status["url"])
+        connection = HTTPConnection(parsed.hostname, parsed.port, timeout=self.timeout)
+        try:
+            connection.request("GET", "/", headers={"Accept-Encoding": "identity"})
+            response = connection.getresponse()
+            if response.status != 200:
+                raise PublishingError("url_unreachable", "Configured site URL did not return a successful direct response")
+            body = response.read(entry["size"] + 1)
+            if len(body) != entry["size"] or hashlib.sha256(body).hexdigest() != entry["sha256"]:
+                raise PublishingError("integrity_error", "Served entrypoint bytes differ from the current immutable release")
+        except (OSError, HTTPException) as exc:
+            raise PublishingError("url_unreachable", "Configured site URL could not be reached from this client") from exc
+        finally:
+            connection.close()
+        latest = self.request({"method": "status", "sessionId": session_id, "siteId": site_id})
+        if any(latest.get(key) != status.get(key) for key in ("revision", "releaseId", "url", "status")):
+            raise PublishingError("site_changed", "Site changed during URL verification; inspect the current release")
+        return {"siteId": site_id, "releaseId": release["id"], "manifestDigest": release["manifestDigest"], "revision": status["revision"], "url": status["url"], "accessPolicy": self.access_policy, "authentication": "none", "clientReachabilityVerified": True, "verifiedAt": datetime.now(timezone.utc).isoformat()}
