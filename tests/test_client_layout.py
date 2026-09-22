@@ -47,6 +47,7 @@ async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, 
     assert app._state['canvasArtifacts'] == artifacts
     app.unsubscribe(own_queue)
     app.unsubscribe(other_queue)
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         assert restored.clients.records['one']['view']['navWidth'] == 300

@@ -96,11 +96,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "callId": event.get("call_id"), "name": event.get("agent") or "Delegated work",
             "kind": "job", "event": kind, "updatedAt": event.get("time")}
     if kind == "worker.activity":
-        return "worker.updated", {**base, "id": event.get("workerId"), "status": "running",
+        return "worker.updated", {**base, "id": event.get("workerId"), "activityOnly": True,
             "phase": event.get("phase"), "detail": event.get("detail"),
             "callId": event.get("callId"), "name": event.get("name", "Worker"),
             "kind": "session", "updatedAt": event.get("time"),
-            **{key:event[key] for key in ("retryAttempt", "retryMax") if key in event}}
+            **{key:event[key] for key in ("runId", "retryAttempt", "retryMax") if key in event}}
     if kind == "child.updated":
         return "worker.updated", {**base, "id": event.get("sessionId"),
             "status": event.get("status", "running"), "name": event.get("agent", "Worker"),
@@ -457,7 +457,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies'} or (
+        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -475,7 +475,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "delivery"}:
+        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -497,7 +497,7 @@ class RuntimeManager:
 
     async def _reply(self, row, identity, future, *, op, args):
         try:
-            timeout = None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
@@ -577,7 +577,7 @@ class RuntimeManager:
                 current.args = (f'Takeover did not complete ({result.status}). {result.message} {current}',)
                 raise current from None
 
-    async def quiesce_for_handoff(self, session, request_id):
+    async def quiesce_for_handoff(self, session, request_id, *, transfer_destination=None):
         """Save and release a known local writer before moving execution cwd."""
         from amplifier_foundation.session import SharedSessionStore, SessionBusyError, request_release
         sid = session['id']
@@ -602,6 +602,12 @@ class RuntimeManager:
                 from .host_identity import local_host_identity, require_local_host
                 owner = held.owner
                 require_local_host(owner.get('hostname'))
+                if transfer_destination is not None:
+                    if not hasattr(held, 'fence_transfer'):
+                        raise ValueError('This runtime needs Foundation durable transfer fencing before task export')
+                    held.fence_transfer(request_id, transfer_destination, role='source')
+                    return {'quiesced': True, 'transferFenced': True, 'nativeSessionId': store.session_id,
+                            'effectsRolledBack': False, 'inputsReplayed': False}
                 return {'quiesced': True, 'executionHost': local_host_identity(), 'releasedOwner': released_owner, 'releaseOwner': {key: owner[key] for key in ('hostname', 'app', 'pid', 'acquisition_id') if key in owner}, 'nativeSessionId': store.session_id, 'historyHome': session['workspace'], 'effectsRolledBack': False, 'inputsReplayed': False}
             finally:
                 await asyncio.to_thread(held.release)
@@ -625,7 +631,7 @@ class RuntimeManager:
     async def control(self, session_id, operation, arguments=None):
         return await self._request(session_id, "control", operation=operation, arguments=arguments or {})
 
-    async def dependencies(self, session_id):
+    async def dependencies(self, session_id, *, verify=False):
         """Inspect an existing worker without warming or acquiring its session."""
         row = self.workers.get(session_id)
         if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
@@ -633,7 +639,19 @@ class RuntimeManager:
         if row['ready'].exception() is not None:
             return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Session runtime did not finish loading.'}
         try:
-            return {**await self._request(session_id, 'dependencies'), 'sessionId': session_id}
+            return {**await self._request(session_id, 'dependencies', **({'verifyImports': True} if verify else {})), 'sessionId': session_id}
+        except RuntimeError:
+            return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
+
+    async def desktop_readiness(self, session_id):
+        """Inspect only the mounted worker; do not revive retired conversations."""
+        row = self.workers.get(session_id)
+        if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'No ready conversation runtime. Start the conversation normally, then check again.'}
+        if row['ready'].exception() is not None:
+            return {'status': 'unavailable', 'sessionId': session_id, 'reason': 'Conversation runtime did not finish loading.'}
+        try:
+            return {**await self._request(session_id, 'desktop.readiness'), 'sessionId': session_id}
         except RuntimeError:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 

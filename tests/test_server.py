@@ -239,3 +239,22 @@ async def test_surface_host_is_trusted_and_limits_child_navigation(authenticated
     assert 'Authored HTML stays in the child' in await child.text()
     stale = await client.get(f'/api/canvas/{identity}/app-host', params={**target, 'generation': '99999'})
     assert stale.status == 409
+
+
+async def test_publishing_error_response_preserves_unknown_receipt(authenticated_client, tmp_path, monkeypatch):
+    from amplifier_publishing import PublishingError
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Publishing uncertainty'})
+    sid = service._session()['id']
+    receipt = {'requestId': 'unknown-import', 'sessionId': sid, 'state': 'unknown',
+               'reconciliationError': {'code': 'invalid_response', 'message': 'Malformed remote receipt'}}
+    async def unresolved(*args, **kwargs):
+        raise PublishingError('unknown_outcome', 'The admitted operation remains unknown', receipt=receipt)
+    monkeypatch.setattr(service.publishing, 'dispatch', unresolved)
+    response = await client.post('/api/actions', json={'action': 'publishing.build', 'args': {
+        'sessionId': sid, 'siteId': 'site', 'sourcePath': 'dist', 'requestId': 'unknown-import'}})
+    payload = await response.json()
+    assert response.status == 503 and payload['accepted'] is False
+    assert payload['code'] == 'unknown_outcome' and payload['receipt'] == receipt

@@ -32,6 +32,16 @@ async def test_keys_are_private_and_redacted_across_scopes(manager,tmp_path,monk
     assert manager.store.read(tmp_path,'project')['config']['providers'][0]['config']['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
 
 @pytest.mark.asyncio
+async def test_nested_image_configuration_roundtrips_without_replacing_chat_instance(manager,tmp_path):
+    config={'default_model':'kept-chat-model','reasoning_effort':'high','image_generation':{'enabled':True,'id':'images','model':'chosen-image-model'}}
+    result=await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'kept-instance','config':config,'scope':'project'})
+    row=next(row for row in result['providers'] if row['id']=='kept-instance')
+    assert row['config']==config
+    saved=manager.store.read(tmp_path,'project')['config']['providers'][0]
+    assert saved['id']=='kept-instance' and saved['config']==config
+
+
+@pytest.mark.asyncio
 async def test_provider_removal_tombstones_inherited_instance(manager,tmp_path):
     args={'workspace':str(tmp_path),'module':'provider-test','id':'one','config':{}}
     await manager.perform('providers.save',args)

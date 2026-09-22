@@ -239,12 +239,28 @@ test('stale or incomplete reconciliation cannot hide a current failure',()=>{
   {diagnostics:{lastFailure:{...failure,attemptId:'new-failed-attempt'}}},
   {pendingRestart:{version:application.current}},
   {pendingApp:{version:application.current}},
+  {pendingReplacement:{}},
  ]){
   const updates=reconciledUpdates(patch);
   assert.equal(reconciledFailure(updates),false);
   const html=render(updates);
   assert.match(html,/Last update issue:/);
   assert.doesNotMatch(html,/Previous update issue resolved|a-update-failure resolved/);
+ }
+});
+
+test('uncertain replacement never appears current or offers another installation',()=>{
+ for(const phase of ['error','interrupted','activating']){
+  const html=render({phase,pendingReplacement:{},canRollback:true});
+  assert.match(html,/Needs attention/);
+  assert.match(html,/installation outcome is unknown/);
+  assert.match(html,/Work remains paused/);
+  assert.match(html,/Installation needs verification/);
+  assert.doesNotMatch(html,/Latest release installed/);
+  for(const action of ['updates.check','updates.install','updates.rollback']){
+   const button=html.match(new RegExp('<button[^>]*data-action="'+action+'"[^>]*>'))?.[0]||'';
+   assert.match(button,/disabled=""/);
+  }
  }
 });
 

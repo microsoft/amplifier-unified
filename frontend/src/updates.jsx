@@ -16,7 +16,7 @@ function SourceList({items,state,act,id}){
  })}</ul></>;
 }
 export function UpdateSettings({state,act}){
- const updates=state.updates||{},options=state.settings?.updates||{},busy=['checking','staging','validating','activating'].includes(updates.phase);
+ const updates=state.updates||{},options=state.settings?.updates||{},replacement=updates.pendingReplacement!=null,busy=replacement||['checking','staging','validating','activating'].includes(updates.phase);
  const application=updates.application||(updates.items||[]).find(item=>item.kind==='app')||{};
  const items=(updates.items||[]).filter(item=>item.kind!=='app'&&item.id!=='application');
  const available=items.filter(item=>item.status==='update').sort((a,b)=>a.label.localeCompare(b.label)),issues=items.filter(item=>['check_failed','local_changes'].includes(item.status));
@@ -26,11 +26,11 @@ export function UpdateSettings({state,act}){
  const appAvailable=application.status==='update',pending=updates.pendingApp||updates.pendingRelease||updates.pendingRestart;
  const restartFailed=!!updates.pendingRestart&&(!!updates.error||['error','interrupted'].includes(updates.phase)||updates.pendingRestart.requestStatus==='rejected');
  const restartUncertain=updates.pendingRestart?.requestStatus==='uncertain';
- const appState=updates.pendingRestart?(restartFailed?'failed':restartUncertain?'restart_pending':'restarting'):updates.pendingApp?(updates.error?'failed':'staged'):application.status==='check_failed'?'failed':application.releaseBehind?'ahead':application.status||'not_checked';
+ const appState=replacement?'failed':updates.pendingRestart?(restartFailed?'failed':restartUncertain?'restart_pending':'restarting'):updates.pendingApp?(updates.error?'failed':'staged'):application.status==='check_failed'?'failed':application.releaseBehind?'ahead':application.status||'not_checked';
  const appLabels={restarting:'Restarting',restart_pending:'Awaiting restarted host',staged:'Ready to restart',update:'Update available',current:'Latest release installed',failed:'Needs attention',ahead:'Ahead of published release',not_checked:'Not checked',release_channel_needed:'Release channel not configured',historical:'Older saved configuration'};
  const AppIcon=appState==='current'?Check:appState==='update'?ArrowUpCircle:appState==='failed'?AlertCircle:Clock3;
- const appDetail=updates.pendingRestart?(updates.error||updates.detail||(restartFailed?'The app installed, but its restart did not complete. Restart Amplifier Unified manually to continue.':'The app is installed. Waiting for a healthy restarted host before resuming work.')):updates.pendingApp?updates.error||'The app passed validation and will restart when conversations, worker lanes, smart tools, and calls are idle.':application.detail;
- const installLabel=updates.pendingRestart?(restartFailed?'Restart needs attention':restartUncertain?'Awaiting restart…':'Restarting…'):updates.pendingApp?'Apply app update':updates.pendingRelease?'Apply ecosystem update':appAvailable?'Install app update':'Install available';
+ const appDetail=replacement?(updates.error||updates.detail||'The installation outcome is unknown. Work remains paused until the qualified app and dependencies are verified on a new host.'):updates.pendingRestart?(updates.error||updates.detail||(restartFailed?'The app installed, but its restart did not complete. Restart Amplifier Unified manually to continue.':'The app is installed. Waiting for a healthy restarted host before resuming work.')):updates.pendingApp?updates.error||'The app passed validation and will restart when conversations, worker lanes, smart tools, and calls are idle.':application.detail;
+ const installLabel=replacement?'Installation needs verification':updates.pendingRestart?(restartFailed?'Restart needs attention':restartUncertain?'Awaiting restart…':'Restarting…'):updates.pendingApp?'Apply app update':updates.pendingRelease?'Apply ecosystem update':appAvailable?'Install app update':'Install available';
  const resultPhase=restartFailed||updates.error||['error','interrupted'].includes(updates.phase)?'error':updates.pendingRestart||busy?'working':updates.phase==='installed'?'success':'neutral';
  const resultMessage=updates.error||(['error','interrupted'].includes(updates.phase)?updates.detail||'The update did not finish.':busy||pending||updates.phase==='installed'?updates.detail:'');
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;

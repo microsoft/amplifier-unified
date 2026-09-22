@@ -39,8 +39,9 @@ async def test_discovery_reports_exact_interpreter_missing_packages_and_optional
     assert 'secret-not-to-report' not in json.dumps(result)
 
 
-async def test_explicit_override_has_precedence_and_invalid_override_does_not_fall_back(monkeypatch, tmp_path):
-    tool = executable(tmp_path / 'office', 'print("LibreOffice 26.2.1.2")\n')
+@pytest.mark.parametrize('product', ['LibreOffice', 'LibreOfficeDev'])
+async def test_explicit_override_has_precedence_and_invalid_override_does_not_fall_back(monkeypatch, tmp_path, product):
+    tool = executable(tmp_path / 'office', f'print("{product} 26.2.1.2")\n')
     monkeypatch.setenv('WORK_SOFFICE', str(tool))
     spec = inventory.EXECUTABLES['libreoffice']
     result = await inventory._version(inventory._executable(spec), spec)
@@ -144,3 +145,55 @@ async def test_shared_ui_agent_action_is_passive_and_targets_calling_session(mon
             await app.dispatch('runtime.dependencies', {'sessionId': 'missing'})
     finally:
         await app.close()
+
+
+async def test_explicit_import_probe_uses_clean_child_and_truthful_results(monkeypatch, tmp_path):
+    # Metadata alone must not establish readiness; workspace lookalikes are ignored.
+    (tmp_path / 'artifact_shadow.py').write_text('raise RuntimeError("workspace secret")')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PYTHONPATH', str(tmp_path))
+    monkeypatch.setattr(inventory, 'ARTIFACT_IMPORTS', {'good': 'json', 'shadow': 'artifact_shadow'})
+    rows = [{'name': 'good', 'status': 'installed'}, {'name': 'shadow', 'status': 'installed'}]
+    assert await inventory.verify_imports(rows) == 'failed'
+    assert rows[0]['importVerified'] is True
+    assert rows[1]['importVerified'] is False
+    assert rows[1]['importStatus'] == 'failed'
+    assert 'workspace secret' not in str(rows)
+
+
+async def test_explicit_probe_only_changes_import_validation(monkeypatch):
+    monkeypatch.setattr(inventory, 'EXECUTABLES', {})
+    monkeypatch.setattr(inventory, 'verify_imports', AsyncMock(return_value='passed'))
+    result = await inventory.discover('worker', verify=True)
+    assert result['validation'] == {'imports': 'passed', 'rendering': 'not_run',
+        'visualReview': 'not_run', 'spreadsheetRecalculation': 'not_run'}
+    inventory.verify_imports.assert_awaited_once()
+
+
+async def test_worker_and_shared_action_forward_explicit_import_probe(monkeypatch, tmp_path):
+    from amplifier_web import runtime_worker
+    publications = []
+    monkeypatch.setattr(runtime_worker, 'publish', publications.append)
+    probe = AsyncMock(return_value={'scope': 'worker'})
+    monkeypatch.setattr(inventory, 'discover', probe)
+    await Worker().command({'op': 'dependencies', 'id': 'verified', 'verifyImports': True})
+    probe.assert_awaited_once_with('worker', verify=True)
+    app = AppService(tmp_path / 'data', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title': 'Import probe'})
+        sid = app._session()['id']
+        app.runtime = SimpleNamespace(dependencies=AsyncMock(return_value={'scope': 'worker'}),
+            close=AsyncMock(), workers={})
+        await app.app_bridge('dispatch', {'action': 'runtime.dependencies', 'args': {'verifyImports': True}}, sid)
+        probe.assert_awaited_with('host', verify=True)
+        app.runtime.dependencies.assert_awaited_once_with(sid, verify=True)
+    finally:
+        await app.close()
+
+
+def test_worker_manifest_provisions_public_authoring_packages():
+    from pathlib import Path
+    import tomllib
+    manifest = tomllib.loads((Path(inventory.__file__).parent / 'runtime_deps/pyproject.toml').read_text())
+    requirements = manifest['project']['dependencies']
+    assert all(any(spec.startswith(name + '>=') for spec in requirements) for name in inventory.ARTIFACT_IMPORTS)

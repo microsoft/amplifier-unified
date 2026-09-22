@@ -29,6 +29,7 @@ async def test_artifacts_survive_replacement_closed_tabs_reload_and_deleted_file
     path.unlink()
     await app.dispatch('canvas.tabClose',{'id':first['id']})
     await app.dispatch('canvas.close',{})
+    await app.close()
     restored=AppService(app.data_dir,workspace=tmp_path)
     try:
         assert len(restored.state['canvasArtifacts'])==2
@@ -94,6 +95,7 @@ async def test_old_successful_inline_artifacts_are_recovered_without_replaying_t
     (legacy/'checkpoint.json').write_text(json.dumps({'version':1,'messages':[
         {'role':'user','content':'Create some diagrams'},{'role':'assistant','tool_calls':calls},*receipts],'metadata':{}}))
     app.state.pop('canvasLibraryMigration');app._save()
+    await app.close()
     restored=AppService(app.data_dir,workspace=app.default_workspace)
     try:
         assert restored.state['canvasLibraryMigration']['recovered']==2
@@ -145,6 +147,7 @@ async def test_large_html_snapshot_stays_out_of_state_and_survives_file_deletion
     path.write_bytes(b'x'*(MAX_HTML+1))
     with pytest.raises(AppError,match='20 MB limit'):
         await app.dispatch('canvas.show',{'kind':'auto','path':str(path)})
+    await app.close()
     restored=AppService(app.data_dir,workspace=tmp_path)
     try:
         assert 'content' not in restored.state['canvas']

@@ -10,13 +10,16 @@ from test_chat_navigation import state_fixture, chat
 
 
 @pytest.fixture
-def service(tmp_path):
+async def service(tmp_path):
     app = AppService(tmp_path / 'app', workspace=tmp_path)
     app.state.update(state_fixture())
     app.state['view']['draft'] = 'Keep this unsent message'
     app.state['sessions'] = [chat('alpha'), chat('beta', 'two')]
+    paths = {workspace['id']: workspace['path'] for workspace in app.state['workspaces']}
+    for session in app.state['sessions']:
+        session.update(workspace=paths[session['workspaceId']], messages=[])
     yield app
-    app.db.close()
+    await app.close()
 
 
 async def command(app, name, **args):
@@ -150,6 +153,7 @@ async def test_recovery_and_saved_composition_survive_restart(service):
     composition['instances'] = []
     change = await prepare(service, composition)
     await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
+    await service.close()
     restored = AppService(service.data_dir, workspace=service.default_workspace)
     try:
         assert restored.shell.client('browser-one')['composition'] == composition
@@ -187,7 +191,7 @@ async def test_unknown_package_unsupported_api_and_invalid_form_rejected(service
 
 @pytest.mark.asyncio
 async def test_pin_resets_only_originating_page_and_new_clients_keep_own_defaults(service):
-    service.state['sessions'] = [{**chat(str(index)), 'workspace': '/projects/one/shared'} for index in range(250)]
+    service.state['sessions'] = [{**chat(str(index)), 'workspace': '/projects/one/shared', 'messages': []} for index in range(250)]
     service.shell.client('browser-two')
     scope = service.shell.inspect('browser-one', snapshots=True)['snapshots']['chats']['chatNavigation']['scope']
     await command(service, 'shell.view.update', clientId='browser-one', instanceId='chats', patch={'navChatPage': {**scope, 'index': 2}})

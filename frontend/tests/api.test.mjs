@@ -45,3 +45,13 @@ test('an older host date arriving after a newer response cannot rewind elapsed t
   assert.ok(hostNow()>=before);assert.equal(elapsedLabel(record,hostNow()),elapsed);
  }finally{globalThis.fetch=original}
 });
+
+test('publishing rejection preserves authoritative unknown receipt even on HTTP409',async()=>{
+ const original=globalThis.fetch,receipt={requestId:'admitted-import',state:'unknown',reconciliationError:{code:'invalid_response'}};
+ try{
+  globalThis.fetch=async()=>new Response(JSON.stringify({accepted:false,error:'The remote receipt is malformed',code:'invalid_response',receipt}),{status:409});
+  await assert.rejects(request('/api/actions',{method:'POST',body:{}}),error=>{
+   assert.equal(error.status,409);assert.equal(error.code,'invalid_response');assert.deepEqual(error.receipt,receipt);return true;
+  });
+ }finally{globalThis.fetch=original}
+});

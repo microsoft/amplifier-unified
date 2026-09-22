@@ -61,6 +61,7 @@ async def test_auto_toggle_is_durable_without_model_call(named, tmp_path):
     assert not session['autoName']
     assert runtime.started == runtime.calls == 0
     assert session['messages'] == original
+    await app.close()
     restored = AppService(tmp_path, workspace=tmp_path)
     try: assert restored._session()['autoName'] is False
     finally: await restored.close()

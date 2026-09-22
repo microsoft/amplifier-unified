@@ -124,6 +124,9 @@ def _scope(app, sid):
 
 
 def _idle(app, sessions, ids):
+    publishing = getattr(app, 'publishing', None)
+    if publishing and any(publishing.owns_records(sid) for sid in ids):
+        raise ValueError('This chat owns retained publishing releases and receipts. Archive it to preserve their ownership.')
     if app.recall.task and not app.recall.task.done():
         raise ValueError('Wait for history indexing to finish before deleting this chat.')
     for row in sessions:

@@ -52,6 +52,8 @@ async def boundaries(request, handler):
         payload = {"error": str(exc), "accepted": False}
         if exc.code:
             payload['code'] = exc.code
+        if exc.receipt is not None:
+            payload['receipt'] = exc.receipt
         if exc.code == 'session_busy':
             payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
         return _set_response_headers(web.json_response(payload, status=exc.status), request.path)

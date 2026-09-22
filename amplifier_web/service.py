@@ -42,7 +42,8 @@ def schema(properties=None, required=None):
 
 
 ACTION_DEFINITIONS = {
-    "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200)}, [])),
+    "desktop.readiness": ("Inspect the serving host's native observation preflight and already-mounted conversation tools. No activation, capture, permission prompt, worker startup or provider change. Browser account/tab context is reported only when the owning transport exposes it.", schema({"sessionId": string(200)}, [])),
+    "runtime.dependencies": ("Inspect exact host and already-running session runtime paths, public artifact package versions, and optional rendering tools. Set verifyImports to probe the six public authoring libraries in isolated child processes. Does not install dependencies, start a session, select a chat or prove rendering success.", schema({"sessionId": string(200), "verifyImports": {"type": "boolean"}}, [])),
     "terminal.prepare": ("Prepare a private, short-lived terminal setup download for a configured service address. Installs on the computer where the user runs it; does not install on the server.", schema({"server": string(500), "platform": {"enum": ["macos-arm64", "linux-arm64"]}, "name": string(80)}, ["server", "platform", "name"])),
     "terminal.devices": ("List enrolled terminal connections without revealing credentials.", schema({})),
     "terminal.revoke": ("Remove one terminal connection's access; accepted work continues on the host.", schema({"id": string(100)}, ["id"])),
@@ -170,6 +171,7 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
+    "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
@@ -195,10 +197,11 @@ ACTION_DEFINITIONS.update(capacity_definitions(schema, string))
 
 
 class AppError(Exception):
-    def __init__(self, message, status=400, *, code=None):
+    def __init__(self, message, status=400, *, code=None, receipt=None):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.receipt = receipt
 
 
 def validate_theme(css):
@@ -241,6 +244,8 @@ from .recall import definitions as recall_definitions
 ACTION_DEFINITIONS.update(recall_definitions(schema, string))
 from .outputs import definitions as output_definitions
 ACTION_DEFINITIONS.update(output_definitions(schema, string))
+from .publishing import definitions as publishing_definitions
+ACTION_DEFINITIONS.update(publishing_definitions(schema, string))
 from .feedback import definitions as feedback_definitions
 ACTION_DEFINITIONS.update(feedback_definitions(schema, string))
 
@@ -263,6 +268,8 @@ from .voice_visual import VoiceVisual, definitions as visual_definitions
 ACTION_DEFINITIONS.update(visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
+from .portability import definitions as portability_definitions
+ACTION_DEFINITIONS.update(portability_definitions(schema, string))
 ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
 ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
 for theme_action in ('theme.apply', 'theme.preview'):
@@ -439,6 +446,10 @@ class AppService:
         self.schedules = Schedules(self)
         from .worktrees import Worktrees
         self.worktrees = Worktrees(self)
+        from .publishing import Publishing
+        self.publishing = Publishing(self)
+        from .portability import Portability
+        self.portability = Portability(self)
         self._refresh_shared_preferences()
         from .operations import Operations
         self.operations = Operations(self)
@@ -560,6 +571,7 @@ class AppService:
         self.questions.sync()
         self.schedules.sync()
         self.worktrees.sync()
+        self.portability.sync()
         from .canvas_apps import sync
         sync(self)
         self._browser_snapshot = None
@@ -827,10 +839,12 @@ class AppService:
             args['args'] = {**invocation, 'actor': origin}
         if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
+        if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
+            raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith("smartTools."):
+        if action.startswith("smartTools.") or action == 'updates.featureInstall':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -838,6 +852,16 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        transfer_sid = None
+        if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+                      'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
+                      'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
+            transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
+            if transfer_sid:
+                # Snapshot without yielding; final admission below checks it
+                # under the mutation lock without changing its queue ordering.
+                try: transfer_context = self.portability.write_context(transfer_sid)
+                except ValueError as exc: raise AppError(str(exc), 409) from exc
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')
@@ -856,6 +880,9 @@ class AppService:
         if action in {'session.deletePreview', 'session.delete'}:
             from .managed_deletion import dispatch as delete_managed_chat
             return await delete_managed_chat(self, action, args, origin, include_state)
+        if action == 'desktop.readiness':
+            from .desktop_readiness import dispatch as desktop_readiness
+            return await desktop_readiness(self, args, origin, expected_revision, caller_session_id)
         if action == 'runtime.dependencies':
             from .artifact_runtime import discover
             async with self.lock:
@@ -864,10 +891,11 @@ class AppService:
                 sid = args.get('sessionId') or self.state.get('selectedSessionId')
                 if sid:
                     self._session(sid)
-            host = await discover('host')
+            verify = args.get('verifyImports') is True
+            host = await discover('host', **({'verify': True} if verify else {}))
             worker = {'status': 'unavailable', 'reason': 'No running session runtime.', 'sessionId': sid}
             if sid and self.runtime and hasattr(self.runtime, 'dependencies'):
-                worker = await self.runtime.dependencies(sid)
+                worker = await self.runtime.dependencies(sid, **({'verify': True} if verify else {}))
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
                 'result': {'host': host, 'worker': worker},
                 **({'state': self.browser_state()} if include_state else {})}
@@ -911,6 +939,15 @@ class AppService:
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
             return await self.outputs.dispatch(action,args,origin,command_id)
+        if action.startswith('publishing.'):
+            if origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
+                raise AppError('Publishing actions must target the calling conversation.', 409)
+            try:
+                result = await self.publishing.dispatch(action, args, origin, command_id)
+            except ValueError as exc:
+                code = getattr(exc, 'code', None)
+                raise AppError(str(exc), 503 if code == 'unknown_outcome' else 409, code=code, receipt=getattr(exc, 'receipt', None)) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
         if action.startswith('terminal.'):
@@ -925,6 +962,12 @@ class AppService:
             raise AppError('Use message.edit to revise conversation history.')
         checked_session = None
         implicit_session = False
+        if action.startswith('portability.'):
+            try:
+                result = await self.portability.dispatch(action, args, origin, command_id)
+            except (ValueError, OSError, KeyError) as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith('worktree.'):
             try:
                 result = await self.worktrees.dispatch(action, args, origin, command_id)
@@ -1027,6 +1070,15 @@ class AppService:
                 raise AppError(str(exc), 409) from exc
         pending = []
         async with self.lock:
+            if transfer_sid:
+                try:
+                    current_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
+                    if current_sid != transfer_sid:
+                        raise ValueError('The selected chat changed. Retry in the intended chat.')
+                    if self.portability.write_context(transfer_sid) != transfer_context:
+                        raise ValueError('The task moved while this request was waiting; inspect and retry.')
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from exc
             # Flush and compare under the same lock: a queued runtime event
             # must not mutate progress between a read barrier and CAS admission.
             if expected_revision is not None and getattr(self, '_progress_dirty', False):
@@ -1631,7 +1683,13 @@ class AppService:
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
-                pending.append((self.update_manager.command, (action.split(".")[1],)))
+                if action == 'updates.featureInstall':
+                    rows = self.state['updates'].setdefault('featureResults', {})
+                    rows[command_id] = {'requestId':command_id, 'feature':args['feature'], 'phase':'queued',
+                        'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
+                    while len(rows) > 20:
+                        rows.pop(next(iter(rows)))
+                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = args["patch"]
                 if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates"}:
@@ -1678,6 +1736,8 @@ class AppService:
                 call_args = dict(args)
                 if action == "call.start":
                     session = self._session()
+                    try: self.portability.write_context(session['id'])
+                    except ValueError as exc: raise AppError(str(exc), 409) from exc
                     if self.voice_service and not self.voice_service.api_key:
                         raise AppError("Set OPENAI_API_KEY in the terminal environment to enable calls.")
                     session["historyManaged"] = False
@@ -1743,6 +1803,8 @@ class AppService:
                 receipt["operationId"] = command_id
             if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']
+            if action == 'updates.featureInstall':
+                receipt['requestId'] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             if defer_publish:
@@ -2068,11 +2130,12 @@ class AppService:
             await self.runtime.stop(sid)
         await self.on_runtime_event("runtime.status", {"sessionId": sid, "status": "stopped"})
 
-    async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed'):
+    async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
         async with self.lock:
             try:session=self._session(session_id)
             except AppError:return
+            self._check_voice_owner(session['id'], transfer_id)
             identity='voice:'+call_id+':'+response_id
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
@@ -2128,6 +2191,17 @@ class AppService:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
             except AppError:
                 return
+            if kind == 'worker.updated' and payload.get('activityOnly'):
+                worker = next((w for w in session.get('workers', []) if w['id'] == payload.get('id')), None)
+                # Progress is not lifecycle authority. Delayed hooks cannot
+                # create workers, reopen settled/unknown work, or change runs.
+                if not worker or worker.get('status') not in {'starting', 'running', 'working', 'stopping'}:
+                    return
+                if not payload.get('runId') or payload['runId'] != worker.get('runId'):
+                    return
+                payload = {**{key: payload[key] for key in (
+                    'sessionId', 'id', 'phase', 'detail', 'updatedAt', 'retryAttempt', 'retryMax') if key in payload},
+                    'status': worker['status'], 'activityOnly': True}
             self.diagnostics.runtime_event(kind,payload,session)
             from .chat_navigation import runtime_activity
             runtime_activity(session, kind, payload)
@@ -2187,7 +2261,9 @@ class AppService:
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
                 session["status"] = payload.get("status", "idle")
-                if session["status"] == "idle": self.schedules.idle(session)
+                if session["status"] == "idle":
+                    self.schedules.idle(session)
+                    self.recall.personalization.idle(session)
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
@@ -2270,7 +2346,7 @@ class AppService:
                 self.schedules.worker(session, payload)
                 worker = next((w for w in session["workers"] if w["id"] == payload.get("id")), None)
                 if worker:
-                    worker.update(payload)
+                    worker.update({key: value for key, value in payload.items() if key != 'activityOnly'})
                 else:
                     worker = copy.deepcopy(payload)
                     task = self.coordination.task(session["id"])
@@ -2353,6 +2429,8 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if operation == 'memory.context':
+            return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == "questions.admit":
             async with self.lock:
                 self._session(session_id)
@@ -2402,7 +2480,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('worktree.'):
+            if args['action'].startswith('worktree.') or (args['action'].startswith('portability.') and args['action'] not in {'portability.stage', 'portability.activate', 'portability.discard'}):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Worktree actions must target the calling task.', 409)
                 action_args['sessionId'] = session_id
@@ -2424,6 +2502,10 @@ class AppService:
                 if action_args.get('sessionId',session_id) != session_id:
                     raise AppError('Recall actions must identify the calling conversation.',409)
                 action_args['sessionId'] = session_id
+            if args['action'] == 'desktop.readiness':
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Desktop readiness must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'].startswith('voice.visual.'):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Visual capture must target the calling conversation.', 409)
@@ -2436,6 +2518,10 @@ class AppService:
                 if action_args.get('sessionId',session_id)!=session_id:
                     raise AppError('Output actions must target the calling conversation.',409)
                 action_args['sessionId']=session_id
+            if args['action'].startswith('publishing.'):
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('Publishing actions must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open','runtime.dependencies','session.sharePreview','session.shareList'}:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
@@ -2475,9 +2561,17 @@ class AppService:
         # Rendered controls are live observations, reset on startup. Agents read
         # them directly; no durable command or browser projection changed.
 
-    async def record_voice_transcript(self, role, text, *, voice_id, item_id, append=False, session_id=None):
+    def _check_voice_owner(self, session_id, transfer_id):
+        try:
+            if self.portability.write_context(session_id) != transfer_id:
+                raise ValueError('This voice call predates the task transfer; its late events cannot change the task.')
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from exc
+
+    async def record_voice_transcript(self, role, text, *, voice_id, item_id, append=False, session_id=None, transfer_id=None):
         async with self.lock:
             session = self._session(session_id)
+            self._check_voice_owner(session['id'], transfer_id)
             existing = next((m for m in session["messages"] if m.get("voiceId") == voice_id and m.get("voiceItemId") == item_id), None)
             if existing:
                 existing["text"] = existing["text"] + text if append else text
@@ -2494,14 +2588,17 @@ class AppService:
                 self.voice_visual.revoke()
             self.voice_visual.publish()
 
-    async def voice_delegate(self, text, command_id, session_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
+        async with self.lock:
+            self._check_voice_owner(self._session(session_id)['id'], transfer_id)
         input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
         async with self.lock:
             if work_paused(self.state):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.",409)
             session = self._session(session_id)
+            self._check_voice_owner(session['id'], transfer_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)
             fingerprint = hashlib.sha256(json.dumps(["voice_delegate", session["id"], text]).encode()).hexdigest()
             previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()
@@ -2567,7 +2664,10 @@ class AppService:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
         await self.voice_visual.close()
         await self.schedules.close()
+        await self.recall.personalization.close()
         await self.worktrees.close()
+        await self.publishing.close()
+        await self.portability.close()
         async with self.runtime_lifecycle_lock:
             if self.runtime:
                 await self.runtime.close()

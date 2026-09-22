@@ -13,6 +13,10 @@ class OutputImageDelivery:
         return getattr(self.previous, name)
 
     def remember_output(self, receipt):
+        # A dispatch's unrelated app state contains floating timestamps which
+        # may change by one ULP in the kernel hook JSON roundtrip. Retain only
+        # this operation's receipt; image identity and evidence stay exact.
+        receipt = {key: copy.deepcopy(receipt[key]) for key in ('accepted', 'effects', 'result') if key in receipt}
         self.observation = {'receipt': copy.deepcopy(receipt), 'epoch': copy.deepcopy(self.previous.epoch)}
         return receipt
 
@@ -33,8 +37,14 @@ class OutputImageDelivery:
             if message.role == 'tool' and message.name == 'app_control' and isinstance(message.content, str):
                 try:
                     value = json.loads(message.content)
-                    if isinstance(value, dict) and value.get('success') is True:
-                        value = value.get('output')
+                    if isinstance(value, dict) and 'output' in value:
+                        # Hook-processed loop receipts can retain output/error
+                        # without model_dump()'s explicit success field. Direct
+                        # get_serialized_output() receipts are already unwrapped.
+                        if value.get('error') is None and (value.get('success') is True or (
+                            'success' not in value and 'error' in value
+                        )):
+                            value = value['output']
                     retained |= value == observation['receipt']
                 except ValueError:
                     pass

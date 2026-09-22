@@ -13,17 +13,19 @@ import {MaintenanceSettings} from './maintenance';
 import {UpdateSettings} from './updates';
 import {WorkerRetentionSettings} from './worker-retention';
 import {RuntimeSettings} from './runtime-settings';
+import {DesktopReadiness} from './desktop-readiness';
 import {ConversationName} from './conversation-controls';
 import {RecallSettings} from './recall';
 import {ConversationExport} from './conversation-export.jsx';
 import {ConversationLibrary,ConversationSharing} from './conversation-library.jsx';
 import {OutputSettings} from './outputs.jsx';
+import {PublishingSettings} from './publishing.jsx';
 import {VoiceSettings,InstallAppSettings} from './settings-personal';
 import {SettingsLayoutContext,useSettingsCompact,useSettingsHistory,useSettingsViewport} from './settings-layout';
 import {settingsTrail,settingsBaseNavigation,mergeSettingsNavigation} from './settings-mobile';
 
 const icons={overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
-export function SettingsExperience({state,session,act,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
+export function SettingsExperience({state,session,act,dispatch,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
  const shell=useShellContext();
  const extensions=(shell?.data?.resolvedInstances||[]).filter(item=>item.slot==='settings.section');
  const sections=[...settingsSections,...extensions.map(item=>({id:'shell:'+item.id,title:shell.data.packages[item.package]?.manifest?.label||item.id,group:'Extensions',scope:'This interface',pages:[['shell:'+item.id,shell.data.packages[item.package]?.manifest?.label||item.id]]}))];
@@ -54,8 +56,10 @@ export function SettingsExperience({state,session,act,open,close=()=>act('view.u
  else if(page==='ready-conversations')content=state.runtime?.retention?<WorkerRetentionSettings {...props}/>:<p>This host does not expose conversation readiness settings.</p>;
  else if(page==='install-app')content=<InstallAppSettings/>;
  else if(page==='runtime')content=<RuntimeSettings {...props}/>;
+ else if(page==='desktop')content=<DesktopReadiness {...props}/>;
  else if(page==='recall')content=<RecallSettings key={session?.id||'none'} {...props}/>;
  else if(page==='outputs')content=<OutputSettings key={session?.id} {...props}/>;
+ else if(page==='publishing')content=<PublishingSettings key={session?.id} {...props} act={dispatch||act}/>;
  else if(page==='conversation')content=<>{session?<><ConversationName key={session.id} session={session} act={act}/><ConversationExport {...props}/>{session.location?.kind==='managed'&&isTopLevelChat(session)&&<div className="a-dialog-actions"><button type="button" className="a-soft a-danger" data-action="view.update" onClick={()=>open('delete-session')}>Delete chat</button></div>}<h3>Conversation bundle</h3></>:<p>Choose a bundle to start a conversation.</p>}<BundleControl {...props} working={['working','starting','running','stopping','busy'].includes(session?.status)}/></>;
  else content=<MaintenanceSettings {...props}/>;
  if(page==='conversation'&&session)content=<>{content}<ConversationLibrary key={'library-'+session.id} {...props}/><ConversationSharing key={'sharing-'+session.id} {...props}/></>;

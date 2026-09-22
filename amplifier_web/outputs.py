@@ -27,6 +27,7 @@ def definitions(schema,string):
         'outputs.read':('Read bounded immutable content, provenance, lineage and local review comments. External links are references only unless version evidence is supplied.',schema({**identity,'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':4000},'commentOffset':{'type':'integer','minimum':0},'commentLimit':{'type':'integer','minimum':1,'maximum':10}},['sessionId','id'])),
         'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; a direct app_control call (not nested inside tool_exec) requests typed pixels for its next vision-capable model request. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
+        'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
         'outputs.review':('Snapshot a bounded read-only local Git diff for review. No changes applied; untracked and binary content excluded. Branch mode resolves existing base and HEAD commits.',schema({**common,**origin,'mode':{'enum':['unstaged','staged','branch']},'base':string(200),'path':string(4000),'title':string(200)},['sessionId','mode'])),
         'outputs.unlink':('Unlink an output from the active list. The underlying object, snapshot and comments are retained.',schema({**identity,'expectedRevision':{'type':'integer','minimum':1}},['sessionId','id','expectedRevision'])),
@@ -129,6 +130,8 @@ class Outputs:
                             result.update(text=text[offset:offset+limit],offset=offset,nextOffset=offset+limit if offset+limit<len(text) else None)
                         except UnicodeDecodeError:result['binary']=True
                     return {'accepted':True,'result':result}
+                portability = getattr(self.app, 'portability', None)
+                transfer_context = portability.write_context(session['id']) if portability else None
                 request=[action,args,origin];identity=command_id or uuid.uuid4().hex
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
@@ -137,11 +140,23 @@ class Outputs:
                 if args.get('messageId') and not any(row.get('id')==args['messageId'] for row in session.get('messages',[])):
                     raise ValueError('Choose an original message visible in this conversation; no turn was inferred.')
             data=None
-            value={'kind':args.get('kind','writing' if action=='outputs.write' else 'git_review'),
+            value={'kind':args.get('kind','writing' if action=='outputs.write' else 'file' if action=='outputs.attachImage' else 'git_review'),
                 'title':args.get('title') or 'Saved Git review','origin':{'source':origin,'messageId':args.get('messageId')},
                 'parentId':args.get('parentId'),'evidenceIds':args.get('evidenceIds',[])}
             workspace=session.get('workingDirectory') or session.get('workspace')
-            if action=='outputs.attach':
+            if action=='outputs.attachImage':
+                from .image_receipts import read_image_receipt
+                data,path,name,receipt=await asyncio.to_thread(read_image_receipt,workspace,args['receiptPath'])
+                if receipt['operation']=='edit':
+                    if not args.get('parentId'):
+                        raise ValueError('Attach the original image first, then supply its parentId for this edit.')
+                    parent=self.record(session['id'],args['parentId'])
+                    if parent.get('kind')!='file' or parent.get('sha256')!=receipt['inputs'][0]['sha256']:
+                        raise ValueError('The saved parent does not match the exact edit input hash.')
+                elif args.get('parentId'):
+                    raise ValueError('A generated image has no edit parent.')
+                value.update(path=path,filename=name,versionEvidence='snapshot',imageGeneration=receipt)
+            elif action=='outputs.attach':
                 kind=args['kind']
                 expected_field='path' if kind in {'file','dataset'} else 'canvasId' if kind=='canvas' else 'url'
                 if not args.get(expected_field) or any(args.get(key) for key in {'path','url','canvasId'}-{expected_field}):
@@ -170,7 +185,13 @@ class Outputs:
                 review=await git_snapshot(workspace,args['mode'],args.get('base'),path)
                 data=review.pop('text').encode();value.update(review=review,filename='review.diff',versionEvidence='snapshot')
             async with self.app.lock:
-                self.app._session(session['id'])
+                current = self.app._session(session['id'])
+                # File/Git reads above can outlive a task transfer. Recheck
+                # authority under the same lock that commits its source fence.
+                if portability and portability.write_context(session['id']) != transfer_context:
+                    raise ValueError('The task moved while reading the output; inspect and retry.')
+                if current.get('executionRevision', 0) != session.get('executionRevision', 0):
+                    raise ValueError('The task execution folder changed while reading the output; inspect and retry.')
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
                 if action in {'outputs.unlink','outputs.relink'}:

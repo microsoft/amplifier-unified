@@ -229,7 +229,7 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_child_retries_show_public_identity_and_count_without_error_body(self):
         worker=Worker();worker.runtime=SimpleNamespace(session_id='parent')
         callbacks={}
-        capabilities={'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1'}})}
+        capabilities={'web.worker_run':'child-run', 'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1','runId':'child-run'}})}
         coordinator=SimpleNamespace(session_id='child',
             get_capability=capabilities.get,
             register_capability=lambda key,value:capabilities.update({key:value}),
@@ -246,6 +246,9 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
             kind,payload=normalize_event(event,'parent')
             self.assertEqual(kind,'worker.updated')
             self.assertEqual(payload['callId'],'tool-1')
+            self.assertEqual(payload['runId'],'child-run')
+            self.assertTrue(payload['activityOnly'])
+            self.assertNotIn('status',payload)
             self.assertEqual(payload['retryMax'],5)
             self.assertNotIn('private',json.dumps(payload))
 

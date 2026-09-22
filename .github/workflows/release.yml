@@ -48,7 +48,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install uv
-          uv sync --locked --group dev
+          uv sync --locked --group dev --group artifacts
           npm ci --prefix frontend
       - name: Resolve current installed host dependencies
         run: uv run --no-sync python scripts/qualify_host_dependencies.py --evidence "$RUNNER_TEMP/host-resolution"
@@ -116,6 +116,14 @@ jobs:
       - name: Verify live surface awareness and draft checkpoints
         working-directory: frontend
         run: npm run test:surface-context-browser
+      - name: Verify shared Work workflow controls
+        if: ${{ hashFiles('frontend/tests/desktop-readiness-browser.mjs', 'frontend/tests/memory-personalization-browser.mjs', 'frontend/tests/publishing-browser.mjs', 'frontend/tests/portability-browser.mjs') != '' }}
+        working-directory: frontend
+        run: |
+          node tests/desktop-readiness-browser.mjs
+          node tests/memory-personalization-browser.mjs
+          node tests/publishing-browser.mjs
+          node tests/portability-browser.mjs
       - name: Verify settings navigation and retained capabilities
         working-directory: frontend
         run: |

@@ -13,6 +13,13 @@ class VoiceVisualDelivery:
         return getattr(self.surfaces, name)
 
     def remember(self, receipt):
+        # Stable capture identity/provenance crosses tool hooks. Permission,
+        # capture age and current pixels are re-read from the host below.
+        result = {key: copy.deepcopy(receipt['result'][key]) for key in (
+            'id', 'sessionId', 'callId', 'grantId', 'sha256', 'width', 'height',
+            'source', 'observation', 'untrustedData', 'nativeForeground', 'scope',
+        ) if key in receipt['result']}
+        receipt = {'accepted': receipt['accepted'], 'result': result}
         self.capture = {"id": receipt["result"]["id"], "receipt": copy.deepcopy(receipt), "epoch": copy.deepcopy(self.surfaces.epoch)}
         return receipt
 
@@ -34,8 +41,11 @@ class VoiceVisualDelivery:
             if message.role == "tool" and message.name == "app_control" and isinstance(message.content, str):
                 try:
                     value = json.loads(message.content)
-                    if isinstance(value, dict) and value.get("success") is True:
-                        value = value.get("output")
+                    if isinstance(value, dict) and "output" in value:
+                        if value.get("error") is None and (value.get("success") is True or (
+                            "success" not in value and "error" in value
+                        )):
+                            value = value["output"]
                     if value == capture["receipt"]:
                         retained = True
                 except ValueError:

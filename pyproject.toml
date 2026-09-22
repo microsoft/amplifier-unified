@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
+    "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=1.6.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
@@ -37,7 +38,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/.ci/**"]
