@@ -36,7 +36,17 @@ directory creation or removal matter; runtime event logs and browser checkpoints
 do not. A full stat reconciliation runs at least once per minute, manual refresh
 forces reconciliation, and unavailable file watches fall back to stat discovery.
 Activity projections independently avoid rereading unchanged event files and
-rebuild when an input session, file identity, size, timestamp or child changes.
+rebuild when a canonical association or lifecycle input, file identity, size,
+timestamp or child changes. Drafts, streamed text and worker progress labels do
+not invalidate the canonical activity cache. Transcript changes are checked as
+well as event-file changes.
+
+Tool and worker progress share the 250 ms publication batch used by streamed
+text. Delivery acknowledgments, messages, approvals, errors and lifecycle
+completion still publish immediately. Diagnostics capture continues normally,
+but record counts and oldest/newest timestamps publish in the background only
+while a connected client is inspecting Diagnostics. Errors and dropped-record
+changes are still published when that panel is closed.
 
 ## Acceptance
 

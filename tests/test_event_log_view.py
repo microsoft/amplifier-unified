@@ -40,16 +40,31 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
     for _ in range(10):
         await view.refresh('app')
     assert calls.count('read') == 1
+    # These fields change on every streamed token or worker progress report.
+    # They have no role in mapping canonical events onto messages and turns.
+    for number in range(10):
+        session.update(streaming=f'Token {number}', recentActivityAt=number, draft=f'Draft {number}')
+        session['workers'] = [{'id': 'child', 'sessionId': 'child', 'status': 'running',
+                               'updatedAt': number, 'detail': f'Progress {number}'}]
+        await view.refresh('app')
+    assert calls.count('read') == 2  # New child discovered once.
+    calls.clear()
     append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'finished'}, 12)
     await view.refresh('app')
-    assert calls.count('read') == 2
+    assert calls.count('read') == 1
     assert session['execution']['nodes'][0]['output'] == 'finished'
     replacement = path.with_suffix('.replacement')
     append(replacement, 'tool:post', {'tool_call_id': 'two', 'result': 'replacement'}, 15)
     replacement.replace(path)
     await view.refresh('app')
-    assert calls.count('read') == 3
+    assert calls.count('read') == 2
     session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Continue', 'createdAt': 20})
+    await view.refresh('app')
+    assert calls.count('read') == 3
+    # Transcript changes can establish associations without an event append.
+    (path.parent.parent / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Inspect it'})+'\n')
+    await view.refresh('app')
+    assert calls.count('read') == 4
     await view.refresh('app')
     assert calls.count('read') == 4
 

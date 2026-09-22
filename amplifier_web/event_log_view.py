@@ -266,7 +266,7 @@ class EventIndex:
         for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
             try:
                 stat = (directory / name).stat()
-                stamps.append((stat.st_ino, stat.st_mtime_ns, stat.st_size))
+                stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
             except FileNotFoundError:
                 stamps.append(None)
         revision = (self.revision, tuple(stamps))
@@ -322,6 +322,17 @@ class EventLogView:
         self.projected = OrderedDict()
         self.read_paths = {}
         self.read_revisions = {}
+
+    @staticmethod
+    def projection_input(session):
+        """Only canonical association/lifecycle inputs, never draft or progress."""
+        result = {key: session[key] for key in ('id', 'workspace', 'nativeProject', 'nativeIdentity',
+                  'runtimeSessionId', 'status', 'execution') if key in session}
+        result['messages'] = [{key: row[key] for key in ('id', 'role', 'createdAt', 'nativeIndex', 'inputId', 'source')
+                               if key in row} for row in session.get('messages', [])]
+        result['workers'] = [{key: row[key] for key in ('id', 'sessionId', 'status') if key in row}
+                            for row in session.get('workers', [])]
+        return result
 
     def start(self):
         self.task = asyncio.create_task(self.loop())
@@ -414,6 +425,11 @@ class EventLogView:
         root_index = next((index for index in indexes if index.identity == root), None)
         source = {**session, 'nativeProject': session.get('nativeProject') or project_slug(session['workspace'])}
         associations = root_index.associations(directory(source)) if root_index else {}
+        if root_index:
+            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup'))
+            self.read_paths[session['id']] += transcript_paths
+            self.read_revisions[session['id']] += tuple(
+                (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
         associated_turns = {}
         for node in nodes:
@@ -566,6 +582,7 @@ class EventLogView:
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
+            inputs = self.projection_input(session)
             cached = self.projected.get(identity)
             paths = self.read_paths.get(identity, ())
             def stamps():
@@ -582,22 +599,22 @@ class EventLogView:
             # tree. External appends/replacements and live metadata still win.
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
             same_root = paths and paths[0] == event_path(session, root)
-            if cached and same_root and cached[0] == session and cached[1] == before:
+            if cached and same_root and cached[0] == inputs and cached[1] == before:
                 return
-            previous = copy.deepcopy(session)
+            previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
             if self.service.closed:
                 return
             async with self.service.lock:
                 session = self.service._session(identity)
-                if session.get('execution') != previous.get('execution') or session.get('messages') != previous.get('messages'):
+                if self.projection_input(session) != previous:
                     return  # A newer live update won; retry from it next tick.
                 if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
                     self.service._publish()
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
-                self.projected[identity] = (copy.deepcopy(session), self.read_revisions[identity])
+                self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])
                 self.projected.move_to_end(identity)
                 while len(self.projected) > 64:
                     expired, _ = self.projected.popitem(last=False)

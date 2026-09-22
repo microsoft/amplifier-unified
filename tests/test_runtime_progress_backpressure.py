@@ -89,3 +89,27 @@ async def test_buffered_worker_events_yield_to_bridge_without_reordering_events(
     assert order.index('bridge') < order.index('54'), 'Buffered telemetry must not monopolize the reader'
     assert len(replies) == 1
     assert json.loads(replies[0]) == {'op': 'bridge.result', 'id': 'capacity', 'result': {'accepted': True}}
+
+
+async def test_tool_and_worker_progress_burst_is_coalesced_but_approval_flushes(app_factory):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    sid = app.state['selectedSessionId']
+    app._session(sid)['workers'] = [{'id': 'child', 'runId': 'current', 'status': 'running'}]
+    revision = app.state['revision']
+    queue = app.subscribe()
+    for number in range(30):
+        await app.on_runtime_event('runtime.tool', {'sessionId': sid, 'tool': 'read_file', 'callId': str(number), 'phase': 'pre'})
+        await app.on_runtime_event('runtime.tool', {'sessionId': sid, 'tool': 'read_file', 'callId': str(number), 'phase': 'post'})
+        await app.on_runtime_event('worker.updated', {'sessionId': sid, 'id': 'child', 'runId': 'current',
+            'activityOnly': True, 'updatedAt': number, 'detail': str(number)})
+    assert queue.empty() and app.state['revision'] == revision
+    assert app._session(sid)['workers'][0]['updatedAt'] == 29
+    await app.on_runtime_event('approval.requested', {'sessionId': sid, 'id': 'review', 'prompt': 'Review this'})
+    latest = queue.get_nowait()['sessions'][0]
+    assert latest['approvals'][-1]['id'] == 'review'
+    assert latest['workers'][0]['updatedAt'] == 29
+    assert not latest['activity']['activeTools']
+    assert app.state['revision'] == revision + 1 and not app._progress_dirty
+    await asyncio.sleep(.3)
+    assert queue.empty()

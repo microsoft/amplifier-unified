@@ -2416,7 +2416,8 @@ class AppService:
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):
                 from .chat_navigation import settle_activity
                 settle_activity(session)
-            progress = kind == 'assistant.delta' or (
+            progress = kind in {'assistant.delta', 'runtime.tool'} or (
+                kind == 'worker.updated' and payload.get('activityOnly')) or (
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
