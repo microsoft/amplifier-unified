@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.5",
+      "title": "Reliable new chats and clear submission recovery",
+      "changes": [
+        "An ordinary folder named work no longer hides the installed Work bundle when starting a conversation.",
+        "Starting a chat creates an explicitly entered workspace folder when needed and reports path errors without losing the draft.",
+        "New chat shows the correct heading and useful submission errors. Confirmed unsent local messages can be discarded, while uncertain deliveries remain available for checking.",
+        "Successful forms clear their submitted drafts while preserving newer typing, failed submissions, and feedback receipts.",
+        "Native model and tool activity stays grouped with the user turn that started it instead of creating duplicate Working groups."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.4",
       "title": "Keep the app responsive while preparing conversations",
       "changes": [

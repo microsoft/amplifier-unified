@@ -30,7 +30,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
 function useNavigationController(host,kind){
  const state=useNavigation(React,host),act=host.dispatch,session={id:state.selectedSessionId},prefix=host.instanceId==='workspaces'?'nav-workspace':'nav-'+host.instanceId;
  const view=state.view||{},savedDraft=view.workspaceDraft||{},draft=(kind==='chats'?savedDraft.mode?.startsWith('chat-'):!savedDraft.mode?.startsWith('chat-'))?savedDraft:{};
- const form=useRef(null),draftRef=useRef(draft),submitting=useRef(false);
+ const form=useRef(null),draftRef=useRef(draft),draftVersion=useRef(0),submitting=useRef(false);
  const [saving,setSaving]=useState(false),[formError,setFormError]=useState('');
  useEffect(()=>{draftRef.current=draft},[draft]);
  const history=state.sharedHistory||{},refreshing=!!(history.loading||history.refreshing);
@@ -39,12 +39,12 @@ function useNavigationController(host,kind){
  const allChats=view.navChatScope==='all',chats=chatPage(state,workspace);
  const groups=[{name:'Pinned',items:chats.items.filter(chat=>chat.pinned)},{name:'Recent',items:chats.items.filter(chat=>!chat.pinned)}];
  const changePage=index=>patch(act,{navChatPage:{...chats.scope,index}});
- const setDraft=value=>{draftRef.current=value;setFormError('');patch(act,{workspaceDraft:value})};
+ const setDraft=value=>{draftVersion.current++;draftRef.current=value;setFormError('');patch(act,{workspaceDraft:value})};
  const updateDraft=value=>setDraft({...draft,...value});
  const choose=id=>act('session.select',{id});
 
  const submit=async e=>{
-  e.preventDefault();if(submitting.current)return;submitting.current=true;setSaving(true);setFormError('');
+  e.preventDefault();if(submitting.current)return;const version=draftVersion.current;submitting.current=true;setSaving(true);setFormError('');
   try{
    let result;
    if(draft.mode==='add')result=await act('workspace.create',{path:draft.path||'',...(draft.name?.trim()?{name:draft.name.trim()}:{})});
@@ -52,7 +52,7 @@ function useNavigationController(host,kind){
    else if(draft.mode==='chat-rename')result=await act('session.rename',{id:draft.id,title:draft.name||''});
    else if(draft.mode==='chat-delete')result=await act('session.delete',{id:draft.id});
    else if(draft.mode==='remove')result=await act('workspace.remove',{id:draft.id});
-   if(result&&result.accepted!==false)setDraft({});
+   if(result&&result.accepted!==false){if(draftVersion.current===version)setDraft({});}
    else setFormError(result?.error||'Could not save. Check the folder or name and try again.');
   }catch(error){setFormError(error.message||'Could not save. Please try again.')}
   finally{submitting.current=false;setSaving(false)}

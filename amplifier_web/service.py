@@ -11,6 +11,7 @@ from pathlib import Path
 import sqlite3
 import time
 import uuid
+from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
@@ -70,7 +71,7 @@ ACTION_DEFINITIONS = {
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000)}, [])),
-    "session.create": ("Start a fresh conversation. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.create": ("Start a fresh conversation, creating an explicitly supplied workspace folder when missing. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -311,6 +312,7 @@ class AppService:
         self.smart_tool_tasks = set()
         self.smart_tool_requests = {}
         self.lock = asyncio.Lock()
+        self._creation_locks = WeakValueDictionary()
         # RuntimeManager.close() is terminal.  Every host-continuing operation
         # that retires it therefore shares this exclusion and installs a fresh
         # manager before reopening normal work.
@@ -778,6 +780,16 @@ class AppService:
             await candidate.close()
 
     async def dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
+        # Directory preparation yields outside the service lock. Keep concurrent
+        # retries on the same creation command behind its durable receipt, so a
+        # conflicting retry cannot create a second folder during that interval.
+        if action == 'session.create' and command_id:
+            lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
+            async with lock:
+                return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+        return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
+
+    async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
         # Keep older shells/agents on the same non-committing launcher.
         if action == 'view.update' and args.get('patch', {}).get('panel') == 'new-session':
@@ -898,6 +910,33 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
+        prepared_workspace = None
+        if action == 'session.create' and args.get('workspace', '').strip():
+            from .new_chat import selection
+            from .session_creation import prepare
+            from .workspace_canvas import _create_workspace_folder
+            async with self.lock:
+                if expected_revision is not None and getattr(self, '_progress_dirty', False):
+                    self._publish()
+                previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
+                if previous:
+                    if previous[0] != fingerprint:
+                        raise AppError('This command ID was already used with different contents.', 409)
+                    if include_state and getattr(self, '_progress_dirty', False):
+                        self._publish()
+                    return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
+                if expected_revision is not None and expected_revision != self.state['revision']:
+                    raise AppError('The app changed. Refresh its state and retry.', 409)
+                try:
+                    selection(args.get('selection', {}))
+                    prepare(self, args, origin, caller_session_id)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if args.get('select', True):
+                    self.canvas_views.guard_transition(action, args)
+            # Opening/editing a draft never creates directories. First submit
+            # creates only its explicit path, away from the event loop and lock.
+            prepared_workspace = str(await asyncio.to_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -1095,7 +1134,7 @@ class AppService:
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
-                    session = self._new_session(args)
+                    session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id'): session['id'] = args['id']
                     apply(self, session, inherited)
                 except ValueError as exc:

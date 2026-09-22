@@ -1,7 +1,7 @@
 import React,{useState} from 'react';
 import {AlertCircle,RotateCcw,LoaderCircle} from 'lucide-react';
 
-export function MessageDelivery({message,session,delivery,localDelivery,dispatch,retry}){
+export function MessageDelivery({message,session,delivery,localDelivery,dispatch,retry,discard}){
  const [pending,setPending]=useState(false),[report,setReport]=useState(null),[confirm,setConfirm]=useState(false),[error,setError]=useState('');
  const inputId=message.inputId||localDelivery?.commandId;
  const blocked=session.configurationBusy||session.ownership?.status==='blocked'||session.workspaceAvailable===false||!!session.historyReadOnlyReason;
@@ -28,6 +28,8 @@ export function MessageDelivery({message,session,delivery,localDelivery,dispatch
   <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>Sending…</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
    {delivery.status==='failed'&&localDelivery?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
   </>}</span>
+  {!sending&&delivery.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}
+  {localDelivery&&delivery.status==='failed'&&!session.messages?.some(row=>row.inputId===inputId)&&<button type="button" className="a-link" disabled={pending} onClick={()=>discard?.(message)}>Discard unsent message</button>}
   {report?.message&&<p role="status" className="a-delivery-detail">{report.message}</p>}
   {error&&<p role="alert" className="a-delivery-detail">{error}</p>}
   {!sending&&report&&!['accepted','sending'].includes(report.delivery)&&!confirm&&<button type="button" className="a-link" data-action="conversation.retry" disabled={pending||blocked||working} onClick={()=>setConfirm(true)}>Send again</button>}

@@ -102,11 +102,18 @@ try{
  assert.equal(saved.attachmentIds.length,3);
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
+ await page.waitForFunction(()=>window.amplifier.getState().view.feedbackDraft.title===''&&!window.amplifier.getState().view.feedbackDraft.pending);
+ await page.waitForFunction(()=>document.querySelector('#feedback-title')?.value==='');
+ assert.equal(await page.getByLabel('Title',{exact:true}).inputValue(),'');
+ assert.equal(await page.getByLabel('Details',{exact:true}).inputValue(),'');
+ assert.equal(await page.getByRole('button',{name:'Preview picked-image.png',exact:true}).count(),0);
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/amplifier-feedback-narrow.png'});
  assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
  await page.evaluate(payload=>window.amplifier.dispatch('feedback.submit',payload),saved);
  assert.equal((await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()))).calls.length,1);
  await page.reload();await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
+ assert.equal(await page.getByLabel('Title',{exact:true}).inputValue(),'');
+ assert.equal(await page.getByLabel('Details',{exact:true}).inputValue(),'');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']}}));
  await page.locator('[aria-label="Application release status"]').waitFor();
  assert.equal(await page.locator('.a-app-update-versions').textContent(),'Installed0.6.3Latest releasev0.6.4');

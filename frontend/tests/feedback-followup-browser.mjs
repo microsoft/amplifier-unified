@@ -47,7 +47,8 @@ try{
  const target=`http://127.0.0.1:${port}`;
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
+ const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];let pending;
+ page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Send feedback',exact:true}).click();
@@ -69,7 +70,8 @@ try{
  await page.getByRole('button',{name:'Send comment',exact:true}).click();
  await page.getByText('Comment added to your feedback report.',{exact:true}).waitFor();
  assert.equal(await page.getByRole('link',{name:'View comment',exact:true}).getAttribute('href'),'https://github.com/microsoft/amplifier-unified/issues/42#issuecomment-123');
- const pending=await page.evaluate(()=>window.amplifier.getState().view.feedbackFollowupDraft.pending);
+ await page.waitForFunction(()=>window.amplifier.getState().view.feedbackFollowupDraft.body===''&&!window.amplifier.getState().view.feedbackFollowupDraft.pending);
+ assert.ok(pending?.requestId);
  await page.evaluate(args=>window.amplifier.dispatch('feedback.comment',args),pending);
  const sent=await page.evaluate(()=>fetch('/api/fixture/followup').then(response=>response.json()));
  assert.equal(sent.posts.length,1);assert.match(sent.posts[0].body,/Additional details from the browser/);
@@ -78,9 +80,9 @@ try{
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth+1));
  await page.reload();await page.getByText('Comment added to your feedback report.',{exact:true}).waitFor();
- assert.equal(await page.getByLabel('Add a comment',{exact:true}).inputValue(),'Additional details from the browser.');
+ assert.equal(await page.getByLabel('Add a comment',{exact:true}).inputValue(),'');
  assert.deepEqual(errors,[]);
- console.log('Feedback follow-up browser passed: report/comments read, user comment, agent retry deduplicated, independent browser pages/drafts, reload retains frozen draft, narrow layout; no live GitHub writes.');
+ console.log('Feedback follow-up browser passed: report/comments read, user comment, agent retry deduplicated, independent browser pages/drafts, success clears on reload while keeping receipt, narrow layout; no live GitHub writes.');
 }finally{
  await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }
