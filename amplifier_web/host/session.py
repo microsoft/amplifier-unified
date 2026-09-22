@@ -419,7 +419,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     if not snapshot:
         from ..builtin_behaviors import resolve_builtin_behavior
         for behavior in config.app_bundles:
-            selected = await registry.load(resolve_builtin_behavior(behavior))
+            selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
             components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
@@ -433,7 +433,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
         if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
-            selected = await registry.load("git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
+            selected, _ = await load_configured_bundle(registry, config, "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
             components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         loaded = _apply_settings(loaded, config)
@@ -467,19 +467,32 @@ def module_source(config, snapshot, module, source, components=None):
     return source if snapshot else config.module_sources.get(module) or source
 
 
+async def load_configured_bundle(registry, config, reference):
+    """Apply the same source selections to roots and app behaviors as includes."""
+    replacement = config.resolve_source(reference)
+    if replacement is None:
+        registered = registry.find(reference)
+        if registered:
+            replacement = config.resolve_source(registered)
+    reference = replacement or reference
+    from .bundle_paths import local_bundle_path
+    candidate = local_bundle_path(config, reference)
+    chosen = str(candidate) if candidate is not None else reference
+    return await registry.load(chosen), chosen
+
+
 async def load_root_bundle(config, chosen, *, execution_workspace=None):
-    """Resolve a root and host composition without per-conversation overrides."""
+    """Compose in a session-local registry view; settings own registrations."""
     from amplifier_foundation import BundleRegistry
-    registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
+    registry = BundleRegistry(home=config.registry_home, strict=True,
+        include_source_resolver=config.resolve_source, persist=False)
     registrations = dict(config.registrations)
-    if "foundation" in registry.list_registered():
+    explicit = {**config.settings.get('bundle', {}).get('added', {}),
+                **config.settings.get('sources', {}).get('bundles', {})}
+    if "foundation" in registry.list_registered() and "foundation" not in explicit:
         registrations.pop("foundation", None)
     registry.register(registrations)
-    from .bundle_paths import local_bundle_path
-    candidate = local_bundle_path(config, chosen)
-    if candidate is not None:
-        chosen = str(candidate)
-    loaded = await registry.load(chosen)
+    loaded, chosen = await load_configured_bundle(registry, config, chosen)
     loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
 

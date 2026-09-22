@@ -97,7 +97,7 @@ async def test_new_session_saved_snapshot_resists_host_recomposition_and_source_
     settings={'bundle':{'app':[str(behavior)]},'routing':{'matrix':'host-matrix'},
         'config':{'tools':[{'module':'tool-disabled'}],'providers':[{'module':'provider-test','id':'saved-provider','config':{'model':'host-model'}}]},
         'overrides':{'tool-filesystem':{'source':'git+https://github.com/example/replacement','config':{'setting':'host-setting','allowed_write_paths':['/allowed'],'denied_write_paths':['/denied']}}}}
-    config=SimpleNamespace(settings=settings,app_bundles=[str(behavior)],providers=settings['config']['providers'],module_sources={'tool-filesystem':'git+https://github.com/example/replacement'},workspace=tmp_path,home=tmp_path,registry_home=tmp_path/'registry')
+    config=SimpleNamespace(settings=settings,app_bundles=[str(behavior)],providers=settings['config']['providers'],module_sources={'tool-filesystem':'git+https://github.com/example/replacement'},workspace=tmp_path,home=tmp_path,registry_home=tmp_path/'registry',config_home=None,resolve_source=lambda _:None)
     loaded=await registry.load(str(target))
     assert loaded.version==SNAPSHOT_VERSION and is_snapshot(loaded)
     loaded=await compose_configured_bundle(registry,loaded,config)
