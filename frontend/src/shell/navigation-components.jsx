@@ -1,6 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Copy,Folder,MoreHorizontal} from 'lucide-react';
-import {chatPage,visibleWorkspaces,isTopLevelChat} from '../chat-navigation';
+import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Copy,Folder,MoreHorizontal,GripVertical,ArrowUp,ArrowDown} from 'lucide-react';
+import {chatPage,visibleWorkspaces,isTopLevelChat,movePin} from '../chat-navigation';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {WorkspaceExplorer} from '../workspace-explorer';
@@ -38,7 +38,7 @@ function useNavigationController(host,kind){
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const workspaceCount=state.library?.bounded?state.library.workspaceCount:workspaces.length;
  const allChats=view.navChatScope==='all',chats=chatPage(state,workspace);
- const groups=[{name:'Pinned',items:chats.items.filter(chat=>chat.pinned)},{name:'Recent',items:chats.items.filter(chat=>!chat.pinned)}];
+ const groups=[{name:'Pinned',items:chats.items.filter(chat=>chat.pinned)},{name:view.navSort==='name'?'By name':view.navSort==='created'?'Newest created':'Recent',items:chats.items.filter(chat=>!chat.pinned)}];
  const changePage=index=>patch(act,{navChatPage:{...chats.scope,index}});
  const setDraft=value=>{draftVersion.current++;draftRef.current=value;setFormError('');patch(act,{workspaceDraft:value})};
  const updateDraft=value=>setDraft({...draft,...value});
@@ -86,6 +86,9 @@ function PairedWorkspaceBrowser({host,onOpen}){
 export function ChatDetails({chat,model,now,close}){
  const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
  const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
+ const pins=state.pinnedSessionIds||[],pinIndex=pins.indexOf(chat.id);
+ const [pinError,setPinError]=useState('');
+ const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
@@ -95,6 +98,7 @@ export function ChatDetails({chat,model,now,close}){
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
+   {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action="session.pinOrder" disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action="session.pinOrder" disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
    <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
    {managed&&!chat.parentId&&<button type="button" className="a-danger" aria-label={'Delete '+title} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Delete</button>}
@@ -104,6 +108,13 @@ export function ChatDetails({chat,model,now,close}){
 export function ConversationList({host,workspaceHost}){
  const model=useNavigationController(host,'chats');
  const {state,act,session,view,draft,history,refreshing,workspace,allChats,chats,groups,changePage,choose}=model;
+ const [dragged,setDragged]=useState(null),[pinError,setPinError]=useState(''),[moving,setMoving]=useState(false);
+ const reorder=async(source,target)=>{
+  const ids=state.pinnedSessionIds||[],next=movePin(ids,source,target);
+  setDragged(null);if(moving||next===ids)return;setMoving(true);setPinError('');
+  try{const result=await act('session.pinOrder',{ids:next});if(result?.accepted===false)throw Error(result.error||'Could not reorder pins.')}
+  catch(error){setPinError(error.message||'Could not reorder pins. Please try again.')}finally{setMoving(false)}
+ };
  const workspaceState=useNavigation(React,workspaceHost||host),now=useActivityClock();
  const browsing=!!workspaceHost&&!allChats&&(view.navWorkspaceList??!workspace);
  const workspaceView=workspaceState.view||{};
@@ -122,6 +133,8 @@ export function ConversationList({host,workspaceHost}){
    </>}
    <NavigationEditor model={model}/>
    <LibraryFilters state={state} act={act}/>
+   <label className="a-managed-chat-filter">Sort<select aria-label="Sort conversations" value={view.navSort||'activity'} data-action="view.update" onChange={e=>patch(act,{navSort:e.target.value})}><option value="activity">Recent activity</option><option value="created">Newest created</option><option value="name">Name</option></select></label>
+   {pinError&&<p role="alert" className="a-danger">{pinError}</p>}
    {allChats&&<label className="a-managed-chat-filter">Location<select aria-label="Filter chats by location" value={view.navLocationFilter||'all'} data-action="view.update" onChange={event=>patch(act,{navLocationFilter:event.target.value})}><option value="all">All locations</option><option value="managed">No workspace</option></select></label>}
    <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder={allChats?'Find chats or paths · * ?':'Find chats · * ? patterns'} data-action="view.update" onChange={e=>patch(act,{navFilter:e.target.value})}/></div>
    <div className="a-navigation-filters" role="group" aria-label="Conversation activity filters">
@@ -132,7 +145,8 @@ export function ConversationList({host,workspaceHost}){
    <div className="a-nav-eyebrow a-nav-conversations"><span className="a-nav-chat-heading">{allChats?(view.navLocationFilter==='managed'?'No workspace':'All chats'):workspace?`Chats in ${workspace.name}`:'Conversations'}</span><span>{chats.pending?'…':chats.total}</span><button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button></div>
    {(chats.pending||history.loading)&&<p className="a-nav-history-status" role="status"><LoaderCircle className="a-progress-spinner"/>{history.loading?'Finding projects and chats…':'Loading conversations…'}</p>}
    {history.error&&<p className="a-nav-history-status a-danger" role="alert"><AlertCircle/><span>{history.error}</span></p>}
-   <div className="a-nav-chats">{groups.filter(group=>group.items.length).map(group=><section className="a-nav-chat-group" aria-label={group.name+' chats'} key={group.name}><h4 className="a-nav-chat-group-title">{group.name}</h4>{group.items.map(chat=><NavigationRow key={chat.id} className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} data-session-id={chat.id} label={chat.title||'Untitled conversation'} expanded={draft.mode==='chat-rename'&&draft.id===chat.id} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>
+   <div className="a-nav-chats">{groups.filter(group=>group.items.length).map(group=><section className="a-nav-chat-group" aria-label={group.name+' chats'} key={group.name}><h4 className="a-nav-chat-group-title">{group.name}</h4>{group.items.map(chat=><NavigationRow key={chat.id} className={`a-nav-chat ${chat.id===session?.id?'is-selected':''}`} data-session-id={chat.id} data-pin-dragging={dragged===chat.id||undefined} onDragOver={e=>{if(dragged&&chat.pinned){e.preventDefault();e.dataTransfer.dropEffect='move'}}} onDrop={e=>{if(dragged&&chat.pinned){e.preventDefault();reorder(dragged,chat.id)}}} label={chat.title||'Untitled conversation'} expanded={draft.mode==='chat-rename'&&draft.id===chat.id} details={({close})=><ChatDetails chat={chat} model={model} now={now} close={close}/>}>
+    {chat.pinned&&<button type="button" className="a-icon a-pin-handle" aria-label={'Reorder '+(chat.title||'Untitled conversation')} title="Drag to reorder; use Alt + Up or Down" data-action="session.pinOrder" draggable={!moving} disabled={moving} onDragStart={e=>{setDragged(chat.id);e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',chat.id)}} onDragEnd={()=>setDragged(null)} onKeyDown={e=>{if(e.altKey&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();const pins=groups[0].items,index=pins.findIndex(row=>row.id===chat.id),target=pins[index+(e.key==='ArrowUp'?-1:1)];if(target)reorder(chat.id,target.id)}}}><GripVertical/></button>}
     <button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===session?.id?'page':undefined} aria-label={chat.title||'Untitled conversation'} onClick={()=>choose(chat.id)}><NavigationStatus activity={activityFor(chat,state)}/><span className="a-nav-chat-label"><span>{chat.title||'Untitled conversation'}</span><small className="a-nav-chat-workspace" title={allChats?chat.workspace:undefined}>{allChats?(chat.workspaceLabel||chat.workspace):activityFor(chat,state).label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button>
    </NavigationRow>)}</section>)}{!chats.total&&!chats.pending&&!history.loading&&<p className="a-nav-empty">{view.navFilter||view.navStatusFilter&&view.navStatusFilter!=='all'?'No matching chats.':!workspace&&!allChats?'Choose a workspace to see its conversations.':'Your conversations will appear here.'}</p>}</div>
    {chats.pages>1&&<div className="a-nav-pagination"><span>{chats.start+1}–{chats.end} of {chats.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label="Show previous conversations" disabled={chats.index===0} onClick={()=>changePage(chats.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label="Show more conversations" disabled={chats.index===chats.pages-1} onClick={()=>changePage(chats.index+1)}>More chats<ChevronRight/></button></div></div>}

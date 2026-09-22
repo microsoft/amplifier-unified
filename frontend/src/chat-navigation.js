@@ -26,33 +26,36 @@ export function workspaceChats(sessions=[],workspace){
  return sessions.filter(chat=>isTopLevelChat(chat)&&(!workspace||(chat.workspaceId?chat.workspaceId===workspace.id:!!workspace.path&&chat.workspace===workspace.path)));
 }
 function recentActivity(chat){
- return [chat.recentActivityAt,chat.createdAt].find(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0)??0;
+ return [chat.navigationActivityAt,chat.recentActivityAt,chat.createdAt].find(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0)??0;
 }
 function orderedChats(state,workspace,mode='workspace'){
  const workspaces=visibleWorkspaces(state),byId=new Map(workspaces.map(row=>[row.id,row])),byPath=new Map(workspaces.map(row=>[row.path,row]));
  const pinned=new Set(state.pinnedSessionIds||[]);
  const organization=state.conversationOrganization||{},archived=organization.archived||{},view=state.view||{},archive=view.navArchive||'active';
+ const sort=view.navSort||'activity';
  const pinOrder=new Map((state.pinnedSessionIds||[]).map((id,index)=>[id,index]));
  return (state.sessions||[]).map((chat,position)=>({chat,position,workspace:byId.get(chat.workspaceId)||byPath.get(chat.workspace)}))
   .filter(row=>isTopLevelChat(row.chat)&&(row.workspace||row.chat.location?.kind==='managed')&&(mode==='all'||row.chat.location?.kind!=='managed'&&row.workspace?.id===workspace?.id))
   .filter(({chat})=>mode!=='all'||view.navLocationFilter!=='managed'||chat.location?.kind==='managed')
   .filter(({chat})=>(archive==='all'||(archive==='archived')===Object.hasOwn(archived,chat.id)))
   .map(row=>({...row.chat,workspace:row.workspace?.path||row.chat.workspace,workspaceId:row.chat.location?.kind==='managed'?null:row.workspace.id,workspaceName:row.chat.location?.kind==='managed'?'No workspace':row.workspace.name||'',workspaceLabel:row.chat.location?.kind==='managed'?'No workspace':row.workspace?.label,pinned:pinned.has(row.chat.id),recentActivityAt:recentActivity(row.chat),position:row.position}))
-  .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(a.pinned&&state.pinOrderCustomized?pinOrder.get(a.id)-pinOrder.get(b.id):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
+  .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(a.pinned?pinOrder.get(a.id)-pinOrder.get(b.id):sort==='name'?((a.title||'Untitled conversation').toLowerCase()<(b.title||'Untitled conversation').toLowerCase()?-1:(a.title||'Untitled conversation').toLowerCase()>(b.title||'Untitled conversation').toLowerCase()?1:0):sort==='created'?(b.createdAt||0)-(a.createdAt||0):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
 }
 export function chatPage(state,workspace){
  const view=state.view||{},mode=view.navChatScope==='all'?'all':'workspace',filter=view.navFilter||'',selectedSessionId=state.selectedSessionId??null;
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
+ if(view.navSort&&view.navSort!=='activity')scope.sort=view.navSort;
  if(mode==='all'&&view.navLocationFilter==='managed')scope.locationFilter='managed';
  const statusFilter=view.navStatusFilter||'all';
  if(statusFilter!=='all')scope.statusFilter=statusFilter;
  if(view.navArchive&&view.navArchive!=='active')scope.archive=view.navArchive;
  const projection=state.chatNavigation;
+ const sameSort=value=>(value?.sort||'activity')===(scope.sort||'activity');
  const sameLocation=value=>(value?.locationFilter||'all')===(scope.locationFilter||'all');
- const saved=view.navChatPage,matches=saved&&sameLocation(saved)&&Object.entries(scope).every(([key,value])=>saved[key]===value);
+ const saved=view.navChatPage,matches=saved&&sameLocation(saved)&&sameSort(saved)&&Object.entries(scope).every(([key,value])=>saved[key]===value);
  const requestedIndex=matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
- if(projection?.scope&&sameLocation(projection.scope)&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
+ if(projection?.scope&&sameLocation(projection.scope)&&sameSort(projection.scope)&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
@@ -90,4 +93,12 @@ export function subagentPage(state,parent){
  const children=directSubagentChats(state.sessions,parent),rows=filterList(children,filter,row=>[row.title,row.description,row.id,row.nativeIdentity]);
  const pages=Math.max(1,Math.ceil(rows.length/50)),index=Math.max(0,Math.min(pages-1,requested)),start=index*50,end=Math.min(rows.length,start+50);
  return {items:rows.slice(start,end),total:rows.length,unfilteredTotal:children.length,index,pages,start,end,scope};
+}
+
+// Move one pin relative to another without dropping pins hidden by a filter/page.
+export function movePin(ids,source,target){
+ if(source===target||!ids.includes(source)||!ids.includes(target))return ids;
+ const next=ids.filter(id=>id!==source);
+ next.splice(ids.indexOf(target),0,source);
+ return next;
 }

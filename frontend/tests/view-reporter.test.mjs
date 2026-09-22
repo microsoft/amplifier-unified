@@ -30,3 +30,13 @@ test('duplicate in-flight reports deduplicate, failures can retry, and payloads 
  finish.resolve();await retried;
  assert.equal(sent.length,3);
 });
+
+test('reconnect resends unchanged observations and rejects old acknowledgments',async()=>{
+ let finish;const sent=[];
+ const report=createViewReporter(value=>{sent.push(value);return new Promise(resolve=>finish=resolve)});
+ const payload={controls:[{label:'Send'}]},first=report(payload);
+ report.invalidate();report(payload);finish();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(sent.length,2);finish();await first;
+ await report(payload);assert.equal(sent.length,2);
+ report.invalidate();const next=report(payload);assert.equal(sent.length,3);finish();await next;
+});

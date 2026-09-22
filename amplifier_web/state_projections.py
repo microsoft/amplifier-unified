@@ -36,7 +36,7 @@ class StateProjections:
     @classmethod
     def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
-                cls.view_scope(state, ('navChatScope', 'navFilter', 'navStatusFilter', 'navLocationFilter',
+                cls.view_scope(state, ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter',
                                       'navArchive', 'navCollection', 'navChatPage')))
 
     @classmethod
@@ -54,7 +54,7 @@ class StateProjections:
         from .chat_navigation import catalog, registry, snapshot
         view = state.get('view', {})
         workspace = None if view.get('navChatScope') == 'all' else state.get('selectedWorkspaceId')
-        filters = {key: view.get(key) for key in ('navChatScope', 'navFilter', 'navStatusFilter', 'navLocationFilter', 'navArchive', 'navCollection')}
+        filters = {key: view.get(key) for key in ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter', 'navArchive', 'navCollection')}
         registrations = self.get(('chat-registry',), lambda: registry(state))
         index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(state, indexed=registrations))
         return self.get(('chats', *self.chat_scope(state)), lambda: snapshot(state, indexed=index))
@@ -77,13 +77,13 @@ class StateProjections:
         Selection, canvas and selected-chat summaries are added by the client.
         """
         def build():
-            from .chat_navigation import recent_activity
+            from .chat_navigation import navigation_activity
             from .navigation_summary import activity
             from .session_navigation import is_top_level
             attention = self.attention(state)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
-            rows = [([row.get(key) for key in fields], recent_activity(row),
+            rows = [([row.get(key) for key in fields], navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
                     for row in state.get('sessions', []) if is_top_level(row)]
             facts = [rows, state.get('workspaces', []), state.get('pinnedSessionIds'),

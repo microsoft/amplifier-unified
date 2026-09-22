@@ -9,7 +9,7 @@ from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activit
 from .session_navigation import is_top_level
 
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
-    'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt',
+    'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
     'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
