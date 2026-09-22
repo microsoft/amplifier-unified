@@ -26,7 +26,7 @@ export function MessageDelivery({message,session,delivery,localDelivery,dispatch
  const sending=delivery.status==='sending';
  return <>
   <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>Sending…</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
-   {delivery.status==='failed'&&localDelivery?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
+   {delivery.status==='failed'?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>session.messages?.some(row=>row.inputId===inputId)?resend():retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
   </>}</span>
   {!sending&&delivery.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}
   {localDelivery&&delivery.status==='failed'&&!session.messages?.some(row=>row.inputId===inputId)&&<button type="button" className="a-link" disabled={pending} onClick={()=>discard?.(message)}>Discard unsent message</button>}

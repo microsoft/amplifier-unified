@@ -297,7 +297,7 @@ function App(){
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
    if(received&&error.code!=='session_busy')outbox.update(entry.id,null);
-   else outbox.update(entry.id,{status:error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
+   else outbox.update(entry.id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
   }finally{deliveries.current.delete(entry.id)}
  }
  function discardMessage(message){
@@ -328,7 +328,7 @@ function App(){
    await saveDraft(stagedDraftPayload.current,blankToken);
    const current=session||await ensureSession(entry.creation);entry=outbox.update(id,{sessionId:current.id});
    await deliver(entry);
-  }catch(error){outbox.update(id,{status:error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
+  }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
   finally{pendingView.current.settle(blankToken);if(stagedDraft.current===blankToken)stagedDraft.current=null;if(latest.current)setState(pendingView.current.apply(latest.current));}
  }
 

@@ -1522,11 +1522,12 @@ class AppService:
                         raise AppError('Only the latest unconfirmed message can be resent. Review later messages first.', 409)
                     if session['status'] in {'working', 'starting', 'running', 'stopping'} or message.get('delivery', {}).get('status') == 'sending':
                         raise AppError('Wait for the current delivery or work to settle before resending.', 409)
-                    if not args.get('confirmUncertain'):
+                    if message.get('delivery', {}).get('status') != 'failed' and not args.get('confirmUncertain'):
                         raise AppError('Delivery is uncertain. Confirm that sending again may repeat earlier work.', 409, code='delivery_uncertain')
                     if not self.runtime or not hasattr(self.runtime, 'retry'):
                         raise AppError('This runtime does not support message recovery.', 409)
                     original_status = session['status']
+                    known_undelivered = message.get('delivery', {}).get('status') == 'failed'
                     original_turn = copy.deepcopy(next((t for t in session.get('execution', {}).get('turns', []) if t['id'] == args['inputId']), {}))
                     self._delivery(session, args['inputId'], 'sending')
                     self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
@@ -1537,7 +1538,7 @@ class AppService:
                     turn['phase'] = 'running'
                     turn['retriedAt'] = time.time()
                     turn.pop('endedAt', None)
-                    pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn)))
+                    pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
@@ -1826,7 +1827,7 @@ class AppService:
                 # run outside it, and the HTTP receipt waits for the actual ack.
                 try:
                     acknowledged = await fn(*values)
-                except Exception:
+                except Exception as exc:
                     if action == "worker.message" and command_id:
                         async with self.lock:
                             result["delivery"] = "unknown"
@@ -1836,6 +1837,10 @@ class AppService:
                     if action == 'conversation.retry' and command_id:
                         async with self.lock:
                             receipt['result'] = {'delivery': 'unknown', 'message': 'Delivery could not be confirmed. Check delivery before trying again.'}
+                            if isinstance(exc, AppError) and exc.code == 'worker_startup_failed':
+                                receipt.update(accepted=False, status=exc.status, code=exc.code,
+                                               error=str(exc), receipt=exc.receipt)
+                                receipt['result'] = {'delivery': exc.receipt['delivery'], 'message': str(exc)}
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
@@ -2004,10 +2009,11 @@ class AppService:
         return {'delivery': status, 'message': {
             'accepted': 'Amplifier received this message. It was not sent again.',
             'sending': 'The original send is still in progress. Nothing was sent again.',
+            'failed': 'The worker failed to start before this message was sent. Your saved message is available to retry.',
         }.get(status, 'Delivery is still uncertain. Checking does not resend it. Sending again may repeat work if the earlier attempt ran.')}
 
-    async def _retry_message(self, session, text, input_id, original_status, original_turn):
-        result = await self._send(session, text, input_id, preserve_draft=True, retry=True)
+    async def _retry_message(self, session, text, input_id, original_status, original_turn, known_undelivered=False):
+        result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)
         if isinstance(result, dict) and result.get('duplicate'):
             async with self.lock:
                 current = self._session(session['id'])
@@ -2033,18 +2039,22 @@ class AppService:
         receipt_bound = receipt.get('inputId') == input_id and receipt.get('sessionId') == session['id']
         if not message_bound and not receipt_bound:
             return
-        if status == 'unknown' and (receipt.get('delivery') == 'accepted' or
+        if status in {'unknown', 'failed'} and (receipt.get('delivery') == 'accepted' or
                 message_bound and message['delivery'].get('status') == 'accepted'):
             return
         if message_bound:
             message['delivery'] = {'status':status}
         if row:
+            if status == 'accepted' and receipt.get('code') == 'worker_startup_failed':
+                receipt['accepted'] = True
+                for key in ('error', 'status', 'code', 'receipt'):
+                    receipt.pop(key, None)
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
 
-    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False):
+    async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
-        from .runtime import RuntimeOperationPending, SessionInUseError
+        from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
             sender = self.runtime.retry if retry else self.runtime.send
@@ -2056,6 +2066,22 @@ class AppService:
             # A missing acknowledgement is not a failed turn. Keep the saved
             # input and live work; the exact late receipt can reconcile delivery.
             raise
+        except RuntimeStartupError as exc:
+            # A failed retry says nothing about whether an earlier attempt ran.
+            # Preserve proven non-delivery, but never erase prior uncertainty.
+            delivery = 'unknown' if retry and not known_undelivered else 'failed'
+            message = str(exc) + (' Earlier delivery is still uncertain; checking does not resend it.' if delivery == 'unknown' else ' Your message has been saved.')
+            receipt = {'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']}
+            async with self.lock:
+                current = self._session(session['id'])
+                self._delivery(current, input_id, delivery)
+                if not retry:
+                    saved = {'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
+                             'error': message, 'receipt': receipt, **receipt}
+                    self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
+                self._publish()
+            await self.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': message})
+            raise AppError(message, 503, code='worker_startup_failed', receipt=receipt) from exc
         except SessionInUseError as exc:
             if retry:
                 async with self.lock:
