@@ -134,6 +134,12 @@ async def test_export_refuses_authoritative_voice_state_before_quiescence(hosts,
 async def test_connect_wins_awaited_export_preflight_race(hosts, monkeypatch):
     host = hosts
     args = await export_args(host)
+    from amplifier_web import portability
+    # Validate the real, unchanged fixture once before starting the controlled
+    # admission race. Git subprocess latency is not part of the voice barrier.
+    workspace = await asyncio.to_thread(portability.capture_workspace, str(host.root),
+                                        args['sourceRevision'], args['mode'])
+    monkeypatch.setattr(portability, 'capture_workspace', lambda *_: copy.deepcopy(workspace))
     manager, created = voice_manager(host.app, monkeypatch)
     original = host.app.history.ensure_loaded
     entered, proceed = asyncio.Event(), asyncio.Event()
