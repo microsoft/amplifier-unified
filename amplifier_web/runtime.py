@@ -75,9 +75,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return "assistant.delta", {**base, "text": event.get("text", ""),
             "requestId": event.get("request_id"), "blockIndex": event.get("block_index")}
     if kind == "assistant.message":
+        from .assistant_messages import metadata
         return "assistant.message", {**base, "text": event.get("text", ""),
             "inputId": (event.get("input_ids") or [input_id])[-1],
             "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", []),
+            **metadata(event),
             **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
         return "runtime.generation", {**base, "event": kind,

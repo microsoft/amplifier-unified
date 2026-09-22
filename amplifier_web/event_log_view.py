@@ -442,6 +442,8 @@ class EventLogView:
                 old = node['id'];node['id'] = previous['id'];remap[old] = node['id']
                 for key in ('turnId', 'parentId', 'lifecycle'):
                     if previous.get(key):node[key] = previous[key]
+                if node['kind'] == 'tool' and previous.get('liveObservation'):
+                    node['liveObservation'] = True
                 if node['kind'] == 'llm' and previous.get('usage'):
                     recorded = node.get('usage') or {}
                     node['usage'] = {**previous['usage'], **recorded}

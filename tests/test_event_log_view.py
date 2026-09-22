@@ -272,6 +272,50 @@ def test_unfinished_historical_record_is_not_a_perpetually_running_call(source):
     assert view.read(session)['nodes'][0]['phase']=='interrupted'
 
 
+@pytest.mark.parametrize('terminal', ['completed', 'interrupted'])
+def test_observed_tool_stays_live_across_refreshes_and_prior_errors_remain_historical(source, terminal):
+    from amplifier_web.execution import ingest
+    session, path = source
+    session['status'] = 'working'
+    session['execution'] = {'turns': [{'id':'turn', 'phase':'running', 'anchorMessageId':'user'}], 'nodes': []}
+    failed = {'id':'tool:native:failed', 'kind':'tool', 'toolCallId':'failed', 'sessionId':'native',
+              'turnId':'turn', 'phase':'error', 'startedAt':10, 'endedAt':11, 'liveObservation':True}
+    live = {'id':'tool:native:sleep', 'kind':'tool', 'toolCallId':'sleep', 'sessionId':'native',
+            'turnId':'turn', 'phase':'running', 'startedAt':12, 'label':'bash', 'liveObservation':True}
+    ingest(session, failed)
+    ingest(session, live)
+    append(path, 'tool:pre', {'tool_call_id':'failed', 'tool_name':'app_control'}, 10)
+    append(path, 'tool:error', {'tool_call_id':'failed', 'error':'Earlier invalid arguments'}, 11)
+    append(path, 'tool:pre', {'tool_call_id':'sleep', 'tool_name':'bash', 'tool_input':{'command':'sleep 60'}}, 12)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = {row.get('toolCallId'): row for row in session['execution']['nodes']}
+        assert nodes['sleep']['phase'] == 'running' and nodes['sleep']['liveObservation']
+        assert nodes['failed']['phase'] == 'error'
+        assert session['execution']['turns'][0]['phase'] == 'running'
+        assert page(session, 'nodes')['segments'][0]['phase'] == 'running'
+    ingest(session, {**live, 'phase':terminal, 'endedAt':20})
+    for _ in range(2):
+        session['execution'] = view.read(session)
+        assert next(n for n in session['execution']['nodes'] if n.get('toolCallId') == 'sleep')['phase'] == terminal
+        assert session['execution']['turns'][0]['phase'] == 'completed'
+        assert page(session, 'nodes')['segments'][0]['phase'] == 'error'  # The genuine prior failure is retained.
+
+
+@pytest.mark.parametrize('status,observed', [('idle',True),('stopped',True),('error',True),('working',False)])
+def test_tool_start_without_live_ownership_stays_recorded_after_repeated_projection(source, status, observed):
+    session, path = source
+    session['status'] = status
+    session['execution'] = {'turns':[], 'nodes':[{'id':'tool:native:old', 'kind':'tool', 'toolCallId':'old',
+        'sessionId':'native', 'phase':'running', 'startedAt':10, 'liveObservation':observed}]}
+    append(path, 'tool:pre', {'tool_call_id':'old', 'tool_name':'bash'}, 10)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        assert session['execution']['nodes'][0]['phase'] == 'recorded'
+
+
 def test_live_completion_usage_survives_delayed_log_flush(source):
     session,path=source
     append(path,'provider:request',{'id':'stable','kind':'llm','sessionId':'native','phase':'running','startedAt':10},10)

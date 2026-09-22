@@ -17,6 +17,15 @@ test('legacy completed messages support forks but partial failed responses do no
  assert.equal(completedTurnEnds(session).get('a1'),1);session.status='error';assert.equal(completedTurnEnds(session).size,0);
 });
 
+test('unknown native message time does not display the session creation time',()=>{
+ const render=message=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},stamp:at=>'TIME-'+at,working:false}));
+ const message={id:'progress',role:'assistant',text:'Workers started',createdAt:100};
+ assert.match(render(message),/TIME-100/);
+ assert.match(render({...message,timestampKnown:true}),/TIME-100/);
+ const unknown=render({...message,timestampKnown:false});
+ assert.match(unknown,/Time unavailable/);assert.doesNotMatch(unknown,/TIME-100/);
+});
+
 
 test('paged native history uses the original user-turn number for forks',()=>{
  const session={status:'idle',sharedHistoryUserTurnOffset:21,messages:[{id:'older-assistant',role:'assistant'},{id:'u22',role:'user'},{id:'a22',role:'assistant'},{id:'u23',role:'user'},{id:'a23',role:'assistant'}]};
