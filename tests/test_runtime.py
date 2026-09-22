@@ -229,7 +229,7 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_child_retries_show_public_identity_and_count_without_error_body(self):
         worker=Worker();worker.runtime=SimpleNamespace(session_id='parent')
         callbacks={}
-        capabilities={'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1','runId':'child-run'}})}
+        capabilities={'web.worker_run':'child-run', 'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1','runId':'child-run'}})}
         coordinator=SimpleNamespace(session_id='child',
             get_capability=capabilities.get,
             register_capability=lambda key,value:capabilities.update({key:value}),

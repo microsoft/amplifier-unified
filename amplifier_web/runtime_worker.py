@@ -132,6 +132,9 @@ class Worker:
                     providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
+        # A resumed child reuses its session ID but owns a new coordinator.
+        # Bind hooks to their originating run, never the mutable registry row.
+        activity_run_id = coordinator.get_capability("web.worker_run")
         async def observe_operation(event):
             identity = (coordinator.session_id, event.get("operationId"))
             if event.get("phase") == "started":
@@ -202,7 +205,7 @@ class Worker:
                 row = registry.rows.get(identity, {}) if registry else {}
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
-                    "runId": row.get("runId"), "time": time.time(), **retry})
+                    "runId": activity_run_id, "time": time.time(), **retry})
             return HookResult()
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)

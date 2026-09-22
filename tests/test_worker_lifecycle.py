@@ -1,11 +1,12 @@
 """Worker activity must not manufacture or reopen a lifecycle."""
 import copy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from amplifier_web.runtime import normalize_event
+from amplifier_web.runtime_worker import Worker
 from amplifier_web.service import AppService
 
 
@@ -113,3 +114,25 @@ async def test_terminal_projection_stays_settled_for_update_readiness_and_waiter
     assert not manager.busy()
     await emit(service, {"type": "child.updated", "sessionId": "child", "runId": "resumed", "status": "running"})
     assert manager.busy()
+
+
+async def test_old_coordinator_hook_cannot_impersonate_resumed_child(service):
+    host = Worker()
+    host.runtime = SimpleNamespace(session_id="parent")
+    callbacks = {}
+    capabilities = {"web.worker_run": "old-run"}
+    coordinator = SimpleNamespace(session_id="child", get_capability=capabilities.get,
+        register_capability=lambda key, value: capabilities.update({key: value}),
+        hooks=SimpleNamespace(register=lambda event, callback, **kwargs: callbacks.update({event: callback})))
+    # Children installs activity before registering live.children, then a
+    # resumed child replaces the same registry identity with another run.
+    host.install_activity(coordinator)
+    capabilities["live.children"] = SimpleNamespace(rows={"child": {"runId": "new-run", "callId": "new-call"}})
+    session = await emit(service, {"type": "child.updated", "sessionId": "child", "runId": "new-run", "status": "running"})
+    before = copy.deepcopy(session)
+    with patch("amplifier_web.runtime_worker.publish") as publish:
+        await callbacks["provider:retry"]("provider:retry", {"attempt": 2, "max_retries": 3})
+    event = publish.call_args.args[0]
+    assert event["runId"] == "old-run"
+    await emit(service, event)
+    assert session == before
