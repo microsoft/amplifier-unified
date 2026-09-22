@@ -245,12 +245,26 @@ test('conversation pagination stays bounded and is shared with agents',async()=>
 
 
 test('simple sidebar separates pins, workspaces and recent without duplicate chats',async()=>{
- const state=initial();state.view.navSimple=true;state.view.navWorkspaceList=true;state.homeNavigation={items:[{...state.sessions[0],pinned:true},{...state.sessions[1],pinned:false}]};state.workspaceOverview={items:state.workspaces};
+ const state=initial();state.view.navSimple=true;state.view.navWorkspaceList=true;state.homeNavigation={items:[{...state.sessions[0],pinned:true},{...state.sessions[1],workspace:'/managed/b',location:{kind:'managed'},pinned:false},{...state.sessions[2],workspaceId:'two',pinned:false}]};state.workspaceOverview={items:state.workspaces};
  let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
  assert.equal(root.root.findAllByProps({'aria-label':'Pinned chats'}).length,1);
  assert.equal(root.root.findAllByProps({'data-session-id':'a'}).filter(node=>typeof node.type==='string').length,1);
  assert.equal(root.root.findAllByProps({'data-session-id':'b'}).filter(node=>typeof node.type==='string').length,1);
  assert.equal(root.root.findAllByProps({'aria-label':'Conversation activity filters'}).length,0);
  assert.equal(root.root.findAllByProps({'aria-label':'New workspace'}).length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'c'}).length,0);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('simple sidebar loads later empty workspaces without leaving the simple view',async()=>{
+ const state=initial(),calls=[];state.view.navSimple=true;state.workspaceOverview={items:state.workspaces,nextOffset:100};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'empty',name:'Empty later folder',path:'/empty',available:true}],nextOffset:null}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ const more=root.root.findAllByType('button').find(button=>button.children.join('')==='More workspaces');
+ await renderAct(async()=>more.props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'workspace.list',args:{offset:100}});
+ assert.equal(root.root.findAllByProps({label:'Empty later folder'}).length,1);
+ assert.equal(root.root.findAllByType('button').some(button=>button.children.join('')==='More workspaces'),false);
  await renderAct(async()=>root.unmount());
 });
