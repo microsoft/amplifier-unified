@@ -201,6 +201,24 @@ The legacy close/reopen lifecycle remains available. Selection and file reads ar
 publications default to the calling session even when the user views another
 chat. Background publications do not replace the user's active preview.
 
+For an agent, `canvas.select {id, clientId?}` validates the artifact against the
+calling chat and routes to a client already displaying that chat. A matching
+bound client is preferred; otherwise one matching client is selected. Multiple
+matching clients require an explicit `clientId`. If no client displays the chat,
+selection returns `canvas_client_required` with instructions to open it first.
+It never navigates an unrelated client, and unsaved viewer edits still block
+replacement through the ordinary Canvas guard.
+
+Agent state reads and selection receipts use the same caller scope.
+`canvasContext` reports the chosen client, matching client IDs, and whether the
+presentation is attached, ambiguous, or unattached. `get_state {clientId, ...}`
+can address one matching client explicitly. Without a unique target, `/canvas`
+is a closed placeholder and the caller's saved artifact index remains available;
+the host does not present another chat's Canvas or composer as the caller's.
+If the client navigates after selection commits, the accepted receipt remains
+successful and its readback reports a detached placeholder instead of failing
+the completed action. Explicit reads still reject a client displaying another chat.
+
 Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
 only through the retained user messages. Editing forks before the original user
 message, so artifacts from that message and later turns remain in the original
