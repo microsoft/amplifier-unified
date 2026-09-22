@@ -37,10 +37,12 @@ def running_identity():
 
 
 def valid_target(value):
+    from .app_features import valid_restart_selection
     return (isinstance(value, dict)
             and isinstance(value.get('version'), str) and re.fullmatch(r'\d+\.\d+\.\d+', value['version'])
             and isinstance(value.get('revision'), str) and re.fullmatch('[a-f0-9]{40}', value['revision'])
-            and isinstance(value.get('attemptId'), str) and re.fullmatch('[a-f0-9]{32}', value['attemptId']))
+            and isinstance(value.get('attemptId'), str) and re.fullmatch('[a-f0-9]{32}', value['attemptId'])
+            and valid_restart_selection(value))
 
 
 def recovery_candidate(manager):
@@ -99,7 +101,7 @@ def recovery_candidate(manager):
 
 def same_target(first, second):
     return bool(first and second and all(first.get(key) == second.get(key)
-                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy')))
+                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest')))
 
 
 async def confirm_readiness(manager, health, expected=None, command_id=None):
@@ -116,6 +118,17 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 or any(identity[key] != target[key] for key in ('version', 'revision'))
                 or target.get('sourceInstanceId') == identity['instanceId']):
             return False
+        selected = target.get('featureSelection')
+        if selected:
+            # Same app version/revision alone cannot attest an added feature.
+            from .app_features import validate_selection
+            from .app_updates import installed_extras, components
+            try:
+                validate_selection(manager, selected, installed_extras(), installing=False)
+                if components.digest(components.installed_graph()) != target.get('dependencyDigest'):
+                    return False
+            except (ValueError, OSError):
+                return False
         async with manager.service.lock:
             state = manager.service.state['updates']
             manager.diagnostics.begin('application', target['revision'], target['attemptId'])
@@ -132,12 +145,18 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 detail = 'Application update installed and the restarted server is healthy.'
                 phase = 'restart-ack'
             application = state.get('application', {})
-            application.pop('componentUpdates', None)
-            application.update(status='current', current=identity['version'])
+            if not selected:
+                application.pop('componentUpdates', None)
+                application.update(status='current', current=identity['version'])
             state['items'] = [application if row.get('id') == 'application' else row for row in state.get('items', [])]
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
-            state.update(phase='installed', pendingRestart=None, pendingApp=None, appAvailable=False,
+            state.update(phase='installed', pendingRestart=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
                          installedAt=time.time(), error=None, detail=detail)
+            if selected:
+                row = state.setdefault('featureResults', {}).setdefault(selected['requestId'], {})
+                row.update(requestId=selected['requestId'], feature=selected['feature'], phase='installed',
+                           updatedAt=time.time(), detail='The restarted host is healthy and the exact qualified feature components are installed.')
+                state['detail'] = row['detail']
             if command_id:
                 manager.diagnostics.record('restart-readiness', 'succeeded', commandId=command_id,
                                            observedVersion=identity['version'], observedRevision=identity['revision'])

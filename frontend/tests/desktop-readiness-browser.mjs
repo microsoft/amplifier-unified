@@ -63,5 +63,29 @@ try{
  if(output){await mkdir(output,{recursive:true});await page.screenshot({path:output+'/desktop-readiness-mobile.png',fullPage:true});await page.setViewportSize({width:1400,height:1000});await page.screenshot({path:output+'/desktop-readiness.png',fullPage:true})}
  assert.deepEqual(errors,[]);assert.equal((await inspect()).sent.length,0);assert.ok((await inspect()).nativeCalls.every(call=>call==='status'));
  await action('session.select',{id:first});assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Preserve this unsent draft');
+ // Optional installation uses the same real shared action and updater. Only
+ // package metadata, installer processes and the restart boundary are fixtures.
+ await setup();await check();
+ await expect(page.getByRole('button',{name:'Install native screen observation',exact:true})).toHaveCount(0);
+ assert.deepEqual((await inspect()).featureCalls,[]);
+ await scenario({featureSupported:true,featureFail:true,native:'missing'});await check();
+ const install=page.getByRole('button',{name:'Install native screen observation',exact:true});
+ await expect(install).toBeEnabled();assert.deepEqual((await inspect()).featureCalls,[]);
+ await install.click();await expect.poll(async()=>(await inspect()).featureEntered).toBe(true);
+ await expect(install).toBeDisabled();await expect(page.getByText(/Native feature request: staging/)).toBeVisible();
+ await scenario({featureRelease:true});await expect(page.getByText(/Native feature request: error/)).toBeVisible();
+ assert.equal((await inspect()).featureCalls.filter(row=>row.includes('install')).length,1);
+ await scenario({featureFail:false});await check();await expect(install).toBeEnabled();await install.click();
+ await expect.poll(async()=>(await inspect()).featureEntered).toBe(true);await expect(install).toBeDisabled();
+ await scenario({featureRelease:true});await expect(page.getByText(/Native feature request: restart pending/)).toBeVisible();
+ await expect(install).toBeDisabled();assert.equal((await inspect()).featureCalls.filter(row=>row.includes('synthetic-restart-request')).length,1);
+ await scenario({featureConfirm:true,native:'permission'});
+ await expect(page.getByText(/Native feature request: installed/)).toBeVisible();
+ await expect(page.getByText('Native observation: backend_not_installed',{exact:true})).toHaveCount(0);
+ await check();await expect(install).toHaveCount(0);
+ await expect(page.getByText('Native observation: permission_required',{exact:true})).toBeVisible();
+ assert.deepEqual(errors,[]);assert.equal((await inspect()).sent.length,0);
+ if(output)await page.screenshot({path:output+'/desktop-feature-installed.png',fullPage:true});
  console.log('Desktop readiness browser acceptance passed: missing host dependency, worker distinction, permissions, unsupported, failed and ready states; no auto check/start/control; shared agent scope; existing doctor tool path with aged remote facts; source replacement/end; late response after conversation change; desktop/mobile layout. Synthetic native and runtime facts only; no physical capture, account, OS or provider claim.');
+ console.log('Native feature browser acceptance passed: unsupported host and no auto installation; explicit shared action; staging disables duplicate clicks; failed qualification; same-app candidate and replacement; pending restart is not installed; exact new-host confirmation clears stale setup; installed package still requires separate OS permission. All installers and restart effects synthetic.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

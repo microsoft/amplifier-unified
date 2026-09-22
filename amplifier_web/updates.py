@@ -391,6 +391,8 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        from .app_features import reconcile_requests
+        reconcile_requests(state)
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
         application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
@@ -512,13 +514,19 @@ class UpdateManager:
         rows.extend(await update_inventory(self.home))
         return rows
 
-    async def command(self, action):
-        if self.awaiting_restart():return
+    async def command(self, action, args=None, command_id=None):
+        if self.awaiting_restart() and action != 'featureInstall':return
         previous_error=self.service.state['updates'].get('error')
         try:
-            await getattr(self, action)()
+            if action == 'featureInstall':
+                await self.featureInstall(args['feature'], args['hostInstanceId'], command_id)
+            else:
+                await getattr(self, action)()
         except asyncio.CancelledError: raise
         except Exception as error:
+            # Feature requests own a durable per-request result. A rejected
+            # concurrent request must not change an active update's work gate.
+            if action == 'featureInstall':return
             if self.service.state['updates'].get('phase')=='error' and self.service.state['updates'].get('error') and self.service.state['updates']['error']!=previous_error:return
             from .update_diagnostics import exception_type
             last=self.diagnostics.state.get('latest',{})
@@ -576,6 +584,33 @@ class UpdateManager:
                     lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency sources were checked.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
+
+    async def featureInstall(self, feature, hostInstanceId, request_id):
+        from .app_features import record
+        from .app_updates import stage, activate, installed_extras
+        request_id = request_id or uuid.uuid4().hex
+        try:
+            if hostInstanceId != self.service.instance_id:
+                raise ValueError('The app host changed. Check desktop setup again before installing.')
+            if feature != 'native-desktop':
+                raise ValueError('Only native-desktop can be added through this action.')
+            state = self.service.state['updates']
+            if (self.closed or self.lock.locked() or self.awaiting_restart()
+                    or state.get('pendingApp') or state.get('pendingRelease')):
+                raise ValueError('Another update is pending. Finish or inspect that update before adding a feature.')
+            async with self.lock:
+                if feature in installed_extras():
+                    await record(self, request_id, 'already_installed', detail='The native observation package is already installed. Check readiness; this request changed nothing.')
+                    return
+                await record(self, request_id, 'staging', detail='Qualifying native observation against this same app and its existing components.')
+                await stage(self, feature=feature, request_id=request_id)
+            await activate(self)
+        except asyncio.CancelledError:
+            await record(self, request_id, 'interrupted', detail='The request was interrupted. Inspect update diagnostics before any retry.')
+            raise
+        except Exception as error:
+            await record(self, request_id, 'error', detail=str(error) if isinstance(error, ValueError) else 'The feature request did not finish. Inspect update diagnostics before retrying; nothing was replayed.')
+            raise
 
     async def app(self):
         if self.lock.locked() or self.awaiting_restart():return

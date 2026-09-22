@@ -149,10 +149,13 @@ async def check():
     except (ValueError,KeyError,RuntimeError,TimeoutError):
         return {**base,'status':'check_failed','detail':'No accessible published release was found. Check GitHub sign-in and release availability.'}
 
-async def stage(manager):
-    manager.diagnostics.begin('application',manager.service.state['updates'].get('application',{}).get('revision'))
+async def stage(manager, *, feature=None, request_id=None):
+    from .app_features import selection
+    selected = selection(manager, feature, request_id) if feature else None
+    revision = selected['hostApp']['revision'] if selected else manager.service.state['updates'].get('application',{}).get('revision')
+    manager.diagnostics.begin('application',revision)
     manager.diagnostics.record('stage','started')
-    try:await _stage(manager)
+    try:await _stage(manager, selected=selected)
     except asyncio.CancelledError:raise
     except Exception:
         phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
@@ -161,8 +164,10 @@ async def stage(manager):
         raise
 
 
-async def _stage(manager):
-    release=manager.service.state['updates'].get('application',{})
+async def _stage(manager, *, selected=None):
+    release=({'status':'update','revision':selected['hostApp']['revision'],
+              'latest':selected['hostApp']['version'],'featureSelection':selected}
+             if selected else manager.service.state['updates'].get('application',{}))
     if release.get('status')!='update':raise ValueError('Check for an application release first')
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
@@ -172,10 +177,20 @@ async def _stage(manager):
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
-    extras=validated_extras(installed_extras())
+    extras=selected['extras'] if selected else validated_extras(installed_extras())
     host_graph=manager.diagnostics.sync('host-components',components.installed_graph)
+    resolution_args=['--upgrade','--refresh']
+    if selected:
+        # This explicit addition must not opportunistically upgrade or omit a
+        # pre-existing distribution, including packages beyond app dependencies.
+        from .app_features import validate_selection
+        validate_selection(manager, selected, extras)
+        await manager.diagnostics.run('target-discovery',installed_target)
+        manager.diagnostics.sync('host-components-record',write_private,folder/'host-components.txt',components.requirements(host_graph))
+        resolution_args=['--refresh','--overrides',str(folder/'host-components.txt'),
+                         '--with-requirements',str(folder/'host-components.txt')]
     await manager.publish(phase='staging',detail='Installing the app release in an isolated environment…',error=None)
-    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force','--upgrade','--refresh',install_requirement(revision,extras),env=env,timeout=900)
+    await manager.diagnostics.run('candidate-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(revision,extras),env=env,timeout=900)
     python=folder/'tools/amplifier-unified'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     output=await manager.diagnostics.run('candidate-probe',process,python,'-I','-c',PROBE,*extras,timeout=30)
     installed=verified_version(manager,output,release['latest'],'candidate-version')
@@ -183,11 +198,21 @@ async def _stage(manager):
     app=next((item for item in graph if item['name']=='amplifier-unified'),{})
     if app.get('revision')!=revision or app.get('url')!=SOURCE or app.get('version')!=installed:
         raise ValueError('Candidate component graph does not match the selected application')
+    if selected:
+        from .app_features import require_preserved_components
+        require_preserved_components(graph, host_graph)
+        from .app_feature_probe import DEPENDENCY_PROBE
+        await manager.diagnostics.run('candidate-dependencies',process,python,'-I','-c',DEPENDENCY_PROBE,*extras,timeout=30)
     manager.diagnostics.sync('candidate-components-record',write_private,folder/'components.txt',components.requirements(graph))
-    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph)}))
+    manager.diagnostics.sync('candidate-record',write_private,folder/'validated.json',json.dumps({'revision':revision,'version':installed,'hostVersion':__version__,'attemptId':manager.diagnostics.state['attemptId'],'extras':extras,'generation':generation,'componentGraph':graph,'componentDigest':components.digest(graph),'hostGraph':host_graph,'hostDigest':components.digest(host_graph),**({'featureSelection':selected} if selected else {})}))
     manager.diagnostics.clear_failure()
     manager.diagnostics.record('stage','succeeded',observedVersion=installed)
     await manager.publish(phase='app-staged',pendingApp={**release,'attemptId':manager.diagnostics.state['attemptId'],'generation':generation},detail='Application release validated. Waiting for work to finish before restarting.')
+    if selected:
+        from .app_features import record
+        await record(manager, selected['requestId'], 'qualified', selection=selected,
+                     generation=generation, componentDigest=components.digest(graph),
+                     detail='Same app and existing components preserved. Waiting for idle guarded activation.')
 
 async def activate(manager):
     async with manager.service.runtime_lifecycle():
@@ -197,8 +222,12 @@ async def activate(manager):
 async def _activate_serialized(manager):
     if manager.lock.locked() or manager.closed:return
     async with manager.lock:
+        selected = (manager.service.state['updates'].get('pendingApp') or {}).get('featureSelection')
         try:await _activate(manager)
         except Exception as error:
+            if isinstance(selected,dict) and isinstance(selected.get('requestId'),str):
+                from .app_features import record
+                await record(manager, selected['requestId'], 'error', detail='Feature activation failed validation. No installation was replayed; inspect the update diagnostics.')
             from .update_diagnostics import exception_type
             last=manager.diagnostics.state.get('latest',{})
             if last.get('status')!='failed':
@@ -208,7 +237,7 @@ async def _activate_serialized(manager):
             if isinstance(state.get('pendingApp'),dict) and state['pendingApp'].get('generation') and state.get('phase')!='activating':
                 # Preserve the failed generation as evidence, but allow a later
                 # explicit Install to create a new candidate. Never retry effects.
-                await manager.publish(phase='error',pendingApp=None,appAvailable=True,
+                await manager.publish(phase='error',pendingApp=None,appAvailable=state.get('application',{}).get('status')=='update' if selected else True,
                     error='The staged application changed or could not be validated. Install again to prepare a new candidate.',
                     detail='The running host and previous candidate evidence were preserved.')
             raise
@@ -260,9 +289,17 @@ async def _activate(manager):
         raise ValueError('App release must pass isolated validation before activation')
     if version_tuple(validated.get('version'))!=version_tuple(release.get('latest')):
         raise ValueError('The pending release does not match its validated package')
+    selected=validated.get('featureSelection')
+    if selected != release.get('featureSelection') or (selected and not generation):
+        raise ValueError('The pending optional feature does not match its qualified generation')
     try:
         extras=validated_extras(validated.get('extras',[]))
-        extras_match=extras==installed_extras()
+        if selected:
+            from .app_features import validate_selection
+            validate_selection(manager, selected, extras)
+            extras_match=True
+        else:
+            extras_match=extras==installed_extras()
     except ValueError:
         extras_match=False
     if not extras_match:
@@ -271,7 +308,7 @@ async def _activate(manager):
         manager.diagnostics.record('activation-validation','failed',errorType='ValueError')
         # Removing the pending pointer lets the normal install command stage a
         # fresh candidate. Keep its receipt on disk for diagnosis, never reuse it.
-        await manager.publish(phase='error',pendingApp=None,appAvailable=True,error=message,detail=message)
+        await manager.publish(phase='error',pendingApp=None,appAvailable=manager.service.state['updates'].get('application',{}).get('status')=='update' if selected else True,error=message,detail=message)
         raise ValueError(message)
     graph=None
     if generation:
@@ -283,6 +320,9 @@ async def _activate(manager):
             raise ValueError('The installed host components changed after validation; prepare a new candidate')
         if (folder/'components.txt').read_text()!=components.requirements(graph):
             raise ValueError('The component resolution changed after validation')
+        if selected:
+            from .app_features import require_preserved_components
+            require_preserved_components(graph, host_graph)
     async with manager.service.lock:
         if manager.busy():return
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'))
@@ -296,11 +336,22 @@ async def _activate(manager):
             raise ValueError('The candidate components changed after validation; stage a new update')
     async with manager.service.lock:
         if manager.busy():return
+        if selected:
+            # Candidate and target probes await external processes. Recheck the
+            # serving baseline after those waits, at final activation admission.
+            validate_selection(manager, selected, extras)
+            if components.installed_graph()!=host_graph:
+                raise ValueError('The serving components changed during activation; qualify a new feature candidate')
         manager.service.state['updates'].update(phase='activating',detail='Installing the app update and restarting…')
         manager.service._publish()
     try:
+        if selected:
+            from .app_features import record
+            await record(manager, selected['requestId'], 'activating', detail='Installing the qualified same-app feature addition.')
         manager.diagnostics.sync('recovery-record',write_private,manager.directory/'previous-app.json',json.dumps(previous))
         resolution_args=['--overrides',str(folder/'components.txt')] if graph is not None else []
+        if selected:
+            resolution_args.extend(['--with-requirements',str(folder/'components.txt')])
         await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
         output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,*extras,timeout=30)
         installed=verified_version(manager,output,validated['version'],'replacement-version')
@@ -309,9 +360,13 @@ async def _activate(manager):
             if replacement_graph!=graph:
                 raise ValueError('Installed components do not match the qualified application generation')
     except asyncio.CancelledError:
+        if selected:
+            await record(manager, selected['requestId'], 'interrupted', detail='Installation was interrupted. Inspect the installation before any retry.')
         await manager.publish(phase='interrupted',pendingApp=None,error='Application installation was interrupted. Check or repair the uv tool installation before restarting.')
         raise
     except Exception as error:
+        if selected:
+            await record(manager, selected['requestId'], 'error', detail='Feature replacement failed. The running host was retained; inspect update diagnostics before retrying.')
         last=manager.diagnostics.state.get('latest',{})
         phase=last.get('phase','activation')
         if last.get('status')!='failed':
@@ -324,7 +379,10 @@ async def _activate(manager):
     manager.diagnostics.clear_failure()
     await manager.publish(phase='activating',pendingApp=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
-                        'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time()},detail='Application installed. Restarting the local host…')
+                        'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
+                        **({'featureSelection':selected,'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])} if selected else {})},detail='Application installed. Restarting the local host…')
+    if selected:
+        await record(manager, selected['requestId'], 'restart_pending', detail='Feature installed; awaiting the restarted host and exact component validation.')
     # A generated systemd unit owns its process lifecycle.  Asking systemd to
     # restart that unit avoids racing its restart policy with a second detached
     # process spawned by this in-process updater.

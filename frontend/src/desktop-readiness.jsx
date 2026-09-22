@@ -6,11 +6,25 @@ function Environment({value}){
  return <p className="a-wrap">{value.host.label} · {value.platform}<br/>Python {value.python.version}<br/><code>{value.python.path}</code><br/>Computer-use package: {value.computerUsePackage.version||value.computerUsePackage.status}</p>;
 }
 export function DesktopReadiness({state,session,act}){
- const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id]);
+ const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id,state.updates?.installedAt]);
  const sequence=useRef(0),[report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [installPending,setInstallPending]=useState(false),[installError,setInstallError]=useState('');
  useEffect(()=>{sequence.current++;setReport(null);setBusy(false);setError('');return ()=>{sequence.current++}},[context]);
  const current=report?.context===context?report.value:null;
  const worker=current?.worker,control=worker?.computerControl;
+ const feature=current?.featureSetup;
+ const requests=Object.values(state.updates?.featureResults||{}).filter(row=>row.feature==='native-desktop');
+ const result=requests.sort((a,b)=>b.updatedAt-a.updatedAt)[0];
+ const featureBusy=installPending||feature?.pending||requests.some(row=>['queued','staging','qualified','activating','restart_pending'].includes(row.phase));
+ async function install(){
+  if(installPending||!current)return;
+  setInstallPending(true);setInstallError('');
+  try{
+   const receipt=await act('updates.featureInstall',{feature:'native-desktop',hostInstanceId:current.host.instanceId});
+   if(!receipt?.accepted||!receipt.requestId)throw Error('The installation request could not be confirmed. Inspect Updates before retrying.');
+  }catch(e){setInstallError(e.message)}
+  finally{setInstallPending(false)}
+ }
  async function check(){
   const request=++sequence.current;setBusy(true);setError('');
   try{
@@ -27,6 +41,8 @@ export function DesktopReadiness({state,session,act}){
   <p>Checking does not enable desktop control, capture a screen, request OS permission, start a conversation runtime or change your model.</p>
   <button className="a-soft" data-action="desktop.readiness" disabled={busy} onClick={check}>{busy?'Checking…':'Check desktop and browser setup'}</button>
   {error&&<p role="alert">{error}</p>}
+  {result&&<p role="status">Native feature request: {result.phase.replaceAll('_',' ')}. {result.detail}</p>}
+  {installError&&<p role="alert">{installError}</p>}
   {current&&<>
    <p className="a-caption">Checked {time(current.observedAt)}. This is a setup snapshot; check again after changing the host, tools or permissions.</p>
    <section aria-label="Native voice observation"><h4>Native voice observation</h4>
@@ -35,6 +51,12 @@ export function DesktopReadiness({state,session,act}){
     <p role="status">Native observation: {current.nativeObservation.available?'ready for explicit consent':current.nativeObservation.code||current.nativeObservation.status}</p>
     {current.nativeObservation.reason&&<p className="a-wrap">{current.nativeObservation.reason}</p>}
     <p>{current.nativeObservation.nextStep}</p>
+    {feature?.supported?<>
+     {feature.installedExtras.includes('native-desktop')?<p>The native observation package is installed. OS permission and consent for each voice call are separate.</p>:<>
+      <p>{feature.detail}</p>
+      <button className="a-soft" data-action="updates.featureInstall" disabled={featureBusy||Boolean(installError)} onClick={install}>Install native screen observation</button>
+     </>}
+    </>:feature?.reason&&<p>{feature.reason}</p>}
     <p className="a-caption">The Python path identifies the executing interpreter. It does not identify which parent application macOS lists in Screen Recording settings.</p>
    </section>
    <section aria-label="Browser voice observation"><h4>Voice screen source</h4>

@@ -171,6 +171,7 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
+    "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
@@ -842,7 +843,7 @@ class AppService:
         if action == 'runtime.control' and args.get('operation', '').startswith(('task.', 'capacity.')):
             action, args = args['operation'], {**args.get('args', {}), 'sessionId': args.get('sessionId')}
         defer_publish = action == 'smartTools.appCall' and not include_state
-        if action.startswith("smartTools."):
+        if action.startswith("smartTools.") or action == 'updates.featureInstall':
             command_id = command_id or str(uuid.uuid4())
         if action not in ACTION_DEFINITIONS:
             raise AppError("Unknown action: " + action, 404)
@@ -1668,7 +1669,13 @@ class AppService:
                 pending.append((self.management.command,(action,copy.deepcopy(args),command_id)))
             elif action.startswith("updates."):
                 if not self.update_manager: raise AppError("Update service is unavailable.")
-                pending.append((self.update_manager.command, (action.split(".")[1],)))
+                if action == 'updates.featureInstall':
+                    rows = self.state['updates'].setdefault('featureResults', {})
+                    rows[command_id] = {'requestId':command_id, 'feature':args['feature'], 'phase':'queued',
+                        'updatedAt':time.time(), 'detail':'Feature installation requested; awaiting qualification.'}
+                    while len(rows) > 20:
+                        rows.pop(next(iter(rows)))
+                pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = args["patch"]
                 if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates"}:
@@ -1780,6 +1787,8 @@ class AppService:
                 receipt["operationId"] = command_id
             if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']
+            if action == 'updates.featureInstall':
+                receipt['requestId'] = command_id
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             if defer_publish:

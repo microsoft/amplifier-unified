@@ -20,6 +20,52 @@ Local data: `updates/inventory.json` (private source details), `updates/releases
 
 Application activation also verifies that the running host and the executable on PATH belong to the same uv tool installation. A development checkout or a different launcher cannot replace another installed tool. Candidate and installed-package probes use isolated Python imports, reject packages outside that environment, and cannot accidentally validate a checkout from the launch directory or PYTHONPATH. The installed package is checked again after replacement; a failed check leaves the running host up for recovery. The restart helper uses the separate validated environment, and new work remains blocked until restart. It preserves the effective bind addresses, public origins, TLS certificate/key, session lifetime, port, workspace and data directory without writing CLI overrides into saved server settings. The replacement host acknowledges the pending restart only after an authenticated HTTP request to its live listener confirms the expected version, exact installed Git revision, data directory identity, and a different process instance. Package probes and application construction alone cannot acknowledge a restart. Smart Tool servers are reported disconnected after restart and can be reconnected explicitly. The recovery record stores the actual prior installation source when available, rather than assuming an older release tag exists. Repeated installation requests reuse a pending validated generation. Cache symlinks remain symlinks while staging; external workspace trees are not copied into the update.
 
+## Optional app features
+
+**Settings → Desktop & browser** offers an explicit **Install native screen
+observation** action after checking the current host. The shared action is
+`updates.featureInstall` with `feature="native-desktop"` and the checked
+`hostInstanceId`. This narrowly adds the absent optional feature to the same
+packaged Microsoft app revision. It does not select a newer app release, upgrade
+existing components, remove existing extras such as TUI, or grant OS permission
+or desktop control. A development checkout or custom source is not eligible.
+The existing installation-owner check also requires the actual serving uv tool
+environment and its active launcher to match before any replacement.
+
+An older running app that does not expose this action must first adopt a reviewed
+ordinary app release containing it. That update preserves the older installation's
+selected extras. Check the newly serving app identity, then request the optional
+feature against that identity. Do not inject an installer into an old process or
+create pending updater state to bypass this adoption order.
+
+Qualification records the actual app source and installed dependencies, builds
+an isolated generation, and preserves every baseline distribution with exact
+per-candidate resolver requirements. It checks imports, packaged assets, exact
+app provenance, the complete component graph, and dependency version constraints
+including activated transitive extras. A conflict fails qualification rather
+than upgrading the baseline. Candidate and serving metadata are rechecked before
+the existing lifecycle/idle/queue guards admit replacement. The prior actual app
+reference remains in the normal recovery record; ecosystem rollback behavior is
+unchanged. Resolver receipts apply only to this feature addition: later ordinary
+updates continue checking published Microsoft app releases and current configured
+component sources.
+
+The accepted action returns a stable `requestId`. Both users and agents read its
+durable result in `updates.featureResults` (the latest 20 requests). Admission
+persists `queued` together with the command receipt, so an exit before the task
+starts becomes `interrupted` without replay. Qualification, activation and pending
+restart remain distinct from success. Exact command retries reuse their receipt.
+Inspect an uncertain/interrupted operation before requesting a new one. A saved
+qualified generation retains the existing guarded activation path; malformed
+restart intent is retired by the normal restart-repair handling.
+
+For this same-app addition, a healthy successor must match the original app
+source and revision, desired extras and exact qualified dependency digest, as
+well as the usual authenticated listener/data/process identity. Until then the
+restart gate remains closed. Success preserves any unrelated newer app update
+already listed. Installing the library does not satisfy Screen Recording consent:
+check setup again and grant observation separately for a connected voice call.
+
 ## Publishing application releases
 
 ### Changelog and high-impact notices

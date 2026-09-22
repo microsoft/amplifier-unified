@@ -58,6 +58,7 @@ def native_next_step(native):
 
 
 async def inspect(service, sid):
+    from .app_features import status as feature_status
     try:
         native = await service.voice_visual.native.run("status")
     except (TimeoutError, ValueError, OSError):
@@ -77,6 +78,7 @@ async def inspect(service, sid):
     return {"schemaVersion": 1, "observedAt": time.time(), "sessionId": sid,
         "host": {**environment(), "instanceId": service.instance_id},
         "nativeObservation": {**native, "nextStep": native_next_step(native)},
+        "featureSetup": feature_status(getattr(service, 'update_manager', None)),
         "worker": worker,
         "voiceObservation": {"status": "source_selected" if source else "not_shared",
             "callId": voice.get("id") if voice.get("sessionId") == sid else None,
@@ -86,6 +88,7 @@ async def inspect(service, sid):
             "nextStep": "Use Capture screen for one snapshot from the selected source, or Stop screen sharing to revoke this call's grant. Screen observation grants no desktop control."
                 if source else "Connect a voice call and use Choose screen source on its owning browser. A direct user click opens the browser picker. Screen observation grants no desktop control."},
         "nextActions": [
+            {"label": "Updates", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "maintenance", "settingsExpanded": ["updates"]}}},
             {"label": "Bundles & modules", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "capabilities", "settingsExpanded": ["app-bundles"]}}},
             {"label": "Smart Tools connections", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "capabilities", "settingsExpanded": ["smart-tools"]}}},
             {"label": "Session tools", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "setup", "settingsExpanded": ["runtime"], "runtimeDraft": {"tab": "tools"}}}},

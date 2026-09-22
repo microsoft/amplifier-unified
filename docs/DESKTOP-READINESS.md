@@ -15,7 +15,7 @@ availability preflight, not a successful physical observation.
 
 | Capability | Owner | Evidence and next step |
 | --- | --- | --- |
-| Native foreground voice observation | Serving app host, using its exact `sys.executable` with an isolated helper | Status distinguishes missing library, unsupported OS, required/unknown Screen Recording permission, and ready for explicit consent. Install the optional `native-desktop` extra in this app environment; a worker install does not suffice. Managed installations require a qualified replacement and coordinated restart. The updater preserves an already-installed extra; ordinary updates do not opt into an absent extra. |
+| Native foreground voice observation | Serving app host, using its exact `sys.executable` with an isolated helper | Status distinguishes missing library, unsupported OS, required/unknown Screen Recording permission, and ready for explicit consent. **Install native screen observation** explicitly adds the optional `native-desktop` extra through the guarded app updater. A worker install does not suffice. Ordinary updates preserve installed extras and do not opt into an absent extra. |
 | Browser-selected voice observation | Browser owning the connected call | Only an explicit source grant supplies its browser-reported kind and label. Use **Choose screen source** on localhost/HTTPS in a browser supporting display capture and fresh video frames. The browser picker needs a user click. No tab URL, browser profile, account, or accessibility text is exposed. |
 | Optional mutable desktop/browser tools | Conversation worker or selected tool transport | The report shows the worker interpreter, configured tool modules including disabled entries, actual mounted tool names, and whether desktop doctor is advertised. Missing/retired workers remain unavailable rather than being started by inspection. Package installation alone is not a mounted tool or successful operation. |
 
@@ -27,6 +27,16 @@ computer tools.
 
 ## Existing shared actions remain authoritative
 
+- **Install native screen observation** appears after a setup check on a packaged
+  Microsoft app when the extra is absent. It dispatches `updates.featureInstall`
+  with `feature="native-desktop"` and the checked `host.instanceId` as
+  `hostInstanceId`. Agents use the same action after an explicit install request.
+  It qualifies the same serving app revision and every existing component before
+  the normal idle/queue guards permit replacement and restart. Read the returned
+  `requestId` in `updates.featureResults`; accepted, qualified and restart pending
+  are not installed. An uncertain result must be inspected before retrying.
+  Development checkouts and unverified/custom installations require their
+  deployment owner. See [optional app feature installation](UPDATES.md#optional-app-features).
 - **Bundles & modules** opens the existing bundle review/configuration UI.
   Use `bundle.discover`, review the offered composition, then explicitly add or
   enable it through `bundles.add` / `bundles.toggle`. Inspect an existing
@@ -58,8 +68,8 @@ without a known block, not proof of permission or physical success; consider
 tool results are historical observations, not continuously refreshed facts.
 
 Readiness results are returned directly, not saved as global current state.
-The UI clears its snapshot when its conversation, active voice call or source
-grant changes, and discards delayed responses from the old context. Check again
+The UI clears its snapshot when its conversation, active voice call, source
+grant or confirmed installation changes, and discards delayed responses from the old context. Check again
 after changing tools or OS permissions. Shared source grants still expire and
 are revalidated at capture time by the [voice observation contract](VOICE-VISUAL.md).
 
@@ -71,6 +81,10 @@ separate host/worker identities, source lifecycle and bounded status data.
 real isolated browser with synthetic native/runtime facts: blocked and ready
 states, existing tool invocation, aged diagnostic facts, setup navigation,
 UI/agent parity, source/conversation changes, failure handling and mobile layout.
+The feature flow uses real updater admission and receipts with synthetic package
+metadata, installer processes and restart requests. It covers explicit clicks,
+duplicate prevention, failed qualification, pending restart, exact successor
+confirmation, and separate OS permission after installation.
 Run it with `AMPLIFIER_TEST_PYTHON` pointing at a test environment; optional
 `AMPLIFIER_ACCEPTANCE_DIR` saves screenshots.
 
