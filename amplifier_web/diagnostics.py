@@ -186,6 +186,9 @@ class Diagnostics:
             self.record('app',{'event':'app:started','data':{'version':__import__('amplifier_web').__version__}})
 
     def record(self,stream,event,*,session_id=None,workspace=None,parent_id=None):
+        identifiers = {session_id, parent_id, event.get('sessionId'), event.get('data', {}).get('sessionId'), event.get('data', {}).get('rootSessionId')}
+        if identifiers & getattr(self.service, '_deleted_session_ids', set()):
+            return
         try:
             self._record(stream,event,session_id=session_id,workspace=workspace,parent_id=parent_id)
         except Exception:

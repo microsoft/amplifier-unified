@@ -39,7 +39,7 @@ class Management:
         rows=manager.provider_rows(workspace)
         async with self.service.lock:
             setup=self.service.state.setdefault('setup',{})
-            if setup.get('providersWorkspace')!=workspace:return
+            if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
             valid={row['id'] for row in rows if row.get('enabled',True)}
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
             for field in ('modelCatalogs','providerCatalogs'):
@@ -53,7 +53,7 @@ class Management:
                 return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'), 'loadedAt':self.provider_catalog.loaded_at.get(cache_key), **values}
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
+                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 # Only the exact configuration key may supply cached values.
                 entry=catalog_entry(cached,phase='ready' if self.provider_catalog.fresh(cache_key) else 'working')
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
@@ -69,7 +69,7 @@ class Management:
             if manager.catalog_key(args,workspace)!=key:return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
+                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
@@ -140,7 +140,7 @@ class Management:
         if action == 'bundles.list':
             return await self.list_bundles(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
-        independent=action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
+        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
         async with (nullcontext() if independent else self.lock):
             await self.provider_status(action,args,command_id,'working')
             await self.publish(management={'phase':'working','operation':action,'error':None})
@@ -307,7 +307,11 @@ class Management:
                 await self.service.refresh_configuration(session['id'])
 
     async def perform(self,action,args,command_id=None):
-        if action=='locations.list':
+        if action=='locations.create':
+            from .locations import create_folder
+            path = await asyncio.to_thread(create_folder, args['path'], args['name'])
+            await self.publish(locationListing={'controlId':args['controlId'],'path':str(path),'parent':str(path.parent),'entries':[],'truncated':False,'createdBy':command_id})
+        elif action=='locations.list':
             path=Path(args.get('path') or self.service.default_workspace).expanduser()
             if not path.is_absolute():path=Path(self.service.default_workspace)/path
             path=path.resolve()
@@ -333,9 +337,31 @@ class Management:
                 self.service.state.setdefault('registry',{}).update(result)
                 self.service._publish()
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
+        elif action=='configuration.defaults':
+            from .draft_defaults import resolve_defaults
+            from .managed_chats import is_managed
+            managed = is_managed(args)
+            workspace = str(self.service.data_dir) if managed else args.get('workspace', '')
+            if not workspace or managed and args.get('workspace', '').strip():
+                raise ValueError('Choose a workspace or a chat without a workspace.')
+            key=json.dumps(['' if managed else workspace,args.get('bundle') or '']+(['managed'] if managed else []),separators=(',',':'),ensure_ascii=False)
+            try:
+                result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
+                result['phase']='ready'
+            except Exception:
+                result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}
+            async with self.service.lock:
+                entries=self.service.state.setdefault('draftDefaults',{})
+                entries[key]=result
+                while len(entries)>32:entries.pop(next(iter(entries)))
+                self.service._publish()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
-            session=self.configuration_session(args)
+            from .managed_chats import is_managed
+            managed_draft = action in {'providers.list','providers.models'} and is_managed(args)
+            session=({'workspace':str(self.service.data_dir)} if managed_draft else {'workspace':str(Path(args['workspace']).expanduser().resolve())}
+                     if managed_draft or action in {'providers.list','providers.models'} and args.get('workspace')
+                     else self.configuration_session(args))
             async def runtime_operation(operation,values):
                 current=self.session(args)
                 await self.ensure_runtime(current)
@@ -349,17 +375,20 @@ class Management:
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            if action=='providers.list':
+                result['providersRequestedWorkspace']=args.get('workspace',session['workspace'])
+                result['providersLocation']={'kind':'managed' if managed_draft else 'workspace'}
             if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if action in {'providers.models','providers.schema'} and setup.get('providersWorkspace') not in {None,session['workspace']}:return
+                if action in {'providers.models','providers.schema'} and (setup.get('providersWorkspace') not in {None,session['workspace']} or (setup.get('providersLocation',{}).get('kind')=='managed')!=managed_draft):return
                 if command_id and action.startswith('providers.'):
                     key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
                     if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
-                if action=='providers.list' and setup.get('providersWorkspace')!=result.get('providersWorkspace'):
+                if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
                 setup.update(result)
                 if result.get('providerMetadata'):

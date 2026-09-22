@@ -23,14 +23,14 @@ class ConfiguredRuntime(Runtime):
         return await self.workers[sid].perform(operation, args)
 
 
-async def fixture(tmp_path, monkeypatch):
+async def fixture(tmp_path, monkeypatch, *, managed=False):
     data = tmp_path / 'app'
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(data))
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
     runtime, now = ConfiguredRuntime(), [1800000000.0]
     app = AppService(data, runtime, workspace=tmp_path)
     attach(app, runtime, now)
-    await app.dispatch('session.create', {'title': 'Schedule owner'})
+    await app.dispatch('session.create', {'title': 'Schedule owner', **({'location': {'kind': 'managed'}} if managed else {})})
     sid = app._session()['id']
     directory = data / 'sessions' / sid
     directory.mkdir(exist_ok=True, parents=True)
@@ -242,3 +242,63 @@ async def test_explicit_identity_cannot_replace_unloaded_native_history(tmp_path
         assert transcript.read_text()=='preserve original history'
         assert len(app.state['sessions'])==1
     finally:await app.close()
+
+
+async def test_managed_new_tasks_allocate_distinct_folders_for_each_occurrence(tmp_path, monkeypatch):
+    from pathlib import Path
+    from amplifier_web.managed_chats import metadata
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch, managed=True)
+    try:
+        source = app._session(sid)
+        source_folder = Path(source['workspace'])
+        (source_folder / 'result.txt').write_text('Original result')
+        app._message(source, 'user', 'Original context must not be copied')
+        messages = copy.deepcopy(source['messages'])
+        registrations = copy.deepcopy(app.state['workspaces'])
+        record, preview = await create(app, sid, now[0])
+        assert record['newTaskConfiguration']['location'] == {'kind': 'managed'}
+        assert len(list((app.data_dir / 'chats').iterdir())) == 1
+        folders = {source_folder}
+        for _ in range(2):
+            now[0] += 61
+            await app.schedules.tick(); await app.schedules.tick()
+            run = app.schedules.store.runs(sid)[0]
+            assert run['phase'] == 'accepted' and run['creationConfirmed'], run['detail']
+            target = app._session(run['destinationSessionId'])
+            folder = Path(target['workspace'])
+            assert target['location'] == {'kind': 'managed'}
+            assert folder == app.data_dir / 'chats' / target['id'] / 'files'
+            assert folder not in folders and metadata(folder)['id'] == target['id']
+            assert not (folder / 'result.txt').exists()
+            (folder / 'result.txt').write_text('Independent scheduled result')
+            assert (source_folder / 'result.txt').read_text() == 'Original result'
+            assert target['selection'] == source['selection']
+            assert len(target['messages']) == 1 and target['messages'][0]['text'] == record['prompt']
+            folders.add(folder)
+            await finish(app, target['id'], run)
+        assert len(folders) == len(list((app.data_dir / 'chats').iterdir())) == 3
+        assert app.state['workspaces'] == registrations
+        assert app.state['selectedSessionId'] == sid
+        assert source['messages'] == messages
+        assert len(runtime.inputs) == 2
+    finally:
+        await app.close()
+
+
+async def test_managed_inheritance_rejects_reusing_source_folder_before_allocation(tmp_path, monkeypatch):
+    from amplifier_web.session_creation import template
+    app, runtime, _, sid = await fixture(tmp_path, monkeypatch, managed=True)
+    try:
+        source = app._session(sid)
+        _, reviewed = template(app, source)
+        identity = str(uuid.uuid4())
+        with pytest.raises(AppError, match='reviewed location'):
+            await app.dispatch('session.create', {
+                'id': identity, 'select': False, 'workspace': source['workspace'], 'bundle': source['bundle'],
+                'inheritConfiguration': {'sessionId': sid, 'configurationHash': reviewed['configurationHash']},
+            })
+        assert len(app.state['sessions']) == len(list((app.data_dir / 'chats').iterdir())) == 1
+        assert not (app.data_dir / 'sessions' / identity).exists()
+        assert not runtime.inputs
+    finally:
+        await app.close()

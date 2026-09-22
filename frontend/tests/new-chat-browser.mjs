@@ -22,23 +22,38 @@ try{
  await expect(page.locator('.a-canvas-toggle')).toHaveText('');await expect(page.locator('.a-canvas-toggle')).toHaveAttribute('title','Open canvas');
  await expect(page.getByRole('button',{name:'Chat details',exact:true})).toBeDisabled();
  const originalWorkspace=(await state()).settings.workspace;
+ await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('first');
+ await expect(page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true})).toContainText('Work');
+ assert.deepEqual((await state()).view.newSessionDraft?.selection||{},{});
+
  await launcher.click();await launcher.click();assert.equal((await state()).sessions.length,0);
- await page.getByText('Chat settings',{exact:true}).click();
- await page.locator('#new-chat-name').pressSequentially('Workspace research');
- await page.getByLabel('Use the bundle’s model').uncheck();
- await page.locator('#new-chat-provider').fill('test-provider');await page.locator('#new-chat-model').fill('chosen-model');await page.locator('#new-chat-effort').fill('high');
+ await expect(page.getByText('Chat settings',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Notify me when ready',exact:true})).toHaveCount(0);
+ await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
+ await page.getByLabel('Registered root bundles',{exact:true}).selectOption('work');
+ await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
+ await page.locator('select#chat-model').selectOption('chosen-model');
+ await page.locator('#chat-effort').press('End');
+ await page.getByRole('button',{name:'Close model settings',exact:true}).click();
  await page.locator('#new-chat-workspace').fill(originalWorkspace+'/../');
  const draftSaved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Do the planned work');
  await composer.fill('Do the planned work');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Use these notes')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();
  assert.equal((await state()).sessions.length,0);assert.deepEqual((await inspect()).sent,[]);assert.deepEqual((await inspect()).started,[]);
- await draftSaved;await page.reload();await expect(composer).toHaveValue('Do the planned work');await page.getByText('Chat settings',{exact:true}).click();await expect(page.locator('#new-chat-name')).toHaveValue('Workspace research');await expect(page.locator('#new-chat-model')).toHaveValue('chosen-model');await expect(page.getByRole('button',{name:'Remove notes.txt'})).toBeVisible();
+ await draftSaved;await page.reload();await expect(composer).toHaveValue('Do the planned work');await expect(page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings'})).toContainText('chosen-model');assert.equal((await state()).view.newSessionDraft.selection.effort,'high');assert.equal((await state()).view.newSessionDraft.bundle,'work');await expect(page.getByRole('button',{name:'Remove notes.txt'})).toBeVisible();
  await page.screenshot({path:out+'/new-chat-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
- for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`})}
+ for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
+ for(const [trigger,label,close] of [['Model and reasoning settings','Conversation model','Close model settings'],['Conversation bundle','Choose conversation bundle','Close bundle settings']]){
+  await page.locator('.a-composer').getByRole('button',{name:trigger,exact:true}).click();const panel=page.locator('section.a-compact-popover');await expect(panel).toBeVisible();
+  const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:el.scrollHeight>el.clientHeight+1}});
+  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry));assert.equal(geometry.scroll,false);
+  await expect(panel.locator('input:not([type=range])')).toHaveCount(0);await page.screenshot({path:out+`/compact-${trigger}-${width}.png`});await page.getByRole('button',{name:close,exact:true}).click();
+ }}
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
- let current=await state();assert.equal(current.sessions.length,1);const sid=current.selectedSessionId,chat=current.sessions.find(row=>row.id===sid);assert.equal(chat.title,'Workspace research');assert.equal(chat.selection.model,'chosen-model');assert.notEqual(chat.workspace,originalWorkspace);
+ let current=await state();assert.equal(current.sessions.length,1);const sid=current.selectedSessionId,chat=current.sessions.find(row=>row.id===sid);assert.equal(chat.title,'Do the planned work');assert.equal(chat.bundle,'work');assert.equal(chat.selection.model,'chosen-model');assert.notEqual(chat.workspace,originalWorkspace);
  const submitted=(await inspect()).sent;assert.equal(submitted.length,1);assert.equal(submitted[0].selection.model,'chosen-model');assert.equal(submitted[0].attachments[0].name,'notes.txt');
  await expect(page.getByRole('button',{name:'Chat details',exact:true})).toBeEnabled();await page.locator('.a-composer').getByRole('button',{name:'Chat controls',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Chat controls',exact:true})).toBeVisible();await page.getByRole('button',{name:'Goals & modes',exact:true}).click();await expect(page.getByLabel('Goal condition')).toBeVisible();await expect(page.getByLabel('Mode',{exact:true})).toBeVisible();await page.screenshot({path:out+'/composer-chat-controls.png'});await page.getByRole('button',{name:'Close panel',exact:true}).click();

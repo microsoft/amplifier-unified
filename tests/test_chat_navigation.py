@@ -143,7 +143,7 @@ async def test_pin_preference_persists_without_native_writes_or_runtime_work(tmp
 
 async def test_pin_rejects_workers_deletion_cleans_preference_and_unpin_is_idempotent(tmp_path,app_factory):
     app=app_factory()
-    await app.dispatch('session.create',{})
+    await app.dispatch('session.create',{'location':{'kind':'managed'}})
     root=app._session()
     worker={**deepcopy(root),'id':'worker','sessionKind':'worker','nativeParentId':root['id']}
     app.state['sessions'].append(worker)
@@ -154,7 +154,8 @@ async def test_pin_rejects_workers_deletion_cleans_preference_and_unpin_is_idemp
     with pytest.raises(AppError):
         await app.dispatch('session.pin',{'id':'','pinned':True})
     await app.dispatch('session.pin',{'id':root['id'],'pinned':True})
-    await app.dispatch('session.delete',{'id':root['id']});await finish_actions(app)
+    preview=(await app.dispatch('session.deletePreview',{'id':root['id']}))['result']
+    await app.dispatch('session.delete',{'id':root['id'],'confirmationToken':preview['confirmationToken']});await finish_actions(app)
     assert root['id'] not in app.state['pinnedSessionIds']
     await app.dispatch('session.pin',{'id':root['id'],'pinned':False})
     assert not app.state['pinnedSessionIds']

@@ -289,19 +289,27 @@ class EventIndex:
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
         app = [row for row in rows if row.get('_appModel')]
-        matched, omitted = set(), set()
+        pairs = []
         for row in rows:
             if row['kind'] != 'llm' or row.get('_appModel'):
                 continue
-            matches = [other for other in app if other['id'] not in matched and
-                       other.get('sessionId') == row.get('sessionId') and same_model_call(other, row)]
-            if matches and (row.get('endedAt') is not None or len(matches) == 1):
-                closest = min(matches, key=lambda other: abs((other.get('endedAt') or other.get('startedAt') or 0) - (row.get('endedAt') or row.get('startedAt') or 0)))
-                matched.add(closest['id']);omitted.add(row['id'])
-                # Preserve the stable lifecycle ID and the native request source.
-                for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
-                    if field in row:closest[field] = row[field]
-                if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+            matches = [other for other in app if other.get('sessionId') == row.get('sessionId')
+                       and same_model_call(other, row)]
+            if row.get('endedAt') is not None or len(matches) == 1:
+                for other in matches:
+                    distance = abs((other.get('endedAt') or other.get('startedAt') or 0) -
+                                   (row.get('endedAt') or row.get('startedAt') or 0))
+                    pairs.append((distance, row, other))
+        matched, omitted = set(), set()
+        # A host call can span provider retries. Match its nearest terminal
+        # native attempt once; preserve earlier attempts and their own details.
+        for _, row, closest in sorted(pairs, key=lambda pair: pair[0]):
+            if row['id'] in omitted or closest['id'] in matched:
+                continue
+            matched.add(closest['id']);omitted.add(row['id'])
+            for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+                if field in row:closest[field] = row[field]
+            if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
         return [row for row in rows if row['id'] not in omitted]
 
 
@@ -383,10 +391,11 @@ class EventLogView:
             return (root if sid in aliases else sid, row.get('toolCallId'))
         tool_ids = {call_key(row): row for row in live_nodes if row.get('kind') == 'tool'}
         turns = {row['id']: copy.deepcopy(row) for row in live.get('turns', [])}
-        input_turns, message_turns = {}, {}
+        input_turns, message_turns, host_turns = {}, {}, set()
         for turn in turns.values():
             if turn.get('canonicalHistory') or turn.get('nativeHistory'):
                 continue
+            host_turns.add(turn['id'])
             for identity in {turn['id'], turn.get('inputId')} - {None}:
                 input_turns.setdefault(identity, set()).add(turn['id'])
             for identity in {turn.get('messageId'), turn.get('userMessageId')} - {None}:
@@ -398,16 +407,34 @@ class EventLogView:
         source = {**session, 'nativeProject': session.get('nativeProject') or project_slug(session['workspace'])}
         associations = root_index.associations(directory(source)) if root_index else {}
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
-        remap = {}
+        associated_turns = {}
+        for node in nodes:
+            association = associations.get(node.get('eventOrder')) if node.get('sessionId') in aliases else None
+            if not association:
+                continue
+            previous = tool_ids.get(call_key(node)) if node['kind'] == 'tool' else live_by_source.get(model_key(node)) or live_by_id.get(model_key(node))
+            candidates = (bindings.get(model_key(node)), previous, node)
+            identity = next((row['turnId'] for row in candidates if row and row.get('turnId') in host_turns), None)
+            if identity:
+                # Exact host call IDs also link sibling native events while the
+                # latest user message is waiting for its transcript index.
+                associated_turns.setdefault(association['turn'], set()).add(identity)
+        remap, assigned_models = {}, set()
+        native_models = {model_key(row) for row in nodes if row['kind'] == 'llm'}
         for node in nodes:
             binding = bindings.get(model_key(node))
             if binding and binding.get('kind') != node.get('kind'):
                 binding = None
             node['_canonicalId'] = node['id']
             previous = tool_ids.get(call_key(node)) if node['kind'] == 'tool' else live_by_source.get(model_key(node)) or live_by_id.get(model_key(node))
+            if previous and node['kind'] == 'llm':
+                key = model_key(previous)
+                if key in assigned_models or (key != model_key(node) and key in native_models):
+                    previous = None  # Another canonical attempt owns this identity.
             if previous is None and node['kind'] == 'llm':
                 candidates = [row for row in live_nodes if row.get('kind') == 'llm' and not row.get('canonicalHistory')
                     and (row.get('sessionId') == node.get('sessionId') or row.get('sessionId') in aliases and node.get('sessionId') in aliases)
+                    and model_key(row) not in native_models and model_key(row) not in assigned_models
                     and same_model_call(row, node)]
                 if len(candidates) == 1:
                     previous = candidates[0]
@@ -422,6 +449,8 @@ class EventLogView:
                         node['usage']['costType'] = previous['usage'].get('costType', 'reported')
                 if node.get('phase') in LIVE_PHASES and isinstance(previous.get('endedAt'), (int, float)) and previous['endedAt'] >= (node.get('startedAt') or 0):
                     node.update(phase=previous.get('phase', 'recorded'), endedAt=previous['endedAt'])
+            if node['kind'] == 'llm':
+                assigned_models.add(model_key(node))
             if binding:
                 # Exact host-owned call identity joins display and accounting.
                 # Native timing similarity alone is never budget authority, and
@@ -442,15 +471,25 @@ class EventLogView:
                 # Preserve its host turn rather than leaving an empty running
                 # placeholder beside a second canonical work group. An anchor
                 # alone is insufficient: independent voice turns can share one.
-                matches = (input_turns.get(anchor.get('inputId'), set()) |
-                           message_turns.get(anchor['id'], set())) if anchor else set()
-                key = next(iter(matches)) if len(matches) == 1 else 'native-turn:' + (anchor['id'] if anchor else str(association['turn']))
+                matches = associated_turns.get(association['turn'], set()) | (
+                    (input_turns.get(anchor.get('inputId'), set()) | message_turns.get(anchor['id'], set())) if anchor else set())
+                # A transcript association must not replace a known host turn:
+                # a later live event would restore just that call and split the
+                # uninterrupted model/tool work into two visible groups.
+                own_turn = node.get('turnId') if node.get('turnId') in host_turns else None
+                key = own_turn or (next(iter(matches)) if len(matches) == 1 else
+                                   'native-turn:' + (anchor['id'] if anchor else str(association['turn'])))
                 node['turnId'] = key
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
                 if association['position'] is not None:
                     preceding = [row for row in native_messages if association['turn'] <= row['nativeIndex'] <= association['position']]
-                    node['anchorMessageId'] = preceding[-1]['id'] if preceding else None
+                    if preceding:
+                        node['anchorMessageId'] = preceding[-1]['id']
+                    elif key in host_turns:
+                        node.pop('anchorMessageId', None)  # Keep live message/timing placement until its index arrives.
+                    else:
+                        node['anchorMessageId'] = None
             if node.get('turnId') not in turns:
                 preceding = [row for row in users if isinstance(at, (int, float)) and isinstance(row.get('createdAt'), (int, float))
                              and row['createdAt'] <= at and row.get('source') != 'native']

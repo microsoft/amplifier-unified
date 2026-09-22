@@ -198,3 +198,26 @@ def test_selected_budget_keeps_synchronous_provider_protocol():
     selected = SelectedProvider(BudgetProvider(), {'model': 'selected'})
     assert selected.request_budget(Request(), context_estimate=20) == {
         'model': 'selected', 'context_estimate': 20}
+
+@pytest.mark.parametrize('surface', [False, True])
+async def test_strict_budget_protocol_receives_selection_in_request_options(surface):
+    from amplifier_web.surface_delivery import SurfaceProvider
+    class AnthropicStyleProvider(Provider):
+        async def request_budget(self, request, *, context_estimate, request_options=None):
+            self.budget_request, self.options = request, request_options
+            assert context_estimate == 20
+            return {'context_token_budget': 100}
+    class Delivery:
+        async def prepare(self, request, provider): return request
+        def commit(self, request): pass
+    provider = AnthropicStyleProvider()
+    selected = SelectedProvider(provider, {'model': 'fable-model', 'effort': 'high'},
+        (lambda original: SurfaceProvider(original, Delivery())) if surface else None)
+    options = {'model': 'stale', 'reasoning_effort': 'low', 'temperature': 0.3}
+    request = Request()
+    assert await selected.request_budget(request, context_estimate=20, request_options=options) == {'context_token_budget': 100}
+    assert provider.options == {'model': 'fable-model', 'reasoning_effort': 'high', 'temperature': 0.3}
+    assert provider.budget_request == Request('fable-model', 'high')
+    assert options['model'] == 'stale' and request == Request()
+    await selected.complete(request)
+    assert provider.request.model == 'fable-model' and provider.kwargs['model'] == 'fable-model'

@@ -297,3 +297,30 @@ async def test_revision_change_during_mkdir_rejects_chat_without_removing_create
     assert (folder / 'other-process.txt').read_text() == 'Keep concurrent work'
     assert not app.state['sessions'] and snapshot(app, 'web')['view']['draft'] == 'Still unsent'
     assert not app.db.execute('SELECT 1 FROM commands WHERE id=?', ('changed-during-create',)).fetchone()
+
+
+@pytest.mark.parametrize('client',['web','agent'])
+async def test_draft_provider_discovery_targets_requested_workspace_without_creating_it(app,tmp_path,monkeypatch,client):
+    from amplifier_web.management import Management
+    from amplifier_web.setup import SetupManager
+    app.management=Management(app)
+    path=tmp_path/'future'/'workspace';observed=[]
+    def rows(self,workspace):
+        observed.append(workspace)
+        return [{'id':'one','module':'provider-test','config':{'model':'chosen'},'enabled':True}]
+    async def catalog(self,action,args,workspace):
+        observed.append(workspace)
+        return {'modelsProviderId':'one','models':[{'id':'chosen'}]}
+    monkeypatch.setattr(SetupManager,'provider_rows',rows)
+    monkeypatch.setattr(SetupManager,'cached_probe',catalog)
+    await command(app,client,'providers.list',{'workspace':str(path)})
+    await command(app,client,'providers.models',{'workspace':str(path),'id':'one'})
+    for _ in range(100):
+        if app.state.get('setup',{}).get('providerCatalogs',{}).get('one',{}).get('phase')=='ready':break
+        await asyncio.sleep(.01)
+    assert app.state['setup']['providersWorkspace']==str(path)
+    assert app.state['setup']['providersRequestedWorkspace']==str(path)
+    assert app.state['setup']['providerCatalogs']['one']['models']==[{'id':'chosen'}]
+    assert observed and all(workspace==str(path) for workspace in observed)
+    assert not app.state['sessions'] and not app.runtime.started and not app.runtime.sent
+    assert not path.exists()

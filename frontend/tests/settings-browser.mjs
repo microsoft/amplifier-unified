@@ -133,10 +133,10 @@ try{
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('session.draft',{}));
- await page.getByText('Chat settings',{exact:true}).click();
- await page.getByLabel('Use the workspace’s default bundle').uncheck();
+ await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
- assert.equal(await page.locator('#new-chat-bundle').inputValue(),'fixture-root');
+ await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
  await page.locator('.a-path-field').filter({has:page.locator('#new-chat-workspace')}).getByRole('button',{name:'Browse',exact:true}).click();
  const workspace=(await state()).settings.workspace;
  await page.locator('#new-chat-workspace-browse-path').fill(workspace+'/missing');

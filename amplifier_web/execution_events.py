@@ -228,6 +228,7 @@ class ExecutionEvents:
                 _amplifier_web_observed = True
                 def __getattr__(self, name): return getattr(provider, name)
             wrapper = ObservedProvider()
+            wrapper.original = provider
             wrapper.complete = complete
             if callable(original_stream):
                 wrapper.stream = stream

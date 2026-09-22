@@ -17,6 +17,7 @@ from jsonschema import validate, ValidationError
 import tinycss2
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
 from .updates import work_paused
+from .managed_chats import LOCATION
 
 
 def settle_stream(session):
@@ -70,8 +71,8 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000)}, [])),
-    "session.create": ("Start a fresh conversation, creating an explicitly supplied workspace folder when missing. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "location": LOCATION}, [])),
+    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -83,7 +84,8 @@ ACTION_DEFINITIONS = {
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
     "session.naming": ("Enable or disable future automatic naming, or generate a name once without sending a chat turn. Regeneration preserves the Auto preference and rejects late results after a newer edit.", schema({"id": string(100), "automatic": {"type": "boolean"}, "regenerate": {"const": True}}, ["id"])),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
-    "session.delete": ("Delete a conversation and stop its work", schema({"id": string(100)})),
+    "session.deletePreview": ("Review permanent deletion of an idle managed chat and its owned files/history. Show the returned scope to the user before confirmation. Workspace chats can only be archived.", schema({"id": string(100)})),
+    "session.delete": ("Permanently delete the managed chat reviewed by session.deletePreview, only after explicit user confirmation of that scope. Requires the unexpired confirmationToken; never infer permission from a preview. Active work and workspace chats refuse.", schema({"id": string(100), "confirmationToken": string(100)}, ["id", "confirmationToken"])),
     "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
@@ -109,13 +111,15 @@ ACTION_DEFINITIONS = {
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
     "providers.move": ("Reorder saved provider connections",schema({"id":string(200),"beforeId":{"type":["string","null"]},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["id"])),
+    "locations.create": ("Create a new folder inside the chosen existing parent. Does not create a workspace registration or conversation.",schema({"path":string(4000),"name":string(255),"controlId":string(200)},["path","name","controlId"])),
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
     "providers.schema": ("Read a provider module’s configuration fields and choices",schema({"module":string(200),"id":string(200),"sessionId":string(200)},["module"])),
-    "providers.list": ("List provider connections and setup status",schema({"sessionId":string(200)},[])),
+    "configuration.defaults": ("Resolve new-chat bundle and model without creating a conversation",schema({"location": LOCATION,"workspace":string(4000),"bundle":string(4000)},[])),
+    "providers.list": ("List provider connections and setup status without creating a conversation",schema({"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
-    "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"id":string(200),"sessionId":string(200),"refresh":{"type":"boolean"}},["id"])),
+    "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"location": LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
     "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
     "providers.loginStatus": ("Check provider sign-in progress",schema({"id":string(200)},["id"])),
     "providers.loginCancel": ("Cancel provider sign-in",schema({"id":string(200)},["id"])),
@@ -330,6 +334,10 @@ class AppService:
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
+        from .managed_deletion import recover as recover_managed_deletions
+        recover_managed_deletions(self.data_dir, self.db, self.state)
+        from .managed_deletion import tombstones
+        self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
         from .default_typography import upgrade_default
         upgrade_default(self.state, self.default_theme())
         from .settings_migration import migrate_settings
@@ -656,6 +664,8 @@ class AppService:
         sid = sid or self.state["selectedSessionId"]
         for session in self.state["sessions"]:
             if session["id"] == sid:
+                if session.get("_deleting"):
+                    raise AppError("This chat is being deleted. No new work was started.", 409)
                 return session
         raise AppError("Select or create a conversation first.", 404)
 
@@ -675,7 +685,7 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return {**({'selection': chosen} if chosen else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
+        return {**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -825,6 +835,9 @@ class AppService:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
             raise AppError(exc.message) from exc
+        if action in {'session.deletePreview', 'session.delete'}:
+            from .managed_deletion import dispatch as delete_managed_chat
+            return await delete_managed_chat(self, action, args, origin, include_state)
         if action == 'runtime.dependencies':
             from .artifact_runtime import discover
             async with self.lock:
@@ -911,7 +924,12 @@ class AppService:
                     raise AppError(str(exc), 409) from None
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_workspace = None
-        if action == 'session.create' and args.get('workspace', '').strip():
+        prepared_identity = None
+        from .managed_chats import is_managed, allocate, creation_identity
+        managed_creation = action == 'session.create' and is_managed(args)
+        if managed_creation and args.get('workspace', '').strip():
+            raise AppError('A chat without a workspace cannot also choose a workspace folder.')
+        if action == 'session.create' and (managed_creation or args.get('workspace', '').strip()):
             from .new_chat import selection
             from .session_creation import prepare
             from .workspace_canvas import _create_workspace_folder
@@ -936,7 +954,17 @@ class AppService:
                     self.canvas_views.guard_transition(action, args)
             # Opening/editing a draft never creates directories. First submit
             # creates only its explicit path, away from the event loop and lock.
-            prepared_workspace = str(await asyncio.to_thread(_create_workspace_folder, args['workspace']))
+            if managed_creation:
+                prepared_identity = creation_identity(self.data_dir, args, command_id)
+                from .managed_deletion import removed
+                if removed(self.db, prepared_identity):
+                    raise AppError("This conversation was permanently deleted. Start a new chat instead.", 409)
+                try:
+                    prepared_workspace = await asyncio.to_thread(allocate, self.data_dir, prepared_identity, command_id or prepared_identity)
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
+            else:
+                prepared_workspace = str(await asyncio.to_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
             from .session_health import inspect_session
@@ -1129,13 +1157,13 @@ class AppService:
                 from .new_chat import open_draft
                 open_draft(self, args)
             elif action == "session.create":
-                if args.get('fromDraft') and not args.get('workspace', '').strip():
+                if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')
                 from .session_creation import prepare, apply
                 try:
                     inherited = prepare(self, args, origin, caller_session_id)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
-                    if args.get('id'): session['id'] = args['id']
+                    if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     apply(self, session, inherited)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
@@ -1238,21 +1266,7 @@ class AppService:
                 elif not args['pinned']:
                     pins[:] = [identity for identity in pins if identity != args['id']]
                 self.state['view'].pop('navChatPage', None)
-            elif action == "session.delete":
-                session = self._session(args["id"])
-                if session.get("configurationBusy"):
-                    raise AppError("Finish configuration changes before removing this conversation.",409)
-                if self.runtime:
-                    pending.append((self.runtime.stop, (session["id"],)))
-                self.history.hide_session(session)
-                self.state["sessions"].remove(session)
-                self.state['pinnedSessionIds'] = [identity for identity in self.state.get('pinnedSessionIds', []) if identity != session['id']]
-                if self.state["selectedSessionId"] == session["id"]:
-                    from .session_navigation import is_top_level
-                    replacement = next((s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == self.state.get('selectedWorkspaceId') or (s.get('workspace') and s.get('workspace') == session.get('workspace')))), None)
-                    self.state['selectedSessionId'] = replacement['id'] if replacement else None
-                    if replacement and replacement.get('nativeProject'):
-                        pending.append((self.history.load, (replacement['id'],)))
+
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -1502,7 +1516,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 allowed.update({'navArchive', 'navCollection'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
@@ -1694,7 +1708,7 @@ class AppService:
             if action == 'conversation.send':receipt['delivery']='sending'
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
-            if action.startswith("smartTools.") and action != "smartTools.context":
+            if action == "locations.create" or action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
             if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']

@@ -2,6 +2,7 @@
 import asyncio
 
 from .session_creation import template
+from .managed_chats import is_managed
 
 
 def creation_guard(schedules, source, identity, destination):
@@ -21,10 +22,11 @@ def creation_guard(schedules, source, identity, destination):
 async def create_destination(schedules, current, run):
     app, sid, identity = schedules.app, current['sessionId'], run['destinationSessionId']
     config = current['newTaskConfiguration']
+    location = {'location': {'kind': 'managed'}} if is_managed(config) else {'workspace': config['workspace']}
     try:
         await app.dispatch('session.create', {
             'id': identity, 'select': False, 'title': current['newTaskTitle'],
-            'workspace': config['workspace'], 'bundle': config['bundle'],
+            **location, 'bundle': config['bundle'],
             'inheritConfiguration': {'sessionId': sid, 'configurationHash': config['configurationHash'], 'scheduledRunId': run['id']},
         }, origin='scheduler', command_id=run['id'] + ':create', include_state=False)
         async with app.lock:

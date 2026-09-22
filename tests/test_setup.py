@@ -259,3 +259,15 @@ async def test_complete_provider_order_is_atomic_and_rejects_stale_list(tmp_path
     assert manager.store.read(tmp_path)==before
     with pytest.raises(ValueError):
         await manager.perform('providers.reorder',{**args,'ids':['three','three','two'],'expectedIds':['three','one','two']})
+
+
+async def test_model_discovery_for_a_future_workspace_does_not_create_it(manager,tmp_path):
+    import sys
+    await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'one','config':{}})
+    child=tmp_path/'draft-probe.py'
+    child.write_text("import os,json; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':os.getcwd()}]}))")
+    manager.probe_command=[sys.executable,str(child)]
+    future=tmp_path/'not-created'/'project'
+    result=await manager.perform('providers.models',{'workspace':str(future),'id':'one'})
+    assert result['models']==[{'id':str(tmp_path)}]
+    assert not future.parent.exists()

@@ -16,12 +16,6 @@ def definitions(schema, string):
         'session.archive': ('Archive a root conversation without stopping its work, changing selection, or deleting history.', schema({'id': identity})),
         'session.restore': ('Restore an archived conversation to the active library without replaying work.', schema({'id': identity})),
         'session.pinOrder': ('Reorder every currently pinned root chat; include every ID exactly once.', schema({'ids': ids})),
-        'collection.create': ('Create a named chat collection; no files or conversations are created.', schema({'name': string(100)})),
-        'collection.rename': ('Rename a chat collection.', schema({'id': identity, 'name': string(100)})),
-        'collection.remove': ('Remove a collection while keeping its chats and history.', schema({'id': identity})),
-        'collection.reorder': ('Order all collections; include every collection ID exactly once.', schema({'ids': ids})),
-        'collection.assign': ('Move a root chat into one collection, or remove membership with id:null. Keeps the selected chat and draft unchanged.', schema({'sessionId': identity, 'id': {'anyOf': [identity, {'type': 'null'}]}, 'beforeId': identity}, ['sessionId', 'id'])),
-        'collection.order': ('Order every member of one collection without selecting chats.', schema({'id': identity, 'sessionIds': ids})),
         'session.sharePreview': ('Freeze a readable conversation snapshot for inspection. Creates no public link. Includes visible text and voice history; artifact/attachment references do not embed their contents.', schema({'sessionId': identity})),
         'session.shareRead': ('Read a bounded page of an immutable snapshot by ID.', schema({'id': identity, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 16000}}, ['id'])),
         'session.shareCreate': ('Publish the exact preview to anyone who has the link and can reach this host. Requires its content hash; later chat edits never alter the snapshot.', schema({'id': identity, 'contentHash': string(64), 'visibility': {'const': 'anyone_with_link'}, 'expiresInSeconds': {'type': 'integer', 'minimum': 60, 'maximum': 31536000}}, ['id', 'contentHash', 'visibility'])),
@@ -37,9 +31,7 @@ def organization(state):
 def projection(state, session_ids=()):
     value = organization(state)
     return {'archivedCount': len(value['archived']),
-        'archived': {sid: value['archived'][sid] for sid in session_ids if sid in value['archived']},
-        'collections': [{**{k: row[k] for k in ('id', 'name')}, 'count': len(row['sessionIds']),
-            'sessionIds': [sid for sid in row['sessionIds'] if sid in session_ids]} for row in value['collections']]}
+        'archived': {sid: value['archived'][sid] for sid in session_ids if sid in value['archived']}}
 
 
 def _same_ids(actual, expected):
@@ -82,7 +74,6 @@ class ConversationLibrary:
     def perform(self, action, args, prepared=None):
         state, db = self.service.state, self.service.db
         value = organization(state)
-        collections = value['collections']
         if action in {'session.archive', 'session.restore'}:
             row = self.root(args['id'])
             if action == 'session.archive':
@@ -95,48 +86,6 @@ class ConversationLibrary:
             state['pinnedSessionIds'] = list(args['ids'])
             state['pinOrderCustomized'] = True
             return {'ids': list(args['ids'])}
-        if action == 'collection.create':
-            name = args['name'].strip()
-            if not name:
-                raise ValueError('Enter a collection name.')
-            if len(collections) >= 100:
-                raise ValueError('This library already has 100 collections.')
-            row = {'id': uuid.uuid4().hex, 'name': name, 'sessionIds': []}
-            collections.append(row)
-            return dict(row)
-        if action == 'collection.reorder':
-            _same_ids(args['ids'], [row['id'] for row in collections])
-            by_id = {row['id']: row for row in collections}
-            collections[:] = [by_id[sid] for sid in args['ids']]
-            return {'ids': list(args['ids'])}
-        if action.startswith('collection.'):
-            target = next((row for row in collections if row['id'] == args['id']), None)
-            if target is None and not (action == 'collection.assign' and args['id'] is None):
-                raise ValueError('Collection is unavailable.')
-            if action == 'collection.assign':
-                sid = self.root(args['sessionId'])['id']
-                before = args.get('beforeId')
-                if before and (target is None or before not in target['sessionIds'] or before == sid):
-                    raise ValueError('Choose another current member as the insertion point.')
-                if target and sid not in target['sessionIds'] and len(target['sessionIds']) >= 10000:
-                    raise ValueError('This collection already contains 10000 conversations.')
-                for row in collections:
-                    if sid in row['sessionIds']:
-                        row['sessionIds'].remove(sid)
-                if target is not None:
-                    target['sessionIds'].insert(target['sessionIds'].index(before) if before else len(target['sessionIds']), sid)
-                return {'sessionId': sid, 'collectionId': args['id']}
-            if action == 'collection.rename':
-                name = args['name'].strip()
-                if not name:
-                    raise ValueError('Enter a collection name.')
-                target['name'] = name
-            elif action == 'collection.remove':
-                collections.remove(target)
-            elif action == 'collection.order':
-                _same_ids(args['sessionIds'], target['sessionIds'])
-                target['sessionIds'] = list(args['sessionIds'])
-            return {'id': args['id']}
         if action == 'session.sharePreview':
             source, content = prepared
             if len(content.encode('utf-8')) > 10_000_000:

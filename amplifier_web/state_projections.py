@@ -32,7 +32,7 @@ class StateProjections:
     @classmethod
     def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
-                cls.view_scope(state, ('navChatScope', 'navFilter', 'navStatusFilter',
+                cls.view_scope(state, ('navChatScope', 'navFilter', 'navStatusFilter', 'navLocationFilter',
                                       'navArchive', 'navCollection', 'navChatPage')))
 
     @classmethod
@@ -50,7 +50,7 @@ class StateProjections:
         from .chat_navigation import catalog, registry, snapshot
         view = state.get('view', {})
         workspace = None if view.get('navChatScope') == 'all' else state.get('selectedWorkspaceId')
-        filters = {key: view.get(key) for key in ('navChatScope', 'navFilter', 'navStatusFilter', 'navArchive', 'navCollection')}
+        filters = {key: view.get(key) for key in ('navChatScope', 'navFilter', 'navStatusFilter', 'navLocationFilter', 'navArchive', 'navCollection')}
         registrations = self.get(('chat-registry',), lambda: registry(state))
         index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(state, indexed=registrations))
         return self.get(('chats', *self.chat_scope(state)), lambda: snapshot(state, indexed=index))
@@ -77,7 +77,7 @@ class StateProjections:
             from .navigation_summary import activity
             from .session_navigation import is_top_level
             attention = self.attention(state)
-            fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId',
+            fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
             rows = [([row.get(key) for key in fields], recent_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
@@ -86,6 +86,6 @@ class StateProjections:
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
-                     state.get('locationListing'), state.get('actionStatus', {}).get('locations.list')]
+                     state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
             return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
         return self.get(('shell-data-key',), build)

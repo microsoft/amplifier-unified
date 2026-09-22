@@ -192,6 +192,8 @@ def recover_legacy(state, db, home):
         except (OSError,ValueError):
             continue
         workspace=next((w for w in state.get('workspaces',[]) if w['path']==session.get('workspace')),None)
+        from .managed_chats import is_managed
+        if not workspace and is_managed(session):workspace={'id':None}
         if not workspace:continue
         receipts={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool'}
         visible=[m for m in session.get('messages',[]) if m.get('role')=='user']

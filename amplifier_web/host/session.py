@@ -136,6 +136,15 @@ class SelectedProvider:
             # root-only overrides as complete().
             def selected_stream(request, **kwargs):
                 selected, kwargs = self._selected_request(request, kwargs, consume=name == "stream")
+                if name == "request_budget":
+                    # The budget protocol carries completion overrides in
+                    # request_options. Anthropic deliberately has no **kwargs.
+                    # Inspect the original provider, before surface adapters.
+                    parameters = inspect.signature(self.original.request_budget).parameters
+                    if "request_options" in parameters:
+                        options = dict(kwargs.get("request_options") or {})
+                        options.update({key: kwargs.pop(key) for key in ("model", "reasoning_effort") if key in kwargs})
+                        kwargs["request_options"] = options
                 try:
                     result = method(selected, **kwargs)
                 except BaseException:
@@ -229,7 +238,7 @@ def _apply_settings(bundle, config):
         from ..shared_settings import routing_dirs
         for hook in bundle.hooks:
             if hook.get("module") == "hooks-routing":
-                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None))]}
+                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None), global_only=getattr(config, "global_only", False))]}
                 if routing.get("matrix"):
                     patch["default_matrix"] = routing["matrix"]
                 if routing.get("overrides"):
@@ -684,6 +693,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 info = await info
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
+                "display_name": getattr(info, "display_name", None),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort"), "models": []})
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),

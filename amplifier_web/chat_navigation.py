@@ -4,6 +4,7 @@ import math
 import time
 
 from .session_navigation import is_top_level
+from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
@@ -82,6 +83,8 @@ def view_patch(patch):
             raise ValueError('Worker history page index must be a nonnegative integer.')
     if 'navWorkspaceList' in patch and type(patch['navWorkspaceList']) is not bool:
         raise ValueError('navWorkspaceList must be a boolean.')
+    if 'navLocationFilter' in patch and patch['navLocationFilter'] not in ('all', 'managed'):
+        raise ValueError('Choose all locations or no workspace.')
     if 'navStatusFilter' in patch and patch['navStatusFilter'] not in ('all', 'attention', 'working', 'unread'):
         raise ValueError('Choose all, attention, working, or unread conversations.')
     if 'navChatScope' in patch and patch['navChatScope'] not in ('workspace', 'all'):
@@ -136,6 +139,9 @@ def catalog(state, *, indexed=None):
     query = query if isinstance(query, str) else ''
     scope = {'mode': mode, 'workspaceId': selected['id'] if mode == 'workspace' and selected else None,
              'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
+    location_filter = view.get('navLocationFilter', 'all') if mode == 'all' else 'all'
+    if location_filter != 'all':
+        scope['locationFilter'] = location_filter
     status_filter = view.get('navStatusFilter', 'all')
     if status_filter != 'all':
         scope['statusFilter'] = status_filter
@@ -148,22 +154,21 @@ def catalog(state, *, indexed=None):
     archive_filter = view.get('navArchive', 'active')
     if archive_filter != 'active':
         scope['archive'] = archive_filter
-    collection_id = view.get('navCollection')
-    collection = next((row for row in organization.get('collections', []) if row['id'] == collection_id), None)
-    collection_order = {sid: i for i, sid in enumerate(collection['sessionIds'])} if collection else {}
-    if collection_id:
-        scope['collectionId'] = collection_id
-    memberships = {sid: row['id'] for row in organization.get('collections', []) for sid in row['sessionIds']}
     rows = []
     for session in roots if mode == 'all' else grouped.get(selected['id'], []) if selected else []:
         is_archived = session['id'] in archived
         if (archive_filter == 'active' and is_archived) or (archive_filter == 'archived' and not is_archived):
             continue
-        if collection_id and session['id'] not in collection_order:
-            continue
         workspace = by_id.get(session.get('workspaceId')) or by_path.get(session.get('workspace'))
-        if workspace is None or (mode == 'workspace' and (selected is None or workspace['id'] != selected['id'])):
+        managed = is_managed(session)
+        if location_filter == 'managed' and not managed:
             continue
+        if mode == 'workspace' and (managed or selected is None or workspace is None or workspace['id'] != selected['id']):
+            continue
+        if workspace is None:
+            if not managed:
+                continue
+            workspace = {'id': None, 'path': session.get('workspace', ''), 'name': 'No workspace'}
         title = session.get('title') or 'Untitled conversation'
         description = session.get('description') or ''
         shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
@@ -176,16 +181,16 @@ def catalog(state, *, indexed=None):
         rows.append({'id': session['id'], 'title': title, 'description': description,
                      'status': session.get('status', 'idle'), 'workspace': workspace['path'],
                      'workspaceId': workspace['id'], 'workspaceName': workspace.get('name', ''),
-                     'workspaceLabel': labels[workspace['path']], 'activity': summary,
+                     'workspaceLabel': 'No workspace' if managed else labels[workspace['path']], 'activity': summary,
+                     **({'location': {'kind': 'managed'}} if managed else {}),
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
                      **({'archived': True} if is_archived else {}),
-                     **({'collectionId': memberships[session['id']]} if session['id'] in memberships else {}),
                      'recentActivityAt': recent_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
     rows.sort(key=lambda row: (not row['pinned'],
         pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
-        else collection_order.get(row['id'], 0) if collection_id and not row['pinned'] else -row['recentActivityAt']))
+        else -row['recentActivityAt']))
     return rows, scope, counts
 
 

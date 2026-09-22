@@ -46,10 +46,13 @@ def refresh_workspace_availability(workspaces):
 
 def initialize(state):
     if "workspaces" not in state:
-        paths = [state["settings"]["workspace"]] + [s["workspace"] for s in state["sessions"]]
+        from .managed_chats import is_managed
+        paths = [state["settings"]["workspace"]] + [s["workspace"] for s in state["sessions"] if not is_managed(s)]
         state["workspaces"] = list({_registration(path)["id"]: _registration(path) for path in paths if path}.values())
     refresh_workspace_availability(state['workspaces'])
-    if state.get("selectedWorkspaceId") not in {w["id"] for w in state["workspaces"]}:
+    selected = next((s for s in state.get("sessions", []) if s["id"] == state.get("selectedSessionId")), {})
+    from .managed_chats import is_managed
+    if not is_managed(selected) and state.get("selectedWorkspaceId") not in {w["id"] for w in state["workspaces"]}:
         state["selectedWorkspaceId"] = next((w["id"] for w in state["workspaces"] if w["path"] == state["settings"]["workspace"]), state["workspaces"][0]["id"] if state["workspaces"] else None)
     state.setdefault("canvas", {"open": False, "events": []})
     state["canvas"].setdefault("id", uuid.uuid4().hex)
@@ -58,6 +61,14 @@ def initialize(state):
 def select_session_workspace(state, session):
     """Keep a conversation reachable in navigation without changing its folder."""
     initialize(state)
+    from .managed_chats import is_managed
+    if is_managed(session):
+        state['selectedWorkspaceId'] = None
+        state['view'].update(navChatScope='all', navLocationFilter='managed', navWorkspaceList=False)
+        state['canvas']['open'] = False
+        return
+    if state['view'].get('navLocationFilter') == 'managed':
+        state['view']['navLocationFilter'] = 'all'
     row = next((w for w in state['workspaces'] if w['id'] == session.get('workspaceId')), None)
     if row is None:
         if session.get('workspace'):
@@ -301,7 +312,9 @@ def canvas_command(state, action, args, origin):
             _error("Supply a surface for an A2UI canvas.")
         canvas["surface"] = validate_surface(args.get("surface"))
     elif args.get("path"):
-        root = next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None)
+        owner = next((s for s in state['sessions'] if s['id'] == state.get('selectedSessionId')), {})
+        from .managed_chats import is_managed
+        root = owner.get('workspace') if is_managed(owner) else next((w["path"] for w in state["workspaces"] if w["id"] == state["selectedWorkspaceId"]), None)
         if not root:
             _error("Choose a workspace first.")
         root = Path(root).resolve()

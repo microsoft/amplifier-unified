@@ -1,35 +1,15 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {Archive,ArchiveRestore,ArrowUp,ArrowDown,Plus,Share2,Copy} from 'lucide-react';
+import {Archive,ArchiveRestore,Share2,Copy} from 'lucide-react';
 
 export function LibraryFilters({state,act}){
- const view=state.view||{},organization=state.conversationOrganization||{},collections=organization.collections||[];
- return <div className="a-form-grid" aria-label="Conversation library filters">
-  <label>Conversations<select aria-label="Active or archived conversations" value={view.navArchive||'active'} data-action="view.update" onChange={e=>act('view.update',{patch:{navArchive:e.target.value}})}><option value="active">Active</option><option value="archived">Archived ({organization.archivedCount||0})</option><option value="all">Active and archived</option></select></label>
-  <label>Collection<select aria-label="Filter by collection" value={view.navCollection||''} data-action="view.update" onChange={e=>act('view.update',{patch:{navCollection:e.target.value||null}})}><option value="">All collections</option>{view.navCollection&&!collections.some(row=>row.id===view.navCollection)&&<option value={view.navCollection}>Removed collection</option>}{collections.map(row=><option key={row.id} value={row.id}>{row.name} ({row.count})</option>)}</select></label>
- </div>;
+ const view=state.view||{},organization=state.conversationOrganization||{};
+ return <div aria-label="Conversation library filters"><label>Conversations<select aria-label="Active or archived conversations" value={view.navArchive||'active'} data-action="view.update" onChange={e=>act('view.update',{patch:{navArchive:e.target.value}})}><option value="active">Active</option><option value="archived">Archived ({organization.archivedCount||0})</option><option value="all">Active and archived</option></select></label></div>;
 }
-
 export function ConversationLibrary({state,session,act}){
- const organization=state.conversationOrganization||{},collections=organization.collections||[];
- const collection=collections.find(row=>row.sessionIds?.includes(session.id)),archived=Object.hasOwn(organization.archived||{},session.id);
- const nameVersion=useRef(0);
- const [name,setName]=useState(''),[rename,setRename]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
- useEffect(()=>setRename(collection?.name||''),[collection?.id,collection?.name]);
- async function run(action,args){
-  setBusy(true);setError('');
-  try{const result=await act(action,args);if(!result?.accepted)throw Error('The change was not saved.');return result}
-  catch(e){setError(e.message)}finally{setBusy(false)}
- }
- const reorder=(index,offset)=>{const ids=collections.map(row=>row.id);[ids[index],ids[index+offset]]=[ids[index+offset],ids[index]];run('collection.reorder',{ids})};
- return <section className="a-settings-section"><h3>Conversation library</h3>
-  <p>Archive keeps this conversation and its files. Work already running continues.</p>
-  <button type="button" className="a-soft" disabled={busy} data-action={archived?'session.restore':'session.archive'} onClick={()=>run(archived?'session.restore':'session.archive',{id:session.id})}>{archived?<ArchiveRestore/>:<Archive/>}{archived?'Restore conversation':'Archive conversation'}</button>
-  <label htmlFor="conversation-collection">Collection</label><select id="conversation-collection" value={collection?.id||''} disabled={busy} data-action="collection.assign" onChange={e=>run('collection.assign',{sessionId:session.id,id:e.target.value||null})}><option value="">No collection</option>{collections.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select>
-  <form onSubmit={async e=>{e.preventDefault();const version=nameVersion.current;if(await run('collection.create',{name})){if(nameVersion.current===version)setName('')}}}><label htmlFor="new-chat-collection">New collection name</label><input id="new-chat-collection" value={name} maxLength={100} onChange={e=>{nameVersion.current++;setName(e.target.value)}}/><button type="submit" className="a-soft" data-action="collection.create" disabled={busy||!name.trim()}><Plus/>Create collection</button></form>
-  {collection&&<><label htmlFor="rename-chat-collection">Collection name</label><input id="rename-chat-collection" maxLength={100} value={rename} onChange={e=>setRename(e.target.value)}/><div className="a-dialog-actions"><button type="button" className="a-soft" data-action="collection.rename" disabled={busy||!rename.trim()} onClick={()=>run('collection.rename',{id:collection.id,name:rename})}>Save collection name</button><button type="button" className="a-soft" data-action="collection.remove" disabled={busy} onClick={()=>run('collection.remove',{id:collection.id})}>Remove collection; keep chats</button></div></>}
-  {collections.length>1&&<ul className="a-catalog-list" aria-label="Collection order">{collections.map((row,index)=><li key={row.id}><span>{row.name}</span><button type="button" className="a-icon" aria-label={'Move '+row.name+' up'} data-action="collection.reorder" disabled={busy||index===0} onClick={()=>reorder(index,-1)}><ArrowUp/></button><button type="button" className="a-icon" aria-label={'Move '+row.name+' down'} data-action="collection.reorder" disabled={busy||index===collections.length-1} onClick={()=>reorder(index,1)}><ArrowDown/></button></li>)}</ul>}
-  {error&&<p role="alert" className="a-danger">{error}</p>}
- </section>;
+ const archived=Object.hasOwn(state.conversationOrganization?.archived||{},session.id);
+ const [busy,setBusy]=useState(false),[error,setError]=useState('');
+ async function toggle(){setBusy(true);setError('');try{const receipt=await act(archived?'session.restore':'session.archive',{id:session.id});if(!receipt?.accepted)throw Error('The change was not saved.')}catch(e){setError(e.message)}finally{setBusy(false)}}
+ return <section className="a-settings-section"><h3>Conversation library</h3><p>Archive keeps this conversation and its files. Work already running continues.</p><button type="button" className="a-soft" disabled={busy} data-action={archived?'session.restore':'session.archive'} onClick={toggle}>{archived?<ArchiveRestore/>:<Archive/>}{archived?'Restore conversation':'Archive conversation'}</button>{error&&<p role="alert" className="a-danger">{error}</p>}</section>;
 }
 
 export function ConversationSharing({session,act}){

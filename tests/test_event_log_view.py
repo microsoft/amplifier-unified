@@ -377,3 +377,111 @@ def test_matching_model_names_on_different_providers_keep_own_request(source):
     assert len(rows)==2
     assert 'requestDetail' not in next(row for row in rows if row['id']=='app')
     assert next(row for row in rows if row.get('provider')=='test')['requestDetail']
+
+
+@pytest.mark.parametrize('already_split', [False, True])
+def test_delayed_transcript_link_and_live_completion_keep_model_and_tools_together(source, already_split):
+    """A native refresh can precede both user-index reconciliation and a live receipt."""
+    from amplifier_web.execution import ingest
+    session, path = source
+    session.update(status='working', messages=[
+        {'id':'old-user', 'role':'user', 'text':'Again', 'nativeIndex':0, 'inputId':'old', 'createdAt':1},
+        {'id':'answer', 'role':'assistant', 'text':'An answer', 'nativeIndex':1, 'createdAt':2},
+        {'id':'new-user', 'role':'user', 'text':'Again', 'inputId':'new', 'createdAt':9}])
+    transcript = [{'role':'user', 'content':'Again'}, {'role':'assistant', 'content':'An answer'},
+                  {'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'one', 'content':'done'}]
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    call = {'id':'model', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app', 'turnId':'new',
+            'phase':'running', 'startedAt':10, 'liveObservation':True, 'revision':1,
+            'producerId':'worker', 'model':'fixture', 'provider':'test'}
+    session['execution'] = {'currentTurnId':'new', 'turns':[
+        {'id':'old', 'inputId':'old', 'anchorMessageId':'old-user', 'phase':'completed'},
+        {'id':'new', 'inputId':'new', 'anchorMessageId':'new-user', 'phase':'running', 'startedAt':9}],
+        'nodes':[dict(call)]}
+    append(path, 'prompt:submit', {'prompt':'Again'}, 1)
+    append(path, 'prompt:submit', {'prompt':'Again'}, 9)
+    append(path, 'provider:request', call, 10)
+    append(path, 'tool:pre', {'tool_call_id':'one', 'tool_input':{}}, 12.6)
+    append(path, 'tool:post', {'tool_call_id':'one', 'result':'done'}, 13)
+    if already_split:
+        session['execution']['turns'].append({'id':'native-turn:2', 'canonicalHistory':True,
+                                             'anchorMessageId':None, 'phase':'completed'})
+        session['execution']['nodes'].append({'id':'tool:app:one', 'kind':'tool', 'sessionId':'app',
+            'toolCallId':'one', 'turnId':'native-turn:2', 'canonicalHistory':True, 'phase':'completed'})
+    view = EventLogView(None)
+    session['execution'] = view.read(session)
+    completed = {**call, 'phase':'completed', 'endedAt':12.6, 'revision':2,
+                 'usage':{'totalTokens':42, 'costUsd':.01, 'costType':'reported'}}
+    ingest(session, completed)
+    for _ in range(3):
+        projected = page(session, 'nodes')
+        assert [segment['id'] for segment in projected['segments']] == ['new@new-user']
+        segment, = projected['segments']
+        assert segment['nodeCounts'] == {'models':1, 'tools':1}
+        assert segment['startedAt'] == 10 and segment['endedAt'] == 13
+        assert segment['aggregateUsage']['totalTokens'] == 42
+        assert segment['aggregateUsage']['calls'] == 1
+        assert {node['turnId'] for node in session['execution']['nodes']} == {'new'}
+        session['execution'] = view.read(session)
+    session['messages'][-1]['nativeIndex'] = 2
+    session['execution'] = view.read(session)
+    assert [segment['id'] for segment in page(session, 'nodes')['segments']] == ['new@new-user']
+
+
+def test_native_association_does_not_merge_distinct_exact_host_calls(source):
+    session, path = source
+    session['messages'][0].update(nativeIndex=0)
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(json.dumps({'role':'user', 'content':'Inspect it'})+'\n')
+    session['execution'] = {'turns':[{'id':key, 'anchorMessageId':'user', 'phase':'completed'}
+                                    for key in ('voice:one','voice:two')], 'nodes':[]}
+    append(path, 'prompt:submit', {'prompt':'Inspect it'}, 1)
+    for at, key in enumerate(('voice:one','voice:two'), 10):
+        append(path, 'provider:request', {'id':key+'-model', 'kind':'llm', 'sessionId':'native',
+               'turnId':key, 'phase':'completed', 'startedAt':at, 'endedAt':at+.5}, at)
+    append(path, 'tool:pre', {'tool_call_id':'ambiguous', 'tool_input':{}}, 12)
+    append(path, 'tool:post', {'tool_call_id':'ambiguous', 'result':'done'}, 13)
+    session['execution'] = EventLogView(None).read(session)
+    assert [node['turnId'] for node in session['execution']['nodes']] == ['voice:one','voice:two','native-turn:user']
+
+
+@pytest.mark.parametrize('late_host_log', [False, True])
+@pytest.mark.parametrize('already_aliased', [False, True])
+def test_provider_retry_attempts_keep_unique_ids_and_their_own_error_details(source, late_host_log, already_aliased):
+    session, path = source
+    host = {'id':'host-call', 'kind':'llm', 'sessionId':'native', 'turnId':'turn', 'provider':'test',
+            'model':'fixture', 'startedAt':10, 'endedAt':11.51, 'phase':'error', 'liveObservation':True,
+            'usage':{'inputTokens':4, 'outputTokens':2, 'totalTokens':6}}
+    session['execution'] = {'turns':[{'id':'turn', 'anchorMessageId':'user', 'phase':'completed'}],
+                            'nodes':[dict(host)]}
+    def host_log():
+        append(path, 'provider:request', {**host, 'phase':'running', 'endedAt':None}, 10)
+        append(path, 'llm:error', host, 11.51)
+    if not late_host_log:host_log()
+    for request, at in [('first',11),('second',11.3)]:
+        append(path, 'llm:request', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'raw':{'input':request+' request'}}, at)
+        append(path, 'llm:response', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'status':'error', 'error':request+' failure', 'usage':{'input_tokens':4,'output_tokens':2}}, at+.2)
+    if late_host_log:host_log()
+    view = EventLogView(None)
+    for iteration in range(3):
+        session['execution'] = view.read(session)
+        nodes = session['execution']['nodes']
+        assert len(nodes) == len({node['id'] for node in nodes}) == 2
+        by_id = {node['id']:node for node in nodes}
+        assert set(by_id) == {'llm:native:first','host-call'}
+        assert by_id['llm:native:first']['error'] == 'first failure'
+        assert by_id['host-call']['error'] == 'second failure'
+        for identity, request in [('llm:native:first','first'),('host-call','second')]:
+            reference = by_id[identity]['requestDetail']
+            assert reference['id'] == identity
+            assert json.loads(read_text(session,{**reference,'complete':'true'})['value']) == {'input':request+' request'}
+        assert session['execution']['aggregateUsage']['calls'] == 2
+        assert session['execution']['aggregateUsage']['totalTokens'] == 12
+        if already_aliased and iteration == 0:
+            # Recover the old bad projection without rewriting any native log.
+            by_id['llm:native:first']['id'] = 'host-call'

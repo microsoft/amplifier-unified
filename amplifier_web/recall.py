@@ -125,6 +125,8 @@ class Recall:
             self.notify(status='failed',error=type(exc).__name__)
 
     def start(self):
+        if any(row.get('_deleting') for row in self.app.state['sessions']):
+            raise ValueError('Wait for chat deletion to finish before indexing history.')
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self.refresh())
 
