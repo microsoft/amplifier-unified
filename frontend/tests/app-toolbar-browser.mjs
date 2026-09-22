@@ -39,16 +39,20 @@ try{
  await more.focus();await page.keyboard.press('Enter');await expect(menu).toBeVisible();await expect(menu.getByRole('button',{name:'Customize appearance'})).toBeFocused();
  await page.keyboard.press('Tab');await expect(menu.getByRole('button',{name:'What the agent sees'})).toBeFocused();await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(more).toBeFocused();
  await more.click();await page.getByRole('textbox',{name:'Message Amplifier'}).click();await expect(menu).toHaveCount(0);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeFocused();
- for(const [label,panel] of [['Customize appearance','appearance'],['What the agent sees','agent'],['Send feedback','feedback']]){
+ for(const [label,panel] of [['Customize appearance','appearance'],['What the agent sees','agent']]){
   await more.click();await menu.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();await expect(menu).toHaveCount(0);
   await expect.poll(async()=>(await state()).view.panel).toBe(panel);await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(more).toBeFocused();
  }
+ const feedback=page.getByRole('button',{name:'Send feedback',exact:true});
+ await feedback.click();await expect.poll(async()=>(await state()).view.panel).toBe('feedback');
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(feedback).toBeFocused();
+ await more.click();await expect(menu.getByRole('button',{name:/Activity|Send feedback/})).toHaveCount(0);await page.keyboard.press('Escape');
  await action('view.update',{patch:{toolbarMenuOpen:true}});await expect(menu).toBeVisible();await action('view.update',{patch:{panel:'agent'}});await expect(menu).toHaveCount(0);assert.equal((await state()).view.toolbarMenuOpen,false);await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('view.update',{patch:{layout:'work'}});await expect(toggle.locator('.lucide-panel-left')).toHaveCount(1);await action('view.update',{patch:{layout:'balanced'}});await expect(toggle.locator('.lucide-panel-right')).toHaveCount(1);
  for(const scheme of ['light','dark']){
   await action('view.update',{patch:{scheme}});
   for(const width of [1280,800,600,390,320]){
-   await page.setViewportSize({width,height:900});await expect(toggle).toBeVisible();
+   await page.setViewportSize({width,height:900});await expect(toggle).toBeVisible();await expect(feedback).toBeVisible();
    const before=await toggle.boundingBox();assert.ok(before.x>=0&&before.x+before.width<=width);
    await more.click();await expect(menu).toBeVisible();const rect=await menu.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width&&rect.y+rect.height<=900);
    await page.screenshot({path:out+`/toolbar-${scheme}-${width}.png`});await page.keyboard.press('Escape');
