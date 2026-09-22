@@ -37,34 +37,43 @@ class Management:
 
     async def warm_providers(self,manager,workspace):
         rows=manager.provider_rows(workspace)
+        enabled=[row for row in rows if row.get('enabled',True)]
+        catalogs={};pending=[]
+        def catalog_entry(result,cache_key,**values):
+            return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
+        # Publish the cached catalog as one snapshot. Even fresh cache hits used
+        # to rebuild and persist the entire app twice for every provider.
+        for row in enabled:
+            key=manager.catalog_key({'id':row['id']},workspace)
+            cache_key=('providers.models',key)
+            cached=self.provider_catalog.peek(cache_key)
+            fresh=self.provider_catalog.fresh(cache_key)
+            catalogs[row['id']]=catalog_entry(cached,cache_key,phase='ready' if fresh else 'working')
+            if not fresh:pending.append((row,key,cache_key))
         async with self.service.lock:
             setup=self.service.state.setdefault('setup',{})
             if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
-            valid={row['id'] for row in rows if row.get('enabled',True)}
+            before=copy.deepcopy({key:setup.get(key) for key in ('models','modelsProviderId','modelCatalogs','providerCatalogs','metadata')})
+            valid=set(catalogs)
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
-            for field in ('modelCatalogs','providerCatalogs'):
-                setup[field]={key:value for key,value in setup.get(field,{}).items() if key in valid}
-            self.service._publish()
-        async def load(row):
-            identity=row['id'];args={'id':identity};key=manager.catalog_key(args,workspace)
-            cache_key=('providers.models',key)
-            cached=self.provider_catalog.peek(cache_key)
-            def catalog_entry(result, **values):
-                return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'), 'loadedAt':self.provider_catalog.loaded_at.get(cache_key), **values}
-            async with self.service.lock:
-                setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
-                # Only the exact configuration key may supply cached values.
-                entry=catalog_entry(cached,phase='ready' if self.provider_catalog.fresh(cache_key) else 'working')
-                setup.setdefault('modelCatalogs',{})[identity]=entry['models']
-                setup.setdefault('providerCatalogs',{})[identity]=entry
+            setup['providerCatalogs']=catalogs
+            setup['modelCatalogs']={identity:entry['models'] for identity,entry in catalogs.items()}
+            for row in enabled:
+                if catalogs[row['id']].get('metadata'):
+                    setup.setdefault('metadata',{})[row['module']]=catalogs[row['id']]['metadata']
+            if before!={key:setup.get(key) for key in before}:
                 self.service._publish()
+        if not pending:return
+        # Yield after the start snapshot so ordinary requests can proceed.
+        await asyncio.sleep(0)
+        async def load(row,key,cache_key):
+            identity=row['id'];args={'id':identity}
             async with self.catalog_limit:
                 try:
                     result=await manager.perform('providers.models',{'id':identity,'workspace':workspace})
-                    entry=catalog_entry(result,phase='ready')
+                    entry=catalog_entry(result,cache_key,phase='ready')
                 except Exception:
-                    entry=catalog_entry(self.provider_catalog.peek(cache_key),phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
+                    entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key,phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
             # An old request must never overwrite a newer config or workspace.
             if manager.catalog_key(args,workspace)!=key:return
             async with self.service.lock:
@@ -73,8 +82,11 @@ class Management:
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
-                self.service._publish()
-        await asyncio.gather(*(load(row) for row in rows if row.get('enabled',True)))
+                self.service._publish_progress()
+        try:
+            await asyncio.gather(*(load(*item) for item in pending))
+        finally:
+            await self.service._flush_pending_progress()
 
     async def warm_runtime_models(self,session_id,providers,revision=None):
         async with self.service.lock:
@@ -139,6 +151,8 @@ class Management:
     async def command(self,action,args,command_id=None):
         if action == 'bundles.list':
             return await self.list_bundles(args, command_id)
+        if action == 'providers.list':
+            return await self.list_providers(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
         independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
         async with (nullcontext() if independent else self.lock):
@@ -170,6 +184,48 @@ class Management:
                         for session in self.service.state['sessions']:
                             if session['id']==guarded:session['configurationBusy']=False
                         self.service._publish()
+
+    async def list_providers(self,args,command_id):
+        """One start and one result publication for a provider catalog read."""
+        from .setup import SetupManager
+        from .managed_chats import is_managed
+        operation_id=command_id or str(uuid.uuid4())
+        await self._provider_list_transition(args,command_id,operation_id,'working')
+        await asyncio.sleep(0)
+        try:
+            managed=is_managed(args)
+            workspace=(str(self.service.data_dir) if managed else str(Path(args['workspace']).expanduser().resolve())
+                       if args.get('workspace') else self.configuration_session(args)['workspace'])
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,
+                                 allow_missing_workspace=bool(args.get('workspace')),global_only=managed)
+            result=await manager.perform('providers.list',{**args,'workspace':workspace})
+            result['providersRequestedWorkspace']=args.get('workspace',workspace)
+            result['providersLocation']={'kind':'managed' if managed else 'workspace'}
+            if await self._provider_list_transition(args,command_id,operation_id,'ready',result=result):
+                self.background(self.warm_providers(manager,workspace))
+        except asyncio.CancelledError:
+            await self._provider_list_transition(args,command_id,operation_id,'error',error='Provider listing cancelled.')
+            raise
+        except Exception as exc:
+            await self._provider_list_transition(args,command_id,operation_id,'error',error=str(exc)[:1000])
+
+    async def _provider_list_transition(self,args,command_id,operation_id,phase,*,result=None,error=None):
+        async with self.service.lock:
+            state=self.service.state;setup=state.setdefault('setup',{})
+            operations=setup.setdefault('operations',{})
+            current=phase=='working' or operations.get('providers.list:',{}).get('commandId')==operation_id
+            if current:
+                operations['providers.list:']={'phase':phase,'error':error,'commandId':operation_id,'envVar':'','updatedAt':time.time()}
+                state.setdefault('actionStatus',{})['providers.list']={'phase':phase,'error':error,'commandId':operation_id,'updatedAt':time.time(),
+                    'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
+                state['management']={'phase':phase,'operation':'providers.list','error':error}
+                if result is not None:
+                    if setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']:
+                        setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
+                    setup.update(result)
+            if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
+            if current or command_id:self.service._publish()
+            return current
 
     async def list_bundles(self, args, command_id):
         """Read the catalog with one start and one atomic completion snapshot.
