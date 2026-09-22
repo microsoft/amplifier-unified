@@ -26,20 +26,20 @@ export function WorkspaceLayout({state,act,children,presentation={}}){
   const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:innerWidth<=700?44:52});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[]);
- const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
+ const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
  const persist=(key,value)=>{
-  const fitted=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
+  const fitted=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
   const patch={[key]:Math.round(value)};
   if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch.canvasWidth=Math.round(fitted.canvas)}
   setDraft(null);act('view.update',{patch});
  };
  return <Layout.Provider value={{...sizes,narrow,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
-  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.canvas?.open} data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
+  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.selectedSessionId&&!!state.canvas?.open} data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
  </Layout.Provider>;
 }
 export function usePanelLayout(state,act){
  const context=useContext(Layout);
- return context||{...fitPanels({navPinned:state.view?.navPinned,canvasOpen:state.canvas?.open,navWidth:state.view?.navWidth,canvasWidth:state.view?.canvasWidth}),preview:()=>{},cancel:()=>{},persist:(key,value)=>act('view.update',{patch:{[key]:value}})};
+ return context||{...fitPanels({navPinned:state.view?.navPinned,canvasOpen:!!state.selectedSessionId&&state.canvas?.open,navWidth:state.view?.navWidth,canvasWidth:state.view?.canvasWidth}),preview:()=>{},cancel:()=>{},persist:(key,value)=>act('view.update',{patch:{[key]:value}})};
 }
 export function PaneResizer({layout,pane}){
  const drag=useRef(null),nav=pane==='nav',key=nav?'navWidth':'canvasWidth',width=nav?layout.nav:layout.canvas,min=nav?NAV_MIN:CANVAS_MIN,max=nav?layout.navMax:layout.canvasMax;

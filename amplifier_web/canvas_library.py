@@ -153,6 +153,9 @@ def command(state, db, action, args):
 
 
 def restore(state,db,*,open_panel=False):
+    if state.get('selectedSessionId') is None:
+        empty(state)
+        return
     rows=[r for r in state.get('canvasArtifacts',[]) if scope(state,r) and presentation(state, r).get('tabOpen')]
     if rows:load(state,db,max(rows,key=lambda r:presentation(state, r).get('lastViewedAt',r.get('createdAt',0)))['id'],open_panel=open_panel)
     else:empty(state,open_panel=open_panel)

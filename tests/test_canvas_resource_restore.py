@@ -152,6 +152,7 @@ async def test_unavailable_retained_source_suspends_pruning_unknown_nested_refer
     from amplifier_web.resource_files import collect, put, root
     app = AppService(tmp_path / 'app', workspace=tmp_path)
     try:
+        await app.dispatch('session.create', {})
         nested = put(app.db, {'content': 'Nested source retained by the missing parent'})
         parent = put(app.db, {'surface': nested})
         app.state['canvasArtifacts'] = [{'id': 'retained', 'body': parent}]

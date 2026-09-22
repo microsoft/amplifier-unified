@@ -12,6 +12,8 @@ def update(service, args, command_id, fingerprint, *, include_state):
     canvas = client.get('canvas', {})
     if args['sessionId'] != client.get('selectedSessionId') or args['canvasId'] != canvas.get('id'):
         raise AppError('The selected chat or artifact changed. Retry in the intended Canvas.', 409)
+    if args['open'] and client.get('selectedSessionId') is None:
+        raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
     cached = service._client_snapshots.get(identity)
     previous = copy.deepcopy(client)
     revision = service._state['revision']

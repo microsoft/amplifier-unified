@@ -44,6 +44,10 @@ def open_draft(service, args):
     if is_managed(setup):
         setup['workspace'] = ''
     state['selectedSessionId'] = None
+    # A draft has no Canvas scope; saved artifacts and tabs remain in the chat.
+    from .canvas_library import empty
+    empty(state)
+    state['view']['canvasFocused'] = False
     state['view'].update(newSessionDraft=setup, panel=None, toolbarMenuOpen=False,
                          composerModel={}, composerBundle={})
     client = service.clients.record()

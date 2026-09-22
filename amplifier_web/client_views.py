@@ -123,6 +123,13 @@ class ClientViews:
             pass
         elif not any(row["id"] == workspace for row in self.service._state.get("workspaces", [])):
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
+        if record.get('selectedSessionId') is None:
+            # Older clients could persist an open Canvas without a chat. Hide
+            # that presentation on reconnect; never discard its saved content.
+            if record.get('canvas', {}).get('open'):
+                record['canvas']['open'] = False
+            if record['view'].get('canvasFocused'):
+                record['view']['canvasFocused'] = False
         from .canvas_library import restore_body
         restore_body(record.get("canvas", {}), self.service.db)
         # The empty key is the client's pre-conversation draft. Unlike None,

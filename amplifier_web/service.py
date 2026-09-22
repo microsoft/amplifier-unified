@@ -1046,6 +1046,9 @@ class AppService:
             if action == 'canvas.visibility':
                 from .canvas_visibility import update
                 return update(self, args, command_id, fingerprint, include_state=include_state)
+            opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose', 'canvas.views.open'} or (action == 'canvas.show' and not args.get('sessionId'))
+            if opens_selected_canvas and self.state.get('selectedSessionId') is None:
+                raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
             from .canvas_library import remember, restore, fork_artifacts
             if action != "session.create" or args.get("select", True):
                 self.canvas_views.guard_transition(action, args)

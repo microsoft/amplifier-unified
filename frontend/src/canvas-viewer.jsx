@@ -1,3 +1,4 @@
+import {CanvasControl} from './canvas-controls';
 import {clientUrl} from './api';
 import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import DOMPurify from 'dompurify';
@@ -34,12 +35,12 @@ export function Diagram({kind,source,canvas,act,part='preview',embedded=false}){
  const uri=useMemo(()=>result.svg?'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(cleanSvg(result.svg)):null,[result.svg]);
  const set=patch=>viewAction(canvas,act,patch),selected=result.nodes?.find(n=>n.name===view.node);
  return <div className={`a-diagram ${embedded?'embedded':''}`}>
-  {!embedded&&<div className="a-canvas-toolbar">
+  {!embedded&&<CanvasControl><div className="a-canvas-toolbar">
    <button type="button" className="a-icon" aria-label="Zoom out" data-action="canvas.view" onClick={()=>set({zoom:Math.max(.2,zoom-.2)})}><ZoomOut/></button><span>{Math.round(zoom*100)}%</span>
    <button type="button" className="a-icon" aria-label="Zoom in" data-action="canvas.view" onClick={()=>set({zoom:Math.min(4,zoom+.2)})}><ZoomIn/></button>
    <button type="button" className="a-soft" data-action="canvas.view" onClick={()=>set({zoom:1,panX:0,panY:0})}><Maximize/>Fit</button>
    {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{['dot','neato','fdp','sfdp','circo','twopi'].map(engine=><option key={engine}>{engine}</option>)}</select>}
-  </div>}
+  </div></CanvasControl>}
   {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={frame} className="a-diagram-stage" tabIndex={0} aria-label="Diagram. Drag to pan; arrow keys move the view." onKeyDown={e=>{const moves={ArrowLeft:[-30,0],ArrowRight:[30,0],ArrowUp:[0,-30],ArrowDown:[0,30]};if(moves[e.key]){e.preventDefault();set({panX:panX+moves[e.key][0],panY:panY+moves[e.key][1]})}}} onPointerDown={e=>{if(embedded)return;drag.current={x:e.clientX,y:e.clientY};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerUp={e=>{if(!drag.current)return;set({panX:Math.max(-10000,Math.min(10000,panX+e.clientX-drag.current.x)),panY:Math.max(-10000,Math.min(10000,panY+e.clientY-drag.current.y))});drag.current=null}}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} style={{transform:embedded?undefined:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
   {!embedded&&result.nodes?.length>0&&<div className="a-node-inspector"><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</div>}
  </div>;
@@ -62,16 +63,16 @@ export function CanvasViewer({canvas,act}){
  useEffect(()=>{if(!['html','babylon','image','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
  const reports=Object.values(canvas.renderReports||{}),error=reports.find(r=>r.status==='error'),pending=reports.some(r=>r.status==='pending');
  return <div className="a-canvas-viewer">
-  <div className="a-canvas-toolbar">
+  <CanvasControl><div className="a-canvas-toolbar">
    {rich&&<><button type="button" className="a-soft" aria-pressed={!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:false})}><Eye/>Preview</button><button type="button" className="a-soft" aria-pressed={!!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:true})}><Code/>Source</button></>}
    <span className="a-canvas-format">{canvas.kind}</span>
    <button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>
    <button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>
-  </div>
+  </div></CanvasControl>
   <div className="a-canvas-preview">
    {view.source?(canvas.contentResource?<StoredSource canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain">{source}</pre>}
   </div>
-  <div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div>
+  <CanvasControl inline={!!error||pending}><div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div></CanvasControl>
  </div>;
 }
 function StructuredData({value,canvas,act}){
