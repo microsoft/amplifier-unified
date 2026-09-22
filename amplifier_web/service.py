@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import socket
 import time
 import uuid
 from weakref import WeakValueDictionary
@@ -53,8 +54,10 @@ ACTION_DEFINITIONS = {
     "diagnostics.retry": ("Retry failed deliveries still authorized by this destination's current policy; never replay historical unselected data.",schema({"id":string(100)})),
     "diagnostics.records": ("Read retained diagnostics by session and stream glob, newest first. Continue using nextBefore. Metadata is the default; conversation text is captured only if explicitly enabled.",schema({"sessionId":string(200),"stream":string(100),"before":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
     "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
-    "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200)},["path"])),
-    "workspace.create": ("Create or choose a workspace folder. Open an existing chat or a configurable draft; a new chat is saved on first submission.", schema({"path":{**string(4000),"minLength":1},"name":string(200)},["path"])),
+    "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200),"fromDraft":{"type":"boolean"}},["path"])),
+    "workspace.list": ("List available workspace folders, including empty workspaces, with bounded search. Saved chats come from native history.", schema({"query":string(500),"offset":{"type":"integer","minimum":0}},[])),
+    "workspace.prepare": ("Resolve a name under the configured workspace root without creating a folder or chat. Inspect disposition: create, open, attach, or blocked.", schema({"name":string(200),"root":string(4000)},["name"])),
+    "workspace.create": ("Create the reviewed workspace plan with a stable command ID. fromDraft preserves the unsent chat and selects the result. Legacy explicit path remains supported.", schema({"planId":string(100),"path":{**string(4000),"minLength":1},"name":string(200),"fromDraft":{"type":"boolean"}},[])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
@@ -286,6 +289,12 @@ for theme_action in ('theme.apply', 'theme.preview'):
 
 
 
+from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
+for _action, (_, _spec) in ACTION_DEFINITIONS.items():
+    if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
+        _spec['properties']['nativeProject'] = string(4000)
+
+
 class AppService:
     @property
     def state(self):
@@ -398,6 +407,9 @@ class AppService:
         self.state["devices"] = {}
         from .workspace_canvas import initialize
         initialize(self.state)
+        from .workspace_placement import defaults as workspace_root
+        self.state['settings'].setdefault('workspaces', {})
+        self.state['workspaceDefaults'] = {'root': workspace_root(self), 'hostLabel': socket.gethostname()}
         from .canvas_library import recover_legacy
         recover_legacy(self.state,self.db,self.data_dir)
         from .naming import automatic,refresh
@@ -677,11 +689,15 @@ class AppService:
 
     def _session(self, sid=None):
         sid = sid or self.state["selectedSessionId"]
-        for session in self.state["sessions"]:
-            if session["id"] == sid:
-                if session.get("_deleting"):
-                    raise AppError("This chat is being deleted. No new work was started.", 409)
-                return session
+        from .session_identity import resolve
+        try:
+            session = next((row for row in self.state['sessions'] if row['id'] == sid), None) or resolve(self.state['sessions'], sid)
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from None
+        if session:
+            if session.get('_deleting'):
+                raise AppError('This chat is being deleted. No new work was started.', 409)
+            return session
         raise AppError("Select or create a conversation first.", 404)
 
     def _new_session(self, args):
@@ -816,6 +832,30 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
+        from .session_identity import resolve
+        scope = args.pop('nativeProject', None)
+        if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
+            raise AppError('Choose a valid native project.')
+        target_key = 'sessionId' if args.get('sessionId') else 'id' if action in SESSION_ID_ACTIONS else None
+        if target_key and args.get(target_key):
+            if scope is None and origin == 'ui':
+                exact = next((row for row in self.state['sessions'] if row['id'] == args[target_key]), None)
+                if exact:
+                    from .session_identity import project as native_project
+                    scope = native_project(exact)
+            try:
+                target = resolve(self.state['sessions'], args[target_key], scope)
+                if target is None:
+                    await self.history.refresh()
+                    target = resolve(self.state['sessions'], args[target_key], scope)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+            if scope and target is None:
+                raise AppError('Session is not in the requested native project.', 404)
+            if target:
+                args[target_key] = target['id']
+        elif scope:
+            raise AppError('Supply a session ID with nativeProject.')
         # Keep older shells/agents on the same non-committing launcher.
         if action == 'view.update' and args.get('patch', {}).get('panel') == 'new-session':
             action, args = 'session.draft', {}
@@ -1173,19 +1213,54 @@ class AppService:
                     removed = next((w for w in self.state['workspaces'] if w['id'] == args['id']), None)
                     if removed and len(self.state['workspaces']) > 1:
                         self.history.hide_workspace(removed)
-                workspace_command(self.state, action, args)
+                from .workspace_placement import prepare as prepare_workspace, create as create_workspace
+                was_existing = bool(args.get('path') and Path(args['path']).expanduser().is_dir())
+                placement_args = dict(args)
+                placement_result = None
+                try:
+                    if action == 'workspace.list':
+                        from .workspace_placement import listing
+                        diagnostic_result = listing(self, args)
+                    elif action == 'workspace.prepare':
+                        diagnostic_result = prepare_workspace(self, args)
+                    elif action == 'workspace.create' and args.get('planId'):
+                        if args.get('path') or args.get('name'):
+                            raise ValueError('Use the reviewed plan without changing its name or path.')
+                        placement_result = create_workspace(self, args['planId'], command_id)
+                        placement_args.update(path=placement_result['path'], name=placement_result['name'])
+                        if any(w.get('path') == placement_result['path'] for w in self.state['workspaces']):
+                            placement_args.pop('name', None)  # A retry cannot undo a later display rename.
+                        workspace_command(self.state, 'workspace.add', placement_args)
+                    elif action == 'workspace.create' and not args.get('path'):
+                        raise ValueError('Prepare a workspace name before creating it.')
+                    else:
+                        workspace_command(self.state, action, args)
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
                 if action in {'workspace.add', 'workspace.create'}:
                     hidden = self.state.get('hiddenNativeWorkspaces', [])
                     from .session_files import project_slug
-                    restored = {self.state['selectedWorkspaceId'], uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + project_slug(args['path'])).hex}
+                    restored = {self.state['selectedWorkspaceId'], uuid.uuid5(uuid.NAMESPACE_URL, 'amplifier-project:' + project_slug(placement_args['path'])).hex}
                     hidden[:] = [identity for identity in hidden if identity not in restored]
+                    if action == 'workspace.add' or was_existing:
+                        pending.append((self.history.refresh, ()))
+                    diagnostic_result = {'workspaceId': self.state['selectedWorkspaceId'], 'path': next(w['path'] for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId']),
+                                         'receiptId': (placement_result or {}).get('receiptId', command_id),
+                                         'outcome': (placement_result or {}).get('outcome', 'attached')}
                 if action in {'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}:
                     from .session_navigation import is_top_level
                     workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
                     matches = [s for s in self.state['sessions'] if is_top_level(s) and (s.get('workspaceId') == workspace['id'] or (workspace.get('path') and s.get('workspace') == workspace['path']))]
                     selected = next((s for s in matches if s['id'] == self.state.get('selectedSessionId')), matches[0] if matches else None)
-                    self.state['selectedSessionId'] = selected['id'] if selected else None
-                    if action == 'workspace.create' and selected is None:
+                    if args.get('fromDraft'):
+                        # Attaching a location is a property of this client's
+                        # unsent chat. Keep text, attachments, model and bundle.
+                        from .new_chat import open_draft
+                        open_draft(self, {'workspace': workspace['path']})
+                        selected = None
+                    else:
+                        self.state['selectedSessionId'] = selected['id'] if selected else None
+                    if action == 'workspace.create' and selected is None and not args.get('fromDraft'):
                         from .new_chat import open_draft
                         open_draft(self, {'workspace': workspace['path']})
                     if selected and selected.get('nativeProject'):
@@ -1692,8 +1767,15 @@ class AppService:
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = args["patch"]
-                if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates"}:
+                if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates", "workspaces"}:
                     raise AppError("Unknown setting.")
+                if 'workspaces' in patch:
+                    from .workspace_placement import validate_settings
+                    try:
+                        options = validate_settings(patch['workspaces'])
+                    except ValueError as exc:
+                        raise AppError(str(exc)) from None
+                    patch = {**patch, 'workspaces': {**self.state['settings'].get('workspaces', {}), **options}}
                 for key in ("preferredVoice", "fallbackVoice"):
                     if key in patch and patch[key] not in {"gpt-live-1", "gpt-realtime-2.1"}:
                         raise AppError("Select a supported voice model.")
@@ -1720,6 +1802,8 @@ class AppService:
                             settings.setdefault("bundle", {})["active"] = patch["bundle"]
                     SettingsStore(self.data_dir).update(self.state["settings"]["workspace"], "global", save_shared)
                 self.state["settings"].update(copy.deepcopy(patch))
+                from .workspace_placement import defaults as workspace_root
+                self.state['workspaceDefaults'] = {'root': workspace_root(self), 'hostLabel': socket.gethostname()}
                 self._refresh_shared_preferences()
             elif action == 'theme.save':
                 from .theme_library import save
@@ -2476,6 +2560,17 @@ class AppService:
         if operation in {"dispatch", "action.dispatch"}:
             from .agent_state import read_state
             action_args=copy.deepcopy(args.get('args',{}))
+            # Resolve native aliases before the existing caller-ownership checks;
+            # aliases never authorize a different conversation.
+            from .session_identity import resolve
+            key = 'sessionId' if action_args.get('sessionId') else 'id' if args['action'] in SESSION_ID_ACTIONS else None
+            if key and action_args.get(key):
+                try:
+                    row = resolve(self.state['sessions'], action_args[key], action_args.get('nativeProject'))
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if row:
+                    action_args[key] = row['id']
             if args['action'].startswith(('question.', 'task.', 'schedule.', 'capacity.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
@@ -2526,6 +2621,9 @@ class AppService:
                 action_args.setdefault('sessionId',session_id)
             if args['action'] == 'session.export':
                 action_args.setdefault('id', session_id)
+            if action_args.get('sessionId') == session_id and session_id:
+                from .session_identity import project as native_project
+                action_args.setdefault('nativeProject', native_project(self._session(session_id)))
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
             if args['action'] == 'canvas.select':

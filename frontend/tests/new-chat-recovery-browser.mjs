@@ -14,7 +14,7 @@ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispa
 const reply=(route,extra={})=>{state.revision++;return route.fulfill({json:{accepted:true,state,...extra}})};
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
- browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
+ browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{
   window.EventSource=class extends EventTarget{close(){}};
   if(sessionStorage.getItem('amplifier.messageOutbox.v1')===null)sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([
@@ -30,6 +30,7 @@ try{
   const body=original.action==='shell.command'?{...original,action:original.args.action,args:original.args.args}:original.action==='shell.view.update'?{...original,action:'view.update'}:original;
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   if(body.action==='session.draft'){state.selectedSessionId=null;state.view.draft='';}
+  if(body.action==='workspace.list')return reply(route,{result:{items:state.workspaces,nextOffset:null}});
   if(body.action==='session.create'){
    if(body.args.workspace!=='/existing')return route.fulfill({status:409,json:{accepted:false,error:'Workspace folder does not exist: /missing'}});
    const chat={...state.sessions[0],id:'created',title:'Created conversation',messages:[],creationCommandId:body.id};
@@ -56,7 +57,7 @@ try{
  await composer.fill('Start fresh');await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(page.getByText('Workspace folder does not exist: /missing',{exact:true})).toBeVisible();
  await expect(page.getByRole('heading',{name:'New chat',exact:true})).toBeVisible();
- await page.locator('#new-chat-workspace').fill('/existing');
+ await page.getByRole('combobox',{name:'Workspace',exact:true}).selectOption('/existing');
  await page.getByRole('button',{name:'Retry',exact:true}).click();
  await expect(page.getByText('Start fresh',{exact:true})).toHaveCount(1);
  await expect(page.getByRole('combobox',{name:'Select conversation'})).toHaveValue('created');
@@ -83,7 +84,7 @@ try{
  await expect(worker).toHaveValue('A newer shared worker draft');await expect(page.getByRole('dialog')).toBeVisible();
  assert.equal(state.view.workerDraft,'A newer shared worker draft');
  await action('view.update',{patch:{panel:null}});await page.getByRole('button',{name:'New chat',exact:true}).click();
- await expect(page.getByRole('button',{name:'New workspace',exact:true})).toHaveCount(0);
+ await page.getByRole('combobox',{name:'Workspace',exact:true}).selectOption(':attach:');
  await page.getByRole('button',{name:'Browse',exact:true}).click();
  await page.getByRole('button',{name:'New folder',exact:true}).click();
  const folder=page.getByRole('textbox',{name:'New folder name',exact:true});
@@ -102,7 +103,7 @@ try{
  await expect(folder).toHaveCount(0);
  await expect(page.getByRole('textbox',{name:'Folder path',exact:true})).toHaveValue(createdPath);
  await page.getByRole('button',{name:'Use this folder',exact:true}).click();
- await expect(page.locator('#new-chat-workspace')).toHaveValue(createdPath);
+ await expect(page.getByRole('textbox',{name:/Folder on/})).toHaveValue(createdPath);
  assert.equal(calls.filter(row=>row.action==='conversation.send').length,1,'Folder selection does not send a new message');
  assert.deepEqual(errors,[]);
  console.log('New chat recovery passed: truthful new-chat header; persisted failed-message discard; inline creation error; corrected-path retry sends once; worker success persists reset; failure/local and shared newer drafts retained; modal error dismissal. Zero model calls.');

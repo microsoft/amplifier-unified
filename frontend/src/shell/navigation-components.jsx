@@ -3,6 +3,8 @@ import {FolderOpen,FolderPlus,MessageCircle,Search,Pencil,Trash2,X,Check,Chevron
 import {chatPage,visibleWorkspaces,isTopLevelChat,movePin} from '../chat-navigation';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
+import {SimpleNavigation} from '../workspace-navigation';
+import {WorkspaceForm} from '../workspace-setup';
 import {WorkspaceExplorer} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
 import {ChatDelete} from '../chat-delete';
@@ -62,6 +64,7 @@ function useNavigationController(host,kind){
 }
 function NavigationEditor({model}){
  const {state,act,prefix,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
+ if(draft.mode==='add')return <WorkspaceForm state={state} act={act} onDone={()=>setDraft({})} onCancel={()=>setDraft({})}/>;
  return <>{draft.mode==='chat-delete'&&<div className="a-nav-form"><strong>Delete chat?</strong><ChatDelete key={draft.id} id={draft.id} act={act} cancel={()=>setDraft({})}/></div>}    {draft.mode&&draft.mode!=='chat-rename'&&draft.mode!=='chat-delete'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
      <div className="a-nav-form-title"><strong>{draft.mode==='add'?'New workspace':draft.mode==='rename'?'Rename workspace':draft.mode==='chat-rename'?'Rename chat':'Remove workspace?'}</strong><button className="a-icon" type="button" aria-label="Cancel navigation edit" data-action="view.update" onClick={()=>setDraft({})}><X/></button></div>
      {draft.mode==='add'&&<><p>Choose an existing folder, or enter a path to create one. Your first chat opens here.</p><label htmlFor={prefix+'-path'}>Folder</label><PathField id={prefix+'-path'} value={draft.path||''} onChange={path=>updateDraft({path})} directory state={state} act={act} placeholder="~/Projects/my-project"/></>}
@@ -124,7 +127,9 @@ export function ConversationList({host,workspaceHost}){
  };
  const selectedWorkspace=workspaceState.workspaceExplorer?.selected;
  const counts=chats.activityCounts||{};
+ if(view.navSimple!==false)return <SimpleNavigation model={model} workspaceHost={workspaceHost} ChatDetails={ChatDetails}/>;
  return <>
+  <button type="button" className="a-link" onClick={()=>patch(act,{navSimple:true})}><ArrowLeft/>Your work</button>
   <div className="a-nav-scope" role="group" aria-label="Chat view"><button type="button" aria-pressed={!allChats} data-action="view.update" onClick={workspaceHost?browseWorkspaces:()=>patch(act,{navChatScope:'workspace'})}><FolderOpen aria-hidden="true"/>Workspaces</button><button type="button" aria-pressed={allChats} data-action="view.update" onClick={()=>patch(act,{navChatScope:'all'})}><MessageCircle aria-hidden="true"/>All chats</button></div>
   {browsing?<PairedWorkspaceBrowser host={workspaceHost} onOpen={()=>patch(act,{navWorkspaceList:false,navStatusFilter:'all',navFilter:''})}/>:<>
    {!allChats&&workspace&&workspaceHost&&<>

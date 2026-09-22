@@ -3,6 +3,7 @@
 export const settingsSections=[
  {id:'overview',title:'Your setup',group:'Start',scope:'This app',pages:[['overview','Your setup']]},
  {id:'appearance',title:'Appearance',group:'Personal',scope:'This interface',pages:[['appearance','Appearance']]},
+ {id:'workspaces',title:'Workspaces',group:'Personal',scope:'This host',pages:[['workspaces','Workspaces']]},
  {id:'voice',title:'Voice',group:'Personal',scope:'Future voice connections',pages:[['voice','Voice']]},
  {id:'notifications',title:'Notifications',group:'Personal',scope:'This app',pages:[['notifications','Notifications']]},
  {id:'models',title:'Models & routing',group:'Configuration',scope:'Scope selected below',pages:[['providers','Connections'],['routing','Routing']]},

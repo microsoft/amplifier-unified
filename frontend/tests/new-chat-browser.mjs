@@ -9,7 +9,7 @@ let browser;
 const out='/tmp/amplifier-chat-controls';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
- await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true});
+ await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const page=await browser.newPage({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[],calls=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -36,7 +36,9 @@ try{
  await page.locator('select#chat-model').selectOption('chosen-model');
  await page.locator('#chat-effort').press('End');
  await page.getByRole('button',{name:'Close model settings',exact:true}).click();
- await page.locator('#new-chat-workspace').fill(originalWorkspace+'/../');
+ await page.getByRole('combobox',{name:'Workspace',exact:true}).selectOption(':attach:');
+ await page.getByRole('textbox',{name:/Folder on/}).fill(originalWorkspace+'/../');
+ await page.getByRole('button',{name:'Use folder',exact:true}).click();
  const draftSaved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Do the planned work');
  await composer.fill('Do the planned work');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Use these notes')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();

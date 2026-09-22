@@ -10,7 +10,7 @@ const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,Sessio
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
-const initial=()=>({view:{navExpanded:true},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
+const initial=()=>({view:{navExpanded:true,navSimple:false},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 
 test('workspace rail scopes chats to registered workspace and honors fnmatch filters',async()=>{
  const state=initial();state.view.navFilter='First*';let root;
@@ -240,5 +240,17 @@ test('conversation pagination stays bounded and is shared with agents',async()=>
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props['aria-label'],'Saved 100');
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('simple sidebar separates pins, workspaces and recent without duplicate chats',async()=>{
+ const state=initial();state.view.navSimple=true;state.view.navWorkspaceList=true;state.homeNavigation={items:[{...state.sessions[0],pinned:true},{...state.sessions[1],pinned:false}]};state.workspaceOverview={items:state.workspaces};
+ let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+ assert.equal(root.root.findAllByProps({'aria-label':'Pinned chats'}).length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'a'}).filter(node=>typeof node.type==='string').length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'b'}).filter(node=>typeof node.type==='string').length,1);
+ assert.equal(root.root.findAllByProps({'aria-label':'Conversation activity filters'}).length,0);
+ assert.equal(root.root.findAllByProps({'aria-label':'New workspace'}).length,1);
  await renderAct(async()=>root.unmount());
 });
