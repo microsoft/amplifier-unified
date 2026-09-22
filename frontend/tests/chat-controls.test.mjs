@@ -40,3 +40,27 @@ test('late catalogs and select-to-text replacement both persist through the shar
  assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('agent-choice')));
  await renderAct(async()=>root.unmount());
 });
+
+
+test('draft model controls discover without creating a session and save choices through shared view actions',async()=>{
+ const calls=[];let state={settings:{workspace:'/future'},view:{newSessionDraft:{workspace:'/future',bundle:'work',selection:{}}}},root;
+ const act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state={...state,view:{...state.view,...args.patch}};return {accepted:true}};
+ const render=()=>React.createElement(ModelControl,{state,session:null,act,ensureSession:async()=>{throw Error('Must not create a chat')},working:false});
+ await renderAct(async()=>{root=create(render())});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
+ assert.deepEqual(calls.find(c=>c.name==='providers.list').args,{workspace:'/future'});
+ state={...state,setup:{providersRequestedWorkspace:'/future',providers:[{id:'one',module:'provider-test',config:{model:'first'}}],providerCatalogs:{one:{phase:'ready',models:['first','chosen']}}}};
+ await renderAct(async()=>root.update(render()));
+ const picker=()=>root.root.findAllByProps({id:'chat-model'}).find(n=>typeof n.type==='string');
+ await renderAct(async()=>picker().props.onChange({target:{value:'chosen'}}));
+ assert.deepEqual(state.view.newSessionDraft.selection,{instance:'one',model:'chosen'});
+ await renderAct(async()=>root.update(render()));
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('chosen')));
+ // A stale pin can still be cleared when discovery is unavailable.
+ state={...state,setup:{},actionStatus:{'providers.list':{phase:'error',error:'Unavailable'}}};
+ await renderAct(async()=>root.update(render()));
+ const reset=root.root.findAllByType('button').find(n=>n.children.includes('Use bundle default'));
+ await renderAct(async()=>reset.props.onClick());assert.deepEqual(state.view.newSessionDraft.selection,{});
+ assert.equal(calls.some(c=>['session.create','runtime.control'].includes(c.name)),false);
+ assert.equal(state.view.newSessionDraft.bundle,'work');await renderAct(async()=>root.unmount());
+});

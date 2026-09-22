@@ -11,7 +11,7 @@ export function BundleControl({state,session,act,working}){
  const shared=state.view?.composerBundle||EMPTY,[draft,setDraft]=useState(shared),[submitting,setSubmitting]=useState(null),submittingRef=useRef(false);
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
- const current=session?.bundle||state.settings?.bundle||'work',open=draft.open&&draft.sessionId===(session?.id||null);
+ const setup=newChatSetup(state),current=session?.bundle||setup.bundle||state.bundleDefaults?.effective||state.settings?.bundle||'work',open=draft.open&&draft.sessionId===(session?.id||null);
  const popover=useRef(null);useOutsideDismiss(open,popover,()=>edit({open:false}));
  const operation=session?.bundleChange,preview=session?.bundlePreview;
  const pending=!!submitting||!!session?.configurationBusy||operation?.phase==='working';
@@ -27,7 +27,7 @@ export function BundleControl({state,session,act,working}){
   finally{submittingRef.current=false;setSubmitting(null)}
  }
  return <div className="a-model-control a-bundle-control" ref={popover}>
-  <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current,resetModel:false})}><Layers/><span>{bundleLabel(state,current)}</span><ChevronDown/></button>
+  <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current,resetModel:false})}><Layers/><span>{!session&&!setup.bundle?'Workspace default':bundleLabel(state,current)}</span><ChevronDown/></button>
   {open&&<section className="a-model-popover a-bundle-popover" aria-label="Choose conversation bundle">
    <div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
    <p>Choose the tools, agents, and instructions for this conversation.</p>
@@ -47,7 +47,7 @@ export function BundleControl({state,session,act,working}){
     </div>
     {working&&<p>Finish this turn and its workers to preview or switch bundles.</p>}
     {(pending||operation)&&<ResultNotice phase={pending?'working':operation.phase} message={pending?progress:operation.error||(operation.phase==='ready'?operation.action==='bundle.preview'?'Preview ready':operation.action==='bundle.fork'?'Fork created':'Bundle switched':'')}/>}
-   </>:<button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use for this draft</button>}
+   </>:<div className="a-dialog-actions"><button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use for this draft</button><button type="button" className="a-soft" disabled={pending||!setup.bundle} data-action="view.update" onClick={()=>act('view.update',{patch:{newSessionDraft:{...setup,bundle:''},composerBundle:{}}})}>Use workspace default</button></div>}
   </section>}
  </div>;
 }

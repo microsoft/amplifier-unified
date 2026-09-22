@@ -335,7 +335,9 @@ class Management:
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
-            session=self.configuration_session(args)
+            session=({'workspace':str(Path(args['workspace']).expanduser().resolve())}
+                     if action in {'providers.list','providers.models'} and args.get('workspace')
+                     else self.configuration_session(args))
             async def runtime_operation(operation,values):
                 current=self.session(args)
                 await self.ensure_runtime(current)
@@ -349,9 +351,10 @@ class Management:
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace'))) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            if action=='providers.list':result['providersRequestedWorkspace']=args.get('workspace',session['workspace'])
             if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})

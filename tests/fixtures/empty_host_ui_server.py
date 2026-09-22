@@ -56,6 +56,14 @@ async def main(home):
     workspace = home / "workspace"
     workspace.mkdir()
     runtime = Runtime()
+    if '--chat-controls' in sys.argv:
+        from amplifier_web.setup import SetupManager
+        SetupManager.provider_rows=lambda self,workspace:[{'id':'test-provider','module':'provider-test','config':{'model':'first'},'enabled':True}]
+        async def catalog(self,action,args,workspace):
+            return {'modelsProviderId':'test-provider','models':[{'id':'first'},{'id':'chosen-model'}],
+                    'providerMetadata':{'module':'provider-test','info':{'display_name':'Test provider'},
+                    'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}}
+        SetupManager.cached_probe=catalog
     if '--retention' in sys.argv:
         from amplifier_web.runtime import RuntimeManager
         # Settings exercise the actual manager policy without starting a model.
