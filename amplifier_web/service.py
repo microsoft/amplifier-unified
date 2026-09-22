@@ -1074,7 +1074,7 @@ class AppService:
                 try:
                     current_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
                     if current_sid != transfer_sid:
-                        raise ValueError('The selected task changed while this request was waiting; inspect and retry.')
+                        raise ValueError('The selected chat changed. Retry in the intended chat.')
                     if self.portability.write_context(transfer_sid) != transfer_context:
                         raise ValueError('The task moved while this request was waiting; inspect and retry.')
                 except ValueError as exc:

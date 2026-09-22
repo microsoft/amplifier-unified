@@ -38,6 +38,32 @@ def native_store(session):
     return SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
 
 
+def retained_native_fence(session):
+    """A retained marker denies writes even when runtime admission is unavailable."""
+    from .automatic_history import directory
+    from .session_files import project_slug
+    projects = {session['nativeProject']} if session.get('nativeProject') else set()
+    if session.get('workspace'):
+        projects.add(project_slug(session['workspace']))
+    identities = {session.get('nativeIdentity'), session.get('runtimeSessionId')} - {None, ''}
+    if not identities:
+        identities.add(session['id'])
+    # Both anchors matter when a history row and its runtime alias differ.
+    for project in projects:
+        for identity in identities:
+            marker = directory({**session, 'nativeProject': project, 'nativeIdentity': identity}) / 'transfer-fence.json'
+            try:
+                marker.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise ValueError('Cannot inspect this task\'s transfer fence.') from exc
+            # Contents, permissions or a dangling marker link cannot grant
+            # admission. Foundation validates evidence during actual transfer.
+            return True
+    return False
+
+
 class Portability:
     def __init__(self, app):
         self.app = app
@@ -51,9 +77,26 @@ class Portability:
             return True
         session = next((row for row in self.app.state['sessions'] if row['id'] == sid), None)
         if session:
+            workspace = session.get('workspace')
+            if session.get('nativeProject') or not workspace or not Path(workspace).expanduser().is_dir():
+                # Indexed history remains addressable without an existing
+                # workspace, including legacy worker IDs a runtime cannot use.
+                # Marker presence only denies writes; never infer permission
+                # from unreadable or malformed transfer evidence.
+                if retained_native_fence(session):
+                    return True
+                if not workspace or not Path(workspace).expanduser().is_dir():
+                    return False
             from amplifier_foundation.session import SharedSessionStore
             if hasattr(SharedSessionStore, 'transfer_fence'):
-                store = SharedSessionStore(session['workspace'], session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+                try:
+                    store = SharedSessionStore(workspace, session.get('runtimeSessionId') or session.get('nativeIdentity') or sid)
+                except ValueError:
+                    if session.get('nativeProject'):
+                        # Legacy history IDs and disappeared workspaces cannot
+                        # construct a runtime store; known markers were checked.
+                        return False
+                    raise
                 return store.transfer_fence() is not None
         return False
 
