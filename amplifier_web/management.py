@@ -140,7 +140,7 @@ class Management:
         if action == 'bundles.list':
             return await self.list_bundles(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
-        independent=action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
+        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
         async with (nullcontext() if independent else self.lock):
             await self.provider_status(action,args,command_id,'working')
             await self.publish(management={'phase':'working','operation':action,'error':None})
@@ -333,6 +333,19 @@ class Management:
                 self.service.state.setdefault('registry',{}).update(result)
                 self.service._publish()
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
+        elif action=='configuration.defaults':
+            from .draft_defaults import resolve_defaults
+            key=json.dumps([args['workspace'],args.get('bundle') or ''],separators=(',',':'),ensure_ascii=False)
+            try:
+                result=await resolve_defaults(self.service.data_dir,args['workspace'],args.get('bundle'),self.service.state['settings'].get('appBundle'))
+                result['phase']='ready'
+            except Exception:
+                result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}
+            async with self.service.lock:
+                entries=self.service.state.setdefault('draftDefaults',{})
+                entries[key]=result
+                while len(entries)>32:entries.pop(next(iter(entries)))
+                self.service._publish()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
             session=({'workspace':str(Path(args['workspace']).expanduser().resolve())}

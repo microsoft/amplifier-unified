@@ -57,10 +57,22 @@ test('draft bundle trigger reflects saved choice and can restore workspace inher
  const render=()=>React.createElement(BundleControl,{state,session:null,act,working:false});
  await renderAct(async()=>{root=create(render())});
  assert.ok(root.root.findByProps({'aria-label':'Conversation bundle'}).findByType('span').children.includes('anchors'));
- await renderAct(async()=>root.root.findAllByType('button').find(n=>n.children.includes('Use for this draft')).props.onClick());
+ await renderAct(async()=>root.root.findAllByType('button').find(n=>n.children.includes('Use bundle')).props.onClick());
  assert.equal(state.view.newSessionDraft.bundle,'work');assert.equal(state.view.newSessionDraft.selection.model,'chosen');
  await renderAct(async()=>root.update(render()));await renderAct(async()=>root.root.findByProps({'aria-label':'Conversation bundle'}).props.onClick());
  await renderAct(async()=>root.root.findAllByType('button').find(n=>n.children.includes('Use workspace default')).props.onClick());
  assert.equal(state.view.newSessionDraft.bundle,'');assert.equal(calls.some(c=>c.name.startsWith('bundle.')||c.name==='session.create'),false);
  await renderAct(async()=>root.unmount());
+});
+
+test('compact draft selector shows resolved default and applies a choice without a session',async()=>{
+ let state={settings:{workspace:'/new'},view:{},registeredBundles:[{value:'work',label:'Work'},{value:'anchors',label:'Anchors'}],draftDefaults:{'["/new",""]':{bundle:'work'}}},root;
+ const calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state={...state,view:{...state.view,...args.patch}}};
+ const render=()=>React.createElement(BundleControl,{compact:true,state,act,working:false});
+ await renderAct(async()=>{root=create(render())});
+ assert.ok(root.root.findByProps({'aria-label':'Conversation bundle'}).findByType('span').children.includes('Work'));
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Conversation bundle'}).props.onClick());
+ await renderAct(async()=>root.root.findByType('select').props.onChange({target:{value:'anchors'}}));
+ assert.equal(state.view.newSessionDraft.bundle,'anchors');assert.equal(calls.some(c=>c.name==='session.create'),false);
+ assert.equal(root.root.findAllByType('input').length,0);await renderAct(async()=>root.unmount());
 });

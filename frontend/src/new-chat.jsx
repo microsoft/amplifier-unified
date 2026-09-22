@@ -8,6 +8,11 @@ export function newChatSetup(state){
  return {title:'',workspace:workspace?.path||state?.settings?.workspace||'',bundle:'',selection:{},...state?.view?.newSessionDraft};
 }
 
+export function draftDefaults(state){
+ const setup=newChatSetup(state);
+ return state.draftDefaults?.[JSON.stringify([setup.workspace,setup.bundle||''])]||{};
+}
+
 export function NewChatSetup({state,act}){
  const setup=newChatSetup(state);
  const edit=patch=>act('view.update',{patch:{newSessionDraft:{...setup,...patch}}});

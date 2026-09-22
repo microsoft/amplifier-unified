@@ -135,7 +135,7 @@ try{
  await page.evaluate(()=>window.amplifier.dispatch('session.draft',{}));
  await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
- await page.getByRole('button',{name:'Use for this draft',exact:true}).click();
+ await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
  await page.locator('.a-path-field').filter({has:page.locator('#new-chat-workspace')}).getByRole('button',{name:'Browse',exact:true}).click();
  const workspace=(await state()).settings.workspace;

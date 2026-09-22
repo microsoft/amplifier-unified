@@ -64,6 +64,12 @@ async def main(home):
                     'providerMetadata':{'module':'provider-test','info':{'display_name':'Test provider'},
                     'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}}
         SetupManager.cached_probe=catalog
+        import amplifier_web.draft_defaults as draft_defaults
+        async def resolve_defaults(home,workspace,bundle=None,app_bundle=None):
+            return {'bundle':bundle or 'work','effective':{'instance':'test-provider','model':'first'},
+                    'providers':[{'id':'test-provider','info':{'display_name':'Test provider','defaults':{'model':'first'}},
+                    'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}]}
+        draft_defaults.resolve_defaults=resolve_defaults
     if '--retention' in sys.argv:
         from amplifier_web.runtime import RuntimeManager
         # Settings exercise the actual manager policy without starting a model.

@@ -3,11 +3,37 @@ import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useState,useEffect,useRef} from 'react';
 import {Layers,ChevronDown,X} from 'lucide-react';
 import {BundlePicker,ResultNotice} from './settings-ui';
-import {newChatSetup} from './new-chat';
+import {newChatSetup,draftDefaults} from './new-chat';
+import {useComposerPopover} from './composer-popover';
 
 export const bundleLabel=(state,value)=>state.registeredBundles?.find(row=>row.value===value)?.label||value||'Bundle';
 const EMPTY={};
-export function BundleControl({state,session,act,working}){
+export function BundleControl(props){return props.compact?<CompactBundleControl {...props}/>:<DetailedBundleControl {...props}/>}
+function CompactBundleControl({state,session,act,working}){
+ const setup=newChatSetup(state),defaults=draftDefaults(state),shared=state.view?.composerBundle||EMPTY;
+ const [draft,setDraft]=useState(shared),[pending,setPending]=useState(false),[error,setError]=useState(''),guard=useRef(false);
+ useEffect(()=>setDraft(shared),[shared]);
+ const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
+ const current=session?.bundle||setup.bundle||defaults.bundle||(state.bundleDefaults?.workspacePath===setup.workspace?state.bundleDefaults.effective:'');
+ const open=draft.open&&draft.sessionId===(session?.id||null),popover=useRef(null),position=useComposerPopover(open,popover);
+ useOutsideDismiss(open,popover,()=>edit({open:false}));
+ useEffect(()=>{if(!state.registeredBundles?.length)act('bundles.list',{})},[]);
+ const rows=state.registeredBundles||[],unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||session?.historyLoaded===false;
+ async function choose(bundle,resetModel=false){
+  if(guard.current)return;guard.current=true;setPending(true);setError('');edit({bundle});
+  try{await act(session?'bundle.switch':'view.update',session?{sessionId:session.id,bundle,resetModel}:{patch:{newSessionDraft:{...setup,bundle}}})}catch(e){setError(e.message)}finally{guard.current=false;setPending(false)}
+ }
+ const needsModel=session?.bundlePreview&&session.bundlePreview.bundle===draft.bundle&&session.bundlePreview.modelCompatible===false&&session?.bundleChange?.phase!=='ready';
+ return <div className="a-model-control a-bundle-control" ref={popover}>
+  <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={!!unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current})}><Layers/><span>{current?bundleLabel(state,current):defaults.phase==='error'?'Bundle unavailable':'Loading bundle…'}</span><ChevronDown/></button>
+  {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Choose conversation bundle"><div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
+   <select aria-label="Registered root bundles" value={current||''} disabled={working||pending||session?.configurationBusy} data-action={session?'bundle.switch':'view.update'} onChange={e=>choose(e.target.value)}>{!session&&<option value="">Use workspace default</option>}{current&&!rows.some(row=>row.value===current)&&<option value={current}>{bundleLabel(state,current)}</option>}{rows.map(row=><option key={row.value} value={row.value}>{row.label||row.value}</option>)}</select>
+   {needsModel&&<><p>Your pinned model is unavailable in this bundle.</p><button type="button" className="a-soft" disabled={pending||working} onClick={()=>choose(draft.bundle,true)}>Use the new bundle’s model</button></>}
+   {(error||session?.bundleChange?.phase==='error')&&<small className="a-danger" role="status">{error||session.bundleChange.error}</small>}
+  </section>}
+ </div>;
+}
+function DetailedBundleControl({state,session,act,working}){
  const shared=state.view?.composerBundle||EMPTY,[draft,setDraft]=useState(shared),[submitting,setSubmitting]=useState(null),submittingRef=useRef(false);
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
@@ -47,7 +73,7 @@ export function BundleControl({state,session,act,working}){
     </div>
     {working&&<p>Finish this turn and its workers to preview or switch bundles.</p>}
     {(pending||operation)&&<ResultNotice phase={pending?'working':operation.phase} message={pending?progress:operation.error||(operation.phase==='ready'?operation.action==='bundle.preview'?'Preview ready':operation.action==='bundle.fork'?'Fork created':'Bundle switched':'')}/>}
-   </>:<div className="a-dialog-actions"><button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use for this draft</button><button type="button" className="a-soft" disabled={pending||!setup.bundle} data-action="view.update" onClick={()=>act('view.update',{patch:{newSessionDraft:{...setup,bundle:''},composerBundle:{}}})}>Use workspace default</button></div>}
+   </>:<div className="a-dialog-actions"><button type="button" className="a-primary" disabled={disabled} data-action="view.update" onClick={()=>run('view.update')}>Use bundle</button><button type="button" className="a-soft" disabled={pending||!setup.bundle} data-action="view.update" onClick={()=>act('view.update',{patch:{newSessionDraft:{...setup,bundle:''},composerBundle:{}}})}>Use workspace default</button></div>}
   </section>}
  </div>;
 }
