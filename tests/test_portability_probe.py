@@ -151,7 +151,38 @@ async def test_unadvertised_option_is_not_sent_to_a_provider_that_ignores_kwargs
     monkeypatch.setattr(provider, 'get_info', lambda self: {'capabilities': [], 'config_fields': []})
     result = await portability_probe.probe(request())
     assert result['code'] == 'single_attempt_unsupported'
-    assert provider.requests == [] and len(provider.instances) == 1 and provider.instances[0].closed
+    assert provider.requests == [] and len(provider.instances) == 2
+    assert all(instance.closed for instance in provider.instances)
+
+
+@pytest.mark.parametrize('ambient,configured,supported', [
+    ('https://proxy.invalid/v1', 'https://api.openai.com/v1', True),
+    ('https://api.openai.com/v1', 'https://proxy.invalid/v1', False),
+])
+async def test_capability_uses_materialized_destination_endpoint(provider, monkeypatch, ambient, configured, supported):
+    original_info = provider.get_info
+    observed = []
+    def endpoint_info(self):
+        endpoint = self.config.get('base_url') or os.environ['OPENAI_BASE_URL']
+        observed.append(endpoint)
+        info = original_info(self)
+        if endpoint != 'https://api.openai.com/v1':
+            info['capabilities'] = []
+        return info
+    monkeypatch.setenv('OPENAI_BASE_URL', ambient)
+    monkeypatch.setenv('DESTINATION_PROBE_URL', configured)
+    monkeypatch.setattr(provider, 'get_info', endpoint_info)
+    value = request()
+    value['config']['base_url'] = '${DESTINATION_PROBE_URL}'
+    result = await portability_probe.probe(value)
+    assert observed == [ambient, configured]
+    assert len(provider.instances) == 2 and all(instance.closed for instance in provider.instances)
+    assert provider.instances[1].config['base_url'] == configured
+    assert len(provider.requests) == int(supported)
+    if supported:
+        assert result['accountVerified'] is True
+    else:
+        assert result['code'] == 'single_attempt_unsupported' and 'accountVerified' not in result
 
 
 @pytest.mark.parametrize('change', [

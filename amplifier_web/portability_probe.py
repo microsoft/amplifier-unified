@@ -172,8 +172,9 @@ async def _probe(request):
     cls = provider_class(request["module"])
     schema_provider = construct_provider(cls, {})
     try:
-        info = await _bounded_info(schema_provider)
-        schema = await config_schema(schema_provider, info=info)
+        # Endpoint-dependent capability belongs to the materialized provider,
+        # not this empty-config instance used only to discover its schema.
+        schema = await config_schema(schema_provider)
     finally:
         await _strict_close(schema_provider)
     config = materialize_provider_config(request["config"], schema)
