@@ -2,8 +2,9 @@
 
 This opt-in profile composes the existing `microsoft/amplifier-m365` native
 `m365-documents` behavior and optional `m365-office-bridge` behavior. The connected
-operations and live bridge require the upstream contribution; main at `e45ed48`
-does not contain them. Authenticated access to that private repository is a source
+operations and live bridge are available on upstream main from
+[`d1c7e0c`](https://github.com/microsoft/amplifier-m365/pull/18).
+Authenticated access to that private repository is a source
 prerequisite. Do not install the superseded standalone `amplifier-m365==0.1.0`
 prototype: that distribution name already belongs to the upstream bundle.
 
@@ -14,7 +15,7 @@ mounted Core tools through the session's ordinary tool execution path.
 
 ## Prepare an optional profile
 
-Check out the reviewed upstream contribution and use its setup guide to supply
+Check out current upstream main and use its setup guide to supply
 an approved tenant/public-client configuration. Preserve existing authentication
 configuration and token caches. The helper below prints a JSON bundle overlay
 (JSON is valid YAML); it does not read credentials, save host settings, sign in,
