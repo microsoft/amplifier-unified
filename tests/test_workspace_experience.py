@@ -248,3 +248,8 @@ async def test_destination_replaced_while_opening_is_not_used(app, tmp_path, mon
     with pytest.raises(AppError, match='destination changed'):
         await app.dispatch('workspace.create', {'planId': plan['planId']}, command_id='replace-on-open')
     assert swapped and not list(root.iterdir()) and not list((tmp_path / 'reviewed-dev').iterdir())
+
+
+async def test_native_alias_resolution_retains_action_input_validation(app):
+    with pytest.raises(AppError):
+        await app.dispatch('session.select', {'id': ['not-a-session-id']})

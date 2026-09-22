@@ -25,6 +25,8 @@ def aliases(row):
 
 
 def resolve(rows, identity, native_project=None):
+    if not isinstance(identity, str):
+        return None  # Let the action schema report malformed caller input.
     matches = [row for row in rows if (identity in {row['id'], native_id(row)}
                or isinstance(identity, str) and len(identity) == 32 and identity in aliases(row))
                and (not native_project or project(row) == native_project)]
