@@ -28,6 +28,7 @@ import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
 import {createPendingView} from './pending-view';
+import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation} from './conversation-navigation';
 import {messageTextForCopy} from './message-copy';
@@ -103,6 +104,7 @@ function App(){
   }
  },[]);
  effectHandler.current=handleEffects;
+ const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
  const acceptState=useCallback(next=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
@@ -114,8 +116,25 @@ function App(){
    if(anchor){historyScrollAnchor.current={sessionId:nextSession.id,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top};stickToBottom.current=false}
   }
   serverState.current=next;conversationNavigation.current.remember(next);
+  for(const wake of stateWaiters.current)wake(next);
   latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
+ const awaitState=useCallback(result=>{
+  if(result.stateRevision===undefined)return Promise.resolve(); // Older hosts and test fixtures.
+  const reached=next=>next?.client?.hostInstanceId===result.hostInstanceId&&next.revision>=result.stateRevision;
+  if(reached(serverState.current))return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+   const done=()=>{clearTimeout(timer);stateWaiters.current.delete(wake);resolve()};
+   const wake=next=>{if(reached(next))done()};
+   // Lost/disconnected streams recover once for all waiting actions, never poll.
+   const timer=setTimeout(()=>{
+    stateWaiters.current.delete(wake);
+    if(!stateRecovery.current)stateRecovery.current=request('/api/state').then(acceptState).finally(()=>{stateRecovery.current=null});
+    stateRecovery.current.then(resolve,reject);
+   },1500);
+   stateWaiters.current.add(wake);
+  });
+ },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
@@ -132,16 +151,17 @@ function App(){
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
+   if(result.state)acceptState(result.state);
+   else await awaitState(result);
    if(pending)pendingView.current.settle(pending);
    if(navigationToken)conversationNavigation.current.settle(navigationToken);
-   if(result.state)acceptState(result.state);
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
    handleEffects(result.effects);return result;
   };
   const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
-  const queue=action.startsWith('coordination.')?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:commandQueue;
+  const queue=action.startsWith('coordination.')||meta.presentation?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:commandQueue;
   const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
@@ -149,7 +169,7 @@ function App(){
    promise.then(settled,settled);
   }
   return promise;
- },[acceptState,handleEffects]);
+ },[acceptState,handleEffects,awaitState]);
  useEffect(()=>{
   for(const entry of outbox.entries){
    if(entry.sessionId||!entry.creation?.id)continue;
@@ -170,7 +190,9 @@ function App(){
    if(!alive)return;
    request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);setConnected(true)}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)setError(actionErrorMessage(e))}).finally(()=>clearTimeout(timer));
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
-   source=new EventSource(clientUrl('/api/events'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;acceptState(JSON.parse(e.data));setConnected(true);if(initial)setError('');clearTimeout(timer)}catch{}});
+   let streamState;
+   source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);setConnected(true);if(initial)setError('');clearTimeout(timer)}catch{}});
+   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setConnected(true)}catch{source.close();setConnected(false);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
    source.onopen=()=>{setConnected(true);viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>setConnected(false);
   }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')setError(actionErrorMessage(e))});

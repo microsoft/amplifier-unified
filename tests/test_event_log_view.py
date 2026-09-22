@@ -24,6 +24,36 @@ def source(tmp_path, monkeypatch):
     return session, event_path(session,'native')
 
 
+async def test_idle_refresh_skips_projection_but_detects_appends_replacements_and_live_changes(source, monkeypatch):
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
+    calls = []
+    service = SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
+                              _publish=lambda:calls.append('publish'))
+    view = EventLogView(service)
+    original = view.read
+    def read(value):
+        calls.append('read')
+        return original(value)
+    monkeypatch.setattr(view, 'read', read)
+    await view.refresh('app')
+    for _ in range(10):
+        await view.refresh('app')
+    assert calls.count('read') == 1
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'finished'}, 12)
+    await view.refresh('app')
+    assert calls.count('read') == 2
+    assert session['execution']['nodes'][0]['output'] == 'finished'
+    replacement = path.with_suffix('.replacement')
+    append(replacement, 'tool:post', {'tool_call_id': 'two', 'result': 'replacement'}, 15)
+    replacement.replace(path)
+    await view.refresh('app')
+    assert calls.count('read') == 3
+    session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Continue', 'createdAt': 20})
+    await view.refresh('app')
+    assert calls.count('read') == 4
+
+
 def test_canonical_body_exact_unredacted_untruncated_and_never_written(source,tmp_path):
     session,path=source
     arguments={'command':'show fixture','token':'user-owned-fixture-token','reasoning':'a literal tool argument'}

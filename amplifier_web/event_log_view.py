@@ -105,7 +105,7 @@ class EventIndex:
                 self.reset()
             return False
         identity = (stat.st_dev, stat.st_ino)
-        revision = (identity, stat.st_size, stat.st_mtime_ns)
+        revision = (identity, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         if revision == self.revision:
             return True
         reset = self.file_id != identity or stat.st_size <= self.offset
@@ -319,6 +319,9 @@ class EventLogView:
         self.indexes = OrderedDict()
         self.task = None
         self.lock = asyncio.Lock()
+        self.projected = OrderedDict()
+        self.read_paths = {}
+        self.read_revisions = {}
 
     def start(self):
         self.task = asyncio.create_task(self.loop())
@@ -348,6 +351,7 @@ class EventLogView:
         queue = [root]
         queue.extend(row.get('sessionId') or row.get('id') for row in session.get('workers', []))
         seen, indexes, nodes, workers = set(), [], [], {}
+        inputs = []
         while queue:
             sid = queue.pop(0)
             if not sid or sid in seen:
@@ -360,7 +364,9 @@ class EventLogView:
                 continue
             index = self.indexes.setdefault(str(path), EventIndex(path, sid))
             self.indexes.move_to_end(str(path))
-            if not index.refresh():
+            available = index.refresh()
+            inputs.append((path, index.revision))
+            if not available:
                 continue
             indexes.append(index)
             nodes.extend(index.rows())
@@ -368,6 +374,8 @@ class EventLogView:
             queue.extend(index.children)
         while len(self.indexes) > max(64, len(seen)):
             self.indexes.popitem(last=False)
+        self.read_paths[session['id']] = tuple(path for path, _ in inputs)
+        self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
         if not indexes:
             return None
         live = session.get('execution', {})
@@ -558,14 +566,40 @@ class EventLogView:
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
+            cached = self.projected.get(identity)
+            paths = self.read_paths.get(identity, ())
+            def stamps():
+                result = []
+                for path in paths:
+                    try:
+                        info = path.stat()
+                        result.append((str(path), ((info.st_dev, info.st_ino), info.st_size, info.st_mtime_ns, info.st_ctime_ns)))
+                    except FileNotFoundError:
+                        result.append((str(path), None))
+                return tuple(result)
+            before = await asyncio.to_thread(stamps)
+            # Compare detached inputs before copying or rebuilding the model
+            # tree. External appends/replacements and live metadata still win.
+            root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
+            same_root = paths and paths[0] == event_path(session, root)
+            if cached and same_root and cached[0] == session and cached[1] == before:
+                return
             previous = copy.deepcopy(session)
             tree = await asyncio.to_thread(self.read, previous)
-            if tree is None or self.service.closed:
+            if self.service.closed:
                 return
             async with self.service.lock:
                 session = self.service._session(identity)
                 if session.get('execution') != previous.get('execution') or session.get('messages') != previous.get('messages'):
                     return  # A newer live update won; retry from it next tick.
-                if session.get('execution') != tree:
+                if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
                     self.service._publish()
+                # Use the signatures actually read, not a later stat that may
+                # already describe bytes appended after the projection.
+                self.projected[identity] = (copy.deepcopy(session), self.read_revisions[identity])
+                self.projected.move_to_end(identity)
+                while len(self.projected) > 64:
+                    expired, _ = self.projected.popitem(last=False)
+                    self.read_paths.pop(expired, None)
+                    self.read_revisions.pop(expired, None)

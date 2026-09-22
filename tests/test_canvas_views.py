@@ -36,6 +36,22 @@ async def show(app, kind='json', content='[{"name":"alpha"},{"name":"beta"}]'):
     return view(app)
 
 
+async def test_mount_evidence_does_not_rewrite_history_and_identical_reports_are_noops(app, monkeypatch):
+    current = await show(app)
+    original = deepcopy(app._state['sessions'])
+    original_save = app._save
+    monkeypatch.setattr(app, '_save', lambda: pytest.fail('Mount evidence must not persist the whole app'))
+    args = {**target(current), 'status': 'ready', 'message': 'Sandbox document loaded'}
+    first = await command(app, 'canvas.views.status', args, command_id='mounted', include_state=False)
+    second = await command(app, 'canvas.views.status', args, command_id='mounted-again', include_state=False)
+    assert first['revision'] == second['revision']
+    assert app._state['sessions'] == original
+    assert view(app)['activation']['status'] == 'ready'
+    with pytest.raises(AppError):
+        await command(app, 'canvas.views.status', {**args, 'generation': -1}, include_state=False)
+    monkeypatch.setattr(app, '_save', original_save)
+
+
 async def update(app, current, patch, **kwargs):
     return await command(app, 'canvas.views.command', {**target(current), 'action': 'canvas.view', 'args': {'patch': patch}}, **kwargs)
 

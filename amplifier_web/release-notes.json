@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.8",
+      "title": "Faster controls and quieter idle work",
+      "changes": [
+        "Keep browser action responses small and stream only changed state after the initial snapshot. Reconnecting restores a complete snapshot automatically.",
+        "Preview appearance changes immediately, preserving saved settings if a change fails.",
+        "Skip unchanged native history and activity scans, react to file changes, and retain periodic reconciliation and explicit refresh.",
+        "Avoid redundant saves for unchanged layout, Canvas visibility and renderer status. Keep historical usage evidence in durable storage while sending only its totals to the browser."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.7",
       "title": "Work artifacts, memory, publishing and task transfer",
       "changes": [

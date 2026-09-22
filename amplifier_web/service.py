@@ -1120,6 +1120,9 @@ class AppService:
             if action == 'canvas.visibility':
                 from .canvas_visibility import update
                 return update(self, args, command_id, fingerprint, include_state=include_state)
+            if action in {'canvas.views.status', 'canvas.views.observe'} and client_id is not None:
+                from .client_observation import update
+                return update(self, action, args, command_id, fingerprint, include_state=include_state)
             opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose', 'canvas.views.open'} or (action == 'canvas.show' and not args.get('sessionId'))
             if action == 'canvas.select' and origin == 'agent' and caller_session_id and self.state.get('selectedSessionId') != caller_session_id:
                 raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
