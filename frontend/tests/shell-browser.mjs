@@ -56,14 +56,14 @@ try{
  const validation=await agent('shell.packages.validate',{digest});
  assert.equal(validation.result.status,'passed',JSON.stringify(validation));
  // A replacement cannot discard a built-in module's unsaved form.
- await page.getByRole('button',{name:'New workspace',exact:true}).click();
- await page.locator('#nav-workspace-path').fill('/unsaved/module-form');
- await expect.poll(async()=>(await agent('shell.query',{clientId,instanceId:'workspaces'})).result.view.workspaceDraft?.path).toBe('/unsaved/module-form');
+ await agent('shell.view.update',{clientId,instanceId:'workspaces',patch:{workspaceDraft:{mode:'rename',id:beta.id,name:beta.name}}});
+ await page.locator('#nav-workspace-name').fill('Unsaved workspace name');
+ await expect.poll(async()=>(await agent('shell.query',{clientId,instanceId:'workspaces'})).result.view.workspaceDraft?.name).toBe('Unsaved workspace name');
  const withoutEditor=structuredClone(original);withoutEditor.instances=withoutEditor.instances.filter(item=>item.id!=='workspaces');
  const removal=(await agent('shell.changes.prepare',{clientId,expectedRevision:0,composition:withoutEditor})).result.id;
  const deferred=await agent('shell.changes.apply',{clientId,changeId:removal,expectedRevision:0});
  assert.equal(deferred.result.status,'deferred');
- assert.equal(await page.locator('#nav-workspace-path').inputValue(),'/unsaved/module-form');
+ assert.equal(await page.locator('#nav-workspace-name').inputValue(),'Unsaved workspace name');
  await page.getByRole('button',{name:'Cancel navigation edit'}).click();
  await expect.poll(async()=>(await agent('shell.query',{clientId,instanceId:'workspaces'})).result.view.workspaceDraft?.mode).toBeUndefined();
  const prepared=await agent('shell.changes.prepare',{clientId,expectedRevision:0,composition});
@@ -148,7 +148,7 @@ try{
  await page.locator('[data-shell-instance="chats"] .a-nav-chat').first().waitFor();
  assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),persisted);
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.locator('#scheme').selectOption('dark');
+ await page.getByRole('button',{name:'Dark',exact:true}).click();
  await expect.poll(async()=>(await inspect()).composition.presentation.scheme).toBe('dark');
  await page.getByRole('button',{name:'Close panel'}).click();
  await action('view.update',{patch:{navPinned:false,navExpanded:true}});

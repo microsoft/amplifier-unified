@@ -154,7 +154,7 @@ try{
  const receipt=await action('smartTools.call',{id:'counter',name:'counter_add',arguments:{amount:4,delay_ms:3000}});
  await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='running'),receipt.operationId);
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.locator('#scheme').selectOption('light');
+ await page.getByRole('button',{name:'Light',exact:true}).click();
  await frame.locator('body[data-theme="light"]').waitFor();
  await page.locator('#layout').selectOption('work');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -166,7 +166,7 @@ try{
  assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');
  await action('view.update',{patch:{canvasFocused:false}});
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
- await page.locator('#scheme').selectOption('system');
+ await page.getByRole('button',{name:'Device',exact:true}).click();
  await page.locator('#layout').selectOption('balanced');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('canvas.close',{});

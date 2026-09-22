@@ -76,7 +76,8 @@
     "test:settings-mobile-browser": "node tests/settings-mobile-browser.mjs",
     "test:terminal-setup-browser": "node tests/terminal-setup-browser.mjs",
     "test:recovery-group-browser": "node tests/recovery-group-browser.mjs",
-    "test:active-client-performance-browser": "node tests/active-client-performance-browser.mjs"
+    "test:active-client-performance-browser": "node tests/active-client-performance-browser.mjs",
+    "test:appearance-library-browser": "node tests/appearance-library-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

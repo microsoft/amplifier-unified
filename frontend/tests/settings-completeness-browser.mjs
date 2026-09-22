@@ -13,7 +13,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const presentation=async(id,value)=>{if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());await expect(page.locator('#'+id)).toHaveValue(value);};
+ const presentation=async(id,value)=>{if(id==='scheme'){const button=page.getByRole('button',{name:{light:'Light',dark:'Dark',system:'Device'}[value],exact:true});if(await button.getAttribute('aria-pressed')!=='true')await button.click();await expect(button).toHaveAttribute('aria-pressed','true');return;}if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());await expect(page.locator('#'+id)).toHaveValue(value);};
  await openSettingsPage(page,'notifications');
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
@@ -58,19 +58,20 @@ try{
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
  assert.ok(!JSON.stringify(await state()).includes('fixture-unsaved-key'));
  await openSettingsPage(page,'appearance');
+ await page.getByText('Advanced customization',{exact:true}).click();
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
  await page.getByRole('button',{name:'Preview',exact:true}).click();
  assert.notEqual((await state()).theme?.name,'Acceptance skin');
  await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');
- await page.getByRole('button',{name:'End preview',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
  await page.getByRole('button',{name:'Apply skin',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
  await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await page.locator('#theme-name').waitFor();
+ await page.reload();await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
  await expect(page.locator('#layout')).toHaveValue('work');
- await page.getByRole('button',{name:'Restore default skin',exact:true}).click();
+ await page.getByRole('button',{name:'Restore original appearance',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name!=='Acceptance skin');
  await openSettingsPage(page,'smart-tools');
  await page.getByRole('button',{name:'Browse catalog',exact:true}).click();

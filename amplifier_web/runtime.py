@@ -396,6 +396,16 @@ class RuntimeManager:
             code = await row["process"].wait()
             if not row["closing"] and not reported_error:
                 error = f"Amplifier worker exited (code {code}). Work was not replayed."
+                if not row["ready"].done():
+                    # stdout can reach EOF before the separate stderr reader.
+                    try:
+                        await asyncio.wait_for(asyncio.shield(row["stderr_task"]), 1)
+                    except (TimeoutError, OSError, ValueError):
+                        pass
+                    from .worker_diagnostics import save_startup_failure
+                    diagnostic = await asyncio.to_thread(save_startup_failure, row, code)
+                    if diagnostic:
+                        error += f" Startup details were saved locally to {diagnostic}."
                 await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
                 if not row["ready"].done():
                     row["ready"].set_exception(RuntimeError(error))
