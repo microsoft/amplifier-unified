@@ -34,7 +34,7 @@ try{
  await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
  await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
  await page.locator('select#chat-model').selectOption('chosen-model');
- await page.locator('#chat-effort').selectOption('high');
+ await page.locator('#chat-effort').press('End');
  await page.getByRole('button',{name:'Close model settings',exact:true}).click();
  await page.locator('#new-chat-workspace').fill(originalWorkspace+'/../');
  const draftSaved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Do the planned work');
@@ -49,7 +49,7 @@ try{
   await page.locator('.a-composer').getByRole('button',{name:trigger,exact:true}).click();const panel=page.locator('section.a-compact-popover');await expect(panel).toBeVisible();
   const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:el.scrollHeight>el.clientHeight+1}});
   assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry));assert.equal(geometry.scroll,false);
-  await expect(panel.locator('input')).toHaveCount(0);await page.screenshot({path:out+`/compact-${trigger}-${width}.png`});await page.getByRole('button',{name:close,exact:true}).click();
+  await expect(panel.locator('input:not([type=range])')).toHaveCount(0);await page.screenshot({path:out+`/compact-${trigger}-${width}.png`});await page.getByRole('button',{name:close,exact:true}).click();
  }}
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();

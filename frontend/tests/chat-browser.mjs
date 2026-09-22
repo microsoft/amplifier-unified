@@ -17,12 +17,12 @@ try{
  await page.locator('#chat-provider').waitFor();
  await page.locator('#chat-model').selectOption('fixture-vision');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.selection?.model==='fixture-vision'));
- await page.locator('#chat-effort').selectOption('high');
+ await page.locator('#chat-effort').press('End');
  await page.waitForFunction(()=>window.amplifier.getState().view.composerModel?.effort==='high');
  await page.waitForFunction(()=>Object.values(window.amplifier.getState().runtimeControl||{}).some(c=>c['configuration.providers']?.pinned&&c['configuration.providers']?.selection?.effort==='high'));
  await page.getByRole('button',{name:'Close model settings'}).click();
  assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision/);
- assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/high reasoning/);
+ assert.match(await page.getByRole('button',{name:'Model and reasoning settings'}).innerText(),/fixture-vision \(high\)/);
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'pixel.png',mimeType:'image/png',buffer:png});
  await page.locator('.a-composer .a-attachment').waitFor();
  assert.equal(await page.locator('.a-composer .a-attachment img').count(),1);

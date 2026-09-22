@@ -54,24 +54,25 @@ test('draft model controls discover without creating a session and save choices 
  assert.deepEqual(state.view.newSessionDraft.selection,{instance:'one',model:'chosen'});
  await renderAct(async()=>root.update(render()));
  assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('chosen')));
- // A stale pin can still be cleared when discovery is unavailable.
- state={...state,setup:{},actionStatus:{'providers.list':{phase:'error',error:'Unavailable'}}};
- await renderAct(async()=>root.update(render()));
- const reset=root.root.findByProps({id:'chat-provider'});
- await renderAct(async()=>reset.props.onChange({target:{value:''}}));assert.deepEqual(state.view.newSessionDraft.selection,{});
+ assert.equal(root.root.findByProps({id:'chat-provider'}).findAllByType('option').some(n=>n.children.includes('Use bundle default')),false);
  assert.equal(calls.some(c=>['session.create','runtime.control'].includes(c.name)),false);
  assert.equal(state.view.newSessionDraft.bundle,'work');await renderAct(async()=>root.unmount());
 });
 
 test('inherited choices are displayed without pinning and the popup opens before requests finish',async()=>{
- const calls=[],state={settings:{workspace:'/new'},view:{},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
+ const calls=[];let state={settings:{workspace:'/new'},view:{},setup:{providersRequestedWorkspace:'/new'},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model',effort:'high'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
  const act=(name,args)=>{calls.push({name,args});return new Promise(()=>{})};let root;
  await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act,working:false}))});
- assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('actual-model'));
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('actual-model (high)'));
  await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
  assert.equal(root.root.findAllByType('section').length,1);
  assert.equal(calls.some(c=>c.name==='session.create'||c.args?.patch?.newSessionDraft),false);
  assert.equal(root.root.findAllByType('input').length,0);
+ state={...state,view:{newSessionDraft:{workspace:'/new',bundle:'another',selection:{}}}};
+ await renderAct(async()=>root.update(React.createElement(ModelControl,{state,act,working:false})));
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('actual-model (high)'));
+ await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+ assert.equal(calls.some(c=>c.name==='providers.list'),false);
  await renderAct(async()=>root.unmount());
 });
 
@@ -79,7 +80,7 @@ test('provider aliases share one choice and model selection retains the correct 
  const calls=[],providers=[{id:'terra',info:{id:'openai',display_name:'OpenAI',defaults:{model:'terra-model'}}},{id:'astra',info:{id:'openai',display_name:'OpenAI',defaults:{model:'astra-model'}}},{id:'claude',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'claude-model'}}}];
  const state={view:{composerModel:{open:true,sessionId:'chat',instance:'terra',model:'terra-model'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:{instance:'terra',model:'terra-model'}}}}};
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args}),working:false}))});
- const choices=root.root.findByProps({id:'chat-provider'}).findAllByType('option');assert.deepEqual(choices.map(n=>n.children.join('')),['Use bundle default','OpenAI','Anthropic']);
+ const choices=root.root.findByProps({id:'chat-provider'}).findAllByType('option');assert.deepEqual(choices.map(n=>n.children.join('')),['Anthropic','OpenAI']);
  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'astra-model'}}));
  assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{instance:'astra',model:'astra-model'});
  await renderAct(async()=>root.unmount());

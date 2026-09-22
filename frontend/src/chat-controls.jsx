@@ -1,6 +1,6 @@
 import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useEffect,useState,useRef} from 'react';
-import {ChevronDown,Pin,X,Paperclip} from 'lucide-react';
+import {ChevronDown,X,Paperclip} from 'lucide-react';
 import {providerFields,modelOptions} from './setup-data';
 import {newChatSetup,draftDefaults} from './new-chat';
 import {useComposerPopover} from './composer-popover';
@@ -14,10 +14,20 @@ export function providerGroups(providers){
  for(const row of providers){const key=row.info?.id||row.module||row.id;
   if(!groups.has(key))groups.set(key,{id:key,label:row.info?.display_name||key,rows:[]});groups.get(key).rows.push(row);
  }
- return [...groups.values()];
+ return [...groups.values()].sort((a,b)=>a.label.localeCompare(b.label,undefined,{sensitivity:'base'}));
+}
+function configuredEffort(row,model){
+ const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');
+ return row?.effort||row?.config?.reasoning_effort||row?.info?.defaults?.reasoning_effort||field?.default||'';
 }
 export function ModelControl({state,session,act,working}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
+ // A bundle change validates defaults in the background. Keep the current
+ // workspace's resolved choices visible until the new result is ready.
+ const previousDefaults=useRef(null);
+ if(isDraft&&defaults.phase==='ready')previousDefaults.current={workspace:setup.workspace,value:defaults};
+ const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.workspace===setup.workspace?previousDefaults.current.value:defaults;
+ const checkingDefaults=isDraft&&defaults.phase!=='ready'&&defaults.phase!=='error';
  const unavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||session?.historyLoaded===false;
  const shared=state.view?.composerModel||EMPTY,[draft,setDraft]=useState(shared),[error,setError]=useState('');
  useEffect(()=>setDraft(shared),[shared]);
@@ -28,12 +38,14 @@ export function ModelControl({state,session,act,working}){
   return {...row,...metadata,info:{...metadata.info,defaults:{...metadata.info?.defaults,model:row.config?.default_model||row.config?.model||metadata.info?.defaults?.model}}};
  });
  const controls=state.runtimeControl?.[sessionId]||{},catalog=controls['configuration.providers'];
- const providers=isDraft?(defaults.providers||cachedProviders):(catalog?.providers||session?.runtimeReport?.provider_choices?.map(row=>({id:row.id,info:{defaults:{model:row.model,reasoning_effort:row.effort}}}))||[]);
+ const providers=isDraft?(resolvedDefaults.providers||cachedProviders):(catalog?.providers||session?.runtimeReport?.provider_choices?.map(row=>({id:row.id,info:{defaults:{model:row.model,reasoning_effort:row.effort}}}))||[]);
  const pinned=isDraft?!!setup.selection?.model:(catalog?.pinned??!!(session?.runtimeReport?.selection||session?.selection));
- const effective=isDraft?(pinned?setup.selection:defaults.effective||{}):(catalog?.effective||session?.runtimeReport?.effective_selection||session?.selection||{});
+ const effective=isDraft?(pinned?setup.selection:resolvedDefaults.effective||{}):(catalog?.effective||session?.runtimeReport?.effective_selection||session?.selection||{});
  const lastCall=[...(session?.execution?.nodes||[])].reverse().find(n=>n.kind==='llm'&&(n.sessionId===sessionId||(!n.sessionId&&!n.parentId)));
  const model=effective.model||(!isDraft?lastCall?.model:'')||(defaults.phase==='error'?'Model unavailable':'Loading model…');
  const provider=effective.instance||effective.id||(!isDraft?lastCall?.provider:'')||'';
+ const effectiveProvider=providers.find(row=>row.id===provider),effectiveEffort=effective.effort||configuredEffort(effectiveProvider,model);
+ const modelLabel=effectiveEffort?`${model} (${effectiveEffort})`:model;
  const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),position=useComposerPopover(open,popover);
  useOutsideDismiss(open,popover,()=>edit({open:false}));
  const groups=providerGroups(providers),group=groups.find(g=>g.rows.some(row=>row.id===draft.instance));
@@ -52,6 +64,8 @@ export function ModelControl({state,session,act,working}){
  models=[...available.values()];
  const metadata=entry?.metadata||selected||{};
  const choices=providerFields(metadata,{model:draft.model,default_model:draft.model}).find(field=>field.id==='reasoning_effort')?.choices||[];
+ const effort=draft.effort||configuredEffort(selected,draft.model)||configuredEffort(metadata,draft.model);
+ const effortPending=useRef(false);
  const request=useRef(''),touched=useRef(false);
  useEffect(()=>{
   if(!isDraft||!setup.workspace)return;
@@ -63,40 +77,42 @@ export function ModelControl({state,session,act,working}){
   },250);return()=>clearTimeout(timer);
  },[isDraft,setup.workspace,setup.bundle]);
  useEffect(()=>{
-  if(open&&!touched.current&&providers.length){const row=providers.find(p=>p.id===(effective.instance||effective.id))||providers[0];edit({instance:row.id,model:effective.model||row.info?.defaults?.model||'',effort:effective.effort||''})}
- },[open,sessionId,providers.map(row=>row.id).join('|'),effective.model]);
+  if(open&&!touched.current&&providers.length){const row=providers.find(p=>p.id===(effective.instance||effective.id))||providers[0];edit({instance:row.id,model:effective.model||row.info?.defaults?.model||'',effort:effectiveEffort||''})}
+ },[open,sessionId,providers.map(row=>row.id).join('|'),effective.model,effectiveEffort]);
  function show(){touched.current=false;setError('');if(open){edit({open:false});return}
-  edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effective.effort||''});
+  edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
   if(session)act('runtime.control',{sessionId,operation:'configuration.providers',args:{}});
  }
- async function apply(patch,reset=false){
-  touched.current=!reset;const next={...draft,...patch};edit(patch);setError('');
-  if(!reset&&(!next.instance||!next.model))return;
+ async function apply(patch){
+  touched.current=true;const next={...draft,...patch};edit(patch);setError('');
+  if(!next.instance||!next.model)return;
   const selection={instance:next.instance,model:next.model,...(next.effort?{effort:next.effort}:{})};
-  try{if(isDraft)await act('view.update',{patch:{newSessionDraft:{...setup,selection:reset?{}:selection}}});
-   else await act('runtime.control',{sessionId,operation:reset?'provider.reset':'provider.select',args:reset?{}:selection});
+  try{if(isDraft)await act('view.update',{patch:{newSessionDraft:{...setup,selection}}});
+   else await act('runtime.control',{sessionId,operation:'provider.select',args:selection});
   }catch(e){setError(e.message)}
  }
  function chooseProvider(value){
-  if(!value){apply({instance:effective.instance||'',model:effective.model||'',effort:''},true);return}
+  if(!value)return;
   const family=groups.find(g=>g.id===value),row=family?.rows.find(p=>p.id===draft.instance)||family?.rows[0];
   value=row?.id;if(!value)return;apply({instance:value,model:row.info?.defaults?.model||'',effort:''});
   if(isDraft&&!draftCatalog.providerCatalogs?.[value])act('providers.models',{id:value,workspace:setup.workspace});
   else if(!isDraft&&!controls.modelCatalogs?.[value])act('runtime.control',{sessionId,operation:'configuration.providerModels',args:{instance:value}});
  }
+ function previewEffort(event){touched.current=true;effortPending.current=true;setDraft({...draft,effort:choices[Number(event.currentTarget.value)]});}
+ function commitEffort(event){if(!effortPending.current)return;effortPending.current=false;const value=choices[Number(event.currentTarget.value)];if(value)apply({effort:value});}
  const op=state.actionStatus?.[isDraft?'configuration.defaults':'runtime.control'];
  const failure=error||(op?.phase==='error'?op.error:'')||defaults.error;
  return <div className="a-model-control" ref={popover}>
-  <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} data-action="view.update" onClick={show}>{pinned&&<Pin/>}<span>{model}{(provider||effective.effort)&&<small>{[effective.effort?`${effective.effort} reasoning`:'',provider].filter(Boolean).join(' · ')}</small>}</span><ChevronDown/></button>
+  <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{modelLabel}</span><ChevronDown/></button>
   {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
    <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
    <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={group?.id||draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
-    <option value="">Use bundle default</option>{draft.instance&&!providers.some(p=>p.id===draft.instance)&&<option value={draft.instance}>{draft.instance}</option>}{groups.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
+    {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':'Loading providers…'}</option>}{draft.instance&&!providers.some(p=>p.id===draft.instance)&&<option value={draft.instance}>{draft.instance}</option>}{groups.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
    </select>
    <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={working||!draft.instance} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>{const value=e.target.value,row=group?.rows.find(p=>p.id===draft.instance&&p.info?.defaults?.model===value)||group?.rows.find(p=>p.info?.defaults?.model===value);apply({instance:row?.id||draft.instance,model:value,effort:''})}}>
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
-   <label htmlFor="chat-effort">Reasoning effort</label><select id="chat-effort" value={draft.effort||''} disabled={working||!draft.model||!choices.length} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>apply({effort:e.target.value})}><option value="">Provider default</option>{draft.effort&&!choices.includes(draft.effort)&&<option value={draft.effort}>{draft.effort}</option>}{choices.map(value=><option key={value} value={value}>{value}</option>)}</select>
+   {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={working||!draft.model} data-action={isDraft?'view.update':'runtime.control'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>Reasoning effort is not configurable for this model.</small>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
   </section>}
