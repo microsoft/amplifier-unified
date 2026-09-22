@@ -11,7 +11,14 @@ def local_bundle_path(config, reference):
     absolute = candidate.is_absolute()
     if not absolute:
         candidate = config.workspace / candidate
-    if candidate.exists():
+    # Bare names are also registry aliases (notably the default "work"). An
+    # unrelated workspace folder must not shadow one merely by existing. Keep
+    # explicit paths authoritative so malformed local bundles still fail at
+    # their requested path rather than silently switching to another bundle.
+    explicit = absolute or reference.startswith(('file://', './', '../')) or '/' in reference
+    manifest = candidate.is_dir() and any((candidate / name).is_file()
+        for name in ('bundle.md', 'bundle.yaml', 'bundle.yml'))
+    if candidate.exists() and (explicit or manifest or candidate.is_file() and candidate.suffix in {'.md', '.yaml', '.yml'}):
         return candidate
     if absolute or reference.startswith('file://'):
         return None
