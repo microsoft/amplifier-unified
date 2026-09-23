@@ -314,8 +314,9 @@ class AutomaticHistory:
                     for row in snapshot['workspaces']:
                         if row.get('path') in managed_paths:
                             continue
-                        unresolved_id = uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
-                        if row.get('path') and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
+                        unresolved_id = (uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
+                                         if hidden_workspaces and row.get('path') else None)
+                        if unresolved_id is not None and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
                             hidden_workspaces.add(row['id'])
                             state.setdefault('hiddenNativeWorkspaces', []).append(row['id'])
                             changed = True
@@ -375,7 +376,7 @@ class AutomaticHistory:
                         if managed:
                             row = {**row, 'workspaceId': None}
                         key = (row['nativeProject'], row['nativeIdentity'])
-                        if identity(*key) in hidden or row['workspaceId'] in hidden_workspaces:
+                        if (hidden and identity(*key) in hidden) or row['workspaceId'] in hidden_workspaces:
                             continue
                         previous = existing.get(key)
                         if previous is None:
@@ -434,10 +435,13 @@ class AutomaticHistory:
                                 for key_name, value in metadata.items():
                                     if previous.get(key_name) != value:
                                         previous[key_name] = value; changed = True
-                            if not previous.get('historyLoaded') and previous.get('historyManaged'):
-                                previous['nativeRevision'] = copy.deepcopy(row.get('transcriptRevision'))
-                            elif 'nativeRevision' not in previous:
-                                previous['nativeRevision'] = copy.deepcopy(row.get('transcriptRevision'))
+                            if (not previous.get('historyLoaded') and previous.get('historyManaged')) or 'nativeRevision' not in previous:
+                                native_revision = row.get('transcriptRevision')
+                                # Keep an already detached, equal revision. Compare
+                                # values on every refresh so in-place edits are seen.
+                                if ('nativeRevision' not in previous or previous['nativeRevision'] != native_revision
+                                        or (isinstance(native_revision, (dict, list)) and previous['nativeRevision'] is native_revision)):
+                                    previous['nativeRevision'] = copy.deepcopy(native_revision)
                         if managed and previous.get('location') != {'kind': 'managed'}:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
