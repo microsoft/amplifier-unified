@@ -355,6 +355,9 @@ class AutomaticHistory:
                             changed = True
                     existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                  s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
+                    from collections import Counter
+                    native_counts = Counter(row['nativeIdentity'] for row in snapshot['sessions'])
+                    catalog_ids = {row['id'] for row in state['sessions']}
                     hidden = set(state.get('hiddenNativeSessions', []))
                     for row in snapshot['sessions']:
                         managed = row.get('workspace') in managed_paths
@@ -365,7 +368,10 @@ class AutomaticHistory:
                             continue
                         previous = existing.get(key)
                         if previous is None:
-                            previous = {'id': row['id'], 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
+                            public_id = row['nativeIdentity']
+                            if native_counts[public_id] > 1 or public_id in catalog_ids:
+                                public_id = row['id']  # Duplicate native IDs require project scope.
+                            previous = {'id': public_id, 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
                                         'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
                                         'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False),
@@ -378,7 +384,7 @@ class AutomaticHistory:
                                         'description': row.get('description', ''), 'shared': True,
                                         'historyReadOnlyReason': row.get('readOnlyReason'),
                                         'historyManaged': True, 'historyLoaded': False}
-                            state['sessions'].append(previous); existing[key] = previous; changed = True
+                            state['sessions'].append(previous); existing[key] = previous; catalog_ids.add(public_id); changed = True
                         else:
                             from .chat_navigation import recent_activity, navigation_activity
                             previous.setdefault('navigationActivityAt', navigation_activity(previous))
@@ -424,7 +430,7 @@ class AutomaticHistory:
                         if managed and previous.get('location') != {'kind': 'managed'}:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
-                        previous['_catalogId'] = row['id']
+                        previous['_catalogId'] = row['nativeIdentity'] if native_counts[row['nativeIdentity']] == 1 else row['id']
                     # Parent identities belong to their native project. UI IDs
                     # are aliases and can differ even when a web root predated
                     # automatic discovery or another project reused the ID.
@@ -437,7 +443,11 @@ class AutomaticHistory:
                         for key_name, value in {'parentId': parent_id, 'nativeParentId': row['parentId']}.items():
                             if session.get(key_name) != value:
                                 session[key_name] = value; changed = True
-                    state['sharedHistory'].update(loading=False, error=None,
+                    issues = snapshot.get('issues', [])
+                    if (state['sharedHistory'].get('issues', []) != issues[:100]
+                            or state['sharedHistory'].get('issueCount', 0) != len(issues)):
+                        changed = True
+                    state['sharedHistory'].update(loading=False, issues=issues[:100], issueCount=len(issues), error=None,
                         projectCount=len(snapshot['workspaces']),
                         sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
                         workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']))

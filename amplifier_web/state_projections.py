@@ -86,7 +86,7 @@ class StateProjections:
             rows = [([row.get(key) for key in fields], navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
                     for row in state.get('sessions', []) if is_top_level(row)]
-            facts = [rows, state.get('workspaces', []), state.get('pinnedSessionIds'),
+            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},

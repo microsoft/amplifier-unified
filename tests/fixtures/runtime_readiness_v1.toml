@@ -1,0 +1,47 @@
+[project]
+name = "amplifier-web-runtime"
+version = "0.1.0"
+description = "Standalone Foundation and loop-live runtime for Amplifier Unified"
+requires-python = ">=3.13"
+dependencies = [
+  "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
+  "amplifier-core>=1.6.1",
+  "amplifier-module-loop-live",
+  "amplifier-foundation",
+  "amplifier-module-loop-streaming",
+  "amplifier-module-context-simple",
+  "amplifier-module-provider-anthropic",
+  "amplifier-module-provider-openai",
+  "amplifier-module-provider-openai-chatgpt",
+  "amplifier-module-provider-github-copilot",
+  "amplifier-module-provider-gemini",
+  "websockets==15.0.1",
+  "filelock>=3.20,<4",
+  "jsonschema>=4.23,<5",
+  "pyyaml>=6.0.3,<7",
+  # Public authoring libraries belong in the actual worker interpreter.
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0,<2",
+  "openpyxl>=3.1,<4",
+  "reportlab>=4.4,<5",
+  "pypdf>=6,<7",
+  "Pillow>=11,<13",
+]
+
+[tool.uv]
+# Follow the same Foundation branch while bundles resolve their modules.
+override-dependencies = [
+  "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+]
+
+[tool.uv.sources]
+amplifier-core = { git = "https://github.com/microsoft/amplifier-core", rev = "main" }
+amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
+amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
+amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
+amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "main" }
+amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "main" }
+amplifier-module-provider-openai = { git = "https://github.com/microsoft/amplifier-module-provider-openai", rev = "main" }
+amplifier-module-provider-openai-chatgpt = { git = "https://github.com/microsoft/amplifier-module-provider-openai-chatgpt", rev = "main" }
+amplifier-module-provider-github-copilot = { git = "https://github.com/microsoft/amplifier-module-provider-github-copilot", rev = "main" }
+amplifier-module-provider-gemini = { git = "https://github.com/microsoft/amplifier-module-provider-gemini", rev = "main" }

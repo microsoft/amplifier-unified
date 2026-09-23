@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-web-runtime"
-version = "0.1.0"
+version = "0.1.1"
 description = "Standalone Foundation and loop-live runtime for Amplifier Unified"
 requires-python = ">=3.13"
 dependencies = [

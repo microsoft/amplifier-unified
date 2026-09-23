@@ -22,10 +22,12 @@ def definitions(schema,string):
     identity={**common,'id':string(100)}
     origin={'messageId':string(200),'parentId':string(100),'evidenceIds':{'type':'array','maxItems':20,'items':string(100)}}
     writing={'content':string(100000),'variant':{'enum':VARIANTS},'subject':string(500)}
+    image_identity=schema({'id':string(100),'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['id','sha256'])
     return {
         'outputs.list':('List exact saved output relationships without opening or sending anything.',schema({**common,'includeUnlinked':{'type':'boolean'},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':50}},['sessionId'])),
         'outputs.read':('Read bounded immutable content, provenance, lineage and local review comments. External links are references only unless version evidence is supplied.',schema({**identity,'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':4000},'commentOffset':{'type':'integer','minimum':0},'commentLimit':{'type':'integer','minimum':1,'maximum':10}},['sessionId','id'])),
         'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; a direct app_control call (not nested inside tool_exec) requests typed pixels for its next vision-capable model request. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
+        'outputs.images':('Inspect two saved PNGs together, in the supplied order, for visual comparison. Choose distinct images with exact id and sha256, up to8MB combined and4096px per side. Call directly through app_control to replace the current image selection for this input. Both images must be available; the receipt alone is not pixels. Does not generate or start work.',schema({**common,'images':{'type':'array','minItems':2,'maxItems':2,'items':image_identity}},['sessionId','images'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
         'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
@@ -92,6 +94,22 @@ class Outputs:
             'mimeType':'image/png','bytes':len(data),'evidence':'immutable-output-snapshot','untrustedData':True,
             'imageUrl':'/api/outputs/'+identity+'/image','_image':base64.b64encode(data).decode()}
 
+    def images(self,sid,identities):
+        if (not isinstance(identities,list) or len(identities)!=2 or
+                any(not isinstance(item,dict) or set(item)!={'id','sha256'} or
+                    any(not isinstance(item[key],str) for key in ('id','sha256')) for item in identities)):
+            raise ValueError('Choose exactly two saved image IDs and hashes.')
+        if len({item['id'] for item in identities})!=2 or len({item['sha256'] for item in identities})!=2:
+            raise ValueError('Choose two different saved images; duplicate IDs or hashes cannot form a comparison.')
+        # The caller holds the app lock. Validate the whole ordered set before
+        # returning any pixels or changing the worker's inspection selection.
+        images=[self.image(sid,item['id'],item['sha256']) for item in identities]
+        total=sum(image['bytes'] for image in images)
+        if total>MAX_FILE:
+            raise ValueError('The two saved images exceed the combined8MB limit.')
+        return {'images':images,'bytes':total,'limits':{'images':2,'maxBytes':MAX_FILE,'maxSide':4096},
+                'imageDelivery':'Both saved images are available. A direct agent inspection requests pixels together; this receipt is not pixels.'}
+
     def fork(self,source_id,target):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
@@ -118,6 +136,10 @@ class Outputs:
                 if action=='outputs.image':
                     result=self.image(session['id'],args['id'],args['sha256']);result.pop('_image')
                     result['imageDelivery']='Agent requests receive typed pixels at the next supported model boundary; this receipt is not pixels.'
+                    return {'accepted':True,'result':result}
+                if action=='outputs.images':
+                    result=self.images(session['id'],args['images'])
+                    for image in result['images']:image.pop('_image')
                     return {'accepted':True,'result':result}
                 if action=='outputs.read':
                     record=self.record(session['id'],args['id']);data=self.content(record)

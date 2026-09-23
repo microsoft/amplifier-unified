@@ -23,7 +23,7 @@ export function NewChatSetup({state,act}){
  const setup=newChatSetup(state);
  const edit=patch=>act('view.update',{patch:{newSessionDraft:{...setup,...patch}}});
  return <section className="a-new-chat-setup" aria-label="New chat settings">
-  <h2>New chat</h2><p>Choose where and how to work. Your chat starts when you send a message.</p>
+  <h2>New chat</h2><p>Choose a workspace, or just start a conversation.</p>
   <ChatLocation state={state} act={act} setup={setup} onChange={edit}/>
  </section>;
 }
