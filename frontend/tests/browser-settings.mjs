@@ -12,7 +12,7 @@ export async function openSettingsPage(page,destination){
  await openSettingsDialog(page);
  const section=settingsSections.find(section=>section.pages.some(([id])=>id===destination));
  if(!section)throw new Error('Unknown settings test destination: '+destination);
- await page.waitForFunction(()=>{const root=document.querySelector('.a-settings-experience');return root?.dataset.compact===String(root.closest('.a-overlay').clientWidth<960)});
+ await page.waitForFunction(()=>{const root=document.querySelector('.a-settings-experience');return !!root&&root.dataset.compact===String(root.closest('.a-overlay').clientWidth<960)});
  if(await page.locator('.a-settings-experience').getAttribute('data-compact')==='true'){
   for(let depth=0;depth<6&&await page.locator('.a-settings-experience').getAttribute('data-settings-index')!=='true';depth++){
    const before=await page.locator('.a-settings-experience').getAttribute('data-settings-route');

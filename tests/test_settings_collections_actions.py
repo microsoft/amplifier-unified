@@ -57,3 +57,27 @@ async def test_guided_provider_finish_has_correlated_user_and_agent_receipts(tmp
         assert row['config']['opaque']=='keep' and row['config']['default_model']=='fixture-model'
         assert 'private-guided-value' not in str(app.browser_state())
     finally:await app.close()
+
+async def test_voice_and_notification_refinements_use_shared_actions(tmp_path,monkeypatch):
+    from amplifier_web.service import AppError
+    from amplifier_web.preferences import SettingsStore
+    monkeypatch.setenv('AMPLIFIER_HOME',str(tmp_path/'shared'))
+    app=AppService(tmp_path/'app',workspace=tmp_path);app.management=Management(app)
+    try:
+        await app.dispatch('settings.update',{'patch':{'preferredVoice':'gpt-live-1','voiceName':'willow'}})
+        assert app.state['settings']['voiceName']=='willow'
+        with pytest.raises(AppError,match='available'):
+            await app.dispatch('settings.update',{'patch':{'preferredVoice':'gpt-realtime-2.1','voiceName':'willow'}})
+        await app.dispatch('settings.update',{'patch':{'preferredVoice':'gpt-realtime-2.1','voiceInterruptions':False}})
+        assert app.state['settings']['voiceName']=='marin'
+        assert app.state['settings']['voiceInterruptions'] is False
+        saved=SettingsStore(app.data_dir).read(tmp_path,'global')['voice']
+        assert saved['voice']=='marin' and saved['interruptions'] is False
+        receipt=await app.dispatch('notifications.save',{'patch':{'desktop':True,'enabled':False}},command_id='notify-refinement')
+        assert receipt['operationId']=='notify-refinement'
+        await settle(app)
+        assert app.state['actionStatus']['notifications.save']['phase']=='ready'
+        await app.dispatch('view.update',{'patch':{'settingsRootVisit':'root-visit','aiConnectionEditor':{'step':'list'}}})
+        assert app.state['view']['settingsRootVisit']=='root-visit'
+    finally:
+        await app.close()

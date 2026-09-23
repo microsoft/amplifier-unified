@@ -63,19 +63,14 @@ async def test_realtime_uses_multipart_and_call_sideband():
     await call.close()
     assert manager.request.call_args.args == ('POST','/realtime/calls/call_1/hangup')
 
-async def test_automatic_fallback_is_honest_and_pins_conversation(monkeypatch):
-    manager = VoiceService(Service(),api_key='secret',http=object())
-    attempted=[]
-    async def create(self,sdp,provider):
-        attempted.append(provider)
-        if provider=='live': raise ProviderError(403,'model_access_denied')
-        self.id='call_1'
-        return {'id':self.id,'sdp':'answer','provider':provider,'sessionId':self.session_id}
+async def test_selected_model_failure_never_switches_model(monkeypatch):
+    manager=VoiceService(Service(),api_key='secret',http=object())
+    create=AsyncMock(side_effect=ProviderError(403,'model_access_denied'))
     monkeypatch.setattr(VoiceCall,'create',create)
-    result=await manager.connect('v=0')
-    assert attempted==['live','realtime'] and result['sessionId']=='main'
-    assert 'unavailable' in result['fallbackReason']
-    with pytest.raises(VoiceError,match='already active'): await manager.connect('v=0')
+    with pytest.raises(ProviderError):await manager.connect('v=0')
+    assert create.call_count==1
+    assert create.call_args.args[-1]=='live'
+    assert manager.call.closed
 
 async def test_auth_failure_never_silently_changes_model(monkeypatch):
     manager=VoiceService(Service(),api_key='secret',http=object())
@@ -450,3 +445,23 @@ async def test_already_shared_source_is_in_initial_provider_instructions(provide
         assert 'Private title' not in config['instructions']
     finally:
         call.final.set(); await call.close()
+
+@pytest.mark.parametrize('provider,name',[('live','willow'),('realtime','cedar')])
+async def test_selected_voice_reaches_provider_without_touching_sdp(provider,name):
+    import json
+    socket=Socket();manager=VoiceService(Service(),api_key='fixture',http=SimpleNamespace(ws_connect=AsyncMock(return_value=socket)))
+    manager.request=AsyncMock(return_value=({'session':{'id':'voice-test'},'transport':{'sdp':'answer'}},'answer',{'Location':'/v1/realtime/calls/voice-test'}))
+    call=VoiceCall(manager,'main');call.voice_name=name;call.interruptions=False
+    sdp='v=0\r\ns=fixture\r\n'
+    try:
+        await call.create(sdp,provider)
+        values=manager.request.call_args.kwargs
+        if provider=='live':
+            config=values['json']['session'];assert values['json']['transport']['sdp']==sdp
+        else:
+            fields={headers['name']:value for headers,_,value in values['data']._fields}
+            config=json.loads(fields['session']);assert fields['sdp']==sdp
+            assert config['audio']['input']['turn_detection']['interrupt_response'] is False
+        assert config['audio']['output']['voice']==name
+    finally:
+        call.final.set();await call.close()

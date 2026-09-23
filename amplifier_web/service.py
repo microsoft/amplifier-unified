@@ -120,7 +120,7 @@ ACTION_DEFINITIONS = {
     "providers.schema": ("Read a provider module’s configuration fields and choices",schema({"module":string(200),"id":string(200),"sessionId":string(200)},["module"])),
     "configuration.defaults": ("Resolve new-chat bundle and model without creating a conversation",schema({"location": LOCATION,"workspace":string(4000),"bundle":string(4000)},[])),
     "providers.list": ("List provider connections and setup status without creating a conversation",schema({"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
-    "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"scope":{"enum":["global","project","local"]}},["module","config"])),
+    "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
@@ -369,7 +369,7 @@ class AppService:
             from .preferences import SettingsStore
             def migrate_voice(settings):
                 voice = settings.setdefault("voice", {})
-                for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model")):
+                for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("voiceInterruptions", "interruptions")):
                     if self.state["settings"].get(old):
                         voice.setdefault(key, self.state["settings"][old])
             SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
@@ -514,6 +514,8 @@ class AppService:
                 'bundleDefaults': defaults(self.data_dir, workspace, app_bundle),
                 'preferredVoice': voice.get("preferred_model", "gpt-live-1"),
                 'fallbackVoice': voice.get("fallback_model", "gpt-realtime-2.1"),
+                'voiceName': voice.get('voice','marin'),
+                'voiceInterruptions': voice.get('interruptions',True),
             }
             # Retain derived preferences only, never complete configuration or
             # credentials. A changing file must be read again on the next call.
@@ -528,7 +530,7 @@ class AppService:
         self.state["settings"].update(
             bundle=bundle_defaults["effective"],
             preferredVoice=preferences['preferredVoice'],
-            fallbackVoice=preferences['fallbackVoice'])
+            fallbackVoice=preferences['fallbackVoice'],voiceName=preferences['voiceName'],voiceInterruptions=preferences['voiceInterruptions'])
         self._shared_preferences_stamp = stamp_value
         self._browser_snapshot = None
         # A different client can select a different workspace. Its preferences
@@ -1739,7 +1741,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 allowed.update({'navArchive', 'navCollection', 'navSort'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
@@ -1840,7 +1842,7 @@ class AppService:
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = args["patch"]
-                if set(patch) - {"preferredVoice", "fallbackVoice", "bundle", "workspace", "notifications", "updates", "workspaces"}:
+                if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
                     raise AppError("Unknown setting.")
                 if 'workspaces' in patch:
                     from .workspace_placement import validate_settings
@@ -1852,6 +1854,14 @@ class AppService:
                 for key in ("preferredVoice", "fallbackVoice"):
                     if key in patch and patch[key] not in {"gpt-live-1", "gpt-realtime-2.1"}:
                         raise AppError("Select a supported voice model.")
+                if {'preferredVoice','voiceName'}.intersection(patch):
+                    from .voice_options import voices_for,selected_voice
+                    model=patch.get('preferredVoice',self.state['settings'].get('preferredVoice','gpt-live-1'))
+                    if 'voiceName' in patch and (not isinstance(patch['voiceName'],str) or patch['voiceName'] not in voices_for(model)):
+                        raise AppError('Choose a voice available for the selected model.')
+                    patch={**patch,'voiceName':patch.get('voiceName',selected_voice(model,self.state['settings'].get('voiceName','marin')))}
+                if 'voiceInterruptions' in patch and type(patch['voiceInterruptions']) is not bool:
+                    raise AppError('Voice interruptions must be on or off.')
                 if "bundle" in patch and (not isinstance(patch["bundle"],str) or not patch["bundle"].strip()):
                     raise AppError("Enter a default bundle.")
                 if "updates" in patch:
@@ -1865,10 +1875,10 @@ class AppService:
                     patch = {**patch, "updates": {**self.state["settings"].get("updates",{}), **options}}
                     if patch["updates"].get("autoInstall") and not patch["updates"].get("autoCheck"):
                         raise AppError("Enable automatic checking before automatic installation.")
-                if {"preferredVoice", "fallbackVoice", "bundle"}.intersection(patch):
+                if {"preferredVoice", "fallbackVoice", "voiceName", "voiceInterruptions", "bundle"}.intersection(patch):
                     from .preferences import SettingsStore
                     def save_shared(settings):
-                        for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model")):
+                        for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("voiceInterruptions", "interruptions")):
                             if old in patch:
                                 settings.setdefault("voice", {})[key] = patch[old]
                         if "bundle" in patch:
@@ -1957,7 +1967,7 @@ class AppService:
             if action == 'conversation.send':receipt['delivery']='sending'
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
-            if action == "locations.create" or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context":
+            if action in {"locations.create", "notifications.save"} or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context":
                 receipt["operationId"] = command_id
             if action in {"feedback.submit", "feedback.get", "feedback.comment"}:
                 receipt["requestId"] = args['requestId']

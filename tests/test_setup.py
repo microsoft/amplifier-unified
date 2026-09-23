@@ -326,3 +326,51 @@ async def test_guided_setup_rejects_blank_or_missing_connection_without_writes(m
         with pytest.raises(ValueError,match=message):
             await manager.perform('providers.finishSetup',{'workspace':str(tmp_path),**args})
     assert manager.store.read(str(tmp_path))=={}
+
+@pytest.mark.asyncio
+async def test_credential_discovery_and_explicit_account_choice(manager,tmp_path,monkeypatch):
+    monkeypatch.setenv('ANTHROPIC_API_KEY','environment-account')
+    result=await manager.perform('providers.credentials',{'workspace':str(tmp_path),'module':'provider-anthropic'})
+    assert result['credentialCheck']['available'] and 'environment-account' not in str(result)
+    args={'workspace':str(tmp_path),'module':'provider-anthropic','config':{}}
+    await manager.perform('providers.save',{**args,'id':'env-account','apiKeyEnv':'ANTHROPIC_API_KEY'})
+    assert not (manager.store.shared_home/'keys.env').exists()
+    await manager.perform('providers.save',{**args,'id':'other-account','apiKey':'different-account'})
+    rows=manager.config(tmp_path).providers
+    assert rows[0]['config']['api_key']=='${ANTHROPIC_API_KEY}'
+    assert rows[1]['config']['api_key']=='${AMPLIFIER_OTHER_ACCOUNT_API_KEY}'
+    assert 'different-account' not in str(manager.provider_rows(tmp_path))
+    assert os.environ['ANTHROPIC_API_KEY']=='environment-account'
+
+@pytest.mark.asyncio
+async def test_github_cli_discovery_is_metadata_only_and_save_is_explicit(manager,tmp_path,monkeypatch):
+    monkeypatch.setattr('amplifier_web.setup.github_cli_token',lambda:'cli-account-token')
+    args={'workspace':str(tmp_path),'module':'provider-github-copilot'}
+    result=await manager.perform('providers.credentials',args)
+    assert result['credentialCheck']['githubCliAvailable']
+    assert 'cli-account-token' not in str(result)
+    assert not (manager.store.shared_home/'keys.env').exists()
+    result=await manager.perform('providers.save',{**args,'id':'copilot','config':{},'useGitHubCli':True})
+    assert 'cli-account-token' not in str(result)
+    assert manager.config(tmp_path).providers[0]['config']['github_token']=='${AMPLIFIER_COPILOT_GITHUB_TOKEN}'
+    monkeypatch.setattr('amplifier_web.setup.github_cli_token',lambda:None)
+    with pytest.raises(ValueError,match='no longer available'):
+        await manager.perform('providers.save',{**args,'id':'missing','config':{},'useGitHubCli':True})
+
+def test_account_status_checks_saved_provider_tokens_without_exposing_them(tmp_path):
+    from amplifier_web.setup import account_connected
+    path=tmp_path/'oauth.json';config={'token_file_path':str(path)}
+    assert not account_connected(config)
+    path.write_text('{"access_token":"private","refresh_token":"private-refresh"}')
+    assert account_connected(config)
+    path.write_text('{"access_token":"expired","expires_at":"2000-01-01T00:00:00+00:00"}')
+    assert not account_connected(config)
+    path.write_text('[]');assert not account_connected(config)
+
+@pytest.mark.asyncio
+async def test_removed_connections_are_excluded_from_preference_order(manager,tmp_path):
+    args={'workspace':str(tmp_path),'module':'provider-test','config':{}}
+    for identity in ('a','b','c'):await manager.perform('providers.save',{**args,'id':identity})
+    await manager.perform('providers.remove',{'workspace':str(tmp_path),'id':'b'})
+    result=await manager.perform('providers.reorder',{'workspace':str(tmp_path),'ids':['c','a'],'expectedIds':['a','c']})
+    assert not next(row for row in result['providers'] if row['id']=='b')['enabled']

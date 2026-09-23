@@ -36,7 +36,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const compact=useSettingsCompact(root),trail=settingsTrail(state.view,state,sections),route=trail.at(-1),index=compact&&route.key==='index',detail=compact&&trail.length>(settingsParent(page,sections)?3:2);
  useSettingsViewport(root,compact);
  const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef});
- const navigate=page=>{navigation.rememberScroll();act('view.update',{patch:compact?mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)):settingsPatch(page,sections)});};
+ const navigate=(page,reset=false)=>{navigation.rememberScroll();act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
+ useEffect(()=>{if(!state.view?.settingsRootVisit)return;const frame=requestAnimationFrame(()=>{if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;});return()=>cancelAnimationFrame(frame)},[state.view?.settingsRootVisit]);
  useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
  const props={state,session,act};
  // Keep visited editors mounted while the dialog is open. Private fields stay
@@ -47,13 +48,13 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  function renderPage(page){
  let content;
  if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate}/>;
- else if(page==='privacy')content=<PrivacySettings navigate={navigate}/>;
+ else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
  else if(page==='custom-appearance')content=React.isValidElement(appearance)?React.cloneElement(appearance,{advancedOnly:true}):appearance;
  else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
  else if(page==='workspaces')content=<WorkspaceSettings {...props}/>;
- else if(page==='voice')content=<><p className="a-everyday-intro">Talk with Amplifier while you work.</p><div className="a-ai-hint"><strong>Voice conversations</strong><p>Use the voice button in your conversation to start talking. Your browser will ask for microphone access.</p></div><details className="a-everyday-disclosure"><summary>Advanced voice options</summary><div><VoiceSettings {...props}/></div></details></>;
+ else if(page==='voice')content=<><p className="a-everyday-intro">Choose how your conversations sound.</p><VoiceSettings {...props}/></>;
  else if(page==='providers')content=<ProviderSettings {...props}/>;
  else if(page==='routing')content=<RoutingSettings {...props}/>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
@@ -78,7 +79,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
    <h3 ref={compact?heading:undefined} tabIndex={-1}>{route.title}</h3>
    <button type="button" className="a-icon" data-action="view.update" aria-label="Close settings" onClick={navigation.dismiss}><X/></button>
   </header>
-  <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0])}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
+  <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0],true)}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
    <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
    {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
