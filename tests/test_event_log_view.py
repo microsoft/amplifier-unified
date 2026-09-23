@@ -814,3 +814,94 @@ def test_resumed_root_alias_pairing_keeps_identical_child_call_separate(source):
     assert {row['id'] for row in tree['nodes']} == {'host-call', 'llm:child:provider-call'}
     assert tree['aggregateUsage']['costUsd'] == pytest.approx(6.28)
     assert tree['retiredUsageNodes'] == []
+
+
+def test_retired_child_receipts_keep_host_turn_across_restart_and_native_steering(source, tmp_path):
+    """Recovered observations must not move six admitted children into new turns."""
+    from amplifier_web.execution import rollup
+    from amplifier_web.session_projection import accounting_projection
+    session, path = source
+    session['status'] = 'stopped'
+    session['messages'][0].update(nativeIndex=0, inputId='host')
+    session['execution'] = {'nodes': [], 'turns': [
+        {'id': 'host', 'inputId': 'host', 'anchorMessageId': 'user', 'phase': 'completed'}],
+        'currentTurnId': 'host', 'retiredUsageNodes': []}
+    records = session['execution']['retiredUsageNodes']
+    transcript = [{'role': 'user', 'content': 'Inspect it'}]
+    root_call = {'id': 'root-call', 'kind': 'llm', 'sessionId': 'app', 'rootSessionId': 'app',
+        'turnId': 'host', 'producerId': 'worker', 'revision': 2, 'model': 'fixture',
+        'provider': 'test', 'startedAt': 2, 'endedAt': 3, 'phase': 'completed',
+        'usage': {'inputTokens': 84, 'outputTokens': 1, 'costUsd': 28.1, 'costType': 'reported'}}
+    records.append(root_call)
+    append(path, 'execution:node', root_call, 3)
+    for i in range(6):
+        child, tool = f'child-{i}', f'delegate-{i}'
+        if i:
+            transcript.append({'role': 'user', 'content': f'External recovered work observation {i}'})
+        transcript.extend([
+            {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': tool, 'name': 'delegate', 'input': {}}]},
+            {'role': 'tool', 'tool_call_id': tool, 'content': 'Worker completed'}])
+        append(path, 'tool:pre', {'tool_call_id': tool, 'tool_name': 'delegate'}, 10 + i * 10)
+        append(path, 'delegate:agent_spawned', {'tool_call_id': tool, 'sub_session_id': child}, 11 + i * 10)
+        append(path, 'tool:post', {'tool_call_id': tool, 'result': 'Worker completed'}, 19 + i * 10)
+        worker = {'id': 'worker:' + child, 'kind': 'worker', 'sessionId': child, 'rootSessionId': 'app',
+            'parentId': 'tool:native:' + tool, 'turnId': 'host', 'phase': 'completed', 'revision': 2,
+            'producerId': 'worker', 'startedAt': 11 + i * 10, 'endedAt': 18 + i * 10}
+        call = {**root_call, 'id': 'call-' + child, 'sessionId': child, 'parentId': worker['id'],
+            'startedAt': 12 + i * 10, 'endedAt': 18 + i * 10,
+            'usage': {'inputTokens': i + 1, 'outputTokens': 1, 'costUsd': i + .1, 'costType': 'reported'}}
+        records.extend([worker, call])
+        append(event_path(session, child), 'execution:node', {**call, 'session_id': child}, 18 + i * 10)
+    (path.parent.parent / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in transcript))
+    expected = rollup([r for r in records if r['kind'] == 'llm'])
+    unchanged = copy.deepcopy(records)
+    canonical = {file: file.read_bytes() for file in path.parent.parent.parent.rglob('*.jsonl')}
+    for _ in range(3):
+        session['execution'] = EventLogView(None).read(session)
+        host = next(t for t in session['execution']['turns'] if t['id'] == 'host')
+        assert host['aggregateUsage'] == expected
+        assert session['execution']['aggregateUsage'] == expected
+        assert accounting_projection(session['execution']) == unchanged
+        assert [segment['id'] for segment in page(session, 'nodes')['segments']] == ['host@user']
+        persist(tmp_path / 'app', {'sessions': [session]}, {})
+        session = json.loads((path.parent.parent / 'unified/view.json').read_text())
+    assert all(file.read_bytes() == content for file, content in canonical.items())
+
+
+@pytest.mark.parametrize('worker_root', ['app', 'another-root'])
+def test_worker_accounting_turn_requires_current_root_binding(source, worker_root):
+    session, path = source
+    session['messages'] = [
+        {'id': 'user', 'role': 'user', 'text': 'First', 'createdAt': 1, 'nativeIndex': 0, 'inputId': 'first'},
+        {'id': 'later', 'role': 'user', 'text': 'Recovered observation', 'createdAt': 5, 'nativeIndex': 1}]
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'first', 'inputId': 'first', 'anchorMessageId': 'user'}],
+        'retiredUsageNodes': [{'id': 'worker:child', 'kind': 'worker', 'sessionId': 'child',
+            'rootSessionId': worker_root, 'turnId': 'first', 'parentId': 'tool:native:delegate'}]}
+    append(path, 'tool:pre', {'tool_call_id': 'delegate', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate', 'sub_session_id': 'child'}, 11)
+    append(event_path(session, 'child'), 'tool:post', {'session_id': 'child', 'tool_call_id': 'child-tool', 'result': 'done'}, 12)
+    transcript = [{'role': 'user', 'content': 'First'}, {'role': 'user', 'content': 'Recovered observation'},
+        {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'delegate', 'name': 'delegate', 'input': {}}]}]
+    (path.parent.parent / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in transcript))
+    original = copy.deepcopy(session['execution']['retiredUsageNodes'])
+    tree = EventLogView(None).read(session)
+    assert {row['turnId'] for row in tree['nodes']} == ({'first'} if worker_root == 'app' else {'native-turn:later'})
+    assert tree['retiredUsageNodes'] == original
+
+
+def test_child_call_exact_turn_survives_later_worker_turn(source):
+    session, path = source
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'old'}, {'id': 'new', 'anchorMessageId': 'user'}],
+        'retiredUsageNodes': [{'id': 'worker:child', 'kind': 'worker', 'sessionId': 'child',
+            'rootSessionId': 'app', 'turnId': 'new', 'parentId': 'tool:native:delegate'}]}
+    append(path, 'tool:pre', {'tool_call_id': 'delegate', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate', 'sub_session_id': 'child'}, 11)
+    for turn in ('old', 'new'):
+        call = {'id': turn + '-call', 'kind': 'llm', 'sessionId': 'child', 'rootSessionId': 'app',
+            'turnId': turn, 'producerId': 'host', 'revision': 2, 'phase': 'completed',
+            'startedAt': 12, 'endedAt': 13, 'model': 'fixture', 'usage': {'totalTokens': 2, 'costUsd': .1}}
+        session['execution']['retiredUsageNodes'].append(call)
+        append(event_path(session, 'child'), 'execution:node', {**call, 'session_id': 'child'}, 13)
+    tree = EventLogView(None).read(session)
+    assert {row['id']: row['turnId'] for row in tree['nodes'] if row['kind'] == 'llm'} == {'old-call': 'old', 'new-call': 'new'}
+    assert {row['id']: row['aggregateUsage']['calls'] for row in tree['turns']} == {'old': 1, 'new': 1}
