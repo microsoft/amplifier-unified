@@ -111,10 +111,12 @@ class ClientViews:
         sync(self.service)
         record = self.records[identity]
         self.dirty.add(identity)
+        self.service.computer_visual.reconcile(identity)
         sid = record.get("selectedSessionId")
         if sid is not None and not any(row["id"] == sid for row in self.service._state.get("sessions", [])):
             record["selectedSessionId"] = None
             record["canvas"] = {}
+        self.service.computer_visual.reconcile(identity)
         from .managed_chats import is_managed
         selected = next((row for row in self.service._state.get("sessions", []) if row["id"] == sid), {})
         managed = is_managed(selected) or (sid is None and is_managed(record.get("view", {}).get("newSessionDraft", {})))
@@ -194,6 +196,7 @@ class ClientViews:
                                        for row in snapshot.get("canvasArtifacts", [])]
         snapshot["client"] = {"id": self.current.get(), "kind": record["kind"], "protocolVersion": 1,
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
+        snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         snapshot["sessions"] = [dict(row) for row in snapshot.get("sessions", [])]
         for session in snapshot["sessions"]:

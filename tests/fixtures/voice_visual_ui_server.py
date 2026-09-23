@@ -44,7 +44,7 @@ async def main(home):
     async def ready(request):await service.set_voice_status({'status':'connected'});return web.json_response({'ready':True})
     async def end(request):return web.json_response(await service.voice_service.end())
     async def inspect(request):
-        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent,'stopped':runtime.stopped,'nativeCalls':service.voice_visual.native.calls})
+        return web.json_response({'grant':service.voice_visual.grant,'receipts':list(service.voice_visual.receipts.values()),'sent':runtime.sent,'stopped':runtime.stopped,'nativeCalls':service.voice_visual.native.calls,'computerGrants':[v.grant for v in service.computer_visual.clients.values() if v.grant],'computerReceipts':[r for v in service.computer_visual.clients.values() for r in v.receipts.values()]})
     async def activity(request):
         data=await request.json();session=service._session(data['sessionId'])
         session['status']=data.get('status','idle');session['workers']=data.get('workers',[])
@@ -52,7 +52,7 @@ async def main(home):
         return web.json_response({'ok':True})
     async def agent(request):
         payload=await request.json()
-        return web.json_response(await service.app_bridge('dispatch',payload,service.voice_service.call.session_id))
+        return web.json_response(await service.app_bridge('dispatch',payload,payload.get('sessionId') or service.voice_service.call.session_id))
     app.router.add_get('/api/voice/config',config);app.router.add_post('/api/voice/connect',connect);app.router.add_post('/api/voice/ready',ready);app.router.add_post('/api/voice/end',end)
     app.router.add_get('/fixture',inspect);app.router.add_post('/fixture/agent',agent);app.router.add_post('/fixture/activity',activity)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start();url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'

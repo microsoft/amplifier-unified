@@ -5,18 +5,19 @@ import {TaskContinuity} from './task-continuity';
 import {WorktreeControls} from './worktrees';
 import {PortabilityControls} from './portability';
 import {ActivityRegion} from './activity-region';
-import React,{useState,useEffect} from 'react';
-import {RefreshCw,Check,Play,Trash2,Target,SlidersHorizontal,Code2,BookOpen} from 'lucide-react';
+import React,{useState,useEffect,useRef,useLayoutEffect} from 'react';
+import {RefreshCw,Check,Play,Trash2,Target,SlidersHorizontal,Code2,BookOpen,Monitor} from 'lucide-react';
 import {Markdown} from './markdown';
 import {usageLabel} from './timeline-data';
 import {ArtifactRuntime} from './artifact-runtime';
 const pretty=value=>JSON.stringify(value,null,2);
 const defaults={tab:'overview',goalCondition:'',goalMaxTurns:'',mode:'',maxIterations:'',contextTokens:'',tool:'',toolArgs:'{}',clearConfirm:false};
-export function RuntimeSettings({state,session,act}){
- const shared=state.view?.runtimeDraft;
+export function RuntimeSettings({state,session,act,computerControls}){
+ const shared=state.view?.runtimeDraft,root=useRef(null);
  const [draft,setDraft]=useState({...defaults,...shared});
  useEffect(()=>{if(shared)setDraft(current=>({...current,...shared}))},[shared]);
- const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{runtimeDraft:next}})};
+ const edit=patch=>{setDraft(current=>({...current,...patch}));act('view.update',{patch:{runtimeDraft:patch}})};
+ useLayoutEffect(()=>{if(!draft.section)return;const section=[...(root.current?.querySelectorAll('[data-runtime-section]')||[])].find(el=>el.dataset.runtimeSection===draft.section);section?.scrollIntoView({block:'nearest'});section?.focus({preventScroll:true})},[draft.section,draft.tab,draft.revealRevision]);
  const results=state.runtimeControl?.[session?.id]||{};
  const catalog=results['catalog.inspect']||{},modes=results['mode.list']||{},goalResult=results['goals.get']||results['goals.set']||{},budget=results['budget.get']||results['budget.set']||{},usage=results['usage.inspect'];
  const capabilities=catalog.capabilities||{},savedTask=results['task.get']?.task||session?.task;
@@ -29,9 +30,11 @@ export function RuntimeSettings({state,session,act}){
  const goalAvailable=!!capabilities.goals,modeAvailable=!!capabilities.modes;
  const currentUsage=usageLabel(usage?.usage);
  let parsedArgs={},argsError='';try{parsedArgs=JSON.parse(draft.toolArgs);if(!parsedArgs||typeof parsedArgs!=='object'||Array.isArray(parsedArgs))throw new Error('Tool arguments must be a JSON object.')}catch(error){argsError=error.message}
- const tabs=[['overview','Session',SlidersHorizontal],['direction','Goals & modes',Target],['limits','Limits & context',BookOpen],['tools','Tools & skills',Code2]];
+ const tabs=[['overview','Session',SlidersHorizontal],['direction','Goals & modes',Target],['limits','Limits & context',BookOpen],['tools','Tools & skills',Code2],['computer','Computer use',Monitor]];
  if(!session)return <PortabilityControls state={state} session={null} act={act}/>;
- return <div className="a-runtime-settings" data-part="runtime-controls"><p>Inspect and control the active Amplifier session. Its bundle determines which capabilities are available.</p><nav className="a-settings-nav" aria-label="Session control sections">{tabs.map(([key,label,Icon])=><button key={key} className={draft.tab===key?'selected':''} data-action="view.update" onClick={()=>edit({tab:key})}><Icon/>{label}</button>)}</nav>
+ return <div ref={root} className="a-runtime-settings" data-part="runtime-controls"><p>Inspect and control the active Amplifier session. Its bundle determines which capabilities are available.</p><nav className="a-settings-nav" aria-label="Session control sections">{tabs.map(([key,label,Icon])=><button key={key} className={draft.tab===key?'selected':''} data-action="view.update" onClick={()=>edit({tab:key,section:null})}><Icon/>{label}</button>)}</nav>
+  <div data-runtime-section={draft.tab} tabIndex={-1}>
+  {draft.tab==='computer'&&computerControls}
   {management.error&&<div className="a-alert" role="alert"><span>{management.error}</span></div>}{pending&&<p className="a-management-status" role="status"><RefreshCw className="a-progress-spinner"/>{management.detail||'Updating the session…'}</p>}
   {draft.tab==='overview'&&<><WorktreeControls session={session} act={act}/><ActivityRegion as="section" name="runtime-catalog.inspect" busy={operationPending('catalog.inspect')} className="a-settings-section"><h3>Session capabilities</h3><button className="a-soft" disabled={pending} data-action="runtime.control" onClick={()=>run('catalog.inspect')}><RefreshCw/>Inspect capabilities</button>{tools.length>0&&<div className="a-capability-counts"><span><strong>{tools.length}</strong> tools</span><span><strong>{Object.keys(catalog.agents||{}).length}</strong> agents</span><span><strong>{(catalog.skills||[]).length}</strong> skills</span></div>}{Object.keys(capabilities).length>0&&<div className="a-capability-tags">{Object.entries(capabilities).map(([name,value])=><span key={name} className={value?'available':'unavailable'}>{name} · {value?'available':'unavailable'}</span>)}</div>}</ActivityRegion><ActivityRegion as="section" name="runtime-usage.inspect" busy={operationPending('usage.inspect')} className="a-settings-section"><h3>Usage & context</h3><button className="a-soft" disabled={pending} data-action="runtime.control" onClick={()=>run('usage.inspect')}><RefreshCw/>Refresh usage</button>{usage&&<><p className="a-caption">{usage.calls??0} model calls · {usage.messages??0} messages · {usage.userTurns??0} user turns</p>{currentUsage&&<p title={currentUsage.title}>{currentUsage.text}</p>}<p className="a-caption">{usage.contextCharacters?.toLocaleString?.()??'Unknown'} context characters. Character counts are not token counts.</p></>}</ActivityRegion></>}
   {draft.tab==='direction'&&<><TaskContinuity state={state} session={session} act={act}/><ScheduleControls session={session} act={act}/>{!savedTask&&<ActivityRegion as="section" name="runtime-goals.get" busy={operationPending('goals.get')} className="a-settings-section"><h3>Goal</h3><p>Give the session an explicit condition to work toward and an optional turn limit.</p>{!goalAvailable&&<p className="a-caption">{Object.keys(capabilities).length?'This bundle does not expose a goal controller.':'Inspect session capabilities first to check goal support.'}</p>}<button className="a-soft" disabled={!goalAvailable||pending} data-action="runtime.control" onClick={()=>run('goals.get')}><RefreshCw/>Load current goal</button>{goalResult.goal&&<div className="a-selection-card"><p><strong>{goalResult.goal.condition}</strong></p><small>{goalResult.goal.turns_used??0} turns used{goalResult.goal.cap?` of ${goalResult.goal.cap}`:''}</small>{goalResult.goal.last_reason&&<p>{goalResult.goal.last_reason}</p>}</div>}<label htmlFor="runtime-goal">Goal condition</label><textarea id="runtime-goal" value={draft.goalCondition} data-action="view.update" onChange={e=>edit({goalCondition:e.target.value})} placeholder="The requested changes are implemented and the checks pass."/><label htmlFor="runtime-goal-turns">Maximum continuation turns (optional)</label><input id="runtime-goal-turns" type="number" min="1" value={draft.goalMaxTurns} data-action="view.update" onChange={e=>edit({goalMaxTurns:e.target.value})}/><div className="a-dialog-actions"><button className="a-primary" disabled={!goalAvailable||!draft.goalCondition.trim()||active||pending||(draft.goalMaxTurns!==''&&(!Number.isInteger(Number(draft.goalMaxTurns))||Number(draft.goalMaxTurns)<1))} data-action="runtime.control" onClick={()=>run('goals.set',{condition:draft.goalCondition.trim(),maxTurns:draft.goalMaxTurns?Number(draft.goalMaxTurns):null})}><Target/>Set goal</button><button className="a-soft" disabled={!goalAvailable||active||pending} data-action="runtime.control" onClick={()=>run('goals.clear')}>Clear goal</button></div></ActivityRegion>}
@@ -41,5 +44,5 @@ export function RuntimeSettings({state,session,act}){
   {draft.tab==='overview'&&<ArtifactRuntime sessionId={session.id} act={act}/>}
   {draft.tab==='overview'&&<PortabilityControls state={state} session={session} act={act}/>}
   {active&&<p className="a-caption">Changes and direct tool calls become available when this session and its workers are idle.</p>}
- </div>;
+ </div></div>;
 }

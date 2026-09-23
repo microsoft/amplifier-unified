@@ -101,6 +101,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.bind_runtime_alias(lambda current: app.__setitem__("runtime", current))
     from .voice_visual import setup_routes as visual_routes
     visual_routes(app)
+    from .computer_visual import setup_routes as computer_visual_routes
+    computer_visual_routes(app)
     from .terminal_setup import setup_routes as setup_terminal
     setup_terminal(app)
     from .smart_tools import SmartToolsManager

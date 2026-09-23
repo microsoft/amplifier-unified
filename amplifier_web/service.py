@@ -110,7 +110,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. clientId selects a browser displaying the calling chat when ambiguous; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
@@ -269,6 +269,8 @@ from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
 from .voice_visual import VoiceVisual, definitions as visual_definitions
 ACTION_DEFINITIONS.update(visual_definitions(schema, string))
+from .computer_visual import ComputerVisuals, definitions as computer_visual_definitions
+ACTION_DEFINITIONS.update(computer_visual_definitions(schema, string))
 from .worktrees import definitions as worktree_definitions
 ACTION_DEFINITIONS.update(worktree_definitions(schema, string))
 from .portability import definitions as portability_definitions
@@ -323,6 +325,7 @@ class AppService:
         self.runtime = runtime
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
+        self.computer_visual = ComputerVisuals(self)
         self.update_manager = None
         self.management = None
         self.smart_tools = None
@@ -714,7 +717,9 @@ class AppService:
 
     def unsubscribe(self, queue):
         self.queues.discard(queue)
-        self.queue_clients.pop(queue, None)
+        client_id = self.queue_clients.pop(queue, None)
+        if client_id and client_id not in self.queue_clients.values():
+            self.computer_visual.reconcile(client_id, disconnect=True)
         self.queue_sessions.pop(queue, None)
 
     def _session(self, sid=None):
@@ -1005,6 +1010,8 @@ class AppService:
             return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
             return await self.operations.dispatch(action, args, origin, command_id)
+        if action.startswith("computer.visual."):
+            return await self.computer_visual.dispatch(action, args, command_id, origin)
         if action.startswith("voice.visual."):
             return await self.voice_visual.dispatch(action, args, command_id, origin)
         if action.startswith("outputs."):
@@ -1183,6 +1190,9 @@ class AppService:
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+            if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
+                from .agent_canvas import target
+                target(self, caller_session_id, client_id, required=True)
             if action == 'view.update' and client_id is not None:
                 from .client_layout import accepts, update
                 if accepts(args['patch']):
@@ -1598,6 +1608,7 @@ class AppService:
                 from .chat_navigation import recent_activity
                 previous_activity = recent_activity(session)
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
+                self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,delivery={'status':'sending'})
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
@@ -1723,7 +1734,8 @@ class AppService:
                     patch = view_patch(self.state, chat_view_patch(patch))
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
-                patch = copy.deepcopy(patch)
+                from .runtime_navigation import update as runtime_view_patch
+                patch = runtime_view_patch(self.state["view"], copy.deepcopy(patch))
                 if 'newSessionDraft' in patch:
                     from .new_chat import validate_setup
                     try:
@@ -1881,6 +1893,7 @@ class AppService:
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
                 restore(self.state,self.db,open_panel=previous_open)
             if client_id is not None and previous_scope[0] != self.state.get('selectedSessionId'):
+                self.computer_visual.reconcile(client_id)
                 self.clients.reconcile(client_id)
             if previous_scope[1] != self.state.get('selectedWorkspaceId') or action in {'workspace.select', 'workspace.add', 'workspace.create', 'session.select'}:
                 # An explicit selection reveals its folder, including returning
@@ -2618,6 +2631,8 @@ class AppService:
                 return {"admitted": True, "questionIds": values}
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
+        if operation == "computer.visual.read":
+            return self.computer_visual.read(session_id, args.get("captureId"))
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
         if operation == "outputs.image.read":
@@ -2694,7 +2709,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Desktop readiness must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('voice.visual.'):
+            if args['action'].startswith(('voice.visual.', 'computer.visual.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Visual capture must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2719,7 +2734,12 @@ class AppService:
                 action_args.setdefault('nativeProject', native_project(self._session(session_id)))
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
-            if args['action'] == 'canvas.select':
+            if args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
+                from .agent_canvas import target
+                canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
+            elif args['action'] == 'canvas.select':
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, action_args)
                 if canvas_client is not None:
@@ -2777,6 +2797,12 @@ class AppService:
             self.state["voice"].update(payload)
             if self.state["voice"].get("status") != "connected":
                 self.voice_visual.revoke()
+            else:
+                call = getattr(self.voice_service, "call", None)
+                client_id = getattr(call, "client_id", None)
+                visual = self.computer_visual.clients.get(client_id)
+                if visual and visual.session_id == self.state["voice"].get("sessionId"):
+                    self.computer_visual.reconcile(client_id, disconnect=True)
             self.voice_visual.publish()
 
     async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
@@ -2854,6 +2880,7 @@ class AppService:
         if lifecycle_tasks:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
         await self.voice_visual.close()
+        await self.computer_visual.close()
         await self.schedules.close()
         await self.recall.personalization.close()
         await self.worktrees.close()

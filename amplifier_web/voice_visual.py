@@ -24,6 +24,10 @@ def definitions(schema, string):
 
 
 class VoiceVisual:
+    action_prefix = "voice.visual"
+    permission_scope = "Explicit UI or agent snapshots during this call; no automatic capture."
+    message_via = "call"
+
     def __init__(self, service):
         self.service = service
         self.grant = None
@@ -57,7 +61,7 @@ class VoiceVisual:
         self.active(sid, call_id)
         grant = self.grant
         if not grant or grant["sessionId"] != sid or grant["callId"] != call_id or grant["expiresAt"] < time.time():
-            self.fail("Choose a screen source in the voice controls first; permission is limited to this call.")
+            self.fail("Choose a screen source in Chat controls → Computer use first; permission is limited to this call.")
         if grant["source"]["kind"] == "native-foreground":
             from .host_identity import require_local_host
             try:
@@ -143,7 +147,7 @@ class VoiceVisual:
             self.grant = {"id": uuid.uuid4().hex, "sessionId": sid, "callId": call_id, "clientId": client,
                           "source": source,
                           "grantedAt": time.time(), "expiresAt": time.time()+900,
-                          "scope": "Explicit UI or agent snapshots during this call; no automatic capture."}
+                          "scope": self.permission_scope}
             self.publish()
             return copy.deepcopy(self.grant)
 
@@ -158,7 +162,7 @@ class VoiceVisual:
             identity = uuid.uuid4().hex
             future = asyncio.get_running_loop().create_future()
             self.pending = {"id": identity, "grantId": grant["id"], "future": future, "requestedAt": time.time(), "nextInput": next_input}
-            command = {"id": identity, "type": "voice.visual.capture", "createdAt": time.time(),
+            command = {"id": identity, "type": self.action_prefix+".capture", "createdAt": time.time(),
                        "callId": call_id, "sessionId": sid, "grantId": grant["id"], "clientId": grant["clientId"]}
             native = grant["source"]["kind"] == "native-foreground"
             if native:
@@ -238,7 +242,7 @@ class VoiceVisual:
                 from .native_foreground import observation_metadata
                 observation = observation_metadata(data)
             from .attachments import save
-            attachment = save(self.service.data_dir, "voice-screen-"+pending["id"]+".png", encoded)
+            attachment = save(self.service.data_dir, self.action_prefix+"-"+pending["id"]+".png", encoded)
             row = {"id": pending["id"], "sessionId": sid, "callId": call_id, "grantId": grant["id"],
                    "source": copy.deepcopy(grant["source"]), "capturedAt": captured, "receivedAt": time.time(),
                    "attachment": attachment, "width": width, "height": height,
@@ -254,7 +258,7 @@ class VoiceVisual:
             # does not create a model turn, touch the draft, or select a chat.
             session = self.service._session(sid)
             self.service._message(session, "user", "Screen snapshot from the selected "+grant["source"]["kind"]+" source (reference data).",
-                                  "call", attachments=[attachment], visualCapture=copy.deepcopy(row), activityOnly=True)
+                                  self.message_via, attachments=[attachment], visualCapture=copy.deepcopy(row), activityOnly=True)
             pending["future"].set_result(copy.deepcopy(row))
             self.publish()
             return {"accepted": True, "captureId": row["id"]}
@@ -289,13 +293,13 @@ class VoiceVisual:
                 return
 
     async def dispatch(self, action, args, command_id=None, origin="ui"):
-        sid, call_id = args["sessionId"], args["callId"]
+        sid, call_id = args["sessionId"], args.get("callId")
         self.service._session(sid)
-        if action == "voice.visual.status":
+        if action == self.action_prefix+".status":
             result = self.status(sid, call_id)
-        elif action == "voice.visual.capture":
+        elif action == self.action_prefix+".capture":
             identity = command_id or str(uuid.uuid4())
-            fingerprint = json.dumps([action, sid, call_id])
+            fingerprint = json.dumps([action, sid, call_id]+([self.client_id] if self.action_prefix == "computer.visual" else []))
             async with self.service.lock:
                 previous = self.service.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (identity,)).fetchone()
                 if previous:
@@ -313,8 +317,8 @@ class VoiceVisual:
                 self.service.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
                 self.service.db.commit()
         else:
-            self.active(sid, call_id)
             async with self.service.lock:
+                self.active(sid, call_id)
                 self.revoke()
                 self.publish()
             result = {"revoked": True}
