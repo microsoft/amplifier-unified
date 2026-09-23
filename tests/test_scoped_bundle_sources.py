@@ -144,3 +144,40 @@ async def test_explicit_global_settings_remain_available_to_future_sessions(sour
         _, loaded, _ = await load_root_bundle(config, "selected")
         assert all(row["config"]["source"] == "target" for row in loaded.tools)
     assert paths["global"].read_bytes() == before
+
+
+@pytest.mark.parametrize("fragment", ["root.yaml", "bundle.md"])
+async def test_file_source_override_resolves_namespace_includes_from_bundle_directory(source_fixture, fragment):
+    workspace, app, shared, roots, paths, overrides, calls = source_fixture
+    # A registered source can name its bundle file explicitly, as Work does.
+    overrides["portable"] = TARGET + "#subdirectory=" + fragment
+    write(paths["session"], {"sources": {"bundles": overrides}})
+    config = read_config(workspace, home=app, shared_home=shared, session_id="session-one")
+    _, loaded, _ = await load_root_bundle(config, "selected")
+    assert {row["module"]: row["config"]["source"] for row in loaded.tools} == {
+        "tool-root": "target", "tool-app": "target", "tool-leaf": "target"}
+    assert TARGET + "#subdirectory=leaf.yaml" in calls
+
+
+@pytest.mark.parametrize(("base", "expected"), [
+    ("", "behaviors/leaf.yaml"),
+    ("#subdirectory=bundles/work", "bundles/work/behaviors/leaf.yaml"),
+    ("#subdirectory=bundles/work/bundle.md", "bundles/work/behaviors/leaf.yaml"),
+    ("#subdirectory=bundles/work/root.yml", "bundles/work/behaviors/leaf.yaml"),
+])
+def test_git_namespace_override_preserves_bundle_base(source_fixture, base, expected):
+    workspace, app, shared, _, paths, _, _ = source_fixture
+    write(paths["session"], {"sources": {"bundles": {"portable": TARGET + base}}})
+    config = read_config(workspace, home=app, shared_home=shared, session_id="session-one")
+    result = config.resolve_source("portable:behaviors/leaf.yaml")
+    assert result.split("#")[0] == TARGET
+    assert parse_qs(result.split("#")[1])["subdirectory"] == [expected]
+
+
+@pytest.mark.parametrize("file_uri", [False, True])
+def test_local_manifest_source_resolves_sibling_include(source_fixture, file_uri):
+    workspace, app, shared, roots, paths, _, _ = source_fixture
+    manifest = roots[TARGET] / "root.yaml"
+    write(paths["session"], {"sources": {"bundles": {"portable": manifest.as_uri() if file_uri else str(manifest)}}})
+    config = read_config(workspace, home=app, shared_home=shared, session_id="session-one")
+    assert config.resolve_source("portable:leaf.yaml") == str(manifest.parent / "leaf.yaml")
