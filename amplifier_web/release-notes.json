@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.16",
+      "title": "Clearer connections and private memory jobs",
+      "changes": [
+        "Improve saved connection status and removal, offer explicit reuse of host credentials, and return Settings categories to their starting view.",
+        "Choose a speaking voice and activity detail level, set up phone notifications more clearly, and trace update badges to the items that need review.",
+        "Prompt to reload when the installed app changes, saving unsent chat drafts first and keeping them when saving fails.",
+        "Update the memory component to run suggestions through Amplifier Core sessions in its own private runtime home without requiring the Amplifier CLI. Shared provider settings remain available without writing job history into user chats."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.15",
       "title": "Simpler Settings and faster installations",
       "changes": [
