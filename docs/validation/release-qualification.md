@@ -18,11 +18,35 @@ and require `git diff --exit-code -- amplifier_web/static` to pass before mergin
 the release candidate; a version-only edit still changes generated bundle hashes.
 Keep the release workflow's committed-assets comparison enabled.
 
+## Temporary rapid-development policy (September 23, 2026)
+
+Browser scenarios are opt-in for the current development period. Neither the
+release workflow nor pull-request workflows install Playwright or run browser
+scenarios. Python contracts, frontend unit tests, frontend builds and the
+committed-assets comparison remain automatic. Release receipts explicitly name
+`python`, `frontend`, and `runtime`; a frontend receipt is not evidence of browser
+validation.
+
+Run **Browser checks (on demand)** from GitHub Actions, selecting the branch or
+tag to test. It retains every former release browser command, plus the capacity,
+coordination and connector browser checks from the PR workflows, in one isolated
+runner. It has read-only permissions and cannot publish or block a release.
+Tests remain available locally through the existing frontend scripts. There is
+no scheduled browser run or automatic expiration of this temporary policy;
+restoring browser gates is an explicit workflow change.
+
+For v0.20.12, merge-to-publication took 10m10s. The browser job took 8m54s,
+while the concurrent Python job took 7m23s. Removing the browser gate is expected
+to bring the same release path to roughly 8–9 minutes, not save nine minutes.
+Actual duration still depends on queues, source builds and tests. Ordinary
+feature merges still need a versioned release before published-release clients
+can update.
+
 ## Execution and identity
 
 `prepare` selects the same immutable merged application commit as before,
 resolves current host dependencies once, and records their exact requirements.
-Python, browser, and runtime jobs then run independently against that commit
+Python, frontend, and runtime jobs then run independently against that commit
 and restored host graph. Each verifies the graph before and after its checks.
 The publication job requires all three jobs to succeed and checks their
 candidate identifiers plus the original wheel/source/checksum bytes before
@@ -55,12 +79,12 @@ the dedicated-key checkout does not grant other cache readers its package build.
 |---|---|
 | Full pytest suite | Python |
 | Distribution verification, isolated wheel install and import/assets/login probe | Python |
-| npm tests, frontend build and committed-assets comparison | Browser |
-| Every existing browser command and its conditional file guard | Browser |
+| npm tests, frontend build and committed-assets comparison | Frontend |
+| Browser scenarios and their conditional file guards | Manual browser workflow; outside publication |
 | Real Core/loop-live surface, child, component and cache tests | Runtime |
 | Immutable tag/asset checks and publication | Release, after all jobs |
 
-The active-client performance check runs once; independent live-client behavior
+In the manual workflow, the active-client performance check runs once; independent live-client behavior
 is checked separately. All four session-health invocations remain, including context-limit and context-limit with an active
 worker. Browser fixtures retain their serial ordering within an isolated runner;
 fixed-port fixtures and performance checks do not compete with other lanes.
@@ -91,8 +115,8 @@ select an already published tag's full original commit SHA. All jobs execute, an
 the existing publisher leaves that tag and its published assets unchanged. The
 default newer main commit with an already released package version is rejected
 at planning; this guard prevents accidental publication but does not exercise
-the downstream jobs. A new release still requires its own version and complete
-qualification.
+the downstream jobs. A new release still requires its own version and all required
+qualification lanes.
 
 An exact-candidate promotion system that reuses matching PR/merge qualification,
 shared prebuilt wheels, and merge-policy changes remain separate proposals.

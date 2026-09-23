@@ -8,6 +8,9 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/workflows/work-workflows.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/browser-checks.yml'
+      - 'scripts/release*.py'
 permissions:
   contents: read
 jobs:
@@ -32,15 +35,4 @@ jobs:
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
       - run: git diff --exit-code -- amplifier_web/static
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - name: Verify active clients with a large conversation library
-        working-directory: frontend
-        run: npm run test:active-client-performance-browser
-      - name: Exercise shared workflow controls in compiled UI
-        working-directory: frontend
-        run: |
-          node tests/desktop-readiness-browser.mjs
-          node tests/memory-personalization-browser.mjs
-          node tests/publishing-browser.mjs
-          node tests/portability-browser.mjs
+      # Browser coverage is available in browser-checks.yml (manual only).

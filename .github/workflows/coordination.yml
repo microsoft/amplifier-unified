@@ -34,6 +34,4 @@ jobs:
       - run: uv run --no-sync pytest tests/test_coordination.py tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run test:coordination-browser --prefix frontend
+      # Browser coverage is available in browser-checks.yml (manual only).
