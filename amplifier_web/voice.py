@@ -92,6 +92,9 @@ class VoiceCall:
     def __init__(self, manager: "VoiceService", session_id: str | None):
         self.manager, self.service = manager, manager.service
         self.session_id = session_id
+        # Capture the browser before create() builds the provider instructions.
+        clients = getattr(self.service, "clients", None)
+        self.client_id = clients.current.get() if clients is not None else None
         portability = getattr(self.service, 'portability', None)
         self.transfer_id = portability.write_context(session_id) if portability else None
         self.id = ""

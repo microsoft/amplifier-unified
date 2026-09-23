@@ -73,7 +73,10 @@ async def inspect(service, sid):
         worker = await service.runtime.desktop_readiness(sid)
     voice = service.state.get("voice", {})
     visual = service.voice_visual.status(sid, voice.get("id")) if sid and voice.get("sessionId") == sid else {}
-    computer = service.computer_visual.project(service.clients.current.get())
+    client_id = service.clients.current.get()
+    if client_id is not None and visual.get("clientId") != client_id:
+        visual = {}
+    computer = service.computer_visual.project(client_id)
     if computer.get("available") and computer.get("sessionId") == sid:
         visual = computer
     source = visual.get("source") if visual.get("available") else None
@@ -88,7 +91,7 @@ async def inspect(service, sid):
             "source": source, "expiresAt": visual.get("expiresAt") if source else None,
             "browserContext": "The native source is bound to the named host and app instance. Window identity is supplied only by an explicit capture; browser tabs and accounts are not exposed."
                 if native_source else "The browser reports only the selected source label and kind. Tab URL, browser profile and signed-in account are not exposed by this transport.",
-            "nextStep": "Use Capture screen for one snapshot from the selected source, or Stop screen sharing to revoke this browser's conversation grant. Screen observation grants no desktop control."
+            "nextStep": "Use Capture screen for one snapshot from the selected source, or Stop screen sharing to revoke the selected source permission. Screen observation grants no desktop control."
                 if source else "Open Chat controls → Computer use and choose a screen source in this browser. Text and voice use the same sharing permission. A direct user click opens the browser picker. Screen observation grants no desktop control."},
         "nextActions": [
             {"label": "Updates", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "maintenance", "settingsExpanded": ["updates"]}}},
