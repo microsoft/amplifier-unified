@@ -6,12 +6,14 @@ This module never writes a capture, changes capture policy, or executes work.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 import copy
 from datetime import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -48,11 +50,29 @@ def merge_model_observations(rows, *, aliases=()):
     separate, and timing matches never create admission-accounting authority.
     """
     app = [row for row in rows if row.get('_appModel')]
+    # Terminal observations can match only within one second. Index that
+    # necessary condition before the identity/usage checks instead of comparing
+    # every historical host call with every provider call on each refresh.
+    # Pending observations retain the existing ambiguity rules below.
+    def finite_timestamp(value):
+        return isinstance(value, (int, float)) and (not isinstance(value, float) or math.isfinite(value))
+    ended = sorted((row['endedAt'], position) for position, row in enumerate(app)
+                   if finite_timestamp(row.get('endedAt')))
+    times = [at for at, _ in ended]
+    pending = [position for position, row in enumerate(app) if not row.get('endedAt')]
     pairs = []
     for row in rows:
         if row['kind'] != 'llm' or row.get('_appModel'):
             continue
-        matches = [other for other in app if (other.get('sessionId') == row.get('sessionId') or
+        end = row.get('endedAt')
+        positions = pending if not end else []
+        if finite_timestamp(end):
+            positions = [*positions, *(position for _, position in
+                         ended[bisect_left(times, end - 1):bisect_right(times, end + 1)])]
+        # Keep original host order for equally close matches and include zero
+        # timestamps in both pending and terminal cases without duplicating them.
+        candidates = (app[position] for position in sorted(set(positions)))
+        matches = [other for other in candidates if (other.get('sessionId') == row.get('sessionId') or
                        other.get('sessionId') in aliases and row.get('sessionId') in aliases)
                    and same_model_call(other, row)]
         if row.get('endedAt') is not None or len(matches) == 1:
