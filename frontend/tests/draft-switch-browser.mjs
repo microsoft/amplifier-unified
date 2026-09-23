@@ -21,17 +21,25 @@ try{
  await act('session.create');const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await act('session.create');const second=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ // Compact action receipts synchronize through SSE; saved drafts are read from
+ // the authoritative state endpoint under the same client identity.
+ const selectSaved=async id=>{
+  const receipt=await act('session.select',{id});assert.equal(receipt.accepted,true);assert.equal(receipt.state,undefined);
+  const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+  const response=await page.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':clientId}});assert.ok(response.ok());
+  const state=await response.json();assert.equal(state.selectedSessionId,id);return state.view.draft;
+ };
  await act('session.select',{id:first});await composer.fill('Unsent draft in first chat');
  const firstTyped=await composer.inputValue();
  await act('session.select',{id:second});await composer.fill('Unsent draft in second chat');
  const secondTyped=await composer.inputValue();
  const completed=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON().action==='view.update'&&response.request().postDataJSON().args.patch?.draft==='Unsent draft in second chat');
  const pending=await page.evaluate(()=>window.flushComposerDebounce());await completed;
- const restored=await act('session.select',{id:first});
- assert.equal(restored.state.view.draft,firstTyped);
+ const restored=await selectSaved(first);
+ assert.equal(restored,firstTyped);
  await expect(composer).toHaveValue(firstTyped);
- const secondRestored=await act('session.select',{id:second});
- assert.equal(secondRestored.state.view.draft,secondTyped);
+ const secondRestored=await selectSaved(second);
+ assert.equal(secondRestored,secondTyped);
  await expect(composer).toHaveValue(secondTyped);
  // Sending the second chat's existing draft can also cancel a staged first draft.
  await act('session.select',{id:first});await composer.fill('First chat edit retained through another chat send');
@@ -40,14 +48,14 @@ try{
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.getByText('Synthetic first response',{exact:true}).waitFor();
  await expect(composer).toHaveValue('');
- const afterSend=await act('session.select',{id:first});
- assert.equal(afterSend.state.view.draft,beforeSend);
+ const afterSend=await selectSaved(first);
+ assert.equal(afterSend,beforeSend);
  await expect(composer).toHaveValue(beforeSend);
  assert.equal(await page.evaluate(()=>window.flushComposerDebounce()),0);
- const sentChat=await act('session.select',{id:second});
- assert.equal(sentChat.state.view.draft,'','An old debounce must not resurrect a sent draft');
+ const sentChat=await selectSaved(second);
+ assert.equal(sentChat,'','An old debounce must not resurrect a sent draft');
  await expect(composer).toHaveValue('');
  const sent=await (await page.request.get(url+'/fixture')).json();
  assert.deepEqual(sent.sent,[{sessionId:second,text:secondTyped}]);
- console.log(JSON.stringify({passed:true,pendingDebounces:pending,firstTyped,firstSaved:restored.state.view.draft,secondTyped,secondSaved:secondRestored.state.view.draft,beforeSend,afterSendSaved:afterSend.state.view.draft,checks:['rapid chat edit retains both authoritative drafts','send in another chat preserves staged draft','send stays bound to intended chat exactly once']}));
+ console.log(JSON.stringify({passed:true,pendingDebounces:pending,firstTyped,firstSaved:restored,secondTyped,secondSaved:secondRestored,beforeSend,afterSendSaved:afterSend,checks:['rapid chat edit retains both authoritative drafts','send in another chat preserves staged draft','send stays bound to intended chat exactly once']}));
 }finally{await browser?.close();fixture.kill()}

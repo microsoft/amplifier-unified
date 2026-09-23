@@ -182,7 +182,7 @@ class TransferNode:
             row.update(phase='prepared', revision=row['revision'] + 1, capsuleHash=digest(encoded(body)), package=str(path))
             return self.save(row)
 
-    def receive(self, envelope, request):
+    def receive(self, envelope, request, *, readiness_policy=None):
         with self.lock:
             body = self.verify(envelope, kind='capsule')
             if type(body.get('generation')) is not int or body['generation'] < 1:
@@ -209,7 +209,25 @@ class TransferNode:
             row = {key: body[key] for key in ('id', 'sessionId', 'generation', 'source', 'destination')}
             row.update(direction='incoming', phase='staging', revision=1, createdAt=time.time(),
                        capsuleHash=digest(encoded(body)), requestHash=digest(request), inputsReplayed=False)
+            if readiness_policy is not None:
+                row.update(readinessPolicy=copy.deepcopy(readiness_policy), readinessPolicyHash=digest(readiness_policy))
             return self.save(row)
+
+    def readiness_checks(self, row):
+        """Authenticate this host's original checks before a new activation effect."""
+        try:
+            receipt = row['readyReceipt']
+            body = receipt['body']
+            if (receipt['signer'] != self.identity['id'] or body.get('kind') != 'ready'
+                    or type(body.get('version')) is not int or body['version'] != 1):
+                raise ValueError('Unsupported destination readiness receipt')
+            self.key.public_key().verify(base64.b64decode(receipt['signature'], validate=True), encoded(body))
+            self.match(row, body)
+            if body['checksHash'] != digest(row['checks']):
+                raise ValueError('Stored destination checks differ from signed readiness')
+            return copy.deepcopy(row['checks'])
+        except (KeyError, TypeError, InvalidSignature) as exc:
+            raise ValueError('Destination readiness authentication failed') from exc
 
     def ready(self, identity, destination, checks):
         with self.lock:
@@ -271,6 +289,7 @@ class TransferNode:
                 return {**row, 'duplicate': True}
             if row['phase'] != 'ready' or row['revision'] != expected_revision:
                 raise ValueError('Inspect the current ready transfer revision before activation')
+            self.readiness_checks(row)
             row.update(phase='activating', revision=row['revision'] + 1, releaseCertificate=copy.deepcopy(certificate))
             return self.save(row)
 

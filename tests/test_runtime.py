@@ -350,8 +350,9 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_cold_start_reports_progress_and_bounded_timeout_without_send(self):
         self.manager.startup_timeout = 0.12
         self.manager.progress_interval = 0.02
-        with self.assertRaisesRegex(RuntimeError, 'stopped before accepting your message'):
+        with self.assertRaisesRegex(RuntimeError, 'This attempt did not send your message') as failure:
             await self.manager.send({'id':'slow'}, 'must not be sent', 'pending-input', self.emit)
+        self.assertIn('stopped before accepting your message', str(failure.exception.__cause__))
         progress = [p for k,p in self.events if k=='runtime.status' and p.get('phase')=='bundle-preparation']
         self.assertGreaterEqual(len(progress), 2)
         self.assertTrue(all(p['status']=='starting' and 'elapsedSeconds' in p for p in progress))

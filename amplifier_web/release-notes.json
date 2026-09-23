@@ -3,14 +3,14 @@
   "releases": [
     {
       "version": "0.20.8",
-      "title": "Named workspaces and shared chat history",
+      "title": "Faster controls and quieter idle work",
       "changes": [
-        "Create a workspace by name under a default folder you can choose in Settings. Attach existing folders without moving their files or choosing a developer mode.",
-        "Choose, create or attach a workspace from New chat while retaining unsent text, attachments, model and bundle choices.",
-        "Discover existing Amplifier CLI and TUI chats from their native history, with compatibility for earlier app IDs and preserved voice and app records.",
-        "Find work in Pinned, Workspaces and Recent. Empty available workspaces remain visible, duplicate folder names are distinguished, and full paths are optional.",
-        "Reorder pinned chats directly by dragging or with Alt+Up/Down, retaining keyboard focus, the active chat and unsent work.",
-        "Recover interrupted workspace creation only when the original folder can be verified. Name collisions and uncertain retries preserve existing folders and saved history."
+        "Keep browser action responses small and stream only changed state after the initial snapshot. Reconnecting restores a complete snapshot automatically.",
+        "Preview appearance changes immediately, preserving saved settings if a change fails.",
+        "Skip unchanged native history and activity scans, react to file changes, and retain periodic reconciliation and explicit refresh.",
+        "Avoid redundant saves for unchanged layout, Canvas visibility and renderer status. Keep historical usage evidence in durable storage while sending only its totals to the browser.",
+        "Keep tool and worker progress updates batched, and avoid background publications for diagnostic timestamps while Diagnostics is closed.",
+        "Keep conversations compatible with older locked Foundation workers. Report a worker startup failure as not sent when no attempt could have received the message, preserving the saved message and safe retry identity."
       ],
       "notices": []
     },
@@ -47,7 +47,7 @@
           "id": "update-compaction-components",
           "title": "Update companion components for compaction recovery",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
         }
       ]
     },
@@ -75,7 +75,7 @@
           "id": "refresh-anthropic-tool-routing",
           "title": "Update companion modules for Anthropic computer tools",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings → Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
         }
       ]
     },
@@ -135,7 +135,7 @@
           "id": "retry-component-updates",
           "title": "Retry a previously failed component update",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, then Install available."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
         }
       ]
     },
@@ -447,8 +447,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
         }
       ]
     },
@@ -468,7 +468,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -487,7 +487,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

@@ -29,6 +29,10 @@ class RuntimeOperationPending(RuntimeError):
         super().__init__('The runtime operation has not returned yet. It may still be running; do not automatically repeat it.')
 
 
+class RuntimeStartupError(RuntimeError):
+    """This attempt failed before any send/retry command was written."""
+
+
 class SessionInUseError(RuntimeError):
     """A definite rejected admission, not an uncertain execution failure."""
 
@@ -526,10 +530,18 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
-        await self.start(session, emit)
+        await self._start_for_input(session, emit)
         return await self._request(session["id"], "send", text=text, input_id=input_id,
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+
+    async def _start_for_input(self, session, emit):
+        try:
+            await self.start(session, emit)
+        except SessionInUseError:
+            raise
+        except Exception as exc:
+            raise RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.') from exc
 
     async def delivery(self, session, input_id):
         """Inspect existing evidence; never start a worker or submit an input."""
@@ -545,7 +557,7 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit):
-        await self.start(session, emit)
+        await self._start_for_input(session, emit)
         return await self._request(session['id'], 'retry', text=text, input_id=input_id,
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))

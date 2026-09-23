@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import stat
 import threading
+import time
 import uuid
 
 from .session_files import amplifier_home, project_slug
@@ -106,13 +107,66 @@ class NativeHistory:
     Returned values are detached from the cache and contain no conversation text.
     """
 
-    def __init__(self, home=None, *, known_workspaces=()):
+    def __init__(self, home=None, *, known_workspaces=(), watch=False):
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
         self._files = {}
         self._projects = {}
         self._lock = threading.Lock()
         self._reads = 0
+        self._project_inputs = {}
+        self._working_dirs = {}
+        self._reconcile_at = 0
+        self._watch_enabled = watch
+        self._watch = None
+        self._watch_root = None
+        self._watch_retry_at = 0
+        self._project_paths = {}
+        self._known_input = None
+
+    @staticmethod
+    def _known_signature(known):
+        return frozenset(str(item.get('path') if isinstance(item, dict) else item) for item in known)
+
+    def needs_scan(self, known_workspaces):
+        """Cheap idle check; a manual refresh still always performs a scan."""
+        if (time.monotonic() >= self._reconcile_at or not self._watch
+                or not self._watch.unchanged()
+                or self._known_signature(known_workspaces) != self._known_input):
+            return True
+        try:
+            info = (self.home / 'projects').stat()
+            if (info.st_dev, info.st_ino) != self._watch_root:
+                return True
+            for workspace in known_workspaces:
+                if isinstance(workspace, dict) and bool(workspace.get('path') and Path(workspace['path']).is_dir()) != workspace.get('available'):
+                    return True
+        except (OSError, ValueError):
+            return True
+        return False
+
+    def close(self):
+        if self._watch:
+            self._watch.close()
+            self._watch = None
+
+    def _invalidations(self):
+        if not self._watch_enabled:
+            return False, set()
+        root = self.home / 'projects'
+        try:
+            info = root.stat()
+            identity = (info.st_dev, info.st_ino)
+        except OSError:
+            identity = None
+        if self._watch and (identity != self._watch_root or not self._watch.thread.is_alive()):
+            self.close()
+        if not self._watch and identity and time.monotonic() >= self._watch_retry_at:
+            from .history_watch import HistoryWatch
+            self._watch_root = identity
+            self._watch_retry_at = time.monotonic() + 60
+            self._watch = HistoryWatch(root)
+        return self._watch.take() if self._watch else (False, set())
 
     def _read(self, path, issues, project, identity=None):
         previous = self._files.get(path)
@@ -190,8 +244,7 @@ class NativeHistory:
                            if not entry.name.startswith('.') and entry.is_dir(follow_symlinks=False)),
                           key=lambda path: path.name)
 
-    @staticmethod
-    def _working_dir(metadata, slug):
+    def _working_dir(self, metadata, slug):
         for key in ('working_dir', 'cwd', 'project_dir', 'workspace'):
             value = _text(metadata.get(key))
             if not value:
@@ -200,12 +253,43 @@ class NativeHistory:
             if not candidate.is_absolute():
                 continue
             try:
-                resolved = str(candidate.resolve())
+                self._project_paths.setdefault(slug, set()).add(str(candidate))
+                key = str(candidate)
+                if key not in self._working_dirs:
+                    self._working_dirs[key] = str(candidate.resolve())
+                resolved = self._working_dirs[key]
                 if project_slug(resolved) == slug:
                     return resolved
             except (OSError, ValueError, RuntimeError):
                 continue
         return None
+
+    def _project_stamp(self, project, known):
+        """Probe metadata, not bodies or derived rows, before rebuilding a project.
+
+        Include absent files so new metadata/transcripts are discovered. A
+        bounded full reconciliation also re-resolves symlinks and permissions.
+        """
+        paths = [project / 'metadata.json', project / 'sessions']
+        paths.extend(known.get(project.name, ()))
+        paths.extend(self._project_paths.get(project.name, ()))
+        try:
+            directories = self._directories(project / 'sessions')
+        except FileNotFoundError:
+            directories = []
+        for directory in directories:
+            paths.extend(str(directory / name) for name in ('metadata.json', 'metadata.json.backup',
+                'transcript.jsonl', 'transcript.jsonl.backup', 'naming.json', 'context-intelligence/metadata.json'))
+        result = [tuple(sorted(known.get(project.name, ())))]
+        result.append(tuple((path, str(Path(path).resolve()))
+                            for path in sorted(self._project_paths.get(project.name, ()))))
+        for path in paths:
+            try:
+                info = os.stat(path, follow_symlinks=False)
+                result.append((str(path), info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            except FileNotFoundError:
+                result.append((str(path), None))
+        return tuple(result)
 
     def _scan_project(self, project, known, issues):
         slug = project.name
@@ -313,13 +397,20 @@ class NativeHistory:
             row.update(canResume=reason is None, readOnlyReason=reason)
         return {'workspace': workspace, 'sessions': rows}
 
-    def scan(self, *, known_workspaces=None):
+    def scan(self, *, known_workspaces=None, force=False):
         """Refresh changed metadata and return all projects and saved sessions."""
         with self._lock:
             self._reads = 0
+            self._working_dirs = {}
+            watching, dirty = self._invalidations()
+            reconcile = force or time.monotonic() >= self._reconcile_at
+            if reconcile:
+                self._reconcile_at = time.monotonic() + 60
             issues = []
             known = {}
-            for item in self.known_workspaces if known_workspaces is None else known_workspaces:
+            inputs = list(self.known_workspaces if known_workspaces is None else known_workspaces)
+            self._known_input = self._known_signature(inputs)
+            for item in inputs:
                 value = item.get('path') if isinstance(item, dict) else item
                 if not isinstance(value, (str, Path)) or not Path(value).expanduser().is_absolute():
                     continue
@@ -337,11 +428,31 @@ class NativeHistory:
             if projects is not None:
                 current = {}
                 for project in projects:
+                    cached = self._project_inputs.get(project.name)
+                    workspace = self._projects.get(project.name, {}).get('workspace', {})
+                    available = bool(workspace.get('path') and Path(workspace['path']).is_dir())
+                    known_paths = tuple(sorted(known.get(project.name, ())))
+                    if watching and not reconcile and '*' not in dirty and project.name not in dirty and cached and cached[0] and cached[0][0] == known_paths and workspace and workspace['available'] == available:
+                        current[project.name] = self._projects[project.name]
+                        issues.extend(cached[1])
+                        continue
+                    try:
+                        stamp = self._project_stamp(project, known)
+                    except (OSError, RuntimeError):
+                        stamp = None
+                    if stamp is not None and cached and cached[0] == stamp and workspace and workspace['available'] == available:
+                        current[project.name] = self._projects[project.name]
+                        issues.extend(cached[1])
+                        continue
+                    start = len(issues)
                     result = self._scan_project(project, known, issues)
                     if result is not None:
                         current[project.name] = result
+                        self._project_inputs[project.name] = (stamp, issues[start:])
                 self._projects = current
                 existing = set(current)
+                self._project_inputs = {key:value for key,value in self._project_inputs.items() if key in existing}
+                self._project_paths = {key:value for key,value in self._project_paths.items() if key in existing}
                 self._files = {path: value for path, value in self._files.items()
                                if path.relative_to(self.home / 'projects').parts[0] in existing}
             workspaces = [project['workspace'] for project in self._projects.values()]

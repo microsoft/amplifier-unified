@@ -499,11 +499,30 @@ async def load_configured_bundle(registry, config, reference):
     return await registry.load(chosen), chosen
 
 
+def session_registry(config):
+    """Keep scoped registrations private, including in older locked workers.
+
+    Host and worker dependencies update independently. Older Foundation
+    registries funnel writes through save(), including constructor cleanup.
+    Override that method before construction, never patch a shared instance.
+    """
+    from amplifier_foundation import BundleRegistry
+    options = dict(home=config.registry_home, strict=True,
+                   include_source_resolver=config.resolve_source)
+    parameters = inspect.signature(BundleRegistry).parameters
+    if 'persist' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return BundleRegistry(**options, persist=False)
+
+    class SessionRegistry(BundleRegistry):
+        def save(self):
+            """Session composition must never modify shared registrations."""
+
+    return SessionRegistry(**options)
+
+
 async def load_root_bundle(config, chosen, *, execution_workspace=None):
     """Compose in a session-local registry view; settings own registrations."""
-    from amplifier_foundation import BundleRegistry
-    registry = BundleRegistry(home=config.registry_home, strict=True,
-        include_source_resolver=config.resolve_source, persist=False)
+    registry = session_registry(config)
     registrations = dict(config.registrations)
     explicit = {**config.settings.get('bundle', {}).get('added', {}),
                 **config.settings.get('sources', {}).get('bundles', {})}

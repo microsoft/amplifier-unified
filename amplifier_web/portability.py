@@ -14,6 +14,7 @@ from amplifier_portability.capsule import capture_workspace, read_capsule, resto
 from amplifier_worktrees.git import digest
 from . import portability_data as data
 from .host_identity import local_host_identity
+from .portability_policy import completion_receipt, effective_effort, readiness_policy, validate_policy
 
 
 def definitions(schema, string):
@@ -257,11 +258,13 @@ class Portability:
                 self.node.unknown(row['id']); self.changed()
             raise_if_cancelled()
 
-    async def destination_checks(self, payload, workspace):
+    def destination_configuration(self, payload, workspace):
         # The probe runs from the destination repository's settings scope. No
         # transferred source overrides, settings or credentials are mounted.
         from .setup import SetupManager
-        manager = SetupManager(self.app.data_dir)
+        # Policy admission precedes checkout creation. Resolve destination-owned
+        # ancestor settings without creating the checkout just to inspect them.
+        manager = SetupManager(self.app.data_dir, allow_missing_workspace=True)
         intent = payload['intent']; selection = intent['selection']
         provider = selection.get('instance') or selection.get('provider')
         config = manager.config(workspace)
@@ -270,13 +273,37 @@ class Portability:
         row = next((r for r in config.providers if (r.get('id') or r.get('instance_id') or r['module'].removeprefix('provider-')) == provider), None)
         if row is None:
             raise ValueError('Configure the saved provider instance on the destination first')
+        if row.get('enabled') is False:
+            raise ValueError('The saved provider instance is disabled on the destination')
+        return provider, row, config
+
+    def destination_policy(self, payload, workspace):
+        provider, row, _ = self.destination_configuration(payload, workspace)
+        selection = payload['intent']['selection']
+        return readiness_policy(row['module'], provider, selection['model'],
+                                effective_effort(selection, row.get('config', {})))
+
+    @staticmethod
+    def require_policy_checks(checks, policy):
+        if (checks.get('readinessPolicyHash') != digest(policy)
+                or digest(checks.get('readinessPolicy')) != digest(policy)):
+            raise ValueError('Destination check did not verify the admitted readiness policy')
+
+    async def destination_checks(self, payload, workspace, policy):
+        policy = validate_policy(policy)
+        provider, row, config = self.destination_configuration(payload, workspace)
+        selection = payload['intent']['selection']
+        if (provider != policy['providerInstance'] or row['module'] != policy['providerModule']
+                or selection['model'] != policy['model']
+                or (selection.get('effort') is not None and selection['effort'] != policy['reasoningEffort'])):
+            raise ValueError('Saved selection differs from the admitted readiness policy')
         from .setup import environment_credential
         from .runtime import RuntimeManager
         raw = copy.deepcopy(row.get('config', {}))
         credential = environment_credential(row['module'], raw)
         if not raw.get(credential['field']) and credential['available']:
             raw[credential['field']] = '${' + credential['envVar'] + '}'
-        request = {'module': row['module'], 'config': raw, 'model': selection['model'],
+        request = {'module': row['module'], 'config': raw, 'model': policy['model'], 'readinessPolicy': policy,
                    'source': config.module_sources.get(row['module']) or row.get('source'), 'registryHome': str(config.registry_home)}
         source = request['source']
         if source and not source.startswith('git+https://'):
@@ -292,7 +319,13 @@ class Portability:
         try:
             output, _ = await asyncio.wait_for(process.communicate(json.dumps(request).encode()), 90)
             result = json.loads(output)
-            if process.returncode or result.get('error') or not result.get('accountVerified') or not result.get('runtimeTransferFence'):
+            if isinstance(result, dict) and result.get('code') == 'single_attempt_unsupported':
+                raise ValueError('This provider version cannot perform a bounded readiness check; update it or use a supported provider.')
+            if (process.returncode or result.get('error') or result.get('accountVerified') is not True
+                    or result.get('runtimeTransferFence') is not True or result.get('method') != 'provider.complete'
+                    or result.get('providerModule') != policy['providerModule'] or result.get('model') != policy['model']
+                    or result.get('reasoningEffort') != policy['reasoningEffort']
+                    or result.get('readinessPolicyHash') != digest(policy)):
                 raise ValueError('Destination provider access or native runtime verification failed; inspect local configuration')
         finally:
             if process.returncode is None:
@@ -303,7 +336,10 @@ class Portability:
         return {'runtimeVerified': True, 'accountVerified': True, 'nativeFenceVerified': True,
                 'credentialsOrigin': 'destination', 'method': result['method'],
                 'accountVerificationScope': result['accountVerificationScope'],
-                'provider': provider, 'model': selection['model'], 'intentHash': digest(intent), 'checkedAt': time.time()}
+                'provider': provider, 'model': policy['model'], 'reasoningEffort': policy['reasoningEffort'],
+                'readinessPolicy': policy, 'readinessPolicyHash': digest(policy),
+                'completionReceipt': completion_receipt(result.get('completionReceipt'), policy),
+                'intentHash': digest(payload['intent']), 'checkedAt': time.time()}
 
     async def stage(self, args):
         envelope = read_capsule(Path(args['path']))
@@ -322,11 +358,12 @@ class Portability:
         if any(path for name in ('transcript.jsonl', 'transcript.jsonl.backup')
                for path in (amplifier_home() / 'projects').glob('*/sessions/' + identity + '/' + name)):
             raise ValueError('This native task already has canonical history on the destination')
-        row = self.node.receive(envelope, args)
+        target = self.node.directory / 'checkouts' / body['id']
+        policy = self.destination_policy(payload, target)
+        row = self.node.receive(envelope, args, readiness_policy=policy)
         if row.get('duplicate'):
             return row
         try:
-            target = self.node.directory / 'checkouts' / row['id']
             restored = await asyncio.to_thread(restore_workspace, payload['workspace'], args['repository'], target)
             session = {**copy.deepcopy(payload['session']), 'workspace': str(target), 'workingDirectory': str(target),
                        'runtimeSessionId': identity, 'nativeIdentity': identity}
@@ -342,7 +379,8 @@ class Portability:
             # release. Native history catalogs must not discover a staged copy.
             package = self.node.directory / 'packages' / (row['id'] + '.json')
             write_capsule(package, envelope)
-            checks = await self.destination_checks(payload, target)
+            checks = await self.destination_checks(payload, target, policy)
+            self.require_policy_checks(checks, policy)
             result = self.node.ready(row['id'], {'workspace': str(target), 'nativeIdentity': identity, 'package': str(package), 'checkout': restored}, checks)
             ready_path = self.node.directory / 'exchange' / (row['id'] + '.ready.json')
             write_capsule(ready_path, result['readyReceipt'])
@@ -460,6 +498,11 @@ class Portability:
             return result
         if row['phase'] != 'ready' or row['revision'] != args['expectedRevision']:
             raise ValueError('Inspect the current ready transfer before activation')
+        checks = self.node.readiness_checks(row)
+        policy = validate_policy(row.get('readinessPolicy'), row.get('readinessPolicyHash'))
+        if not row.get('readinessPolicyHash'):
+            raise ValueError('Legacy readiness has no admitted policy; it cannot consume a new probe budget')
+        self.require_policy_checks(checks, policy)
         capture_workspace(destination['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
         async with self.app.lock:
             data.preflight_install(self.app, payload)
@@ -467,7 +510,8 @@ class Portability:
         # A crash here recovers as unknown, never as another ready admission.
         row = self.node.activating(row['id'], certificate, args['expectedRevision'])
         try:
-            await self.destination_checks(payload, Path(destination['workspace']))
+            checks = await self.destination_checks(payload, Path(destination['workspace']), policy)
+            self.require_policy_checks(checks, policy)
             capture_workspace(destination['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
             async with self.app.lock:
                 data.preflight_install(self.app, payload)

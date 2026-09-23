@@ -9,9 +9,10 @@ import pytest
 from amplifier_foundation.session import SharedSessionStore, SessionTransferFencedError
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.portability import Portability
+from amplifier_web.portability_policy import readiness_policy
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.service import AppService, AppError
-from amplifier_worktrees.git import atomic, git
+from amplifier_worktrees.git import atomic, digest, git
 from test_worktrees import repository
 
 
@@ -54,9 +55,15 @@ async def setup_hosts(tmp_path, monkeypatch):
         atomic(left.portability.node.directory / 'peers.json', {right.portability.node.identity['id']: right.portability.node.identity})
     # These service tests isolate account-network behavior. The separate probe
     # tests and two-process acceptance exercise the subprocess boundary.
-    async def checks(self, payload, workspace):
+    def policy(self, payload, workspace):
+        selection = payload['intent']['selection']
+        return readiness_policy('provider-fixture', selection.get('instance') or selection['provider'],
+                                selection['model'], selection.get('effort') or 'high')
+    monkeypatch.setattr(Portability, 'destination_policy', policy)
+    async def checks(self, payload, workspace, policy):
         assert (Path(workspace) / '.git').is_file()
-        return {'runtimeVerified': True, 'accountVerified': True, 'nativeFenceVerified': True, 'credentialsOrigin': 'destination'}
+        return {'runtimeVerified': True, 'accountVerified': True, 'nativeFenceVerified': True,
+                'credentialsOrigin': 'destination', 'readinessPolicy': policy, 'readinessPolicyHash': digest(policy)}
     monkeypatch.setattr(Portability, 'destination_checks', checks)
     return app, target, source, destination, root, destrepo, sid, out1, out2
 

@@ -20,6 +20,21 @@ async def command(app, patch, **kwargs):
         return await app.dispatch('view.update', {'patch': patch}, **kwargs)
 
 
+async def test_duplicate_hover_value_does_not_publish_or_advance_revision(app, monkeypatch):
+    await command(app, {'canvasControlsExpanded': False})
+    before = app._state['revision']
+    with app.clients.bind('one'):
+        queue = app.subscribe()
+    original_save = app._save
+    monkeypatch.setattr(app, '_save', lambda: pytest.fail('No-op must not rewrite history'))
+    receipt = await command(app, {'canvasControlsExpanded': False}, command_id='same-value', include_state=False)
+    assert receipt['revision'] == before == app._state['revision']
+    assert queue.empty()
+    assert (await command(app, {'canvasControlsExpanded': False}, command_id='same-value', include_state=False))['duplicate']
+    app.unsubscribe(queue)
+    monkeypatch.setattr(app, '_save', original_save)
+
+
 async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, monkeypatch):
     await command(app, {'draft': 'Keep my unsent words'})
     with app.clients.bind('one'):
