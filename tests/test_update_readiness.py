@@ -101,6 +101,20 @@ async def test_constructor_waits_for_real_listener_readiness(tmp_path,monkeypatc
         await service.close()
 
 
+async def test_legacy_application_state_preserves_restart_readiness(tmp_path,monkeypatch):
+    from amplifier_web import app_updates
+    monkeypatch.setattr(app_updates,'application_state',lambda:{'current':__version__,'status':'current'})
+    service,manager=make_manager(tmp_path,monkeypatch)
+    try:
+        assert service.state['updates']['application']['canInstall'] is True
+        assert service.state['updates']['pendingRestart']==TARGET
+        assert service.state['updates']['phase']=='activating'
+        assert await manager.confirm_readiness(health(manager))
+        assert service.state['updates']['pendingRestart'] is None
+    finally:
+        await service.close()
+
+
 @pytest.mark.parametrize('changes',[
     {'ok':False},{'ok':1},{'app':'another-app'},{'version':'0.0.0'},{'revision':'e'*40},
     {'revision':None},{'instanceId':'e'*32},{'dataIdentity':'another-data-directory'},

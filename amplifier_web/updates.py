@@ -409,7 +409,7 @@ class UpdateManager:
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
         running_application=application_state()
-        application={**running_application,**state.get('application',{}),'current':__import__('amplifier_web').__version__,'canInstall':running_application['canInstall']}
+        application={**running_application,**state.get('application',{}),'current':__import__('amplifier_web').__version__,'canInstall':running_application.get('canInstall',True)}
         from .release_notes import history
         application['releaseNotes']=history(application.get('releaseNotes',[]),application.get('latest') if version_tuple(application.get('latest')) else None)
         application['runningRevision'] = self.running_identity['revision']
