@@ -7,6 +7,17 @@ spent 9m28s rebuilding the same Core Git commit as the preceding attempts;
 its 24 actual tests took 4.57s. Application packaging and its install probe took
 six seconds.
 
+## Preparing a version change
+
+The frontend embeds the package version from `pyproject.toml` in both its
+JavaScript bundle and `static/build.json`. After updating the Python package
+versions and release notes, run `npm ci --prefix frontend`,
+`npm test --prefix frontend`, and `npm run build --prefix frontend`. Include all
+resulting `amplifier_web/static` changes in the release commit. Rebuild once more
+and require `git diff --exit-code -- amplifier_web/static` to pass before merging
+the release candidate; a version-only edit still changes generated bundle hashes.
+Keep the release workflow's committed-assets comparison enabled.
+
 ## Execution and identity
 
 `prepare` selects the same immutable merged application commit as before,
@@ -49,8 +60,8 @@ the dedicated-key checkout does not grant other cache readers its package build.
 | Real Core/loop-live surface, child, component and cache tests | Runtime |
 | Immutable tag/asset checks and publication | Release, after all jobs |
 
-Both active-client performance invocations remain. All four session-health
-invocations remain, including context-limit and context-limit with an active
+The active-client performance check runs once; independent live-client behavior
+is checked separately. All four session-health invocations remain, including context-limit and context-limit with an active
 worker. Browser fixtures retain their serial ordering within an isolated runner;
 fixed-port fixtures and performance checks do not compete with other lanes.
 
