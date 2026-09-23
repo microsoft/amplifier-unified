@@ -47,6 +47,85 @@ def history_for(service, rows):
     return history
 
 
+async def test_reused_catalog_revision_stays_detached_and_reconciles_in_place_changes(monkeypatch):
+    from amplifier_web.automatic_history import identity
+
+    service = ReconciliationService([])
+    history = AutomaticHistory(service)
+    catalog = {'workspaces': [], 'sessions': [
+        {'id': 'catalog-id', 'nativeProject': 'project', 'nativeIdentity': 'saved',
+         'workspace': None, 'workspaceId': None, 'sessionKind': 'root',
+         'title': 'Original', 'transcriptRevision': [1, 2]},
+    ]}
+    token = object()
+    monkeypatch.setattr(history.index, 'scan_if_changed',
+                        lambda **kwargs: (token, catalog if kwargs['since'] is not token else None))
+    await history.refresh(force=False)
+    saved = service.state['sessions'][0]
+    revision = saved['nativeRevision']
+    assert revision == [1, 2] and revision is not catalog['sessions'][0]['transcriptRevision']
+
+    # Reusing an unchanged native generation cannot skip edits to either side.
+    saved['nativeRevision'][0] = -1
+    saved['description'] = 'Locally stale metadata'
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 2] and saved['description'] == ''
+    catalog['sessions'][0]['transcriptRevision'][1] = 3
+    catalog['sessions'][0]['title'] = 'Externally changed'
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 3]
+    assert saved['title'] == 'Externally changed'
+    saved['nativeRevision'][0] = -2
+    assert catalog['sessions'][0]['transcriptRevision'] == [1, 3]
+
+    # Loaded history keeps its old stamp so the selected-view loader can detect
+    # a changed transcript; an absent stamp still receives a detached value.
+    saved.update(historyLoaded=True, nativeRevision=[0, 0])
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [0, 0]
+    del saved['nativeRevision']
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 3]
+    assert saved['nativeRevision'] is not catalog['sessions'][0]['transcriptRevision']
+
+    # Filters added and removed after warming are live even without a native
+    # revision change. Native identity is project-scoped, not the catalog ID.
+    service.state['sessions'] = []
+    service.state['hiddenNativeSessions'] = [identity('project', 'saved')]
+    await history.refresh(force=False)
+    assert service.state['sessions'] == []
+    service.state['hiddenNativeSessions'] = []
+    await history.refresh(force=False)
+    assert service.state['sessions'][0]['nativeIdentity'] == 'saved'
+    assert history._native_revision is token
+    assert service.state['sharedHistory']['error'] is None
+
+
+async def test_revision_alias_is_detached_and_missing_or_null_stamp_is_preserved(monkeypatch):
+    service = ReconciliationService([])
+    history = AutomaticHistory(service)
+    row = {'id': 'catalog-id', 'nativeProject': 'project', 'nativeIdentity': 'saved',
+           'workspace': None, 'workspaceId': None, 'sessionKind': 'root',
+           'title': 'Original', 'transcriptRevision': [1, 2]}
+    catalog = {'workspaces': [], 'sessions': [row]}
+    token = object()
+    monkeypatch.setattr(history.index, 'scan_if_changed', lambda **kwargs: (token, catalog))
+    await history.refresh(force=False)
+    saved = service.state['sessions'][0]
+    saved['nativeRevision'] = row['transcriptRevision']
+    await history.refresh(force=True)
+    assert saved['nativeRevision'] == row['transcriptRevision']
+    assert saved['nativeRevision'] is not row['transcriptRevision']
+    row['transcriptRevision'] = None
+    await history.refresh(force=False)
+    assert 'nativeRevision' in saved and saved['nativeRevision'] is None
+    del row['transcriptRevision']
+    del saved['nativeRevision']
+    await history.refresh(force=False)
+    assert 'nativeRevision' in saved and saved['nativeRevision'] is None
+    assert service.state['sharedHistory']['error'] is None
+
+
 async def test_reused_native_catalog_reconciles_local_filters_errors_and_selections(tmp_path, monkeypatch):
     import json
     from amplifier_web.native_history import NativeHistory
