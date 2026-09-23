@@ -82,11 +82,14 @@ def installed_sources(project, *, graph=None):
     result = {}
     for record in installed_graph(project) if graph is None else graph:
         name = record['name']
-        if not name.startswith('amplifier-'):
-            continue
         direct = record.get('directUrl') or {}
         vcs = direct.get('vcs_info') or {}
         cached = record.get('cacheSource')
+        # Bundle packages need not use the amplifier- prefix. Include every
+        # installed Git/cache component, while leaving ordinary registry
+        # dependencies to the resolver instead of treating them as overrides.
+        if not (name.startswith('amplifier-') or cached or vcs.get('vcs') == 'git'):
+            continue
         if cached:
             result[name] = {'url': cached['url'], 'ref': cached['ref'], 'current': cached['revision'],
                             'subdirectory': cached['subdirectory'] if cached['subdirectory'] != '.' else '',
@@ -115,8 +118,6 @@ def inventory(home, *, installed=None):
     observed = {}
     for name, resolved in locked.items():
         name = package_name(name)
-        if name not in sources and not name.startswith('amplifier-'):
-            continue
         query = parse_qs(resolved.query)
         source = sources.get(name, {})
         policy = recorded_policies.get(name, {})

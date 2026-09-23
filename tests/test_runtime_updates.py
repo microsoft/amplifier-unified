@@ -172,7 +172,8 @@ async def test_update_manager_installs_runtime_only_and_manifest_updates(environ
 
 
 @pytest.fixture
-def installed_transitive(environment):
+def installed_transitive(environment, request):
+    child_name = getattr(request, "param", "amplifier-fixture-child")
     manager, current, row, old, new, repo = environment
     remote = manager.home.parent / 'modules'
     remote.mkdir()
@@ -182,7 +183,7 @@ def installed_transitive(environment):
     child = remote / 'child'
     child.mkdir()
     build = '\n[build-system]\nrequires=["setuptools"]\nbuild-backend="setuptools.build_meta"\n[tool.setuptools]\npackages=[]\n'
-    (child / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-child"\nversion="0.1.0"\n' + build)
+    (child / 'pyproject.toml').write_text('[project]\nname=' + json.dumps(child_name) + '\nversion="0.1.0"\n' + build)
     git(remote, 'add', '.')
     git(remote, 'commit', '-m', 'child')
     parent = manager.home.parent / 'parent'
@@ -190,7 +191,7 @@ def installed_transitive(environment):
     git(parent, 'init', '-b', 'main')
     git(parent, 'config', 'user.name', 'Fixture')
     git(parent, 'config', 'user.email', 'fixture@example.invalid')
-    (parent / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-parent"\nversion="0.1.0"\ndependencies=[' + json.dumps('amplifier-fixture-child @ git+' + remote.as_uri() + '@main#subdirectory=child') + ']\n' + build)
+    (parent / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-parent"\nversion="0.1.0"\ndependencies=[' + json.dumps(child_name + ' @ git+' + remote.as_uri() + '@main#subdirectory=child') + ']\n' + build)
     git(parent, 'add', '.')
     git(parent, 'commit', '-m', 'parent')
     uv = shutil.which('uv')
@@ -201,21 +202,22 @@ def installed_transitive(environment):
     git(remote, 'add', '.')
     git(remote, 'commit', '-m', 'new child')
     latest = git(remote, 'rev-parse', 'HEAD')
-    child_row = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    child_row = next(row for row in environments.inventory(manager.home) if row.get('package') == child_name)
     return manager, current, {**child_row, 'status': 'update', 'latest': latest}, initial, latest, remote
 
 
+@pytest.mark.parametrize("installed_transitive", ["amplifier-fixture-child", "component-child"], indirect=True)
 async def test_actual_transitive_git_distribution_survives_staging_and_frozen_replay(installed_transitive):
     manager, current, row, old, new, repo = installed_transitive
     before = (current / 'uv.lock').read_bytes()
     assert row['current'] == old and row['ref'] == 'main' and row['subdirectory'] == 'child'
     assert row['provenance'] == 'installed Git distribution' and row['eligible']
-    assert 'amplifier-fixture-child' not in environments.locked_sources(current)
+    assert row['package'] not in environments.locked_sources(current)
     generation = 'd' * 32
     receipt = environments.receipt_directory(manager.home, generation)
     receipt.mkdir(parents=True)
     project = await environments.stage(manager, generation, [row])
-    assert environments.locked_sources(project)['amplifier-fixture-child'].fragment == new
+    assert environments.locked_sources(project)[row['package']].fragment == new
     assert 'amplifier-fixture-parent' in environments.locked_sources(project)
     assert '@main#subdirectory=child' in (project / 'pyproject.toml').read_text()
     assert (current / 'uv.lock').read_bytes() == before
