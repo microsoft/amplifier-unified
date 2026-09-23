@@ -20,25 +20,34 @@ Keep the release workflow's committed-assets comparison enabled.
 
 ## Temporary rapid-development policy (September 23, 2026)
 
-Browser scenarios are opt-in for the current development period. Neither the
-release workflow nor pull-request workflows install Playwright or run browser
-scenarios. Python contracts, frontend unit tests, frontend builds and the
-committed-assets comparison remain automatic. Release receipts explicitly name
-`python`, `frontend`, and `runtime`; a frontend receipt is not evidence of browser
-validation.
+Browser scenarios and the complete Python suite are opt-in for the current
+development period. Neither release publication nor PR integration runs the
+complete Python suite or browser scenarios. Run the full suite locally before
+release preparation with `uv sync --locked --group dev --group artifacts` and
+`uv run --no-sync pytest -q --tb=short`, retaining the tested commit and result
+in the release handoff. This local result is not an automatic publication gate.
+Focused contract workflows, frontend unit tests/builds, committed-assets
+comparison, package installation probes, and the short real-runtime suite remain
+automatic. Release receipts explicitly name `package`, `frontend`, and `runtime`;
+none of these claims that the full Python or browser suite ran.
+
+**Python checks (on demand)** also runs the complete suite on a selected branch
+or tag. It is a read-only manual workflow without a publish step or a release
+dependency. No tests were deleted, and restoring automatic coverage is an
+explicit workflow change.
 
 Run **Browser checks (on demand)** from GitHub Actions, selecting the branch or
 tag to test. It retains every former release browser command, plus the capacity,
 coordination and connector browser checks from the PR workflows, in one isolated
 runner. It has read-only permissions and cannot publish or block a release.
 Tests remain available locally through the existing frontend scripts. There is
-no scheduled browser run or automatic expiration of this temporary policy;
-restoring browser gates is an explicit workflow change.
+no scheduled browser/Python run or automatic expiration of this temporary policy.
 
-For v0.20.12, merge-to-publication took 10m10s. The browser job took 8m54s,
-while the concurrent Python job took 7m23s. Removing the browser gate is expected
-to bring the same release path to roughly 8–9 minutes, not save nine minutes.
-Actual duration still depends on queues, source builds and tests. Ordinary
+For v0.20.13, merge-to-publication took 10m02s; its Python lane took 8m31s,
+frontend 1m13s, and runtime 43s with a cache hit. Those lanes overlap, so removing
+the full Python suite will expose another longest lane rather than subtracting
+8m31s from every release. The next release must measure the resulting critical
+path. Actual duration still depends on queues, dependency resolution and builds. Ordinary
 feature merges still need a versioned release before published-release clients
 can update.
 
@@ -46,7 +55,7 @@ can update.
 
 `prepare` selects the same immutable merged application commit as before,
 resolves current host dependencies once, and records their exact requirements.
-Python, frontend, and runtime jobs then run independently against that commit
+Package, frontend, and runtime jobs then run independently against that commit
 and restored host graph. Each verifies the graph before and after its checks.
 The publication job requires all three jobs to succeed and checks their
 candidate identifiers plus the original wheel/source/checksum bytes before
@@ -77,8 +86,8 @@ the dedicated-key checkout does not grant other cache readers its package build.
 
 | Previous serial stage | Job |
 |---|---|
-| Full pytest suite | Python |
-| Distribution verification, isolated wheel install and import/assets/login probe | Python |
+| Full pytest suite | Local or manual Python workflow; outside publication |
+| Distribution verification, isolated wheel install and import/assets/login probe | Package |
 | npm tests, frontend build and committed-assets comparison | Frontend |
 | Browser scenarios and their conditional file guards | Manual browser workflow; outside publication |
 | Real Core/loop-live surface, child, component and cache tests | Runtime |

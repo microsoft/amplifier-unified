@@ -76,6 +76,13 @@ def test_old_browser_receipt_cannot_replace_frontend_qualification(qualified):
         qualification.verify_receipts(root, evidence, expected, receipts, dist)
 
 
+def test_old_python_receipt_cannot_replace_package_qualification(qualified):
+    root, evidence, expected, receipts, dist, *_ = qualified
+    (receipts / 'package.json').rename(receipts / 'python.json')
+    with pytest.raises(FileNotFoundError):
+        qualification.verify_receipts(root, evidence, expected, receipts, dist)
+
+
 @pytest.mark.parametrize('change', ['other-candidate', 'wrong-lane', 'wheel', 'extra-artifact', 'runtime'])
 def test_promotion_rejects_mixed_or_tampered_evidence(qualified, change):
     root, evidence, expected, receipts, dist, *_ = qualified
@@ -195,6 +202,28 @@ def test_browser_checks_are_manual_and_not_in_automatic_gates():
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend
     assert 'git diff --exit-code -- amplifier_web/static' in frontend
+
+
+def test_full_python_suite_is_manual_but_package_and_runtime_proofs_remain():
+    workflows = ROOT / '.github/workflows'
+    manual = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(manual['on']) == {'workflow_dispatch'}
+    assert manual['permissions'] == {'contents': 'read'}
+    assert any('pytest -q --tb=short' in step.get('run', '')
+               for step in manual['jobs']['python']['steps'])
+    for filename in ('release.yml', 'work-workflows.yml'):
+        jobs = yaml.load((workflows / filename).read_text(), Loader=yaml.BaseLoader)['jobs']
+        for job in jobs.values():
+            for step in job.get('steps', []):
+                for line in step.get('run', '').splitlines():
+                    if ' pytest -' in line or ' -m pytest ' in line:
+                        assert 'tests/' in line, (filename, line)
+    release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
+    package = '\n'.join(step.get('run', '') for step in release['jobs']['package']['steps'])
+    assert 'uv build' in package and 'release.py" verify' in package
+    assert 'dist/*.whl' in package and 'from amplifier_web.app_updates import PROBE' in package
+    runtime = '\n'.join(step.get('run', '') for step in release['jobs']['runtime']['steps'])
+    assert 'tests/test_runtime_module_cache.py' in runtime
 
 
 def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():

@@ -71,7 +71,7 @@ jobs:
           name: host-source-resolution
           path: ${{ runner.temp }}/host-resolution
           if-no-files-found: ignore
-  python:
+  package:
     needs: prepare
     runs-on: ubuntu-latest
     env:
@@ -100,8 +100,7 @@ jobs:
           uv sync --locked --group dev --group artifacts
           uv pip install --python .venv/bin/python --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" --requirements "$RUNNER_TEMP/host-resolution/qualified-overrides.txt"
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
-      - name: Validate Python
-        run: uv run --no-sync pytest -q
+      # Full Python coverage runs locally or in python-checks.yml on demand.
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -113,8 +112,8 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" dist/*.whl
           cd "$RUNNER_TEMP"
           env -u PYTHONPATH "$RUNNER_TEMP/release-smoke/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
-      - name: Bind tested distributions to the candidate
-        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane python --destination "$RUNNER_TEMP/python.json"
+      - name: Bind verified distributions to the candidate
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane package --destination "$RUNNER_TEMP/package.json"
       - uses: actions/upload-artifact@v4
         with:
           name: release-distributions
@@ -122,8 +121,8 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: python-qualification
-          path: ${{ runner.temp }}/python.json
+          name: package-qualification
+          path: ${{ runner.temp }}/package.json
           if-no-files-found: error
   frontend:
     needs: prepare
@@ -280,7 +279,7 @@ jobs:
             ${{ runner.temp }}/surface-runtime/build-identity.json
           if-no-files-found: ignore
   release:
-    needs: [prepare, python, frontend, runtime]
+    needs: [prepare, package, frontend, runtime]
     runs-on: ubuntu-latest
     permissions:
       contents: write
