@@ -75,11 +75,17 @@ def display_message(row, index, session, *, include_internal=False):
         # Read that host metadata; matching text alone is never provenance.
         provenance={'version':1,'kind':'service','id':recovery,'source':'local-job-recovery'}
     observation={}
+    input_identity = {}
+    if (row['role'] == 'user' and isinstance(provenance, dict)
+            and provenance.get('version') == 1 and provenance.get('kind') == 'user'
+            and isinstance(provenance.get('id'), str) and 0 < len(provenance['id']) <= 200):
+        input_identity = {'nativeInputId': provenance['id']}
     if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None, **observation}
+            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,
+            **input_identity, **observation}
 
 
 def read_transcript(session, *, before=None, limit=100):
@@ -102,7 +108,7 @@ def read_transcript(session, *, before=None, limit=100):
     # remain the same since the last tail refresh. A rewrite that moves or
     # replaces those anchors still requires a refresh before paging.
     check_anchors = before is not None and 'nativeRevision' in session and session['nativeRevision'] != start
-    anchors = {message['nativeIndex']: display_identity(session, message['nativeIndex'],
+    anchors = {message['nativeIndex']: message.get('nativeMessageId') or display_identity(session, message['nativeIndex'],
                 message['role'], message.get('text', ''))
                for message in session.get('messages', []) if type(message.get('nativeIndex')) is int} if check_anchors else {}
     first_anchor = min(anchors) if anchors else None
@@ -158,6 +164,58 @@ def remove_internal_copies(session, hidden):
         session.pop('nativeBoundaryId', None)
 
 
+def align_attachment_inputs(current, incoming):
+    """Use canonical input metadata, never an attachment-looking text prefix.
+
+    The native prompt includes attachment instructions, so its text differs
+    from the web bubble. Bind its exact native identity while retaining the
+    bubble and its attachment metadata. Repair an earlier display copy only
+    when its native index, ID and text all still match the canonical row.
+    """
+    native_by_input = {}
+    web_by_input = {}
+    cached_by_index = {}
+    for row in incoming:
+        if row.get('nativeInputId'):
+            native_by_input.setdefault(row['nativeInputId'], []).append(row)
+    for position, row in enumerate(current):
+        if row.get('role') == 'user' and row.get('inputId') and row.get('source') != 'native':
+            web_by_input.setdefault(row['inputId'], []).append(position)
+        if row.get('source') == 'native':
+            cached_by_index.setdefault(row.get('nativeIndex'), []).append(position)
+    replacements, copies = {}, set()
+    for identity, positions in web_by_input.items():
+        natives = native_by_input.get(identity, [])
+        if len(positions) != 1 or len(natives) != 1:
+            continue
+        position, native = positions[0], natives[0]
+        message = current[position]
+        if not message.get('attachments'):
+            continue
+        if ((message.get('nativeIndex') is not None and message['nativeIndex'] != native['nativeIndex'])
+                or (message.get('nativeMessageId') and message['nativeMessageId'] != native['id'])):
+            raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
+        replacements[position] = {**message, 'nativeMessageId': native['id']}
+        for number in cached_by_index.get(native['nativeIndex'], []):
+            saved = current[number]
+            if (saved.get('id') == native['id'] and saved.get('text') == native['text']
+                    and saved.get('role') == native['role']):
+                copies.add(number)
+                # Replace the old display copy's anchor. A newly matched input
+                # must instead enter normal ordered alignment below, so native
+                # replies between it and other inputs are still inserted.
+                replacements[position]['nativeIndex'] = native['nativeIndex']
+    return [replacements.get(number, row) for number, row in enumerate(current) if number not in copies]
+
+
+def same_native_message(native, visible):
+    if native.get('role') != visible.get('role'):
+        return False
+    if visible.get('nativeMessageId'):
+        return visible['nativeMessageId'] == native['id']
+    return native.get('text') == visible.get('text')
+
+
 def merge_web_history(session, incoming):
     """Append native messages after an ordered boundary, preserving web IDs.
 
@@ -168,7 +226,7 @@ def merge_web_history(session, incoming):
     Legacy UI rows without indexes use ordered text alignment; distinguishing
     an identical failed prompt from a saved prompt would require an input ledger.
     """
-    current = session['messages']
+    current = align_attachment_inputs(session['messages'], incoming)
     indexed = {message['nativeIndex']: (number, message) for number, message in enumerate(incoming)}
     boundary = session.get('nativeBoundary')
     boundary_id = session.get('nativeBoundaryId')
@@ -180,7 +238,7 @@ def merge_web_history(session, incoming):
         if anchored:
             number, message = max(anchored, key=lambda item: item[1]['nativeIndex'])
             match = indexed.get(message['nativeIndex'])
-            if not match or (match[1]['role'], match[1]['text']) != (message['role'], message.get('text')):
+            if not match or not same_native_message(match[1], message):
                 raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
             cursor, start = match[0] + 1, number + 1
     elif boundary >= 0:
@@ -201,11 +259,10 @@ def merge_web_history(session, incoming):
         role = message.get('role')
         begin = role_cursors.get(role, cursor)
         anchor = indexed.get(message.get('nativeIndex'))
-        if anchor and (anchor[1]['role'], anchor[1]['text']) != (role, message.get('text')):
+        if anchor and not same_native_message(anchor[1], message):
             raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
         match = anchor[0] if anchor else next((number for number in range(begin, len(incoming))
-                      if (incoming[number]['role'], incoming[number]['text']) ==
-                         (role, message.get('text'))), None)
+                      if same_native_message(incoming[number], message)), None)
         if match is not None:
             matches[position] = match
             claimed.add(match)
