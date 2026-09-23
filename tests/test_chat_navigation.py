@@ -59,6 +59,7 @@ def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     state['sessions']=[chat('old-pin',recent=2),chat('newest',recent=90),chat('same-first',recent=50),
         chat('same-second','two',50),chat('new-pin','two',3),chat('gone','gone',1000),
         chat('unknown','unknown',1000),chat('child',recent=1000,sessionKind='worker'),
+        chat('internal',recent=1000,sessionKind='internal',status='working'),
         chat('fork','two',4,parentId='newest')]
     state['pinnedSessionIds']=['old-pin','new-pin','child','gone']
     state['sessions'][0]['updatedAt']=99999

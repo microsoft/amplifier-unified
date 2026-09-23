@@ -48,7 +48,7 @@ def snapshot(state, device=None):
             'scope':'all' if view.get('navChatScope')=='all' else 'workspace','filterActive':bool(view.get('navFilter')),
             'page':state.get('chatNavigation',{}).get('index',0)},
         'conversation':{'status':session.get('status') if session.get('status') in {'idle','working','running','starting','stopping','stopped','error','ready'} else 'other',
-            'kind':'worker' if session.get('sessionKind')=='worker' or session.get('nativeParentId') else 'root',
+            'kind':'internal' if session.get('sessionKind')=='internal' else ('worker' if session.get('sessionKind')=='worker' or session.get('nativeParentId') else 'root'),
             'historyLoaded':session.get('historyLoaded'),'historyLoading':bool(session.get('historyLoading')),
             'historyError':bool(session.get('historyError')),'runtimeError':bool(session.get('error')),
             'workspaceAvailable':session.get('workspaceAvailable'), 'messages':len(session.get('messages',[])),

@@ -41,3 +41,33 @@ def test_stream_and_compaction_event_bridge():
     assert value == {"sessionId": "s", "text": "visible", "requestId": "r", "blockIndex": None}
     kind, value = normalize_event({"type": "runtime.activity", "phase": "compacting", "detail": "Making room"}, "s")
     assert kind == "runtime.status" and value["phase"] == "compacting"
+
+
+@pytest.mark.asyncio
+async def test_internal_history_requires_explicit_diagnostic_scope(tmp_path):
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        root = app._new_session({'title': 'Human chat', 'workspace': str(tmp_path)})
+        internal = {**copy.deepcopy(root), 'id': 'internal', 'title': 'Internal job',
+            'sessionKind': 'internal', 'sessionPurpose': 'memory.suggestion',
+            'messages': [{'id': 'job-message', 'role': 'user', 'text': 'synthetic needle'}]}
+        child = {**copy.deepcopy(internal), 'id': 'child', 'sessionKind': 'worker', 'nativeParentId': root['id']}
+        app.state['sessions'].extend([root, internal, child])
+        await app.history.refresh()
+        original = copy.deepcopy([internal, child])
+        for action in ('list', 'search'):
+            args = {'action': action, **({'query': 'needle'} if action == 'search' else {})}
+            result = await app.app_bridge('history', args, root['id'])
+            assert not {'internal', 'child'} & {row['id'] for row in result['items']}
+            result = await app.app_bridge('history', {**args, 'include_children': True}, root['id'])
+            assert 'internal' not in {row['id'] for row in result['items']}
+            result = await app.app_bridge('history', {**args, 'include_internal': True}, root['id'])
+            assert 'internal' in {row['id'] for row in result['items']}
+            assert 'child' not in {row['id'] for row in result['items']}
+        result = await app.app_bridge('history', {'action': 'read', 'session_id': 'internal',
+            'include_internal': True}, root['id'])
+        assert result['session']['sessionPurpose'] == 'memory.suggestion'
+        assert result['messages'][0]['text'] == 'synthetic needle'
+        assert [internal, child] == original
+    finally:
+        await app.close()

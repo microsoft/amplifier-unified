@@ -30,7 +30,9 @@ def organization(state):
 
 def projection(state, session_ids=()):
     value = organization(state)
-    return {'archivedCount': len(value['archived']),
+    from .session_navigation import is_top_level
+    excluded = {row['id'] for row in state.get('sessions', []) if not is_top_level(row)}
+    return {'archivedCount': len(value['archived'].keys() - excluded),
         'archived': {sid: value['archived'][sid] for sid in session_ids if sid in value['archived']}}
 
 

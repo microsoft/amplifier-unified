@@ -14,6 +14,7 @@ SCHEMA = {"type": "object", "properties": {
     "action": {"enum": ["list", "search", "read"]},
     "scope": {"enum": ["workspace", "all"]},
     "include_children": {"type": "boolean"},
+    "include_internal": {"type": "boolean"},
     "query": {"type": "string", "minLength": 1, "maxLength": 500},
     "nativeProject": {"type":"string", "maxLength":4000},
     "session_id": {"type": "string", "maxLength": 200},
@@ -49,7 +50,7 @@ def _rows(session):
 
 def _identity(session):
     from .session_identity import native_id, reference
-    return {**{key: session.get(key) for key in ('title', 'description', 'status', 'workspace', 'parentId', 'sessionKind')},
+    return {**{key: session.get(key) for key in ('title', 'description', 'status', 'workspace', 'parentId', 'sessionKind', 'sessionPurpose')},
             'parentId': session.get('nativeParentId') or session.get('parentId'),
             'id': native_id(session), 'sessionRef': reference(session), 'legacyId': session['id']}
 
@@ -69,6 +70,7 @@ async def query_history(service, args, caller_id):
         sessions = [copy.deepcopy(row) for row in service.state.get("sessions", [])
                     if (args.get("scope", "workspace") == "all" or row.get("workspace") == caller.get("workspace"))
                     and (not args.get("nativeProject") or native_project(row) == args["nativeProject"])
+                    and (args.get("include_internal", False) or row.get("sessionKind") != "internal")
                     and (args.get("include_children", False) or row.get("sessionKind", "root") != "worker")]
     sessions.sort(key=lambda row: (-row.get("recentActivityAt", row.get("createdAt", 0)), row["id"]))
     offset, limit = args.get("offset", 0), args.get("limit", 20)

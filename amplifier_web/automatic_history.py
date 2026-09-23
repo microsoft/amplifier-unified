@@ -20,7 +20,7 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
-                'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
+                'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose')
 
 
 def identity(project, session):
@@ -448,6 +448,7 @@ class AutomaticHistory:
                                         'nativeProject': row['nativeProject'], 'nativeRevision': copy.deepcopy(row.get('transcriptRevision')),
                                         'parentId': row.get('parentId'), 'nativeParentId': row.get('parentId'), 'turnCount': row.get('turnCount'),
                                         'sessionKind': row['sessionKind'],
+                                        **({'sessionPurpose': row['sessionPurpose']} if row.get('sessionPurpose') else {}),
                                         'description': row.get('description', ''), 'shared': True,
                                         'historyReadOnlyReason': row.get('readOnlyReason'),
                                         'historyManaged': True, 'historyLoaded': False}
@@ -463,6 +464,7 @@ class AutomaticHistory:
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
+                                                    'sessionPurpose': row.get('sessionPurpose'),
                                                     'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
@@ -520,7 +522,8 @@ class AutomaticHistory:
                     state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]), issueCount=len(issues), error=None,
                         projectCount=len(snapshot['workspaces']),
                         sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
-                        workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']))
+                        workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']),
+                        internalSessionCount=sum(row['sessionKind'] == 'internal' for row in snapshot['sessions']))
                     self.last_scan = snapshot
                     if changed:
                         self.service._publish()

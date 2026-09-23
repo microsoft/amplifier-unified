@@ -11,7 +11,7 @@ export function workspaceLabel(workspace){
 }
 export function isTopLevelChat(chat){
  if(chat?.sessionKind==='root')return true;
- if(chat?.sessionKind==='worker')return false;
+ if(chat?.sessionKind==='worker'||chat?.sessionKind==='internal')return false;
  if(chat?.forkTranscript?.length||chat?.editOrigin)return true;
  return !chat?.nativeParentId;
 }
