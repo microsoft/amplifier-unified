@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.10",
+      "title": "Reliable voice snapshots, clearer startup failures and lighter background work",
+      "changes": [
+        "Reduce repeated work when reading workspace preferences, indexing unchanged capture metadata and checking native conversation history.",
+        "Preserve safe worker-startup failure details through message admission so a failed message has a useful diagnosis without exposing private worker output or repeating work.",
+        "Forward optional startup resume requests to the terminal client, including the workspace-scoped picker and explicit session identifiers.",
+        "Capture fresh screenshots from stationary shared browser tabs, windows and screens during voice calls while respecting the current sharing grant and call.",
+        "Make delegated voice capabilities and available shared sources explicit so voice can use the tools supplied by the host.",
+        "Document verified Mac-to-Spark task transfer while preserving saved history and execution ownership."
+      ],
+      "notices": [
+        {
+          "id": "terminal-resume-client-02010",
+          "title": "Terminal resume also needs a current client",
+          "detail": "The Unified launcher and terminal client are separate components. Startup resume behavior requires the corresponding client update as well as this app release.",
+          "action": "Use a current qualified terminal client and check available component updates after updating the app."
+        }
+      ]
+    },
+    {
       "version": "0.20.9",
       "title": "Quieter background work and reliable conversation recovery",
       "changes": [
