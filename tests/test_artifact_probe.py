@@ -1,6 +1,7 @@
 """The probe group stays owned until helper and inherited pipes are closed."""
 import asyncio
 import base64
+import errno
 import json
 import os
 from pathlib import Path
@@ -80,9 +81,36 @@ def running(pid):
     try:
         if stat.read_text().rsplit(')', 1)[1].split()[0] == 'Z':
             return False
+    except ProcessLookupError:
+        # The process can disappear after kill(pid, 0) succeeds.
+        return False
     except FileNotFoundError:
         pass
     return True
+
+
+@pytest.mark.parametrize(('error', 'expected'), [
+    (ProcessLookupError(errno.ESRCH, 'No such process'), False),
+    (FileNotFoundError(errno.ENOENT, 'No proc stat file'), True),
+    (PermissionError(errno.EACCES, 'Permission denied'), None),
+    (OSError(errno.EIO, 'Input/output error'), None),
+], ids=['exited-after-kill-check', 'proc-unavailable', 'permission-error', 'io-error'])
+def test_running_handles_stat_exit_race_without_hiding_other_errors(monkeypatch, error, expected):
+    calls = []
+    def kill(pid, sig):
+        calls.append(('kill', pid, sig))
+    def read_stat(path):
+        calls.append(('stat', str(path)))
+        raise error
+    monkeypatch.setattr(sys.modules[__name__], 'os', SimpleNamespace(kill=kill))
+    monkeypatch.setattr(Path, 'read_text', read_stat)
+    if expected is None:
+        with pytest.raises(type(error)) as caught:
+            running(12345)
+        assert caught.value is error
+    else:
+        assert running(12345) is expected
+    assert calls == [('kill', 12345, 0), ('stat', '/proc/12345/stat')]
 
 
 async def stopped(pids):
