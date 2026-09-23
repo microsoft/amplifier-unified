@@ -23,6 +23,8 @@ import uuid
 from .session_files import amplifier_home, project_slug
 
 _MAX_METADATA = 8 * 1024 * 1024
+_STAMP_FILES = ('metadata.json', 'metadata.json.backup', 'transcript.jsonl',
+                'transcript.jsonl.backup', 'naming.json', os.path.join('context-intelligence', 'metadata.json'))
 _FIELDS = (
     'name', 'title', 'description', 'name_source', 'bundle', 'bundle_name',
     'parent_id', 'parent_session_id', 'agent_name', 'created', 'created_at', 'started_at', 'updated_at',
@@ -281,8 +283,10 @@ class NativeHistory:
         except FileNotFoundError:
             directories = []
         for directory in directories:
-            paths.extend(str(directory / name) for name in ('metadata.json', 'metadata.json.backup',
-                'transcript.jsonl', 'transcript.jsonl.backup', 'naming.json', 'context-intelligence/metadata.json'))
+            # All children are fixed relative names. Reusing the normalized
+            # directory string avoids reparsing a full Path for every probe.
+            prefix = str(directory) + os.sep
+            paths.extend(prefix + name for name in _STAMP_FILES)
         result = [tuple(sorted(known.get(project.name, ())))]
         result.append(tuple((path, str(Path(path).resolve()))
                             for path in sorted(self._project_paths.get(project.name, ()))))
