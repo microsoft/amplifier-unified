@@ -77,14 +77,16 @@ def selection_target(service, session_id, args):
     return target(service, session_id, args.get('clientId'), required=True)[0]
 
 
-def state(service, session_id, client_id=None, *, allow_detached=False, connected_only=False):
+def state(service, session_id, client_id=None, *, allow_detached=False, connected_only=False, detached=False):
     """Project caller Canvas state; absent/ambiguous clients have no active view.
 
     Keep the full artifact catalog and its JSON Pointer indices intact. This is
     presentation scoping, not a replacement for artifact ownership validation.
     """
     identity, candidates = target(service, session_id, client_id, allow_detached=allow_detached, connected_only=connected_only)
-    detached = client_id is not None and identity is None
+    if detached:
+        identity = None
+    detached = detached or (client_id is not None and identity is None)
     sid, workspace_id = scope(service, session_id, required=False)
     with service.clients.bind(identity):
         snapshot = service.state_context()
@@ -98,6 +100,9 @@ def state(service, session_id, client_id=None, *, allow_detached=False, connecte
                     'view': {'draft': '', 'canvasFocused': False}, 'canvasTabs': {}, 'deviceCommands': []}
         snapshot.pop('client', None)
         snapshot.pop('canvasWorkspace', None)
+        snapshot['computerVisual'] = {'available': False, 'captureMode': 'explicit-frame',
+                                     'reason': 'No single connected originating browser is selected.'}
+        snapshot['devices'] = {}
     connected = connected_clients(service, session_id)
     snapshot['canvasContext'] = {'sessionId': sid, 'clientId': identity, 'clientIds': candidates, 'connectedClientIds': [identity for identity in candidates if identity in connected],
                                  'status': 'detached' if detached else 'client' if identity else 'default' if legacy else

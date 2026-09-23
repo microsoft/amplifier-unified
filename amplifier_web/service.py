@@ -2616,6 +2616,43 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if '_inputClients' not in args:
+            return await self._app_bridge(operation, args, session_id)
+        # The worker stamps this from accepted inputs, replacing any tool args.
+        # Do not inherit the browser context captured when the runtime started.
+        clients = args['_inputClients']
+        identity = (clients[0] if isinstance(clients, list) and clients
+                    and all(isinstance(value, str) and value and value == clients[0] for value in clients) else None)
+        origin = {'clientId': identity, 'status': 'client' if identity else 'unavailable'}
+        with self.clients.bind(identity if identity in self.clients.records else None):
+            return await self._app_bridge(operation, args, session_id, input_origin=origin)
+
+    async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        def visual_origin(explicit=None):
+            if input_origin is None:
+                return
+            identity = input_origin['clientId']
+            if identity is None or explicit not in (None, identity):
+                raise AppError("Screen consent requires one originating browser; another client's consent cannot be borrowed.",
+                               409, code='visual_owner')
+            from .agent_canvas import target
+            target(self, session_id, identity, required=True, connected_only=True)
+
+        def agent_snapshot(client_id=None, **options):
+            from .agent_canvas import state
+            if input_origin is not None and client_id is None:
+                client_id = input_origin['clientId']
+                options.update(connected_only=True, allow_detached=True, detached=client_id is None)
+            snapshot = state(self, session_id, client_id, **options)
+            if input_origin is not None:
+                origin_id = input_origin['clientId']
+                live = origin_id in snapshot['canvasContext']['connectedClientIds']
+                snapshot['inputOrigin'] = {**input_origin, 'status': 'client' if live else 'unavailable'}
+                if not live or snapshot['canvasContext']['clientId'] != origin_id:
+                    snapshot['computerVisual'] = {'available': False, 'captureMode': 'explicit-frame',
+                                                 'reason': 'Screen consent requires the connected originating browser.'}
+            return snapshot
+
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == "questions.admit":
@@ -2632,6 +2669,11 @@ class AppService:
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "computer.visual.read":
+            visual_origin()
+            if input_origin is not None:
+                visual = self.computer_visual.clients.get(input_origin['clientId'])
+                if visual is None or args.get('captureId') not in visual.receipts:
+                    raise AppError("This capture belongs to another originating browser.", 409, code='visual_owner')
             return self.computer_visual.read(session_id, args.get("captureId"))
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
@@ -2657,8 +2699,7 @@ class AppService:
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state
-            from .agent_canvas import state
-            return read_state(state(self, session_id, args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
+            return read_state(agent_snapshot(args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
             actions = self.get_actions()
             prefix = args.get('prefix', '')
@@ -2735,8 +2776,14 @@ class AppService:
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
             if args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
+                if args['action'].startswith('computer.visual.'):
+                    visual_origin(action_args.get('clientId'))
+                elif input_origin is not None and not action_args.get('clientId') and input_origin['clientId'] is None:
+                    raise AppError('Choose an explicit connected navigation target; the input has no single originating browser.',
+                                   409, code='ui_client_required')
                 from .agent_canvas import target
-                canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=True)[0]
+                requested_client = action_args.get('clientId', input_origin['clientId'] if input_origin is not None else None)
+                canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             elif args['action'] == 'canvas.select':
@@ -2746,6 +2793,13 @@ class AppService:
                     action_args['clientId'] = canvas_client
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
+            elif input_origin is not None and 'clientId' in action_args and (
+                    args['action'].startswith(('canvas.views.', 'canvas.apps.'))
+                    or args['action'] in {'canvas.visibility', 'theme.preview', 'theme.revert'}):
+                # An explicit Canvas target is independent of screen consent.
+                canvas_client = action_args['clientId']
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
             await self._flush_pending_progress()
@@ -2758,8 +2812,7 @@ class AppService:
                 from .agent_state import surface_context
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:
-                from .agent_canvas import state
-                context = read_state(state(self, session_id, canvas_client, allow_detached=True, connected_only=args['action'] == 'view.update' or args['action'].startswith('computer.visual.')), {}, session_id=session_id, resolve=self.state_resource)
+                context = read_state(agent_snapshot(canvas_client, allow_detached=True, connected_only=args['action'] == 'view.update' or args['action'].startswith('computer.visual.')), {}, session_id=session_id, resolve=self.state_resource)
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 
