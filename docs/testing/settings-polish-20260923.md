@@ -13,10 +13,12 @@ This follow-up starts from 0.20.16. The previous approved Settings release is al
 ## Evidence
 
 - Focused Python suite: 275 passed, including voice lifecycle/credentials, setup, updates, shared settings, and agent actions.
+- Upgrade compatibility follow-up: 124 update/readiness tests passed, including startup with the older application-state shape used by managed upgrade handoff.
 - Frontend unit suite: 328 passed.
 - `node frontend/tests/settings-refinements-browser.mjs`: provider removal, signed-in state, root navigation, credential choices, model/voice selection, notification saving, badge trail; 38 screenshots; no browser errors.
 - `node frontend/tests/settings-polish-browser.mjs`: 323 screenshots covering all Settings destinations in Graphite at 390/1280 px and light/dark; basic destinations in all four appearances; empty/populated tools, installation failure/retry, voice sample, visibility acknowledgment, busy/error updates, appearance reload. Synthetic provider/tool results are used to exercise failures without changing an account.
-- A real provider sample and deployment checks are separate from fixture evidence. Fixture audio validates playback wiring, not provider availability or physical audio quality.
+- Spark-2 qualification: 119 focused tests passed in the isolated host environment. Live TLS checks verified matching frontend assets and preserved appearance, provider identities, sessions, and voice selection after restart.
+- Real GPT Live 1 and GPT Realtime 2.1 requests returned non-silent 24 kHz voice samples. This validates provider audio generation; subjective playback quality was not assessed. Browser fixture audio separately validates playback wiring.
 
 ## Preview environment
 
