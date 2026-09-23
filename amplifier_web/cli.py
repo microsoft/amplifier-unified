@@ -64,7 +64,9 @@ def _parse() -> argparse.Namespace:
         tui.add_argument("--" + flag)
     tui.add_argument("--workspace", dest="tui_workspace", help="Workspace path on the host (defaults to the launch directory)")
     selection = tui.add_mutually_exclusive_group()
-    selection.add_argument("--session", "--resume", dest="session")
+    selection.add_argument("--session", help="Native CLI or host conversation ID, unique prefix, or latest")
+    selection.add_argument("--resume", nargs="?", const="", metavar="ID",
+                           help="Open this directory's resume picker, or resume an ID or unique prefix")
     selection.add_argument("--new", action="store_true")
     tui.add_argument("--list-sessions", action="store_true")
     config = subcommands.add_parser("config", help="Manage server configuration")
@@ -222,6 +224,8 @@ def _tui(args, data_dir):
                 options += ['--' + key.replace('_', '-'), str(getattr(args, key))]
         if args.tui_workspace:
             options += ['--workspace', args.tui_workspace]
+        if args.resume is not None:
+            options += ['--resume'] + ([args.resume] if args.resume else [])
         for key in ('new', 'list_sessions'):
             if getattr(args, key):
                 options += ['--' + key.replace('_', '-')]
@@ -250,6 +254,8 @@ def _tui(args, data_dir):
             options += ["--" + key.replace("_", "-"), str(getattr(args, key))]
     if args.tui_workspace:
         options += ["--workspace", args.tui_workspace]
+    if args.resume is not None:
+        options += ["--resume"] + ([args.resume] if args.resume else [])
     for key in ("new", "list_sessions"):
         if getattr(args, key):
             options += ["--" + key.replace("_", "-")]

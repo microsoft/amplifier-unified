@@ -451,7 +451,8 @@ def test_installed_version_must_match_prepared_release_before_redeeming(tmp_path
 
 @pytest.mark.parametrize('managed', [False, True])
 @pytest.mark.parametrize('explicit', [None, '/remote/project'])
-def test_tui_resume_scope_defaults_to_launch_directory(tmp_path, monkeypatch, managed, explicit):
+@pytest.mark.parametrize('selection', [['--list-sessions'], ['--resume'], ['--resume', 'aabbccdd'], ['--session', 'saved']])
+def test_tui_resume_scope_defaults_to_launch_directory(tmp_path, monkeypatch, managed, explicit, selection):
     import subprocess
     import sys
     import types
@@ -468,7 +469,7 @@ def test_tui_resume_scope_defaults_to_launch_directory(tmp_path, monkeypatch, ma
     module.main = lambda args: calls.append(args)
     monkeypatch.setitem(sys.modules, 'amplifier_tui', types.ModuleType('amplifier_tui'))
     monkeypatch.setitem(sys.modules, 'amplifier_tui.connected', module)
-    argv = ['amplifier-unified', 'tui', '--server', 'https://fixture.example', '--list-sessions']
+    argv = ['amplifier-unified', 'tui', '--server', 'https://fixture.example', *selection]
     if explicit:
         argv += ['--workspace', explicit]
     monkeypatch.setattr(sys, 'argv', argv)
@@ -480,4 +481,5 @@ def test_tui_resume_scope_defaults_to_launch_directory(tmp_path, monkeypatch, ma
         cli.main()
     options = calls[0]
     assert options[options.index('--workspace') + 1] == (explicit or str(launch.resolve()))
-    assert '--list-sessions' in options
+    index = options.index(selection[0])
+    assert options[index:index + len(selection)] == selection
