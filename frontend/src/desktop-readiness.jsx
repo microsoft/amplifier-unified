@@ -45,28 +45,28 @@ export function DesktopReadiness({state,session,act}){
   {installError&&<p role="alert">{installError}</p>}
   {current&&<>
    <p className="a-caption">Checked {time(current.observedAt)}. This is a setup snapshot; check again after changing the host, tools or permissions.</p>
-   <section aria-label="Native voice observation"><h4>Native voice observation</h4>
+   <section aria-label="Native screen observation"><h4>Native screen observation</h4>
     <p>The serving app host can differ from your browser device and the conversation worker.</p>
     <Environment value={current.host}/>
     <p role="status">Native observation: {current.nativeObservation.available?'ready for explicit consent':current.nativeObservation.code||current.nativeObservation.status}</p>
     {current.nativeObservation.reason&&<p className="a-wrap">{current.nativeObservation.reason}</p>}
     <p>{current.nativeObservation.nextStep}</p>
     {feature?.supported?<>
-     {feature.installedExtras.includes('native-desktop')?<p>The native observation package is installed. OS permission and consent for each voice call are separate.</p>:<>
+     {feature.installedExtras.includes('native-desktop')?<p>The native observation package is installed. OS permission and consent for this conversation and browser are separate.</p>:<>
       <p>{feature.detail}</p>
       <button className="a-soft" data-action="updates.featureInstall" disabled={featureBusy||Boolean(installError)} onClick={install}>Install native screen observation</button>
      </>}
     </>:feature?.reason&&<p>{feature.reason}</p>}
     <p className="a-caption">The Python path identifies the executing interpreter. It does not identify which parent application macOS lists in Screen Recording settings.</p>
    </section>
-   <section aria-label="Browser voice observation"><h4>Voice screen source</h4>
-    {current.voiceObservation.source?<p>Selected {current.voiceObservation.source.kind}: {current.voiceObservation.source.label}. Permission expires {time(current.voiceObservation.expiresAt)}.</p>:<p>No source is shared for this conversation's active voice call.</p>}
+   <section aria-label="Browser screen observation"><h4>Shared screen source</h4>
+    {current.voiceObservation.source?<p>Selected {current.voiceObservation.source.kind}: {current.voiceObservation.source.label}. Permission expires {time(current.voiceObservation.expiresAt)}.</p>:<p>No source is shared for this conversation in this browser.</p>}
     <p>{current.voiceObservation.nextStep}</p><p className="a-caption">{current.voiceObservation.browserContext}</p>
    </section>
    <section aria-label="Conversation computer tools"><h4>Conversation computer and browser tools</h4>
     {worker.status!=='available'?<p>{worker.reason}</p>:<>
      <Environment value={worker}/>
-     <p>Computer control: {control.status.replaceAll('_',' ')}. Mounted tools are separate from native voice observation.</p>
+     <p>Computer control: {control.status.replaceAll('_',' ')}. Mounted tools are separate from native screen observation.</p>
      {control.detail&&<p className="a-wrap">{control.detail}</p>}
      <p className="a-wrap">Mounted tools: {worker.mountedTools.join(', ')||'none'}</p>
      <details><summary>Configured tool modules</summary><ul>{worker.modules.map(row=><li key={row.id}>{row.module} ({row.enabled?'enabled':'disabled'})</li>)}</ul></details>

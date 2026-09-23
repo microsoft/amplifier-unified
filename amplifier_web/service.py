@@ -2797,12 +2797,6 @@ class AppService:
             self.state["voice"].update(payload)
             if self.state["voice"].get("status") != "connected":
                 self.voice_visual.revoke()
-            else:
-                call = getattr(self.voice_service, "call", None)
-                client_id = getattr(call, "client_id", None)
-                visual = self.computer_visual.clients.get(client_id)
-                if visual and visual.session_id == self.state["voice"].get("sessionId"):
-                    self.computer_visual.reconcile(client_id, disconnect=True)
             self.voice_visual.publish()
 
     async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
@@ -2829,6 +2823,7 @@ class AppService:
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
             self.voice_visual.bind_input(session["id"], command_id)
+            self.computer_visual.bind_input(session["id"], command_id)
             session.setdefault('surfaceInputs', {})[command_id] = input_context
             session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()

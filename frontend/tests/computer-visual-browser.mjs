@@ -11,6 +11,9 @@ try {
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{
+  class Peer extends EventTarget {constructor(){super();this.connectionState='new'}createDataChannel(){const c=new EventTarget();c.readyState='open';c.close=()=>{};return c}addTrack(){}async createOffer(){return {type:'offer',sdp:'synthetic-offer'}}async setLocalDescription(v){this.localDescription=v}async setRemoteDescription(){this.connectionState='connected';this.dispatchEvent(new Event('connectionstatechange'))}close(){}}
+  window.RTCPeerConnection=Peer;
+  navigator.mediaDevices.getUserMedia=async()=>new MediaStream();
   navigator.mediaDevices.getDisplayMedia=async()=>{
    window.pickerCalls=(window.pickerCalls||0)+1;
    const canvas=document.createElement('canvas');canvas.width=320;canvas.height=200;const c=canvas.getContext('2d');c.fillStyle='navy';c.fillRect(0,0,320,200);c.fillStyle='white';c.font='22px sans-serif';c.fillText('Synthetic text chat',15,80);
@@ -44,9 +47,21 @@ try {
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Unsent text remains');assert.equal((await inspect()).sent.length,0);
  await page.screenshot({path:process.env.COMPUTER_VISUAL_SCREENSHOT||'/tmp/amplifier-computer-controls.png',fullPage:true});
  await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('status',{name:'Screen sharing active'})).toBeVisible();
+ const sharedGrant=(await inspect()).computerGrants[0].id;
+ await action('call.start');await expect(page.getByRole('button',{name:'End call',exact:true})).toBeVisible();
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().voice.status)).toBe('connected');
+ assert.equal((await inspect()).computerGrants[0].id,sharedGrant);assert.equal(await page.evaluate(()=>window.captureTrack.readyState),'live');
+ await page.getByRole('button',{name:'End call',exact:true}).click();
+ assert.equal((await inspect()).computerGrants[0].id,sharedGrant);await expect(page.getByRole('status',{name:'Screen sharing active'})).toBeVisible();
+ await page.setViewportSize({width:390,height:844});
+ const stop=page.getByRole('button',{name:'Stop sharing',exact:true});await expect(stop).toBeVisible();
+ const stopBox=await stop.boundingBox();assert.ok(stopBox.x>=0&&stopBox.x+stopBox.width<=390);
+ await page.screenshot({path:process.env.SHARING_INDICATOR_SCREENSHOT||'/tmp/amplifier-sharing-indicator.png',fullPage:true});
+ await page.setViewportSize({width:1400,height:1000});
  await new Promise(r=>setTimeout(r,2100));
  const captured=await agent('computer.visual.capture',{sessionId:sid},'text-agent-capture');assert.equal(captured.result.source.label,'Synthetic text window');
- await agent('computer.visual.revoke',{sessionId:sid});await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');
+ await page.getByRole('button',{name:'Stop sharing',exact:true}).click();await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');await expect.poll(async()=>(await inspect()).computerGrants.length).toBe(0);await expect(page.getByRole('status',{name:'Screen sharing active'})).toHaveCount(0);
  await page.getByRole('button',{name:'Chat controls',exact:true}).click();
  await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
  await action('session.create',{});await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');

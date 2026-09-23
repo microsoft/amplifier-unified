@@ -405,3 +405,23 @@ async def test_provider_finalization_releases_call_without_cancelling_work():
     await asyncio.gather(*list(call.tasks))
     assert call.closed and socket.closed and call.final.is_set()
     assert call.close_result['workContinues'] is True
+
+
+def test_voice_context_uses_only_its_browser_conversation_source():
+    import json
+    from types import SimpleNamespace
+    service = Service()
+    sources = {
+        'call-browser': {'available':True, 'sessionId':'main', 'source':{'kind':'window','label':'Private title'}, '_image':'private-pixels'},
+        'other-browser': {'available':True, 'sessionId':'other', 'source':{'kind':'monitor'}},
+    }
+    service.computer_visual = SimpleNamespace(project=lambda client: sources.get(client, {'available':False}))
+    call = VoiceCall(VoiceService(service), 'main')
+    call.client_id = 'call-browser'
+    context = json.loads(call.context(service.state))
+    assert context['screen_source'] == {'available':True, 'kind':'window'}
+    assert 'Private title' not in str(context) and 'private-pixels' not in str(context)
+    call.client_id = 'other-browser'
+    assert json.loads(call.context(service.state))['screen_source'] == {'available':False}
+    call.client_id = 'missing'
+    assert json.loads(call.context(service.state))['screen_source'] == {'available':False}
