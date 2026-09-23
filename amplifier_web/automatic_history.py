@@ -239,6 +239,8 @@ class AutomaticHistory:
         self.loads = {}
         self.task = None
         self.last_scan = None
+        self._native_snapshot = None
+        self._native_revision = None
         service.state.setdefault('sharedHistory', {}).update(loading=True, error=None)
 
     def start(self):
@@ -275,7 +277,16 @@ class AutomaticHistory:
                 known = copy.deepcopy(self.service.state['workspaces'])
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
-                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known, force=force)
+                revision_token, incoming = await asyncio.to_thread(self.index.scan_if_changed,
+                    known_workspaces=known, force=force, since=self._native_revision)
+                if incoming is not None:
+                    self._native_snapshot = incoming
+                    self._native_revision = revision_token
+                # Reconcile local changes even when native files are unchanged:
+                # hidden rows, tombstones, managed markers and selected views
+                # have independent invalidation. Filtering must not alter the
+                # retained unfiltered catalog.
+                snapshot = dict(self._native_snapshot)
                 managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return
@@ -378,7 +389,7 @@ class AutomaticHistory:
                                         'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
                                         'status': 'idle', 'messages': [], 'workers': [], 'approvals': [],
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
-                                        'nativeProject': row['nativeProject'], 'nativeRevision': row.get('transcriptRevision'),
+                                        'nativeProject': row['nativeProject'], 'nativeRevision': copy.deepcopy(row.get('transcriptRevision')),
                                         'parentId': row.get('parentId'), 'nativeParentId': row.get('parentId'), 'turnCount': row.get('turnCount'),
                                         'sessionKind': row['sessionKind'],
                                         'description': row.get('description', ''), 'shared': True,
@@ -424,9 +435,9 @@ class AutomaticHistory:
                                     if previous.get(key_name) != value:
                                         previous[key_name] = value; changed = True
                             if not previous.get('historyLoaded') and previous.get('historyManaged'):
-                                previous['nativeRevision'] = row.get('transcriptRevision')
+                                previous['nativeRevision'] = copy.deepcopy(row.get('transcriptRevision'))
                             elif 'nativeRevision' not in previous:
-                                previous['nativeRevision'] = row.get('transcriptRevision')
+                                previous['nativeRevision'] = copy.deepcopy(row.get('transcriptRevision'))
                         if managed and previous.get('location') != {'kind': 'managed'}:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
@@ -447,7 +458,7 @@ class AutomaticHistory:
                     if (state['sharedHistory'].get('issues', []) != issues[:100]
                             or state['sharedHistory'].get('issueCount', 0) != len(issues)):
                         changed = True
-                    state['sharedHistory'].update(loading=False, issues=issues[:100], issueCount=len(issues), error=None,
+                    state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]), issueCount=len(issues), error=None,
                         projectCount=len(snapshot['workspaces']),
                         sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
                         workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']))

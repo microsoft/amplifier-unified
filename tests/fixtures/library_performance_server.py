@@ -81,7 +81,7 @@ async def main(args):
         app['control_token'] = 'fixture-library-performance-token'
         service = app['service']
         await service.history.close()
-        service.history.index.scan = lambda **kwargs: copy.deepcopy(catalog)
+        service.history.index.scan_if_changed = lambda **kwargs: (object(), copy.deepcopy(catalog))
         await service.history.refresh()
         if service.state['sharedHistory'].get('error'):
             raise AssertionError(service.state['sharedHistory']['error'])
