@@ -111,6 +111,7 @@ class NativeHistory:
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
         self._files = {}
+        self._file_projects = set()
         self._projects = {}
         self._lock = threading.Lock()
         self._reads = 0
@@ -199,6 +200,7 @@ class NativeHistory:
             # when the writer actually changes the file, not on every poll.
             value = previous[1] if previous else {}
         self._files[path] = (signature, value, failed)
+        self._file_projects.add(project)
         return value
 
     def _native_metadata(self, directory, issues, project):
@@ -235,6 +237,7 @@ class NativeHistory:
             value = previous[1] if previous else {}
             issues.append({'kind': 'unreadable', 'nativeProject': project, 'nativeIdentity': directory.name})
         self._files[path] = (signature, value, failed)
+        self._file_projects.add(project)
         return value
 
     @staticmethod
@@ -451,8 +454,13 @@ class NativeHistory:
                 existing = set(current)
                 self._project_inputs = {key:value for key,value in self._project_inputs.items() if key in existing}
                 self._project_paths = {key:value for key,value in self._project_paths.items() if key in existing}
-                self._files = {path: value for path, value in self._files.items()
-                               if path.relative_to(self.home / 'projects').parts[0] in existing}
+                # File ownership changes only when a project disappears. Avoid
+                # parsing tens of thousands of unchanged paths at every timer
+                # reconciliation; metadata stamps and discovery still run.
+                if self._file_projects - existing:
+                    self._files = {path: value for path, value in self._files.items()
+                                   if path.relative_to(self.home / 'projects').parts[0] in existing}
+                    self._file_projects.intersection_update(existing)
             workspaces = [project['workspace'] for project in self._projects.values()]
             sessions = [row for project in self._projects.values() for row in project['sessions']]
             sessions.sort(key=lambda row: (row['updatedAt'], row['id']), reverse=True)
