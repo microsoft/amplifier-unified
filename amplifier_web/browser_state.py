@@ -11,7 +11,7 @@ from .session_navigation import is_top_level
 
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
-    'sessionKind', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
+    'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
     'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
@@ -56,7 +56,7 @@ class SessionIndex:
             else:
                 self.parents.setdefault(row.get('parentId'), set()).add(identity)
                 self.native_parents.setdefault(row.get('nativeParentId'), set()).add(identity)
-            if row.get('messages'):
+            if row.get('messages') and row.get('sessionKind') != 'internal':
                 self.notifications.extend(
                     {**{key: message[key] for key in ('id', 'role', 'via', 'createdAt') if key in message},
                      'sessionId': identity, 'text': message.get('text', '')[:500]}
@@ -170,7 +170,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                      for row in index.notifications]
     selected_root = selected_row if selected_row and is_top_level(selected_row) else None
     continuation = selected_root or index.first_root
-    result['library'] = {'sessionCount': len(state.get('sessions', [])), 'workspaceCount': len(state.get('workspaces', [])),
+    result['library'] = {'sessionCount': sum(is_top_level(row) for row in state.get('sessions', [])), 'workspaceCount': len(state.get('workspaces', [])),
                          'continueSessionId': continuation['id'] if continuation else None,
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):

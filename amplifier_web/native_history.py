@@ -30,6 +30,7 @@ _FIELDS = (
     'parent_id', 'parent_session_id', 'agent_name', 'created', 'created_at', 'started_at', 'updated_at',
     'last_updated', 'last_event_at', 'ended_at', 'turn_count', 'working_dir',
     'cwd', 'project_dir', 'workspace', 'model', 'status', 'forked_from_turn', 'forked_at',
+    'session_visibility', 'session_purpose',
 )
 
 
@@ -76,7 +77,7 @@ def _small_metadata(value):
 
 
 def classify_session(identity, *metadata_sources):
-    """Distinguish runtime children from independent roots and fork lineage.
+    """Distinguish internal jobs, runtime children and independent roots.
 
     Foundation CLI forks are independent roots with parent_id plus the documented
     forked_from_turn/forked_at fields. Other native parent identities indicate
@@ -95,8 +96,15 @@ def classify_session(identity, *metadata_sources):
                    and bool(_text(metadata.get('forked_at')))))
         if forked:
             return 'root', parent
+        # Visibility is a producer declaration, not inferred from a prompt,
+        # title, invocation mode, TTY, or generic agent/recipe origin. Those
+        # also occur in user-requested standalone conversations.
+        if metadata.get('session_visibility') == 'internal':
+            return 'internal', parent
         if parent_key is not None:
             return ('worker' if parent else 'root'), parent
+        if metadata.get('session_visibility') == 'chat':
+            return 'root', None
     return ('worker' if '_' in identity else 'root'), None
 
 
@@ -374,6 +382,9 @@ class NativeHistory:
                 'nativeIdentity': directory.name, 'nativeProject': slug,
                 'name': name, 'title': name, 'description': _text(meta.get('description')) or '',
                 'bundle': bundle, 'parentId': parent, 'sessionKind': kind,
+                **({'sessionPurpose': meta['session_purpose']} if kind == 'internal'
+                   and isinstance(meta.get('session_purpose'), str)
+                   and re.fullmatch(r'[a-z][a-z0-9_.-]{0,79}', meta['session_purpose']) else {}),
                 'createdAt': created, 'updatedAt': updated, 'recentActivityAt': recent, 'turnCount': turns,
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
@@ -391,11 +402,14 @@ class NativeHistory:
             'available': bool(path and Path(path).is_dir()),
             'sessionCount': sum(row['sessionKind'] == 'root' for row in rows),
             'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in rows),
+            'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in rows),
         }
         for row in rows:
             row.update(workspace=path, workspaceId=workspace_id)
             reason = None
-            if row['sessionKind'] == 'worker':
+            if row['sessionKind'] == 'internal':
+                reason = 'Internal job history is read-only; it is not an ordinary conversation.'
+            elif row['sessionKind'] == 'worker':
                 reason = 'Worker sessions are read-only; continuing them as root chats would lose their worker configuration.'
             elif not re.fullmatch(r'[A-Za-z0-9-]{1,128}', row['nativeIdentity']):
                 reason = 'This legacy session identifier is not supported for shared root execution.'
@@ -507,4 +521,5 @@ class NativeHistory:
             return self._snapshot_revision, copy.deepcopy({'workspaces': workspaces, 'sessions': sessions,
                                   'sessionCount': sum(row['sessionKind'] == 'root' for row in sessions),
                                   'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in sessions),
+                                  'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in sessions),
                                   'issues': issues, 'metadataReads': self._reads})

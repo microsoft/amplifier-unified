@@ -242,3 +242,20 @@ async def test_explicit_snapshot_target_does_not_change_selection_or_default_cac
     assert next(row for row in scoped['sessions'] if row['id'] == target['id'])['generations'][0]['generation_id'] == 'done'
     assert app.browser_state() is original
     assert target['id'] not in {row['id'] for row in app.browser_state()['sessions']}
+
+
+def test_internal_history_stays_out_of_browser_counts_and_notifications(app_factory):
+    app = app_factory()
+    rows = catalog(app, count=2, workers=1, workspaces=1)
+    internal = deepcopy(rows[1])
+    internal.update(id='internal-job', sessionKind='internal', messages=[
+        {'id':'internal-answer', 'role':'assistant', 'via':'text', 'text':'private job output'}])
+    app.state['sessions'].append(internal)
+    app.state['conversationOrganization'] = {'archived': {rows[1]['id']: 1, 'internal-job': 2}, 'collections': []}
+    app._publish()
+    result = app.browser_state()
+    assert result['library']['sessionCount'] == 2
+    assert result['conversationOrganization']['archivedCount'] == 1
+    assert all(row['sessionId'] != 'internal-job' for row in result['notificationMessages'])
+    assert all(row['id'] != 'internal-job' for row in result['chatNavigation']['items'])
+    assert app.state['sessions'][-1]['messages'][0]['text'] == 'private job output'

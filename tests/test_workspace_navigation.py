@@ -61,6 +61,7 @@ def test_available_empty_folders_remain_visible_without_counting_workers_or_muta
         workspace('worker-only', '/workers'), workspace('unchecked', '/unchecked', available=None),
     ], [chat('valid-chat', 'valid'), chat('prefix-chat', 'prefix'), chat('gone-chat', 'gone'),
         chat('unresolved-chat', 'unknown'), chat('worker', 'worker-only', sessionKind='worker'),
+        chat('internal', 'worker-only', sessionKind='internal'),
         chat('unchecked-chat', 'unchecked')], 'valid')
     original = copy.deepcopy(value)
     result = snapshot(value)
