@@ -99,7 +99,7 @@ export class VoiceVisualClient {
  dispose(){this.stop();globalThis.window?.removeEventListener('pagehide',this.onPageHide)}
 }
 
-/** Conversation-scoped consent is deliberately separate from a voice call. */
+/** A browser-owned source belongs to the conversation, across text and voice. */
 export class ComputerVisualClient extends VoiceVisualClient {
  constructor({getSession,...options}){super({...options,scope:'computer',getVoice:()=>{const sessionId=getSession();return {sessionId,id:sessionId,status:sessionId?'connected':'idle'}}})}
 }

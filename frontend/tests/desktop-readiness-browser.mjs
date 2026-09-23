@@ -50,7 +50,7 @@ try{
  await expect(page.getByText('Native observation: ready for explicit consent',{exact:true})).toHaveCount(0);
  await check();await expect(page.getByText(/Selected browser: Synthetic selected tab/)).toBeVisible();
  await scenario({source:'Replacement tab',sessionId:first});await check();await expect(page.getByText(/Selected browser: Replacement tab/)).toBeVisible();
- await scenario({end:true});await check();await expect(page.getByText("No source is shared for this conversation's active voice call.",{exact:true})).toBeVisible();
+ await scenario({end:true});await check();await expect(page.getByText("No source is shared for this conversation in this browser.",{exact:true})).toBeVisible();
  await action('session.create',{title:'Different conversation',select:false});const second=await page.evaluate(first=>window.amplifier.getState().sessions.find(row=>row.id!==first).id,first);
  await scenario({delay:true});const delayed=check();await expect.poll(async()=>(await inspect()).delayEntered).toBe(true);
  await action('session.select',{id:second});assert.notEqual(first,second);

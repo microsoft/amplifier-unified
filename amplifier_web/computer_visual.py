@@ -1,8 +1,9 @@
-"""Explicit text-chat screen consent, separate from live voice-call consent.
+"""Explicit conversation screen consent shared by text and voice.
 
 Each browser owns its grant. Changing its selected chat or disconnecting ends
 that scope, including requests already in flight. Nothing is restored on load.
-The bounded capture/receipt engine is shared with voice, not its authority.
+Voice is a modality of the same conversation; starting or ending a call does
+not create, transfer, or revoke this browser-owned permission.
 """
 from aiohttp import web
 
@@ -20,7 +21,7 @@ def definitions(schema, string):
 
 class ComputerVisual(VoiceVisual):
     action_prefix = "computer.visual"
-    permission_scope = "Explicit UI or agent snapshots for this chat in this browser, for up to 15 minutes; switching chats, starting voice here, disconnecting or stopping sharing ends access. No automatic capture."
+    permission_scope = "Explicit UI or agent snapshots for this chat in this browser, for up to 15 minutes; switching chats, disconnecting or stopping sharing ends access. Text and voice use the same permission. No automatic capture."
     message_via = "chat"
 
     def __init__(self, service, client_id, session_id):
@@ -69,10 +70,6 @@ class ComputerVisuals:
         if not sid or record.get("selectedSessionId") != sid:
             raise AppError("The browser must display the requested conversation.", 409, code="stale_visual_scope")
         self.service._session(sid)
-        call = getattr(self.service.voice_service, "call", None)
-        if (call and getattr(call, "client_id", None) == current and call.session_id == sid
-                and not call.closed and not call.closing and self.service.state["voice"].get("status") == "connected"):
-            raise AppError("Use this active call's separate screen permission; text-chat consent is not promoted into a call.", 409, code="visual_call_scope")
         visual = self.clients.get(current)
         if visual is None or visual.detached or visual.session_id != sid:
             if visual:

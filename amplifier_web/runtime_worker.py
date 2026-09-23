@@ -94,6 +94,29 @@ class Worker:
         finally:
             self.bridges.pop(identity, None)
 
+    def app_access_bridge(self, coordinator):
+        # Workers inherit the originating inputs at assignment, never
+        # another client's later input or another coordinator's receipts.
+        assigned = None if coordinator is self.session.coordinator else list(self.context_inputs)
+        assigned_clients = None if assigned is None else [self.context_bindings.get(i, {}).get('clientId') for i in assigned]
+        watched = set()
+        async def bridge(operation, args):
+            ids = self.context_inputs if assigned is None else assigned
+            args = {**args, '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
+                                             if assigned_clients is None else assigned_clients)}
+            if operation.startswith('context.'):
+                bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
+                if assigned is not None:
+                    if operation == 'context.read':
+                        watched.add(args.get('surfaceId'))
+                    bindings = [{**b, 'targets': [t for t in b.get('targets', []) if t['surfaceId'] in watched]} for b in bindings]
+                    if not bindings:
+                        bindings = [{'clientId': 'detached-worker', 'targets': []}]
+                args = {**args, '_contextInputs': ids,
+                        '_contextBindings': bindings}
+            return await self.bridge(operation, args)
+        return bridge
+
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
@@ -319,26 +342,7 @@ class Worker:
                 report["fork_context_messages"] = len(messages)
             host = self
             from amplifier_web.app_guidance import install_app_access
-            def surface_bridge(coordinator):
-                # Workers inherit the originating inputs at assignment, never
-                # another client's later input or another coordinator's receipts.
-                assigned = None if coordinator is host.session.coordinator else list(host.context_inputs)
-                watched = set()
-                async def bridge(operation, args):
-                    ids = host.context_inputs if assigned is None else assigned
-                    if operation.startswith('context.'):
-                        bindings = [host.context_bindings[i] for i in ids if i in host.context_bindings]
-                        if assigned is not None:
-                            if operation == 'context.read':
-                                watched.add(args.get('surfaceId'))
-                            bindings = [{**b, 'targets': [t for t in b.get('targets', []) if t['surfaceId'] in watched]} for b in bindings]
-                            if not bindings:
-                                bindings = [{'clientId': 'detached-worker', 'targets': []}]
-                        args = {**args, '_contextInputs': ids,
-                                '_contextBindings': bindings}
-                    return await host.bridge(operation, args)
-                return bridge
-            await install_app_access(self.session.coordinator, surface_bridge(self.session.coordinator))
+            await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
                 def __getattr__(self, name):
@@ -347,7 +351,7 @@ class Worker:
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
-                        await install_app_access(coordinator, surface_bridge(coordinator))
+                        await install_app_access(coordinator, host.app_access_bridge(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
