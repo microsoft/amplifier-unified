@@ -41,6 +41,12 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
 - `smartTools.resources {id,kind?,cursor?}` lists resources or templates one page
   at a time; `smartTools.readResource {id,uri}` reads through that server.
 - `smartTools.open {id,tool,operationId?,sessionId?}` attaches a standard view.
+- `smartTools.viewStatus {canvasId,clientId?}` inspects the active view's saved
+  source and live connection independently. It does not connect or call a tool.
+- `smartTools.reconnectView {canvasId,expectedBindingRevision,clientId?,reviewedContract?}`
+  reconnects that same tab through the ordinary connection/account checks. Read
+  `viewStatus` first and use its exact binding revision. Agent requests are scoped
+  to the calling chat; multiple matching clients require an explicit client ID.
 - `smartTools.readResult {operationId,path?,offset?,limit?,operationRevision?}` reads
   a retained receipt synchronously, without creating another operation or changing
   a shared inspection slot. Follow `$operationPath` previews with the same operation
@@ -112,6 +118,36 @@ A fork copies a reference to the same tool work, not a tool-specific clone. Fork
 views display a shared-work notice. Ask the tool to clone if it exposes that capability.
 Updating a server configuration invalidates its old view bindings and launch receipts;
 open a fresh view after reconnecting.
+
+### Saved documents and reconnection
+
+Saved MCP HTML remains readable inside its existing sandbox after disconnect,
+restart or a changed server configuration. Live tool and resource calls still
+require a valid binding. Missing source is reported separately, retaining its
+original reference; a handshake timeout does not imply that the source was lost.
+The tool's own server/state may still be needed for live features.
+
+New views record a fingerprint of their granted tool definitions and launcher,
+plus any attested account identity. Discovery generations may change on restart;
+an explicit reconnect can rebind an unchanged contract without reading today's
+HTML, adding tools, creating another tab or reissuing earlier calls. Changed
+configuration, account identity, app resource or granted schemas fail visibly.
+The reconnect control preserves the mounted iframe and unfinished input. Reload
+is a separate explicit control because it resets local inputs and reruns the
+authored document's initialization code.
+
+Older views lack a saved contract fingerprint. Reconnect returns `review_required`
+with the current definitions for the already-granted action names. After reviewing
+them, the user or authorized agent can supply that exact `review.fingerprint` as
+`reviewedContract`. The binding is checked again before committing. This does not
+grant newly discovered tools or infer a missing historical account identity.
+Legacy views with an attested but unrecorded account require a newly reviewed view.
+This recovery path does not introduce artifact revision history or merge tabs by title.
+
+Local acceptance: `npm --prefix frontend run test:mcp-recovery-browser` uses an
+actual MCP SDK fixture and restarts the host over isolated synthetic state. It
+checks source identity, launch receipts, mutation counts, input preservation and
+changed-schema denial. `AMPLIFIER_TEST_PYTHON` selects the test interpreter.
 
 ## Supported protocol profile
 

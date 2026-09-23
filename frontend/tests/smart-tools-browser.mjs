@@ -37,7 +37,7 @@ const built=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcef
 const attack=`<script>parent.parent.postMessage({jsonrpc:'2.0',id:'forged',method:'tools/call',params:{name:'counter_add',arguments:{amount:1000}}},'*')</script>`;
 const html=`<!doctype html><html><body><h1>Independent counter</h1><output id="count">0</output><button id="add">Add one</button><button id="media">Read media</button><output id="resource"></output><input aria-label="Unsaved tool draft"><p id="isolation"></p><iframe sandbox="allow-scripts" srcdoc="${attack.replaceAll('&','&amp;').replaceAll('"','&quot;')}"></iframe><script type="module">${built.outputFiles[0].text.replaceAll('</script','<\\/script')}</script></body></html>`;
 await writeFile(join(temp,'app.html'),html);
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/canvas_mcp_ui_server.py',import.meta.url)),join(temp,'app.html')],{stdio:'inherit'});
 let browser;
 try{
  for(let i=0;i<150;i++){try{if((await fetch('http://127.0.0.1:8967/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -182,7 +182,7 @@ try{
  await action('smartTools.configure',{id:'counter',name:'Changed counter',command:'invalid-command',args:[]});
  await page.waitForFunction(()=>window.amplifier.getState().smartTools.servers.find(s=>s.id==='counter').command==='invalid-command');
  await frame.getByRole('button',{name:'Add one'}).click();
- await page.getByText('This server configuration changed. Open a fresh tool view.',{exact:true}).waitFor();
+ await page.getByText('This server configuration changed. The saved document is retained; review the connection in Settings and open a new tool view.',{exact:true}).waitFor();
  await frame.getByRole('button',{name:'Read media'}).click();
  await frame.locator('#resource').filter({hasText:'configuration changed'}).waitFor();
  assert.deepEqual(errors.filter(e=>!e.includes('configuration changed')),[]);
