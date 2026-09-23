@@ -39,10 +39,10 @@ export function ConversationName({session,act}){
 export function ConversationDetails({session,act}){
  const [report,setReport]=useState(session.health),[busy,setBusy]=useState(''),[error,setError]=useState(''),[copied,setCopied]=useState('');
  const inFlight=useRef(false);
- useEffect(()=>{setReport(session.health);setCopied('');setError('')},[session.id,session.health]);
+ useEffect(()=>{setReport(session.health);setCopied('');setError('')},[session.id,session.health,session.status,session.failure]);
  async function inspect(){
   if(inFlight.current)return;inFlight.current=true;setBusy('inspect');setError('');
-  try{const result=await act('session.inspect',{id:session.id});if(!result||result.accepted===false)throw Error('Could not inspect this conversation.');setReport(result.result)}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
+  try{const result=await act('session.inspect',{id:session.id});if(!result||result.accepted===false)throw Error('Could not inspect this conversation.');if(result.result?.stale)throw Error('The conversation changed while reading its diagnostics. Try copying again.');setReport(result.result);return result.result}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
  useEffect(()=>{inspect()},[session.id]);
  async function recover(){
@@ -50,14 +50,27 @@ export function ConversationDetails({session,act}){
   try{const result=await act('session.recover',{id:session.id});if(!result||result.accepted===false)throw Error('Could not create the recovery copy.')}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
  async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID below.')}}
- const identity=sessionIdentity(session),failure=report?.failure||session.failure;
- const moduleFailures=report?.moduleFailures||session.moduleFailures||[];
+ async function copyDiagnostics(){
+  if(inFlight.current)return;
+  const pending=inspect();
+  if(navigator.clipboard?.write&&typeof ClipboardItem!=='undefined'){
+   // Start the clipboard operation in the click gesture, including on Safari;
+   // its promised content waits for the fresh diagnostic snapshot.
+   const content=pending.then(current=>{if(!current)throw Error('Diagnostics unavailable');return new Blob([JSON.stringify(current,null,2)],{type:'text/plain'})});
+   content.catch(()=>{});
+   try{await navigator.clipboard.write([new ClipboardItem({'text/plain':content})]);setCopied('Diagnostics copied')}
+   catch{setError(current=>current||'Clipboard unavailable. Select and copy the session ID below.')}
+  }else{const current=await pending;if(current)await copy(JSON.stringify(current,null,2),'Diagnostics copied')}
+ }
+ const currentReport=report?.status&&report.status!==session.status?undefined:report;
+ const identity=sessionIdentity(session),failure=currentReport?.failure||session.failure;
+ const moduleFailures=currentReport?.moduleFailures||session.moduleFailures||[];
  const working=recoveryUnsafe(session);
  return <div className="a-conversation-details" aria-busy={!!busy}>
   <div><p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>{identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}<p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
-   {(session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details></>)}
+   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
    <p>Create an independent copy with readable history. Old tool calls and image payloads stay in the original; reattach images if needed. Safety stops remain in effect. Nothing runs until you send a new message.</p>
-   <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button><button type="button" className="a-soft" disabled={!report} onClick={()=>copy(JSON.stringify(report,null,2),'Diagnostics copied')}>Copy diagnostics</button></div>
+   <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button><button type="button" className="a-soft" disabled={!!busy} onClick={copyDiagnostics}>Copy diagnostics</button></div>
    {working&&<p>Wait for the current work to stop before creating a copy.</p>}
   </div>
   {copied&&<p role="status">{copied}</p>}{error&&<p role="alert" className="a-danger">{error}</p>}

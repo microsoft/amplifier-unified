@@ -1108,7 +1108,9 @@ class AppService:
             from .session_health import inspect_session
             async with self.lock:
                 snapshot = copy.deepcopy(self._session(args['id']))
+                captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+            prepared_health['capturedAt'] = captured_at
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
@@ -1527,8 +1529,13 @@ class AppService:
                     pending.append((self._send,(copy.deepcopy(session),text,input_id)))
             elif action == 'session.inspect':
                 diagnostic_result = prepared_health
-                if self._session(args['id']).get('errorAt') == snapshot.get('errorAt'):
+                from .session_health import inspection_stamp
+                if inspection_stamp(self._session(args['id'])) == inspection_stamp(snapshot):
                     self._session(args['id'])['health'] = diagnostic_result
+                else:
+                    # A lifecycle/failure can change while the bounded disk
+                    # inspection runs. Never cache that older view as current.
+                    diagnostic_result = {**diagnostic_result, 'stale': True}
             elif action in {"session.fork", "session.recover"}:
                 source = self._session(args["id"])
                 if source.get("configurationBusy"):

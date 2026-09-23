@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -51,6 +52,64 @@ async def test_verified_generation_start_clears_stale_failure(tmp_path):
     })
     assert 'error' not in session and 'failure' not in session
     await app.close()
+
+
+async def test_inspection_reports_structured_failure_without_raw_error_or_log_scan(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    session.update(status='stopped', failure={
+        **failure_details('Invalid image base64 data', 'ValueError'),
+        'inputId': 'failed-input', 'recordedAt': 1790182800,
+    })
+    from pathlib import Path
+    original_open = Path.open
+    def no_events(path, *args, **kwargs):
+        assert path.name != 'events.jsonl', 'Structured-only inspection does not start a log scan'
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', no_events)
+    receipt = await app.dispatch('session.inspect', {'id': session['id']}, origin='agent')
+    report = receipt['result']
+    assert report['failure'] == session['failure']
+    assert report['capturedAt'] > 0
+    assert report['workReplayed'] is False and report['status'] == 'stopped'
+    assert 'error' not in session and session['messages'] == []
+    await app.close()
+
+
+@pytest.mark.parametrize('change', ['status', 'failure', 'worker', 'title'])
+async def test_inspection_does_not_cache_snapshot_changed_while_reading(tmp_path, monkeypatch, change):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    started, release = threading.Event(), threading.Event()
+    def delayed_inspect(home, snapshot):
+        started.set()
+        assert release.wait(5)
+        return inspect_session(home, snapshot)
+    monkeypatch.setattr('amplifier_web.session_health.inspect_session', delayed_inspect)
+    operation = asyncio.create_task(app.dispatch('session.inspect', {'id': session['id']}))
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        if change == 'status':
+            await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'stopped'})
+        elif change == 'failure':
+            await app.on_runtime_event('execution.event', {
+                'sessionId': session['id'], 'id': 'failed-call', 'kind': 'llm', 'phase': 'error',
+                'failure': failure_details('Invalid image base64', 'ValueError'),
+            })
+        elif change == 'worker':
+            session['workers'] = [{'id': 'synthetic-worker', 'status': 'working'}]
+        else:
+            session['title'] = 'Updated title'
+        release.set()
+        receipt = await operation
+        assert receipt['result']['stale'] is True
+        assert 'health' not in session
+    finally:
+        release.set()
+        await operation
+        await app.close()
 
 
 def rows():
