@@ -150,7 +150,7 @@ def snapshot(state, device=None, *, now=None):
             'scope': 'all' if view.get('navChatScope') == 'all' else 'workspace', 'filterActive': bool(view.get('navFilter')),
             'page': _count(_object(state.get('chatNavigation')).get('index'))},
         'conversation': {'status': _enum(session.get('status'), {'idle', 'working', 'running', 'starting', 'stopping', 'stopped', 'error', 'ready'}, 'other'),
-            'kind': 'worker' if session.get('sessionKind') == 'worker' or session.get('nativeParentId') else 'root',
+            'kind': 'internal' if session.get('sessionKind') == 'internal' else ('worker' if session.get('sessionKind') == 'worker' or session.get('nativeParentId') else 'root'),
             'historyLoaded': _boolean(session.get('historyLoaded')), 'historyLoading': bool(session.get('historyLoading')),
             'historyError': bool(session.get('historyError')), 'runtimeError': bool(session.get('error')),
             'workspaceAvailable': _boolean(session.get('workspaceAvailable')), 'messages': len(_rows(session.get('messages'))),

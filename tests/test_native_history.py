@@ -464,6 +464,13 @@ def test_legacy_and_worker_ids_are_visible_but_cannot_resume_as_root(tmp_path):
     ('named-fork', {'parent_id': 'root', 'forked_from_turn': 3, 'forked_at': '2026-01-01T00:00:00Z'}, {}, 'root', 'root'),
     ('fork_with_underscore', {'parent_id': 'root', 'forked_from_turn': 3, 'forked_at': '2026-01-01T00:00:00Z'}, {}, 'root', 'root'),
     ('unified-fork', {'parent_id': None, 'fork': {'source_session_id': 'root', 'through_user_turn': 2}}, {}, 'root', None),
+    ('internal-root', {'parent_id': None, 'session_visibility': 'internal'}, {}, 'internal', None),
+    ('internal-child', {'parent_id': 'root', 'session_visibility': 'internal'}, {}, 'internal', 'root'),
+    ('declared-internal', {}, {'session_visibility': 'internal'}, 'internal', None),
+    ('real-root', {'parent_id': None}, {'session_visibility': 'internal'}, 'root', None),
+    ('real-root', {'session_visibility': 'unknown', 'session_purpose': 'memory-suggestion'}, {}, 'root', None),
+    ('human-named-root', {'name': 'Conversation abcd', 'title': 'Memory suggestion', 'origin': 'agent'}, {}, 'root', None),
+    ('fork-internal', {'session_visibility': 'internal', 'parent_id': 'job', 'forked_from_turn': 1, 'forked_at': '2026-01-01T00:00:00Z'}, {}, 'root', 'job'),
 ])
 def test_worker_classification_respects_metadata_and_independent_fork_roots(tmp_path, identity, metadata, capture, kind, parent):
     home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
@@ -479,11 +486,30 @@ def test_worker_classification_respects_metadata_and_independent_fork_roots(tmp_
     assert result['workerSessionCount'] == (1 if kind == 'worker' else 0)
     assert result['workspaces'][0]['sessionCount'] == result['sessionCount']
     assert result['workspaces'][0]['workerSessionCount'] == result['workerSessionCount']
-    if kind == 'worker':
+    assert result['internalSessionCount'] == (1 if kind == 'internal' else 0)
+    assert result['workspaces'][0]['internalSessionCount'] == result['internalSessionCount']
+    if kind == 'internal':
+        assert row['canResume'] is False
+        assert 'Internal job history' in row['readOnlyReason']
+    elif kind == 'worker':
         assert row['canResume'] is False
         assert 'Worker sessions' in row['readOnlyReason']
     elif '_' not in identity:
         assert row['canResume'] is True
+
+
+def test_internal_purpose_is_bounded_metadata_not_prompt_or_credential_text(tmp_path):
+    home, workspace = tmp_path / 'amplifier', tmp_path / 'workspace'
+    workspace.mkdir()
+    for identity, purpose in [('valid', 'memory.suggestion'), ('invalid', 'private free text ' * 200)]:
+        session(home, workspace, identity, {'working_dir': str(workspace), 'bundle': 'work',
+            'session_visibility': 'internal', 'session_purpose': purpose})
+    before = {str(p): p.read_bytes() for p in home.rglob('*') if p.is_file()}
+    rows = {row['nativeIdentity']: row for row in NativeHistory(home).scan()['sessions']}
+    assert rows['valid']['sessionPurpose'] == 'memory.suggestion'
+    assert 'sessionPurpose' not in rows['invalid']
+    assert all(row['sessionKind'] == 'internal' for row in rows.values())
+    assert before == {str(p): p.read_bytes() for p in home.rglob('*') if p.is_file()}
 
 
 def test_explicit_root_metadata_refreshes_previous_worker_classification(tmp_path):
@@ -565,3 +591,11 @@ def test_cached_session_moved_to_another_project_is_rediscovered(tmp_path):
     assert moved['sessions'][0]['workspace'] == str(new_workspace)
     assert history._file_projects == {project_slug(new_workspace)}
     assert all(path.is_relative_to(target_project) for path in history._files)
+
+
+def test_explicit_chat_creation_beats_stale_internal_capture():
+    from amplifier_web.native_history import classify_session
+    assert classify_session('root', {'session_visibility': 'chat'},
+                            {'session_visibility': 'internal'}) == ('root', None)
+    # A child remains a child; a root declaration cannot erase explicit lineage.
+    assert classify_session('child', {'session_visibility': 'chat', 'parent_id': 'root'}) == ('worker', 'root')

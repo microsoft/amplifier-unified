@@ -26,7 +26,7 @@ def definitions(schema, string):
         'recall.status': ('Inspect derived index coverage. Does not select conversations or start a model.', schema(common)),
         'recall.refresh': ('Index registered conversation text in the background. Originals are read-only. Check coverage and wait before claiming a complete search.', schema(common)),
         'recall.wait': ('Wait for an index progress revision, without sending input or changing the draft.', schema({**common, 'afterRevision': {'type':'integer','minimum':0}, 'waitMs': {'type':'integer','minimum':0,'maximum':60000}}, ['sessionId'])),
-        'recall.search': ('Rank indexed message matches with source references. Lexical AND search; a partial index is not the entire library. Read an exact result to verify current source revision before citing it as current.', schema({**common, **scope, **page, 'query': {**string(500),'minLength':1}, 'includeChildren': {'type':'boolean'}}, ['sessionId','query'])),
+        'recall.search': ('Rank indexed message matches with source references. Lexical AND search; a partial index is not the entire library. Read an exact result to verify current source revision before citing it as current. Internal jobs require includeInternal for diagnostic searches.', schema({**common, **scope, **page, 'query': {**string(500),'minLength':1}, 'includeChildren': {'type':'boolean'}, 'includeInternal': {'type':'boolean'}}, ['sessionId','query'])),
         'recall.read': ('Read a bounded source message at its exact indexed revision. Changed or removed sources fail visibly; browsing never selects or resumes work.', schema({**common, 'sourceSessionId':string(200),'messageId':string(200),'sourceRevision':{}, 'offset':page['offset'], 'limit':{'type':'integer','minimum':1,'maximum':4000}}, ['sessionId','sourceSessionId','messageId','sourceRevision'])),
         'memory.list': ('Inspect explicit saved memory; available defaults to current task/workspace/global. Explicit all includes notes from removed conversations for review/deletion. Memory is reference data, not permission.', schema({**common, **page, 'scope':{'enum':['task','workspace','global','available','all']}}, ['sessionId'])),
         'memory.read': ('Read a saved memory and up to 50 retained revisions. No automatic model execution.', schema({**common,**all_scopes,'id':string(200)}, ['sessionId','id'])),
@@ -165,6 +165,7 @@ class Recall:
             elif action == 'recall.search':
                 scope = args.get('scope','workspace')
                 allowed = {sid for sid,row in catalog.items() if (scope=='all' or scope=='task' and sid==session['id'] or scope=='workspace' and row['workspace']==session.get('workspace'))
+                    and (args.get('includeInternal') or row['kind']!='internal')
                     and (args.get('includeChildren') or row['kind']!='worker')}
                 result = await asyncio.to_thread(self.store.search,args['query'],allowed,args.get('offset',0),args.get('limit',20))
                 result.update(coverage=copy.deepcopy(self.state), scope=scope, sourceFreshness='indexed_snapshot; verify with recall.read')

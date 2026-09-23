@@ -180,3 +180,25 @@ async def test_task_and_output_metadata_are_indexed_with_exact_correction_revisi
         assert read['recordRevision']==2 and 'river' in read['text']
         assert not app.runtime.sent
     finally:await app.close()
+
+
+async def test_internal_recall_is_explicit_without_deleting_index_or_source(tmp_path):
+    app = AppService(tmp_path / 'app', workspace=tmp_path, runtime=Runtime())
+    try:
+        job = await make(app, 'Job', 'synthetic violet')
+        app._session(job)['sessionKind'] = 'internal'
+        root = await make(app, 'Human chat', 'independent conversation')
+        await refresh(app)
+        original = deepcopy(app._session(job)['messages'])
+        for options in ({}, {'includeChildren': True}):
+            result = await app.dispatch('recall.search', {'sessionId': root, 'query': 'violet', **options})
+            assert result['result']['items'] == []
+        result = await app.dispatch('recall.search', {'sessionId': root, 'query': 'violet', 'includeInternal': True})
+        match = result['result']['items'][0]
+        assert match['sessionId'] == job
+        read = await app.dispatch('recall.read', {'sessionId': root, 'sourceSessionId': job,
+            'messageId': match['messageId'], 'sourceRevision': match['sourceRevision']})
+        assert read['result']['text'] == 'synthetic violet'
+        assert app._session(job)['messages'] == original
+    finally:
+        await app.close()

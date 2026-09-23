@@ -66,6 +66,7 @@ test('primary chat lists exclude workers, preserve independent forks, and count 
  const state=fixture();state.sessions=[
   {id:'root',workspaceId:'project',sessionKind:'root'},
   {id:'worker',title:'Worker-only title',workspaceId:'project',sessionKind:'worker',parentId:'root'},
+  {id:'internal',title:'Internal-only title',workspaceId:'project',sessionKind:'internal'},
   {id:'legacy-worker',workspaceId:'project',nativeParentId:'root'},
   {id:'web-fork',workspaceId:'project',parentId:'root',forkTranscript:[]},
   {id:'cli-fork',workspaceId:'project',sessionKind:'root',nativeParentId:'root'},
@@ -77,7 +78,9 @@ test('primary chat lists exclude workers, preserve independent forks, and count 
  assert.equal(chatPage(state,state.workspaces[0]).total,4);
  assert.deepEqual(headerChatChoices(state).items.map(row=>row.id),expected,'selected workers must not reappear in the header');
  state.view.navFilter='Worker-only';assert.equal(chatPage(state,state.workspaces[0]).total,0);
- assert.equal(state.sessions.length,6,'worker history stays available in app state');
+ state.view.navFilter='Internal-only';assert.equal(chatPage(state,state.workspaces[0]).total,0);
+ state.selectedSessionId='internal';assert.ok(!headerChatChoices(state).items.some(row=>row.id==='internal'));
+ assert.equal(state.sessions.length,7,'worker and internal history stays available in app state');
 });
 
 test('direct subagent history handles aliased native parents without including forks or other projects',async()=>{

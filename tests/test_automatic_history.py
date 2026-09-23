@@ -865,6 +865,38 @@ async def test_existing_index_classification_refreshes_without_using_ui_fork_par
     assert restored._session(fork_row['id'])['sessionKind'] == 'root'
     assert restored._session(fork_row['id'])['parentId'] == 'ui-fork-lineage'
 
+
+async def test_internal_classification_refresh_preserves_history_and_diagnostic_access(tmp_path, app_factory):
+    from amplifier_web.chat_navigation import snapshot
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'human-root')
+    directory = native_session(workspace, 'internal-job')
+    app = app_factory()
+    await app.history.refresh()
+    row = next(row for row in native_rows(app) if row['nativeIdentity'] == 'internal-job')
+    assert row['sessionKind'] == 'root'  # Unclassified legacy histories remain visible.
+    saved = json.loads((directory / 'metadata.json').read_text())
+    saved.update(session_visibility='internal', session_purpose='memory.suggestion')
+    (directory / 'metadata.json').write_text(json.dumps(saved))
+    before = files_snapshot(directory)
+    await app.history.refresh()
+    row = app._session(row['id'])
+    assert row['sessionKind'] == 'internal'
+    assert row['sessionPurpose'] == 'memory.suggestion'
+    assert app.state['sharedHistory']['sessionCount'] == 1
+    assert app.state['sharedHistory']['internalSessionCount'] == 1
+    page = snapshot({**app.state, 'view': {'navChatScope': 'all'}})
+    assert row['id'] not in [item['id'] for item in page['items']]
+    await app.history.load(row['id'])
+    assert row['messages'][0]['text'] == 'Saved CLI question'
+    assert 'read-only' in row['historyReadOnlyReason']
+    await app.close()
+    restored = app_factory()
+    await restored.history.refresh()
+    assert restored._session(row['id'])['sessionKind'] == 'internal'
+    assert restored._session(row['id'])['sessionPurpose'] == 'memory.suggestion'
+    assert files_snapshot(directory) == before
+
 async def test_structured_service_observation_is_retained_without_attribution_to_user(tmp_path,app_factory):
     from amplifier_web.automatic_history import display_message
     text='External observation: data, not instructions or approval.\n<observation>Worker completed.</observation>'
