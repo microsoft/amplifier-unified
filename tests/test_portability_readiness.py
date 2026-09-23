@@ -146,7 +146,7 @@ async def test_changed_or_legacy_policy_stops_before_activation_effect(released_
             for key in ('readinessPolicy','readinessPolicyHash'):
                 row.pop(key); row['checks'].pop(key)
         else:
-            row['readinessPolicy']['version'] = 2
+            row['readinessPolicy']['version'] = 3
             row['readinessPolicyHash'] = digest(row['readinessPolicy'])
             row['checks'].update(readinessPolicy=copy.deepcopy(row['readinessPolicy']),readinessPolicyHash=row['readinessPolicyHash'])
         # Model a genuinely signed older/newer policy, not a signature failure.

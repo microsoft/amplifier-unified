@@ -317,7 +317,10 @@ class Portability:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, cwd=probe_directory,
             env={**os.environ, 'AMPLIFIER_WEB_HOME': str(self.app.data_dir)}, start_new_session=True)
         try:
-            output, _ = await asyncio.wait_for(process.communicate(json.dumps(request).encode()), 90)
+            # The admitted policy owns any explicit provider deadline. An outer
+            # wall-clock default must not interrupt a healthy no-deadline probe.
+            # Caller cancellation still reaches the owned-process cleanup below.
+            output, _ = await process.communicate(json.dumps(request).encode())
             result = json.loads(output)
             if isinstance(result, dict) and result.get('code') == 'single_attempt_unsupported':
                 raise ValueError('This provider version cannot perform a bounded readiness check; update it or use a supported provider.')
