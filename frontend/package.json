@@ -8,6 +8,7 @@
     "build": "vite build",
     "test": "node --test tests/*.test.mjs",
     "test:feedback-followup-browser": "node tests/feedback-followup-browser.mjs",
+    "test:publishing-browser": "node tests/publishing-browser.mjs",
     "test:settings-browser": "node tests/settings-browser.mjs",
     "test:chat-browser": "node tests/chat-browser.mjs",
     "test:workspace-browser": "node tests/workspace-explorer-browser.mjs",
@@ -68,6 +69,7 @@
     "test:settings-collections-browser": "node tests/settings-collections-browser.mjs",
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",
     "test:new-chat-recovery-browser": "node tests/new-chat-recovery-browser.mjs",
+    "test:composer-primary-action-browser": "node tests/composer-primary-action-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
     "test:registry-browser": "node tests/registry-validation-browser.mjs",
     "test:themes-browser": "node tests/theme-definitions-browser.mjs",
@@ -78,7 +80,10 @@
     "test:terminal-setup-browser": "node tests/terminal-setup-browser.mjs",
     "test:recovery-group-browser": "node tests/recovery-group-browser.mjs",
     "test:active-client-performance-browser": "node tests/active-client-performance-browser.mjs",
-    "test:appearance-library-browser": "node tests/appearance-library-browser.mjs"
+    "test:state-transport-browser": "node tests/state-transport-browser.mjs",
+    "test:sidebar-activity-browser": "node tests/sidebar-activity-browser.mjs",
+    "test:appearance-library-browser": "node tests/appearance-library-browser.mjs",
+    "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

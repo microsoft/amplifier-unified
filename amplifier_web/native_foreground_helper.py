@@ -1,4 +1,4 @@
-"""Fixed read-only helper. Started only after an explicit voice UI request.
+"""Fixed helper for explicit setup preflight or call-scoped voice observation.
 
 No target arguments, shell, tool execution, permission prompt or persistent
 process. The optional computer-use library owns OS observation.

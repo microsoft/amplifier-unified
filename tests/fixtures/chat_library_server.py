@@ -103,7 +103,9 @@ async def main():
                 service._message(chat, 'user', 'An earlier fixture question')
                 service._message(chat, 'assistant', 'An earlier fixture response')
                 chat.update(createdAt=1_600_000_000, updatedAt=1_600_000_000,
-                            recentActivityAt=1_600_000_000, deferRuntimeUntilInteraction=True)
+                            recentActivityAt=1_600_000_000, navigationActivityAt=1_600_000_000,
+                            deferRuntimeUntilInteraction=True)
+                chat.pop('navigationActivityPending', None)
                 for row in chat['messages']:
                     row['createdAt'] = 1_600_000_000
                 initial = next(row['id'] for row in service.state['sessions'] if row.get('nativeIdentity') == 'alpha-201')

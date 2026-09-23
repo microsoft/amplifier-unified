@@ -22,7 +22,7 @@ export function reconciledFailure(updates){
  return !!(failure?.attemptId&&receipt?.attemptId===failure.attemptId&&Number.isFinite(receipt.verifiedAt)&&receipt.verifiedAt>0&&
   typeof receipt.version==='string'&&receipt.version===application.current&&
   (!application.runningRevision||receipt.revision===application.runningRevision)&&
-  !updates.error&&!updates.pendingRestart&&!updates.pendingApp);
+  !updates.error&&!updates.pendingRestart&&!updates.pendingApp&&updates.pendingReplacement==null);
 }
 function facts(event){
  const parts=[];

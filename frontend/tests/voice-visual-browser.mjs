@@ -41,7 +41,7 @@ try {
  await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
  await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');assert.deepEqual(errors,[]);
- await page.getByRole('button',{name:'Start voice call',exact:true}).click();
+ await action('call.start');
  await page.getByRole('button',{name:'Check desktop host',exact:true}).waitFor();
  assert.deepEqual((await inspect()).nativeCalls,[]);
  await page.getByRole('button',{name:'Check desktop host',exact:true}).click();

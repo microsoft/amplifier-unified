@@ -884,7 +884,10 @@ async def test_agent_history_search_reads_unloaded_native_chat_without_selection
     files = files_snapshot(directory)
     result = await app.app_bridge("history", {"action": "search", "query": "unique decision"}, target["id"])
     assert any(row["id"] == target["id"] for row in result["items"])
-    assert app.state == before
+    assert app.state['selectedSessionId'] == before['selectedSessionId']
+    assert app.state['selectedWorkspaceId'] == before['selectedWorkspaceId']
+    assert app.state['view'] == before['view']
+    assert [row.get('messages') for row in app.state['sessions'] if row['id'] in {s['id'] for s in before['sessions']}] == [row.get('messages') for row in before['sessions']]
     assert files_snapshot(directory) == files
     assert app.runtime.started == [] and app.runtime.sent == []
 

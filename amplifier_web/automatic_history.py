@@ -17,7 +17,7 @@ from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
-                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
+                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
@@ -234,11 +234,13 @@ class AutomaticHistory:
     def __init__(self, service):
         from .native_history import NativeHistory
         self.service = service
-        self.index = NativeHistory()
+        self.index = NativeHistory(watch=True)
         self.lock = asyncio.Lock()
         self.loads = {}
         self.task = None
         self.last_scan = None
+        self._native_snapshot = None
+        self._native_revision = None
         service.state.setdefault('sharedHistory', {}).update(loading=True, error=None)
 
     def start(self):
@@ -248,10 +250,13 @@ class AutomaticHistory:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        await asyncio.to_thread(self.index.close)
 
     async def loop(self):
         while not self.service.closed:
-            await self.refresh()
+            known = copy.deepcopy(self.service.state['workspaces'])
+            if await asyncio.to_thread(self.index.needs_scan, known):
+                await self.refresh(force=False)
             await asyncio.sleep(15)
 
     def hide_session(self, session):
@@ -266,13 +271,22 @@ class AutomaticHistory:
         if workspace['id'] not in hidden:
             hidden.append(workspace['id'])
 
-    async def refresh(self):
+    async def refresh(self, *, force=True):
         async with self.lock:
             try:
                 known = copy.deepcopy(self.service.state['workspaces'])
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
-                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known)
+                revision_token, incoming = await asyncio.to_thread(self.index.scan_if_changed,
+                    known_workspaces=known, force=force, since=self._native_revision)
+                if incoming is not None:
+                    self._native_snapshot = incoming
+                    self._native_revision = revision_token
+                # Reconcile local changes even when native files are unchanged:
+                # hidden rows, tombstones, managed markers and selected views
+                # have independent invalidation. Filtering must not alter the
+                # retained unfiltered catalog.
+                snapshot = dict(self._native_snapshot)
                 managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return
@@ -300,8 +314,9 @@ class AutomaticHistory:
                     for row in snapshot['workspaces']:
                         if row.get('path') in managed_paths:
                             continue
-                        unresolved_id = uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
-                        if row.get('path') and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
+                        unresolved_id = (uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
+                                         if hidden_workspaces and row.get('path') else None)
+                        if unresolved_id is not None and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
                             hidden_workspaces.add(row['id'])
                             state.setdefault('hiddenNativeWorkspaces', []).append(row['id'])
                             changed = True
@@ -352,35 +367,44 @@ class AutomaticHistory:
                             changed = True
                     existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                  s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
+                    from collections import Counter
+                    native_counts = Counter(row['nativeIdentity'] for row in snapshot['sessions'])
+                    catalog_ids = {row['id'] for row in state['sessions']}
                     hidden = set(state.get('hiddenNativeSessions', []))
                     for row in snapshot['sessions']:
                         managed = row.get('workspace') in managed_paths
                         if managed:
                             row = {**row, 'workspaceId': None}
                         key = (row['nativeProject'], row['nativeIdentity'])
-                        if identity(*key) in hidden or row['workspaceId'] in hidden_workspaces:
+                        if (hidden and identity(*key) in hidden) or row['workspaceId'] in hidden_workspaces:
                             continue
                         previous = existing.get(key)
                         if previous is None:
-                            previous = {'id': row['id'], 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
+                            public_id = row['nativeIdentity']
+                            if native_counts[public_id] > 1 or public_id in catalog_ids:
+                                public_id = row['id']  # Duplicate native IDs require project scope.
+                            previous = {'id': public_id, 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
                                         'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
                                         'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False),
                                         'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
                                         'status': 'idle', 'messages': [], 'workers': [], 'approvals': [],
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
-                                        'nativeProject': row['nativeProject'], 'nativeRevision': row.get('transcriptRevision'),
+                                        'nativeProject': row['nativeProject'], 'nativeRevision': copy.deepcopy(row.get('transcriptRevision')),
                                         'parentId': row.get('parentId'), 'nativeParentId': row.get('parentId'), 'turnCount': row.get('turnCount'),
                                         'sessionKind': row['sessionKind'],
                                         'description': row.get('description', ''), 'shared': True,
                                         'historyReadOnlyReason': row.get('readOnlyReason'),
                                         'historyManaged': True, 'historyLoaded': False}
-                            state['sessions'].append(previous); existing[key] = previous; changed = True
+                            state['sessions'].append(previous); existing[key] = previous; catalog_ids.add(public_id); changed = True
                         else:
-                            from .chat_navigation import recent_activity
+                            from .chat_navigation import recent_activity, navigation_activity
+                            previous.setdefault('navigationActivityAt', navigation_activity(previous))
                             recent = max(recent_activity(previous), row.get('recentActivityAt', 0))
                             if previous.get('recentActivityAt') != recent:
                                 previous['recentActivityAt'] = recent; changed = True
+                                if previous.get('historyManaged') and previous.get('status') not in BUSY:
+                                    previous['navigationActivityAt'] = recent
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
@@ -411,14 +435,17 @@ class AutomaticHistory:
                                 for key_name, value in metadata.items():
                                     if previous.get(key_name) != value:
                                         previous[key_name] = value; changed = True
-                            if not previous.get('historyLoaded') and previous.get('historyManaged'):
-                                previous['nativeRevision'] = row.get('transcriptRevision')
-                            elif 'nativeRevision' not in previous:
-                                previous['nativeRevision'] = row.get('transcriptRevision')
+                            if (not previous.get('historyLoaded') and previous.get('historyManaged')) or 'nativeRevision' not in previous:
+                                native_revision = row.get('transcriptRevision')
+                                # Keep an already detached, equal revision. Compare
+                                # values on every refresh so in-place edits are seen.
+                                if ('nativeRevision' not in previous or previous['nativeRevision'] != native_revision
+                                        or (isinstance(native_revision, (dict, list)) and previous['nativeRevision'] is native_revision)):
+                                    previous['nativeRevision'] = copy.deepcopy(native_revision)
                         if managed and previous.get('location') != {'kind': 'managed'}:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
-                        previous['_catalogId'] = row['id']
+                        previous['_catalogId'] = row['nativeIdentity'] if native_counts[row['nativeIdentity']] == 1 else row['id']
                     # Parent identities belong to their native project. UI IDs
                     # are aliases and can differ even when a web root predated
                     # automatic discovery or another project reused the ID.
@@ -431,7 +458,11 @@ class AutomaticHistory:
                         for key_name, value in {'parentId': parent_id, 'nativeParentId': row['parentId']}.items():
                             if session.get(key_name) != value:
                                 session[key_name] = value; changed = True
-                    state['sharedHistory'].update(loading=False, error=None,
+                    issues = snapshot.get('issues', [])
+                    if (state['sharedHistory'].get('issues', []) != issues[:100]
+                            or state['sharedHistory'].get('issueCount', 0) != len(issues)):
+                        changed = True
+                    state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]), issueCount=len(issues), error=None,
                         projectCount=len(snapshot['workspaces']),
                         sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
                         workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']))

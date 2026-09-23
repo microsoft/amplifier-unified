@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 import pytest
 from amplifier_web import app_updates
-from amplifier_web.service import AppService
+from amplifier_web.service import AppError, AppService
 from amplifier_web.updates import UpdateManager,work_paused
 from test_service import Runtime
 
@@ -217,7 +217,7 @@ async def test_managed_service_restart_does_not_spawn_a_second_host(tmp_path,mon
     await service.close()
 
 
-async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypatch):
+async def test_failed_installed_probe_retains_host_and_holds_work_until_verified(tmp_path,monkeypatch):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)
     await service.dispatch('session.create', {})
     async def process(*args,**kwargs):return '98.0.0' if '-c' in args else ''
@@ -226,7 +226,10 @@ async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypat
     await app_updates.activate(manager)
     assert service.state['updates']['phase']=='error'
     assert service.state['updates']['pendingApp'] is None
-    assert (await service.dispatch('conversation.send', {'text': 'Still usable after failed application probe'}))['delivery'] == 'accepted'
+    assert service.state['updates']['pendingReplacement']
+    assert work_paused(service.state) and manager.awaiting_restart()
+    with pytest.raises(AppError):
+        await service.dispatch('conversation.send', {'text': 'Wait for exact installation verification'})
     await service.close()
 
 @pytest.mark.parametrize('receipt',[
@@ -237,7 +240,7 @@ async def test_failed_installed_probe_does_not_terminate_host(tmp_path,monkeypat
     {'version':'0.0.1'},
     {'version':'0.0.1','revision':'a'*40},
 ])
-async def test_invalid_restart_receipt_is_retired_without_acknowledgement(tmp_path,monkeypatch,receipt):
+async def test_invalid_restart_receipt_is_retired_but_uncertain_replacement_stays_held(tmp_path,monkeypatch,receipt):
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     service.state['updates']={'phase':'activating','pendingRestart':receipt,'pendingApp':{'revision':'old'},
                               'pendingRelease':'c'*32}
@@ -250,12 +253,13 @@ async def test_invalid_restart_receipt_is_retired_without_acknowledgement(tmp_pa
     monkeypatch.setattr(service,'_save',save)
     manager=UpdateManager(service);service.update_manager=manager
     updates=service.state['updates']
-    assert updates['phase']=='interrupted'
+    assert updates['phase']=='activating'
     assert updates['pendingRestart'] is None and updates['pendingApp'] is None
+    assert updates['pendingReplacement']['unqualified'] is True
     assert updates['pendingRelease']=='c'*32
-    assert 'No restart success was inferred.' in updates['error']
-    assert 'not acknowledged' in updates['detail']
-    assert not work_paused(service.state) and not manager.awaiting_restart()
+    assert 'No restart success was inferred' in updates['error']
+    assert 'Work remains paused' in updates['detail']
+    assert work_paused(service.state) and manager.awaiting_restart()
     repair=manager.diagnostics.state['latest']
     assert repair['phase']=='restart-repair' and repair['status']=='failed' and repair['errorType']=='ValueError'
     assert not any(event['phase'] in {'restart-ack','restart-reconcile'} for event in manager.diagnostics.state['events'])
@@ -263,12 +267,13 @@ async def test_invalid_restart_receipt_is_retired_without_acknowledgement(tmp_pa
     assert saves==1
     saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
     assert saved['updates']['pendingRestart'] is None and saved['updates']['pendingApp'] is None
+    assert saved['updates']['pendingReplacement']==updates['pendingReplacement']
     started=[]
     async def allowed():started.append(True)
     for action in ('check','app','install'):
         monkeypatch.setattr(manager,action,allowed)
         await manager.command(action)
-    assert started==[True,True,True]
+    assert started==[]
     await service.close()
 
 
@@ -286,6 +291,10 @@ async def test_restart_repair_preserves_existing_diagnostic_failure(tmp_path,mon
         original_save()
     monkeypatch.setattr(service,'_save',save)
     manager=UpdateManager(service);service.update_manager=manager
+    assert service.state['updates']['phase']=='interrupted'
+    assert service.state['updates']['pendingRestart'] is None
+    assert not service.state['updates'].get('pendingReplacement')
+    assert not work_paused(service.state) and not manager.awaiting_restart()
     assert manager.diagnostics.state['lastFailure']==prior
     repair=manager.diagnostics.state['events'][-1]
     assert repair['phase']=='restart-repair' and repair['attemptId']=='b'*32

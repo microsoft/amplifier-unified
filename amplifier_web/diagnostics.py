@@ -128,6 +128,8 @@ class Diagnostics:
             self.configuration_error=True
             self.config={**copy.deepcopy(DEFAULT),'enabled':False}
         self.flush_lock=asyncio.Lock()
+        from .capture_index import CaptureMetadataCache
+        self.capture_metadata_cache=CaptureMetadataCache()
         self.pending=[];self.dropped=service.state.get('diagnostics',{}).get('local',{}).get('dropped',0);self.storage_error=False;self.task=None;self.stopping=False
         self.delivery_tasks={}
         self.policy_generation=0;self.configuring=False
@@ -269,7 +271,7 @@ class Diagnostics:
                     try:validate_id(capture_session)
                     except ValueError:continue
                     scopes.append((session['workspace'], capture_session))
-            for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg):
+            for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg,metadata_cache=self.capture_metadata_cache):
                 if not cfg['enabled'] or at<self.route_since:continue
                 # Forward a selected projection of new hook records. Reading
                 # historical CLI captures never backfills any destination.
@@ -287,7 +289,9 @@ class Diagnostics:
                     db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',
                                (identity,dest['id'],route_revision(dest),json.dumps(payload),'pending',time.time()))
             cutoff=time.time()-cfg['retentionDays']*86400
-            obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq NOT IN (SELECT seq FROM records ORDER BY seq DESC LIMIT ?)',(cutoff,cfg['maxRecords']))]
+            # The first row outside the retained count bounds all older seqs,
+            # including gaps. Avoid materializing every retained ID each flush.
+            obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq <= (SELECT seq FROM records WHERE ? >= 0 ORDER BY seq DESC LIMIT 1 OFFSET ?)',(cutoff,cfg['maxRecords'],cfg['maxRecords']))]
             for identity in obsolete:
                 count=db.execute("SELECT count(*) FROM deliveries WHERE record_id=? AND status IN ('pending','failed')",(identity,)).fetchone()[0]
                 if count: db.execute("INSERT INTO counters VALUES('expiredPending',?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value",(count,))
@@ -377,12 +381,35 @@ class Diagnostics:
                 rows.append({'id':dest['id'],'counts':counts,'last':dict(last) if last else None,'error':json.loads(failure[0]) if failure else None,'credentialAvailable':bool(os.environ.get(dest['apiKeyEnv'])) if dest['authMode']=='static' else None})
             return {'config':copy.deepcopy(self.config),'local':local,'destinations':rows,'results':copy.deepcopy(self.results)}
 
-    async def publish(self):
+    def observed(self):
+        """Saved settings selection is not demand after its client disconnects."""
+        for queue, identity in self.service.queue_clients.items():
+            if self.service.queue_sessions.get(queue) is not None:
+                continue
+            record = self.service._state if identity is None else self.service.clients.records.get(identity, {})
+            view = record.get('view', {})
+            expanded = view.get('settingsExpanded')
+            if view.get('panel') == 'settings' and isinstance(expanded, list) and 'diagnostics' in expanded:
+                return True
+        return False
+
+    @staticmethod
+    def health(summary):
+        # Capture timestamps and record counts are useful in Diagnostics, but
+        # must not drive whole-app saves and stream events while it is closed.
+        # Errors, dropped records and destination delivery health still do.
+        return {**summary, 'local': {key: value for key, value in summary.get('local', {}).items()
+                                    if key not in {'records', 'oldest', 'newest'}}}
+
+    async def publish(self, *, background=False):
         try:summary=await asyncio.to_thread(self._summary)
         except Exception:
             self._storage_failed();summary=self._unavailable_summary()
         if summary!=self._last_summary and not self.service.closed:
             async with self.service.lock:
+                if (background and self._last_summary is not None and not self.observed()
+                        and self.health(summary) == self.health(self._last_summary)):
+                    return
                 self.service.state['diagnostics'].update(summary)
                 self.service._publish()
             self._last_summary=summary
@@ -396,7 +423,7 @@ class Diagnostics:
                         previous=self.delivery_tasks.get(dest['id'])
                         if self.storage_ready and dest['enabled'] and (previous is None or previous.done()):
                             self.delivery_tasks[dest['id']]=asyncio.create_task(self.deliver(copy.deepcopy(dest)))
-                    await self.publish()
+                    await self.publish(background=True)
                 except Exception:
                     # Diagnostics must not terminate its loop (or a chat) when
                     # storage disappears temporarily. Try again next cycle.

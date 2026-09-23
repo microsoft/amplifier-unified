@@ -228,6 +228,21 @@ Community bundles retain their providers, tools, hooks and agents. The supported
 
 ## Shared control and appearance
 
+### Named workspaces
+
+Use **New workspace** in the sidebar, or choose **Create new workspace** from the
+Workspace picker in **New chat**. Enter a name; Amplifier creates its folder under
+**Settings → Workspaces → Default workspace folder**. The default is
+`<app-home>/workspaces`; a host-specific setting such as `~/dev` is supported.
+**Use an existing folder** attaches files where they already live and discovers
+existing CLI/TUI chats. Creation and attachment preserve the unsent draft,
+attachments, model and bundle. They do not save an empty chat or start a model.
+
+The default sidebar shows Pinned, Workspaces and Recent. **All chats** opens the
+existing filters and folder explorer. Paths stay available in details and can be
+shown throughout the sidebar in Settings. See the [workspace guide and
+contracts](docs/workspaces/README.md) for actions, identity and preservation rules.
+
 ### Automatic CLI workspaces and chats
 
 Unified uses Foundation's native `session.history` reader/writer and
@@ -256,7 +271,7 @@ or starting a runtime. Navigation renders 100 chats at a time; search covers all
 chats in the selected view. Agents use the same `history.refresh`, `session.select`,
 and `session.history` actions as the interface.
 
-The workspace explorer shows existing folders with top-level chats and the
+The advanced workspace explorer under All chats shows existing folders with top-level chats and the
 ancestor folders needed to reach them. Click a workspace name to select its
 chats; a chevron appears only when that folder contains deeper workspaces.
 Browsing folders leaves the current conversation open. Search accepts full paths,

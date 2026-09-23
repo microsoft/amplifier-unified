@@ -2,19 +2,74 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.7",
-      "title": "Clear compaction activity and reliable agent controls",
+      "version": "0.20.9",
+      "title": "Quieter background work and reliable conversation recovery",
       "changes": [
+        "Reduce repeated background work and disk writes by reusing unchanged history, navigation and accounting projections, avoiding redundant capture writes, and making diagnostics retention cheaper.",
+        "Match resumed model observations to their original calls, avoiding duplicate call rows and usage totals while preserving recorded child-session turn assignments.",
+        "Keep context-limit failures visibly failed with recovery details instead of reporting successful completion. Saved work is not automatically replayed.",
+        "Create named workspaces, discover shared native conversations, page workspace folders, and retain direct ordering of pinned chats.",
+        "Load bundle includes correctly when their source is a local bundle file, and inventory installed Git components as well as cached bundles when checking updates.",
+        "Remove the default deadline from provider readiness checks used when moving tasks between hosts, while retaining explicit configured limits and cancellation.",
+        "Preserve artifact-probe process ownership during cleanup and keep saved image pairs together for visual comparison.",
+        "Run independent release checks in parallel and reuse exactly matched runtime builds, shortening qualification without removing validation coverage."
+      ],
+      "notices": [
+        {
+          "id": "compaction-checkpoint-components-0209",
+          "title": "Update companion components for compaction improvements",
+          "detail": "Provider and context-manager fixes are separate from the app package. Updated components remove default provider response deadlines, try text-summary recovery before last-resort trimming, and preserve valid compaction checkpoints when later background results arrive.",
+          "action": "After updating the app, check and install available component updates, then verify the versions loaded by a fresh conversation worker. Updating the app alone does not replace every companion component."
+        }
+      ]
+    },
+    {
+      "version": "0.20.8",
+      "title": "Faster controls and quieter idle work",
+      "changes": [
+        "Keep browser action responses small and stream only changed state after the initial snapshot. Reconnecting restores a complete snapshot automatically.",
+        "Preview appearance changes immediately, preserving saved settings if a change fails.",
+        "Skip unchanged native history and activity scans, react to file changes, and retain periodic reconciliation and explicit refresh.",
+        "Avoid redundant saves for unchanged layout, Canvas visibility and renderer status. Keep historical usage evidence in durable storage while sending only its totals to the browser.",
+        "Keep tool and worker progress updates batched, and avoid background publications for diagnostic timestamps while Diagnostics is closed.",
+        "Keep conversations compatible with older locked Foundation workers. Report a worker startup failure as not sent when no attempt could have received the message, preserving the saved message and safe retry identity."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.7",
+      "title": "Work artifacts, memory, publishing and task transfer",
+      "changes": [
+        "Inspect generated image outputs through the provider's visual input path and check artifact dependencies in the worker that will create the deliverable.",
+        "Opt in separately to memory contribution and relevant-context retrieval, with source exclusions, correction handling and controls shared by the interface and agents.",
+        "Preview immutable publishing releases, record review, deploy or roll back to an inspected target, and reconcile uncertain results without automatically repeating an external action.",
+        "Export and import signed task transfers with preserved history and output evidence. Execution ownership remains fenced until the transfer is reconciled.",
+        "Inspect desktop and browser readiness, explicitly install optional native screen observation, and keep work paused when application replacement has an uncertain outcome until the serving installation is verified.",
+        "Configure optional native Microsoft 365 document tools and live Excel support through the published companion components and account setup guidance.",
+        "Keep late worker progress attached to its original run without reopening completed work or adopting a newer run's identity.",
+        "Use one composer button for voice, send and cancel. Keep chat ordering stable during background activity while reducing browser request traffic.",
         "Context compaction calls are identified separately from ordinary replies, retain usage and safe failure details, and keep internal summary text out of the conversation.",
         "Compaction summaries retain their requested reasoning effort when the conversation has a higher effort selected. Budget checks and model dispatch use the same setting.",
         "Malformed app_control requests receive a clear corrective request shape before any action executes, while valid action receipts remain unchanged."
       ],
       "notices": [
         {
+          "id": "work-companion-components",
+          "title": "Update Work components and review optional setup",
+          "detail": "Work skill and runtime improvements include separately published bundle and module changes. Memory remains opt-in. Microsoft 365, live Excel, image generation and native desktop features require their own configured services, dependencies or permissions; selecting Work does not connect accounts or grant access.",
+          "action": "After updating the app, check available component updates and review the setup guidance for the optional capabilities you want to use. Deliberate source pins remain in effect."
+        },
+        {
+          "id": "publishing-transfer-ownership",
+          "title": "Choose publishing and transfer targets deliberately",
+          "detail": "Publishing requires a configured target and an explicit access policy. Tasks retaining managed publishing state, including stopped sites or receipts, cannot transfer. Transfer requires compatible writers on both hosts and does not migrate credentials or install the destination runtime. Older session writers do not respect its ownership fence.",
+          "action": "Before transferring, update both hosts and upgrade or disable every CLI, TUI and runtime that can write the session, then pair the hosts and verify destination setup. Keep the source available until handoff is confirmed. Inspect saved operation state before retrying an uncertain action."
+        },
+        {
           "id": "update-compaction-components",
           "title": "Update companion components for compaction recovery",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
         }
       ]
     },
@@ -42,7 +97,7 @@
           "id": "refresh-anthropic-tool-routing",
           "title": "Update companion modules for Anthropic computer tools",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings → Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
         }
       ]
     },
@@ -102,7 +157,7 @@
           "id": "retry-component-updates",
           "title": "Retry a previously failed component update",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, then Install available."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
         }
       ]
     },
@@ -414,8 +469,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
         }
       ]
     },
@@ -435,7 +490,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -454,7 +509,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

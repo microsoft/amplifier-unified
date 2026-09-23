@@ -56,6 +56,7 @@ async def test_same_tab_revision_history_and_state_survive_restart(app, tmp_path
     row = await edit(app, row, 'restore', version=1)
     assert row['app']['revision'] == 3
     assert row['app']['state']['selected'] == 'forest'
+    await app.close()
     restored = AppService(app.data_dir, workspace=tmp_path)
     try:
         inspected = (await dispatch(restored, 'canvas.apps.inspect', {'id': row['id'], 'includeSource': True}))['result']

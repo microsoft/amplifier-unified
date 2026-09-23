@@ -23,7 +23,8 @@ async def main(home):
     await service.dispatch('view.update',{'patch':{'draft':'Preserve this draft'}})
     async def inspect(request):
         return web.json_response({'selected':service.state['selectedSessionId'],'draft':service.state['view']['draft'],
-            'sent':runtime.sent,'sourceText':source['messages'][0]['text'],'memories':service.recall.store.list_memories(None)['items']})
+            'sent':runtime.sent,'sourceText':source['messages'][0]['text'],'memories':service.recall.store.list_memories(None)['items'],
+            'personalization':service.recall.personalization.status(service._session(sid))})
     app.router.add_get('/fixture',inspect)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
     url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'

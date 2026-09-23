@@ -57,3 +57,9 @@
 #amp-one .a-nav-slot .a-workspace-ancestors>div{position:absolute;top:100%;left:0;z-index:4;width:220px;max-width:calc(100vw - 70px);max-height:260px;overflow:auto;box-shadow:0 8px 24px #0002}
 #amp-one[data-density="compact"] .a-nav-slot .a-nav-chat:not(.a-nav-chat-rename),#amp-one[data-density="compact"] .a-nav-slot .a-workspace-row{height:52px;min-height:52px;max-height:52px}
 @media(hover:none),(pointer:coarse){#amp-one .a-nav-slot .a-navigation-more{opacity:1;width:40px;min-width:40px;height:44px}#amp-one .a-nav-slot .a-navigation-flyout button{min-height:44px;min-width:36px}#amp-one .a-nav-slot .a-navigation-filters button,#amp-one .a-nav-slot .a-workspace-modes button,#amp-one .a-nav-slot .a-navigation-back{min-height:44px}#amp-one .a-nav-slot .a-navigation-flyout input{font-size:16px}}
+
+#amp-one .a-pin-handle{flex:0 0 20px;width:20px;min-width:20px;padding:1px;align-self:center;cursor:grab;color:var(--a-muted)}
+#amp-one .a-pin-handle svg{width:14px;height:14px}
+#amp-one .a-pin-handle[aria-disabled=true]{cursor:wait;opacity:.55}
+#amp-one .a-nav-chat[data-pin-dragging=true]{opacity:.5}
+#amp-one .a-nav-chat:has(.a-pin-handle) .a-nav-chat-select{min-width:0;padding-left:2px}

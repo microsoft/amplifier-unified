@@ -43,8 +43,157 @@ def workspace(identity, project, path=None, **extra):
 def history_for(service, rows):
     history = AutomaticHistory(service)
     service.state['sharedHistory']['loading'] = False
-    history.index.scan = lambda **kwargs: {'workspaces': copy.deepcopy(rows), 'sessions': []}
+    history.index.scan_if_changed = lambda **kwargs: (object(), {'workspaces': copy.deepcopy(rows), 'sessions': []})
     return history
+
+
+async def test_reused_catalog_revision_stays_detached_and_reconciles_in_place_changes(monkeypatch):
+    from amplifier_web.automatic_history import identity
+
+    service = ReconciliationService([])
+    history = AutomaticHistory(service)
+    catalog = {'workspaces': [], 'sessions': [
+        {'id': 'catalog-id', 'nativeProject': 'project', 'nativeIdentity': 'saved',
+         'workspace': None, 'workspaceId': None, 'sessionKind': 'root',
+         'title': 'Original', 'transcriptRevision': [1, 2]},
+    ]}
+    token = object()
+    monkeypatch.setattr(history.index, 'scan_if_changed',
+                        lambda **kwargs: (token, catalog if kwargs['since'] is not token else None))
+    await history.refresh(force=False)
+    saved = service.state['sessions'][0]
+    revision = saved['nativeRevision']
+    assert revision == [1, 2] and revision is not catalog['sessions'][0]['transcriptRevision']
+
+    # Reusing an unchanged native generation cannot skip edits to either side.
+    saved['nativeRevision'][0] = -1
+    saved['description'] = 'Locally stale metadata'
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 2] and saved['description'] == ''
+    catalog['sessions'][0]['transcriptRevision'][1] = 3
+    catalog['sessions'][0]['title'] = 'Externally changed'
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 3]
+    assert saved['title'] == 'Externally changed'
+    saved['nativeRevision'][0] = -2
+    assert catalog['sessions'][0]['transcriptRevision'] == [1, 3]
+
+    # Loaded history keeps its old stamp so the selected-view loader can detect
+    # a changed transcript; an absent stamp still receives a detached value.
+    saved.update(historyLoaded=True, nativeRevision=[0, 0])
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [0, 0]
+    del saved['nativeRevision']
+    await history.refresh(force=False)
+    assert saved['nativeRevision'] == [1, 3]
+    assert saved['nativeRevision'] is not catalog['sessions'][0]['transcriptRevision']
+
+    # Filters added and removed after warming are live even without a native
+    # revision change. Native identity is project-scoped, not the catalog ID.
+    service.state['sessions'] = []
+    service.state['hiddenNativeSessions'] = [identity('project', 'saved')]
+    await history.refresh(force=False)
+    assert service.state['sessions'] == []
+    service.state['hiddenNativeSessions'] = []
+    await history.refresh(force=False)
+    assert service.state['sessions'][0]['nativeIdentity'] == 'saved'
+    assert history._native_revision is token
+    assert service.state['sharedHistory']['error'] is None
+
+
+async def test_revision_alias_is_detached_and_missing_or_null_stamp_is_preserved(monkeypatch):
+    service = ReconciliationService([])
+    history = AutomaticHistory(service)
+    row = {'id': 'catalog-id', 'nativeProject': 'project', 'nativeIdentity': 'saved',
+           'workspace': None, 'workspaceId': None, 'sessionKind': 'root',
+           'title': 'Original', 'transcriptRevision': [1, 2]}
+    catalog = {'workspaces': [], 'sessions': [row]}
+    token = object()
+    monkeypatch.setattr(history.index, 'scan_if_changed', lambda **kwargs: (token, catalog))
+    await history.refresh(force=False)
+    saved = service.state['sessions'][0]
+    saved['nativeRevision'] = row['transcriptRevision']
+    await history.refresh(force=True)
+    assert saved['nativeRevision'] == row['transcriptRevision']
+    assert saved['nativeRevision'] is not row['transcriptRevision']
+    row['transcriptRevision'] = None
+    await history.refresh(force=False)
+    assert 'nativeRevision' in saved and saved['nativeRevision'] is None
+    del row['transcriptRevision']
+    del saved['nativeRevision']
+    await history.refresh(force=False)
+    assert 'nativeRevision' in saved and saved['nativeRevision'] is None
+    assert service.state['sharedHistory']['error'] is None
+
+
+async def test_reused_native_catalog_reconciles_local_filters_errors_and_selections(tmp_path, monkeypatch):
+    import json
+    from amplifier_web.native_history import NativeHistory
+    from amplifier_web.session_files import project_slug
+    home, folder = tmp_path / 'native', tmp_path / 'workspace'
+    folder.mkdir()
+    project = project_slug(folder)
+    directory = home / 'projects' / project / 'sessions' / 'saved'
+    directory.mkdir(parents=True)
+    (directory / 'metadata.json').write_text(json.dumps({'working_dir': str(folder), 'bundle': 'anchors'}))
+    (directory / 'transcript.jsonl').write_text('saved transcript\n')
+    service = ReconciliationService([])
+    history = AutomaticHistory(service)
+    history.index = NativeHistory(home)
+    await history.refresh(force=False)
+    await history.refresh(force=False)  # Settle learned workspace paths.
+    token = history._native_revision
+    original_revision = history._native_snapshot['sessions'][0]['transcriptRevision'][:]
+    saved = service.state['sessions'][0]
+    saved['nativeRevision'][0] = -1
+    service.state['sharedHistory']['error'] = 'Previous refresh failed'
+    queue = object()
+    service.queue_clients[queue] = 'background-tab'
+    service.queue_sessions = {queue: saved['id']}
+    selected_loads = []
+
+    async def load(identity):
+        selected_loads.append(identity)
+
+    monkeypatch.setattr(history, 'load', load)
+    monkeypatch.setattr('amplifier_web.automatic_history.revision', lambda row: original_revision)
+    await history.refresh(force=False)
+    assert history._native_revision is token
+    assert saved['nativeRevision'] == original_revision
+    assert history._native_snapshot['sessions'][0]['transcriptRevision'] == original_revision
+    assert service.state['sharedHistory']['error'] is None
+    assert selected_loads == [saved['id']]
+
+    # Local tombstones filter this refresh, not the retained unfiltered catalog.
+    monkeypatch.setattr('amplifier_web.managed_deletion.tombstones', lambda db: [{'project': project}])
+    await history.refresh(force=False)
+    assert history._native_revision is token
+    assert history.last_scan['sessions'] == []
+    assert len(history._native_snapshot['sessions']) == 1
+    monkeypatch.setattr('amplifier_web.managed_deletion.tombstones', lambda db: [])
+    service.state['sessions'] = []
+    await history.refresh(force=False)
+    assert service.state['sessions'][0]['nativeIdentity'] == 'saved'
+    assert history._native_revision is token
+
+    # Managed ownership/availability is independent of native metadata stamps.
+    monkeypatch.setattr('amplifier_web.automatic_history.catalog_locations', lambda snapshot: {str(folder): False})
+    await history.refresh(force=False)
+    saved = service.state['sessions'][0]
+    assert saved['workspaceId'] is None and saved['workspaceAvailable'] is False
+    monkeypatch.setattr('amplifier_web.automatic_history.catalog_locations', lambda snapshot: {str(folder): True})
+    await history.refresh(force=False)
+    assert saved['workspaceAvailable'] is True
+    assert history._native_revision is token
+
+    history.hide_session(service.state['sessions'][0])
+    service.state['sessions'] = []
+    await history.refresh(force=False)
+    assert service.state['sessions'] == []
+    service.state['hiddenNativeSessions'] = []
+    await history.refresh(force=False)
+    assert service.state['sessions'][0]['nativeIdentity'] == 'saved'
+    assert history._native_revision is token
 
 
 class CountedWorkspace(dict):

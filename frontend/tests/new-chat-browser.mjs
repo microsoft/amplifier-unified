@@ -9,7 +9,7 @@ let browser;
 const out='/tmp/amplifier-chat-controls';
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
- await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true});
+ await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const page=await browser.newPage({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[],calls=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -36,7 +36,9 @@ try{
  await page.locator('select#chat-model').selectOption('chosen-model');
  await page.locator('#chat-effort').press('End');
  await page.getByRole('button',{name:'Close model settings',exact:true}).click();
- await page.locator('#new-chat-workspace').fill(originalWorkspace+'/../');
+ await page.getByRole('combobox',{name:'Workspace',exact:true}).selectOption(':attach:');
+ await page.getByRole('textbox',{name:/Folder on/}).fill(originalWorkspace+'/../');
+ await page.getByRole('button',{name:'Use folder',exact:true}).click();
  const draftSaved=page.waitForResponse(response=>response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions'&&response.request().postDataJSON()?.args?.patch?.draft==='Do the planned work');
  await composer.fill('Do the planned work');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Use these notes')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();
@@ -63,7 +65,7 @@ try{
  await activity('working');
  for(const scheme of ['light','dark']){await action('view.update',{patch:{scheme,navPinned:false,navExpanded:false}});for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await expect(page.getByRole('button',{name:'Chat controls',exact:true})).toBeInViewport();await expect(page.getByRole('button',{name:'Stop response',exact:true})).toBeInViewport();await page.screenshot({path:out+`/composer-${scheme}-${width}.png`})}}
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{scheme:'light',navPinned:true}});const stop=page.getByRole('button',{name:'Stop response',exact:true});await expect(stop).toHaveCount(1);const box=await stop.boundingBox();await composer.fill('A correction');const send=page.getByRole('button',{name:'Send a correction',exact:true});await expect(send).toBeEnabled();assert.deepEqual(await send.boundingBox(),box);await composer.fill('');await expect(stop).toBeEnabled();assert.deepEqual(await stop.boundingBox(),box);
- await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'correction.txt',mimeType:'text/plain',buffer:Buffer.from('Next attachment')});await page.getByRole('button',{name:'Remove correction.txt'}).waitFor();await expect(send).toBeEnabled();await page.getByRole('button',{name:'Remove correction.txt'}).click();await expect(stop).toBeEnabled();await stop.click();await expect(page.getByRole('button',{name:'Send message',exact:true})).toBeDisabled();assert.deepEqual((await inspect()).stopped,[sid]);
+ await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'correction.txt',mimeType:'text/plain',buffer:Buffer.from('Next attachment')});await page.getByRole('button',{name:'Remove correction.txt'}).waitFor();await expect(send).toBeEnabled();await page.getByRole('button',{name:'Remove correction.txt'}).click();await expect(stop).toBeEnabled();await stop.click();await expect(page.getByRole('button',{name:'Start voice call',exact:true})).toBeEnabled();assert.deepEqual((await inspect()).stopped,[sid]);
  await activity('idle',[{id:'worker',status:'running',title:'Background work'}]);await expect(stop).toBeEnabled();await activity('idle');
  // The damaged source stays referenced and the drawer still opens.
  await action('canvas.show',{kind:'markdown',title:'Recoverable artifact',content:'# Saved artifact'});const aid=(await state()).canvas.id;await action('canvas.close');assert.equal((await page.request.post(url+'/fixture/damage',{data:{artifactId:aid}})).status(),200);await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(page.getByRole('complementary',{name:'Agent canvas'})).toBeVisible();await expect(page.getByText('The saved artifact source is unavailable.',{exact:true}).first()).toBeVisible();assert.equal((await state()).canvas.id,aid);assert.equal((await state()).selectedSessionId,sid);await page.screenshot({path:out+'/unavailable-artifact.png'});await action('canvas.close');

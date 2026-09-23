@@ -693,8 +693,8 @@ class Management:
             else:await self.download('amplifier-session.json',json.dumps({'messages':rows,'metadata':metadata},indent=2))
         elif action=='history.cleanup':
             cutoff=time.time()-args.get('days',30)*86400
-            async with self.service.lock:
-                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
+            async with self.service.publishing.lock, self.service.lock:
+                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and not self.service.publishing.owns_records(s['id']) and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
                 if args.get('apply'):
                     identities={s['id'] for s in eligible}
                     for session in eligible:
@@ -706,7 +706,7 @@ class Management:
                         for identity in identities:
                             path=store.directory(identity)
                             if path.exists():shutil.rmtree(path)
-                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Shared CLI transcripts and event files are retained.'}
+                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Publishing owners, shared CLI transcripts and event files are retained.'}
                 self.service._publish()
         elif action=='maintenance.restoreResource':
             from .resource_files import restore

@@ -1,0 +1,21 @@
+#amp-one .a-workspace-picker select,#amp-one .a-workspace-setup input:not([type=checkbox]){width:100%;box-sizing:border-box;min-width:0;font:inherit;padding:11px;border-radius:10px;border:1px solid var(--a-line);background:var(--a-surface);color:var(--a-ink)}
+#amp-one .a-workspace-setup{margin:14px 0;padding:18px;border:1px solid var(--a-line);border-radius:16px;background:var(--a-surface);min-width:0}
+#amp-one .a-workspace-setup-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#amp-one .a-workspace-setup h3{margin:0 0 12px;font-size:20px}
+#amp-one .a-workspace-setup label{display:flex;align-items:center;gap:8px;margin:14px 0 8px}
+#amp-one .a-workspace-setup .a-caption,#amp-one .a-workspace-picker .a-caption{color:var(--a-muted);line-height:1.5}
+#amp-one .a-workspace-setup details,#amp-one .a-workspace-picker>details{margin:14px 0;color:var(--a-muted);font-size:13px}
+#amp-one .a-workspace-setup summary,#amp-one .a-workspace-picker summary{cursor:pointer;padding:6px 0}
+#amp-one .a-workspace-setup-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;margin:16px 0}
+#amp-one .a-workspace-destination{display:block;overflow-wrap:anywhere;color:var(--a-muted);font-size:13px;margin-top:6px}
+#amp-one .a-nav-form .a-workspace-setup{margin:0;border:0;padding:0}
+#amp-one .a-simple-navigation section{margin:18px 0 12px}
+#amp-one .a-simple-nav-heading{display:flex;align-items:center;justify-content:space-between}
+#amp-one .a-simple-navigation .a-nav-chat-group-title{margin:8px 6px;font-weight:500;color:var(--a-muted)}
+#amp-one .a-simple-workspace{border-radius:10px}
+#amp-one .a-simple-workspace .a-nav-chat-select>svg{width:17px;height:17px;flex:none}
+#amp-one .a-simple-workspace-chats{margin-left:14px;padding-left:8px;border-left:1px solid var(--a-line)}
+#amp-one .a-simple-workspace-chats>.a-link{display:flex;gap:6px;padding:8px;align-items:center}
+#amp-one .a-simple-workspace-chats>.a-link svg{width:15px;height:15px}
+#amp-one .a-simple-all-chats{display:flex;align-items:center;gap:8px;padding:12px 6px;color:var(--a-muted)}
+#amp-one .a-simple-all-chats svg{width:16px;height:16px}

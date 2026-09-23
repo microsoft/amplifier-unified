@@ -1,9 +1,11 @@
 import asyncio
+import copy
 import json
 from types import SimpleNamespace
 
 import pytest
 from amplifier_core.message_models import ChatRequest, Message, ToolSpec
+from amplifier_core.models import ToolResult
 from amplifier_web.service import AppError, AppService
 from amplifier_web.surface_context import compact, revision
 from amplifier_web.surface_delivery import SurfaceDelivery, SurfaceProvider
@@ -71,7 +73,17 @@ async def test_patch_changes_are_bounded_and_input_binding_does_not_follow_other
         await app.app_bridge('context.read', {'surfaceId': row['id']}, other)
 
 
-async def test_notice_never_acknowledges_content_and_compaction_resyncs(surface):
+def serialized_receipt(value, serialization):
+    result = ToolResult(success=True, output=value)
+    if serialization == 'core':
+        return result.get_serialized_output()
+    if serialization == 'observed':
+        return json.dumps(result.model_dump(exclude={'success'}))
+    return json.dumps(result.model_dump())
+
+
+@pytest.mark.parametrize('serialization', ['core', 'full', 'observed'])
+async def test_notice_never_acknowledges_content_and_compaction_resyncs(surface, serialization):
     app, row, binding, _ = surface
     delivery = SurfaceDelivery(bridge_for(app, row, binding))
     first = await delivery.prepare(request(), provider(), commit=True)
@@ -79,7 +91,7 @@ async def test_notice_never_acknowledges_content_and_compaction_resyncs(surface)
     second = await delivery.prepare(request(), provider(), commit=True)
     assert notice(second)['surfaces'][0]['unseenContent']
     read = await delivery.read({'surfaceId': row['id'], 'representation': 'state', 'fields': ['theme']})
-    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=json.dumps(read)))
+    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=serialized_receipt(read, serialization)))
     current = await delivery.prepare(retained, provider(), commit=True)
     assert notice(current)['surfaces'][0]['observedFields'] == ['theme']
     assert 'facts' not in notice(current)['surfaces'][0]
@@ -90,13 +102,14 @@ async def test_notice_never_acknowledges_content_and_compaction_resyncs(surface)
     assert notice(await worker.prepare(retained, provider()))['surfaces'][0]['unseenContent']
 
 
-async def test_selective_images_are_typed_and_never_leak_into_tool_outputs(surface):
+@pytest.mark.parametrize('serialization', ['core', 'full', 'observed'])
+async def test_selective_images_are_typed_and_never_leak_into_tool_outputs(surface, serialization):
     app, row, binding, _ = surface
     delivery = SurfaceDelivery(bridge_for(app, row, binding))
     await delivery.prepare(request(), provider(), commit=True)
     read = await delivery.read({'surfaceId': row['id'], 'representation': 'image'})
     assert PNG not in json.dumps(read)
-    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=json.dumps(read)))
+    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=serialized_receipt(read, serialization)))
     current = await delivery.prepare(retained, provider(), commit=True)
     assert current.messages[-1].content[-1].type == 'image'
     assert current.messages[-1].content[-1].source['data'] == PNG
@@ -105,6 +118,68 @@ async def test_selective_images_are_typed_and_never_leak_into_tool_outputs(surfa
     assert all(block.type != 'image' for block in no_vision.messages[-1].content)
     compacted = await delivery.prepare(request(), provider())
     assert all(block.type != 'image' for block in compacted.messages[-1].content)
+
+
+@pytest.mark.parametrize('envelope', [
+    {'success': False, 'error': None},
+    {'error': {'message': 'unavailable'}},
+])
+async def test_failed_receipt_never_acknowledges_state_or_delivers_pixels(surface, envelope):
+    app, row, binding, _ = surface
+    delivery = SurfaceDelivery(bridge_for(app, row, binding))
+    await delivery.prepare(request(), provider(), commit=True)
+    state = await delivery.read({'surfaceId': row['id'], 'representation': 'state', 'fields': ['theme']})
+    image = await delivery.read({'surfaceId': row['id'], 'representation': 'image'})
+    retained = request(*[
+        Message(role='tool', name='app_control', tool_call_id=str(index), content=json.dumps({**envelope, 'output': value}))
+        for index, value in enumerate([state, image])
+    ])
+    current = await delivery.prepare(retained, provider(), commit=True)
+    assert not notice(current)['surfaces'][0]['observedFields']
+    assert not notice(current)['surfaces'][0]['imageInThisRequest']
+    assert all(block.type != 'image' for block in current.messages[-1].content)
+
+
+@pytest.mark.parametrize('replacement', [None, {}, {'theme': 'changed'}])
+async def test_changed_or_stubbed_state_body_does_not_acknowledge_fields(surface, replacement):
+    app, row, binding, _ = surface
+    delivery = SurfaceDelivery(bridge_for(app, row, binding))
+    read = await delivery.read({'surfaceId': row['id'], 'representation': 'state', 'fields': ['theme']})
+    changed = copy.deepcopy(read)
+    changed['data'] = replacement
+    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=json.dumps(changed)))
+    current = await delivery.prepare(retained, provider())
+    assert not notice(current)['surfaces'][0]['observedFields']
+    assert 'facts' in notice(current)['surfaces'][0]
+
+
+async def test_image_receipt_survives_actual_hook_float_roundtrip_but_identity_is_exact(surface):
+    from amplifier_core import HookRegistry, HookResult
+    app, row, binding, _ = surface
+    original = bridge_for(app, row, binding)
+    async def bridge(operation, args):
+        value = await original(operation, args)
+        if operation == 'context.read':
+            value['capturedAt'] = 1789888171.4219217
+        return value
+    delivery = SurfaceDelivery(bridge)
+    await delivery.prepare(request(), provider(), commit=True)
+    read = await delivery.read({'surfaceId': row['id'], 'representation': 'image'})
+    hooks = HookRegistry()
+    async def unchanged(event, data):return HookResult()
+    hooks.register('tool:post', unchanged, name='pass-through')
+    emitted = await hooks.emit('tool:post', {'tool_name': 'app_control', 'result': ToolResult(success=True, output=read).model_dump()})
+    retained = request(Message(role='tool', name='app_control', tool_call_id='read', content=json.dumps(emitted.data['result'])))
+    current = await delivery.prepare(retained, provider())
+    assert current.messages[-1].content[-1].source['data'] == PNG
+    assert notice(current)['surfaces'][0]['imageInThisRequest']
+    for key in ['observationReceipt', 'surfaceId', 'revision', 'representation', 'digest', 'generation', 'editVersion', 'viewId', 'clientId']:
+        changed = copy.deepcopy(read)
+        changed[key] = 'changed'
+        forged = request(Message(role='tool', name='app_control', tool_call_id='read', content=json.dumps(changed)))
+        result = await delivery.prepare(forged, provider())
+        assert not notice(result)['surfaces'][0]['imageInThisRequest']
+        assert all(block.type != 'image' for block in result.messages[-1].content)
 
 
 async def test_dirty_or_replaced_views_never_claim_saved_pixels(surface):

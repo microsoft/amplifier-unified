@@ -38,6 +38,7 @@ async def test_saved_appearance_survives_restart_and_external_files_are_discover
     external.write_text('#amp-one{--a-accent:#654321}')
     listing = (await dispatch(app, 'theme.list', {}))['result']
     assert {r['name'] for r in listing['items']} >= {'A shared look', 'From a friend'}
+    await app.close()
     restored = AppService(app.data_dir, workspace=tmp_path)
     try:
         value = (await restored.dispatch('theme.read', {'id': result['id']}))['result']

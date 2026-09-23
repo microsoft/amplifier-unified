@@ -23,7 +23,8 @@ from .host.config import write_private
 
 def work_paused(state):
     updates = state.get('updates', {})
-    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart'))
+    from .app_replacement import pending
+    return updates.get('phase') == 'activating' or bool(updates.get('pendingRestart')) or pending(updates)
 
 
 def active_release(home):
@@ -90,8 +91,10 @@ def configured_sources(service):
     Never prepare a bundle, import credentials or mutate configuration here.
     """
     from .host.config import read_config
+    from .shared_settings import SettingsReadCache
     import yaml
     sources, incomplete = {}, False
+    settings_cache = SettingsReadCache()
     issues = getattr(service, 'source_issues', None)
     def issue(reason, *, workspace=None, session_id=None, reference=None, historical=False):
         nonlocal incomplete
@@ -152,7 +155,7 @@ def configured_sources(service):
             # history. Their unavailable directories are not configuration errors.
             if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
-            config = read_config(workspace, home=home, session_id=session_id)
+            config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache)
             registrations = {name: row['uri'] for name, row in registry.items()
                              if isinstance(row, dict) and isinstance(row.get('uri'), str)}
             configured = dict(config.registrations)
@@ -378,9 +381,19 @@ class UpdateManager:
         from .update_readiness import running_identity,valid_target
         self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
+        from .app_replacement import pending as replacement_pending
+        # An older process may have died after replacing its files but before
+        # recording a restart target. Preserve uncertainty, never infer rollback.
+        if not replacement_pending(state) and not valid_target(state.get('pendingRestart')) and state.get('phase') == 'activating' and state.get('pendingApp'):
+            state['pendingReplacement'] = {'unqualified': True, 'detail': 'An older app replacement was interrupted without complete qualification evidence.'}
         restarted=state.get('pendingRestart')
         restart_repair=restarted is not None and not valid_target(restarted)
-        if restart_repair:
+        if replacement_pending(state):
+            if restart_repair:
+                state.update(pendingRestart=None, error='The saved restart receipt was invalid. No restart success was inferred; replacement uncertainty remains fenced.')
+            state.update(phase='activating', pendingApp=None,
+                         detail='Application replacement may have changed this installation. Work remains paused until a healthy new host proves the qualified app and dependencies. If evidence is incomplete, repair and qualify the installation before reopening admission.')
+        elif restart_repair:
             state.update(phase='interrupted',pendingRestart=None,pendingApp=None,
                          error='The saved restart receipt was invalid and has been retired. No restart success was inferred.',
                          detail='The interrupted restart was not acknowledged. Review the diagnostic receipt before retrying updates.')
@@ -391,6 +404,8 @@ class UpdateManager:
             if state.get('phase')=='activating':state['pendingApp']=None
             state.update(phase='interrupted', detail='The update was interrupted; installed sources were not replayed.')
         state.setdefault('phase', 'idle')
+        from .app_features import reconcile_requests
+        reconcile_requests(state)
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
         application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
@@ -427,7 +442,8 @@ class UpdateManager:
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates
         # another update; an actual pending handoff remains gated until verified.
-        return bool(self.service.state['updates'].get('pendingRestart') or
+        from .app_replacement import pending
+        return bool(pending(self.service.state['updates']) or self.service.state['updates'].get('pendingRestart') or
                     (self.readiness_task and not self.readiness_task.done() and recovery_candidate(self)))
 
     async def publish(self, **values):
@@ -512,13 +528,19 @@ class UpdateManager:
         rows.extend(await update_inventory(self.home))
         return rows
 
-    async def command(self, action):
-        if self.awaiting_restart():return
+    async def command(self, action, args=None, command_id=None):
+        if self.awaiting_restart() and action != 'featureInstall':return
         previous_error=self.service.state['updates'].get('error')
         try:
-            await getattr(self, action)()
+            if action == 'featureInstall':
+                await self.featureInstall(args['feature'], args['hostInstanceId'], command_id)
+            else:
+                await getattr(self, action)()
         except asyncio.CancelledError: raise
         except Exception as error:
+            # Feature requests own a durable per-request result. A rejected
+            # concurrent request must not change an active update's work gate.
+            if action == 'featureInstall':return
             if self.service.state['updates'].get('phase')=='error' and self.service.state['updates'].get('error') and self.service.state['updates']['error']!=previous_error:return
             from .update_diagnostics import exception_type
             last=self.diagnostics.state.get('latest',{})
@@ -576,6 +598,33 @@ class UpdateManager:
                     lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency sources were checked.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
+
+    async def featureInstall(self, feature, hostInstanceId, request_id):
+        from .app_features import record
+        from .app_updates import stage, activate, installed_extras
+        request_id = request_id or uuid.uuid4().hex
+        try:
+            if hostInstanceId != self.service.instance_id:
+                raise ValueError('The app host changed. Check desktop setup again before installing.')
+            if feature != 'native-desktop':
+                raise ValueError('Only native-desktop can be added through this action.')
+            state = self.service.state['updates']
+            if (self.closed or self.lock.locked() or self.awaiting_restart()
+                    or state.get('pendingApp') or state.get('pendingRelease')):
+                raise ValueError('Another update is pending. Finish or inspect that update before adding a feature.')
+            async with self.lock:
+                if feature in installed_extras():
+                    await record(self, request_id, 'already_installed', detail='The native observation package is already installed. Check readiness; this request changed nothing.')
+                    return
+                await record(self, request_id, 'staging', detail='Qualifying native observation against this same app and its existing components.')
+                await stage(self, feature=feature, request_id=request_id)
+            await activate(self)
+        except asyncio.CancelledError:
+            await record(self, request_id, 'interrupted', detail='The request was interrupted. Inspect update diagnostics before any retry.')
+            raise
+        except Exception as error:
+            await record(self, request_id, 'error', detail=str(error) if isinstance(error, ValueError) else 'The feature request did not finish. Inspect update diagnostics before retrying; nothing was replayed.')
+            raise
 
     async def app(self):
         if self.lock.locked() or self.awaiting_restart():return

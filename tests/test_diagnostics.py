@@ -209,6 +209,53 @@ async def test_queue_retention_and_disk_failure_are_visible_and_do_not_break_wor
     assert service._session()['status']=='idle'
 
 
+async def test_retention_preserves_count_age_boundaries_and_pending_loss_accounting(service,monkeypatch):
+    collector=service.diagnostics
+    now=100000.0
+    monkeypatch.setattr('amplifier_web.diagnostics.time.time',lambda:now)
+    cfg={**copy.deepcopy(DEFAULT),'retentionDays':1,'maxRecords':3}
+    cutoff=now-86400
+    # Non-contiguous insertion order and out-of-order event timestamps are
+    # normal after deletion and importing older capture events.
+    rows=[(1,'old-pending',now),(5,'old-failed',now),(10,'old-accepted',now),
+          (11,'old-two-routes',now),(30,'boundary',cutoff),
+          (31,'recent-but-expired',cutoff-1),(50,'unknown-time',None)]
+    deliveries=[('old-pending','a','pending'),('old-failed','a','failed'),
+                ('old-accepted','a','accepted'),('old-two-routes','a','pending'),
+                ('old-two-routes','b','failed'),('recent-but-expired','a','pending'),
+                ('boundary','a','accepted'),('unknown-time','a','accepted')]
+    with collector._db() as db:
+        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
+                       [(seq,identity,at,'{}') for seq,identity,at in rows])
+        db.executemany('INSERT INTO deliveries(record_id,destination,status) VALUES(?,?,?)',deliveries)
+    collector._persist([],cfg)
+    with collector._db() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM records')}=={'boundary','unknown-time'}
+        assert {r[0] for r in db.execute('SELECT record_id FROM deliveries')}=={'boundary','unknown-time'}
+        assert db.execute("SELECT value FROM counters WHERE name='expiredPending'").fetchone()[0]==5
+    # An idle flush with fewer rows than the cap must keep them and count no
+    # losses twice. A later cap decrease expires only the older insertion.
+    collector._persist([],cfg)
+    collector._persist([],{**cfg,'maxRecords':1})
+    with collector._db() as db:
+        assert [r[0] for r in db.execute('SELECT id FROM records')]==['unknown-time']
+        assert [r[0] for r in db.execute('SELECT record_id FROM deliveries')]==['unknown-time']
+        assert db.execute("SELECT value FROM counters WHERE name='expiredPending'").fetchone()[0]==5
+
+
+@pytest.mark.parametrize('limit,expected',[(0,set()),(1,{'newer'}),(2,{'older','newer'}),(10,{'older','newer'}),(-1,{'older','newer'})])
+async def test_retention_count_empty_exact_and_unlimited_boundaries(service,limit,expected):
+    collector=service.diagnostics
+    cfg={**copy.deepcopy(DEFAULT),'maxRecords':limit}
+    collector._persist([],cfg)  # An empty database has no boundary row.
+    with collector._db() as db:
+        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
+                       [(2,'older',None,'{}'),(19,'newer',None,'{}')])
+    collector._persist([],cfg)
+    with collector._db() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM records')}==expected
+
+
 async def test_disabling_after_queue_read_cannot_send_detached_cancelled_payload(service,monkeypatch):
     await configure(service,destination())
     collector=service.diagnostics
@@ -397,7 +444,8 @@ async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnost
              'status':'idle','messages':[],'workers':[]} for i in range(5000)]
     service.state['sessions'].extend(native)
     indexed=[]
-    def index_shared(db, scopes, config):
+    def index_shared(db, scopes, config, *, metadata_cache=None):
+        assert metadata_cache is service.diagnostics.capture_metadata_cache
         indexed.extend(scopes)
         return []
     monkeypatch.setattr(capture_index,'index_shared',index_shared)
@@ -419,3 +467,80 @@ async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnost
     assert {r['data']['runtimeSessionId'] for r in rows}=={'root:worker-1','historical-root'}
     assert not native_root.exists()
     assert not (tmp_path/'unavailable-cli-folder').exists()
+
+
+async def test_background_capture_counts_do_not_publish_until_observed_but_health_does(service, monkeypatch):
+    collector = service.diagnostics
+    current = {'config': {}, 'local': {'records': 1, 'oldest': 1, 'newest': 1,
+        'dropped': 0, 'storageError': False}, 'destinations': [], 'results': {}}
+    monkeypatch.setattr(collector, '_summary', lambda: copy.deepcopy(current))
+    await collector.publish(background=True)
+    revision = service.state['revision']
+    for number in range(2, 12):
+        current['local'].update(records=number, oldest=number, newest=number)
+        await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    assert service.state['diagnostics']['local']['records'] == 1
+    # Opening another settings page or a disconnected client's retained view
+    # is not a subscription to diagnostics counters.
+    record = service.clients.attach('diagnostics-client')
+    record['view'].update(panel='settings', settingsExpanded=['diagnostics'])
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    with service.clients.bind('diagnostics-client'):
+        queue = service.subscribe()
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    assert service.state['diagnostics']['local']['records'] == 11
+    record['view']['settingsExpanded'] = ['appearance']
+    current['local']['newest'] = 12
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    current['local']['storageError'] = True
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 2
+    assert service.state['diagnostics']['local']['storageError'] is True
+    current['local'].update(storageError=False, dropped=1)
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 3
+    service.unsubscribe(queue)
+    # Explicit inspection remains available to agent callers without UI demand.
+    current['local']['records'] = 20
+    await collector.publish()
+    assert service.state['diagnostics']['local']['records'] == 20
+
+
+async def test_capture_validation_reuses_instance_cache_and_recovers_from_invalid_metadata(service, monkeypatch):
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from amplifier_web.session_files import capture_dir
+    await service.dispatch('session.create', {})
+    session = service._session()
+    directory = capture_dir(session['workspace'], session['id'])
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata = directory / 'metadata.json'
+    valid = json.dumps({'format': 'context-intelligence', 'version': '1.0.0'})
+    metadata.write_text(valid)
+    (directory / 'events.jsonl').write_text(json.dumps({'event': 'tool:post',
+        'timestamp': datetime.now(timezone.utc).isoformat(), 'data': {'event_id': 'fixture'}}) + '\n')
+    opened = []
+    original = Path.open
+    def record_open(path, *args, **kwargs):
+        if path == metadata:
+            opened.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', record_open)
+    collector = service.diagnostics
+    collector._persist([], collector.config)
+    collector._persist([], collector.config)
+    assert opened == [metadata]
+    metadata.write_text(valid.replace('1.0.0', '9.0.0'))
+    for _ in range(2):
+        with pytest.raises(ValueError, match='Unsupported Context Intelligence'):
+            collector._persist([], collector.config)
+    assert str(metadata) not in collector.capture_metadata_cache._validated
+    metadata.write_text(valid)
+    collector._persist([], collector.config)
+    before = len(opened)
+    collector._persist([], collector.config)
+    assert len(opened) == before

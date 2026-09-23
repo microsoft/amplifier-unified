@@ -71,7 +71,7 @@ def package_name(value):
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
-def installed_sources(project, *, graph=None):
+def installed_sources(project, *, graph=None, tracked=()):
     """Read worker metadata without importing modules or executing its Python.
 
     The lock cannot describe modules installed later by Foundation. Conversely a
@@ -80,13 +80,20 @@ def installed_sources(project, *, graph=None):
     """
     from .runtime_qualification import installed_graph
     result = {}
+    tracked = set(locked_sources(project)) | set(tracked)
+    configured = {package_name(name) for name in
+                  tomllib.loads(manifest_path().read_text()).get('tool', {}).get('uv', {}).get('sources', {})}
     for record in installed_graph(project) if graph is None else graph:
         name = record['name']
-        if not name.startswith('amplifier-'):
-            continue
         direct = record.get('directUrl') or {}
         vcs = direct.get('vcs_info') or {}
         cached = record.get('cacheSource')
+        # Bundle packages need not use the amplifier- prefix. Include every
+        # installed Git/cache component, while leaving ordinary registry
+        # dependencies to the resolver instead of treating them as overrides.
+        if not (name.startswith('amplifier-') or name in tracked or name in configured
+                or cached or vcs.get('vcs') == 'git'):
+            continue
         if cached:
             result[name] = {'url': cached['url'], 'ref': cached['ref'], 'current': cached['revision'],
                             'subdirectory': cached['subdirectory'] if cached['subdirectory'] != '.' else '',
@@ -98,7 +105,7 @@ def installed_sources(project, *, graph=None):
                             'subdirectory': direct.get('subdirectory', ''), 'provenance': 'installed Git distribution'}
         else:
             result[name] = {'current': record['version'], 'provenance': 'installed local or registry override',
-                            'override': True}
+                            'override': True, **({'trackedSource': True} if name in tracked else {})}
     return result
 
 
@@ -115,8 +122,6 @@ def inventory(home, *, installed=None):
     observed = {}
     for name, resolved in locked.items():
         name = package_name(name)
-        if name not in sources and not name.startswith('amplifier-'):
-            continue
         query = parse_qs(resolved.query)
         source = sources.get(name, {})
         policy = recorded_policies.get(name, {})
@@ -126,7 +131,7 @@ def inventory(home, *, installed=None):
                           'ref': policy.get('ref') or next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '') or source.get('branch') or source.get('rev') or '',
                           'current': resolved.fragment, 'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
                           'provenance': 'worker resolution lock'}
-    for name, source in (installed_sources(project) if installed is None else installed).items():
+    for name, source in (installed_sources(project, tracked=locked) if installed is None else installed).items():
         resolved = locked.get(name)
         policy = recorded_policies.get(name)
         if (policy and resolved and source.get('current') == resolved.fragment
@@ -175,7 +180,7 @@ async def update_inventory(home):
     receipt = receipt_directory(home, generation)
     project = project_path(home, generation)
     graph = await asyncio.to_thread(installed_graph, project)
-    policy = installed_sources(project, graph=graph)
+    policy = installed_sources(project, graph=graph, tracked=locked_sources(receipt / 'runtime.lock'))
     # Frozen generations retain their exact graph rules, including bytecode.
     if not (receipt / 'runtime-installed.json').exists():
         roots = [(foundation_home(home) / 'cache', Path(home).resolve())]
@@ -248,7 +253,7 @@ def augmented_manifest(content, rows):
         if row.get('kind') != 'runtime dependency':
             continue
         name = row['package']
-        if row.get('override') and (name in declared or row.get('cacheManaged')):
+        if row.get('override') and (name in declared or row.get('cacheManaged') or row.get('trackedSource')):
             raise ProtectedRuntimeSource(name)
         if row.get('override') or not row.get('url') or not row.get('ref'):
             continue

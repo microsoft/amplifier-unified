@@ -136,9 +136,11 @@ async def test_snapshot_endpoint_requires_authentication_and_survives_restart(tm
     assert collect(service.db, service.state) == []
     service._save()
     from amplifier_web.service import AppService
+    expected = exported(service, result)
+    await client.close()
     reopened = AppService(tmp_path, workspace=tmp_path)
     try:
-        assert exported(reopened, result) == exported(service, result)
+        assert exported(reopened, result) == expected
         assert reopened.state['conversationExports'][result['result']['snapshotId']]['statePath'] == result['result']['statePath']
     finally:
         await reopened.close()

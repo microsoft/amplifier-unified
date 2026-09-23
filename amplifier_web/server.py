@@ -52,6 +52,8 @@ async def boundaries(request, handler):
         payload = {"error": str(exc), "accepted": False}
         if exc.code:
             payload['code'] = exc.code
+        if exc.receipt is not None:
+            payload['receipt'] = exc.receipt
         if exc.code == 'session_busy':
             payload['state'] = getattr(exc, 'client_state', None) or request.app['service'].browser_state()
         return _set_response_headers(web.json_response(payload, status=exc.status), request.path)
@@ -181,9 +183,20 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if isinstance(payload, dict) and payload.get('action') == 'terminal.prepare':
             from .terminal_setup import require_safe_transport
             require_safe_transport(request)
+        compact = request.headers.get('X-Amplifier-State-Transport') == 'delta-v1'
         task = service._task(service.dispatch(payload["action"], payload.get("args", {}), origin="ui",
-                                        command_id=payload.get("id"), expected_revision=payload.get("expectedRevision")))
+                                        command_id=payload.get("id"), expected_revision=payload.get("expectedRevision"),
+                                        include_state=not compact))
         result = await asyncio.shield(task)
+        if compact:
+            # Some delegated action families return their own snapshot. Keep
+            # their receipt/effects, but use the same stream synchronization.
+            result = {key: value for key, value in result.items() if key != 'state'}
+            # Shell-only receipts have their own revision domain and notify
+            # /api/shell. They must not wait for an unrelated app-state frame.
+            if not payload['action'].startswith('shell.') or payload['action'] == 'shell.command':
+                result['stateRevision'] = result.get('revision', service._state['revision'])
+            result['hostInstanceId'] = service.instance_id
         return web.json_response(result)
 
     async def view(request):
@@ -235,11 +248,17 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 # session.select. Load its display history without warming or
                 # starting a runtime, while the initial snapshot paints promptly.
                 service._task(service.history.refresh_session(selected['id']))
+            previous = None
+            compact = request.query.get('transport') == 'delta-v1'
             while True:
                 if "shellClientId" in snapshot:
                     await response.write(("event: shell\ndata: " + json.dumps(snapshot) + "\n\n").encode())
                 else:
-                    await response.write(("event: state\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(snapshot) + "\n\n").encode())
+                    from .state_transport import delta
+                    event = 'state-delta' if compact and previous is not None else 'state'
+                    payload = delta(previous, snapshot) if event == 'state-delta' else snapshot
+                    await response.write(("event: " + event + "\nid: " + str(snapshot["revision"]) + "\ndata: " + json.dumps(payload) + "\n\n").encode())
+                    previous = snapshot
                 try:
                     snapshot = await asyncio.wait_for(queue.get(), 20)
                 except TimeoutError:

@@ -269,3 +269,61 @@ async def test_connected_client_recovery_uses_shared_passive_and_explicit_action
     duplicate = await action('conversation.retry', 'explicit-once', confirmUncertain=True)
     assert duplicate.status == 200 and (await duplicate.json())['duplicate']
     assert runtime.sent == [(sid, 'Saved request', 'saved-input')]
+
+
+async def test_real_worker_startup_failure_has_durable_non_delivery_receipt(authenticated_client, tmp_path):
+    import sys
+    from amplifier_web.server import create_app
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise SystemExit(3)'], startup_timeout=3)
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=runtime,
+                           voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {})
+    sid = service._session()['id']
+    payload = {'action': 'conversation.send', 'args': {'sessionId': sid, 'text': 'Keep this request'}, 'id': 'startup-input'}
+    response = await client.post('/api/actions', json=payload)
+    data = await response.json()
+    assert response.status == 503 and data['code'] == 'worker_startup_failed'
+    assert data['receipt']['delivery'] == 'failed'
+    assert service._session()['messages'][-1]['delivery']['status'] == 'failed'
+    assert not runtime.workers
+    checked = await service.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'startup-input'})
+    assert checked['result']['delivery'] == 'failed'
+    duplicate = await client.post('/api/actions', json=payload)
+    assert (await duplicate.json())['receipt'] == data['receipt']
+    assert not runtime.workers
+    retry = {'action': 'conversation.retry', 'args': {'sessionId': sid, 'inputId': 'startup-input'}, 'id': 'startup-retry'}
+    failed_retry = await client.post('/api/actions', json=retry)
+    assert failed_retry.status == 503
+    assert (await failed_retry.json())['receipt']['delivery'] == 'failed'
+    assert service._session()['messages'][-1]['delivery']['status'] == 'failed'
+    repeated_retry = await client.post('/api/actions', json=retry)
+    repeated_data = await repeated_retry.json()
+    assert repeated_data['result']['delivery'] == repeated_data['receipt']['delivery'] == 'failed'
+    assert not runtime.workers
+    replacement = RecoveryRuntime()
+    service.runtime = replacement
+    result = await service.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'startup-input'}, command_id='explicit-retry')
+    assert result['result']['delivery'] == 'accepted'
+    assert replacement.sent == [(sid, 'Keep this request', 'startup-input')]
+    assert len([m for m in service._session()['messages'] if m['role'] == 'user']) == 1
+    confirmed = await client.post('/api/actions', json=payload)
+    confirmed_data = await confirmed.json()
+    assert confirmed_data['accepted'] is True and confirmed_data['delivery'] == 'accepted'
+    assert 'code' not in confirmed_data and len(replacement.sent) == 1
+    await runtime.close()
+
+
+async def test_retry_startup_failure_cannot_claim_earlier_attempt_was_not_delivered(recovery):
+    from amplifier_web.runtime import RuntimeStartupError
+    app, runtime, _ = recovery
+    runtime.retry = AsyncMock(side_effect=RuntimeStartupError('Worker could not start.'))
+    args = {**recovery_args(app), 'confirmUncertain': True}
+    with pytest.raises(AppError) as failure:
+        await app.dispatch('conversation.retry', args, command_id='failed-retry')
+    assert failure.value.receipt['delivery'] == 'unknown'
+    assert app._session()['messages'][-1]['delivery']['status'] == 'unknown'
+    cached = await app.dispatch('conversation.retry', args, command_id='failed-retry')
+    assert cached['accepted'] is False and cached['receipt']['delivery'] == 'unknown'
+    runtime.retry.assert_awaited_once()

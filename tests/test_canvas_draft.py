@@ -126,6 +126,7 @@ async def test_restart_hides_legacy_draft_canvas_and_restore_does_not_reopen_it(
         artifact = deepcopy(app._state['canvasArtifacts'][-1])
         app.clients.save('one')
         app._save()
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         restored.clients.attach('one')

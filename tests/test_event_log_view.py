@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +23,51 @@ def source(tmp_path, monkeypatch):
     session={'id':'app','runtimeSessionId':'native','workspace':str(tmp_path/'project'),
              'messages':[{'id':'user','role':'user','createdAt':1,'text':'Inspect it'}], 'workers':[]}
     return session, event_path(session,'native')
+
+
+async def test_idle_refresh_skips_projection_but_detects_appends_replacements_and_live_changes(source, monkeypatch):
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
+    calls = []
+    service = SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
+                              _publish=lambda:calls.append('publish'))
+    view = EventLogView(service)
+    original = view.read
+    def read(value):
+        calls.append('read')
+        return original(value)
+    monkeypatch.setattr(view, 'read', read)
+    await view.refresh('app')
+    for _ in range(10):
+        await view.refresh('app')
+    assert calls.count('read') == 1
+    # These fields change on every streamed token or worker progress report.
+    # They have no role in mapping canonical events onto messages and turns.
+    for number in range(10):
+        session.update(streaming=f'Token {number}', recentActivityAt=number, draft=f'Draft {number}')
+        session['workers'] = [{'id': 'child', 'sessionId': 'child', 'status': 'running',
+                               'updatedAt': number, 'detail': f'Progress {number}'}]
+        await view.refresh('app')
+    assert calls.count('read') == 2  # New child discovered once.
+    calls.clear()
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'finished'}, 12)
+    await view.refresh('app')
+    assert calls.count('read') == 1
+    assert session['execution']['nodes'][0]['output'] == 'finished'
+    replacement = path.with_suffix('.replacement')
+    append(replacement, 'tool:post', {'tool_call_id': 'two', 'result': 'replacement'}, 15)
+    replacement.replace(path)
+    await view.refresh('app')
+    assert calls.count('read') == 2
+    session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Continue', 'createdAt': 20})
+    await view.refresh('app')
+    assert calls.count('read') == 3
+    # Transcript changes can establish associations without an event append.
+    (path.parent.parent / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Inspect it'})+'\n')
+    await view.refresh('app')
+    assert calls.count('read') == 4
+    await view.refresh('app')
+    assert calls.count('read') == 4
 
 
 def test_canonical_body_exact_unredacted_untruncated_and_never_written(source,tmp_path):
@@ -258,6 +304,36 @@ def test_duplicate_model_telemetry_matches_once_after_admission_delay(source):
     assert [row['id'] for row in index.rows()]==['stable-0','stable-1']
 
 
+def test_completed_call_logged_under_app_alias_stays_single_after_reprojection(source):
+    from amplifier_web.capacity import usage_snapshot
+    session, native_path = source
+    session['status'] = 'working'
+    call = {'id':'host-call', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'turnId':'turn', 'producerId':'worker', 'revision':2, 'liveObservation':True,
+            'provider':'test', 'model':'fixture', 'phase':'completed', 'startedAt':10,
+            'endedAt':26.001, 'usage':{'inputTokens':3, 'outputTokens':465,
+                'cacheWriteTokens':249877, 'totalTokens':468, 'costUsd':3.1467425, 'costType':'reported'}}
+    session['execution'] = {'nodes':[dict(call)], 'turns':[{'id':'turn','anchorMessageId':'user'}]}
+    # The host capture is stored under the app ID, while the resumed provider's
+    # capture is under the original CLI ID. Both represent the same request.
+    app_path = event_path(session, 'app')
+    append(app_path, 'provider:request', {**call,'phase':'running','endedAt':None,'usage':{}}, 10)
+    append(native_path, 'llm:request', {'request_id':'provider-call','provider':'test','model':'fixture'}, 11.1)
+    append(native_path, 'llm:response', {'request_id':'provider-call','provider':'test','model':'fixture',
+           'usage':{'input_tokens':3,'output_tokens':465,'cache_write_tokens':249877,'cost_usd':3.1467425}}, 26)
+    original_capacity = usage_snapshot(session)
+    view = EventLogView(None)
+    for delayed in (True, False):
+        if not delayed:append(app_path, 'llm:response', call, 26.002)
+        for _ in range(3):
+            session['execution'] = view.read(session)
+            nodes = session['execution']['nodes']
+            assert len(nodes) == 1
+            assert nodes[0]['id'] == 'host-call'
+            assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(3.1467425)
+            assert usage_snapshot(session)['receipts'] == original_capacity['receipts']
+
+
 def test_unfinished_historical_record_is_not_a_perpetually_running_call(source):
     session,path=source
     append(path,'tool:pre',{'tool_call_id':'one','tool_name':'bash','tool_input':{'command':'old'}})
@@ -325,6 +401,114 @@ def test_live_completion_usage_survives_delayed_log_flush(source):
     node,=EventLogView(None).read(session)['nodes']
     assert node['phase']=='completed' and node['endedAt']==12
     assert node['usage']['totalTokens']==120 and node['usage']['costUsd']==.004
+
+
+@pytest.mark.parametrize('receipt_location', ['nodes', 'retiredUsageNodes'])
+def test_completed_receipts_pair_before_delayed_app_log_flush(source, receipt_location):
+    """Captured race: the last native response flushes before its app completion."""
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, start, end, inputs, outputs, cost in (
+        ('first', 1790114695.062343, 1790114703.596118, 25625, 401, .0110674),
+        ('last', 1790114704.501729, 1790114708.916924, 26075, 185, .0090629),
+    ):
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'turnId':'turn', 'producerId':'worker', 'revision':2, 'liveObservation':True,
+                'provider':'test', 'model':'fixture', 'phase':'completed',
+                'startedAt':start, 'endedAt':end, 'usage':{'inputTokens':inputs,
+                'outputTokens':outputs, 'totalTokens':inputs+outputs, 'costUsd':cost, 'costType':'reported'}}
+        calls.append(call)
+        append(path, 'llm:request', {'provider':'test', 'model':'fixture', 'raw':{'input':identity}}, start+.4)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+               'revision':1, 'endedAt':None, 'usage':{}}, start+.01)
+        append(path, 'llm:response', {'provider':'test', 'model':'fixture', 'usage':{
+               'input_tokens':inputs, 'output_tokens':outputs, 'cost_usd':cost}}, end-.003)
+        if identity == 'first':
+            append(path, 'llm:response', {**call, 'sessionId':'native'}, end+.001)
+    session['execution'] = {'nodes':[], 'turns':[{'id':'turn', 'anchorMessageId':'user'}],
+                            receipt_location:copy.deepcopy(calls)}
+    original = session['execution']
+    before = copy.deepcopy(original)
+    original_log = path.read_bytes()
+    original_capacity = usage_snapshot(session)
+    view = EventLogView(None)
+    for delayed in (True, False):
+        if not delayed:
+            append(path, 'llm:response', {**calls[-1], 'sessionId':'native'}, calls[-1]['endedAt']+.001)
+        for _ in range(2):
+            session['execution'] = view.read(session)
+            tree = session['execution']
+            assert [row['id'] for row in tree['nodes']] == ['first', 'last']
+            assert tree['aggregateUsage']['calls'] == 2
+            assert tree['aggregateUsage']['costUsd'] == pytest.approx(.0201303)
+            assert tree['aggregateUsage']['totalTokens'] == 52286
+            capacity = usage_snapshot(session)
+            assert capacity['receipts'] == original_capacity['receipts']
+            assert capacity['metrics'] == original_capacity['metrics']
+            for node in tree['nodes']:
+                assert node['requestDetail']['id'] == node['id']
+                assert json.loads(read_text(session, {**node['requestDetail'], 'complete':'true'})['value']) == {'input':node['id']}
+        if delayed:
+            # Projection must not upgrade the cached native evidence in place.
+            indexed = view.indexes[str(path)].nodes['last']
+            assert indexed['phase'] == 'running' and indexed['endedAt'] is None
+            assert indexed['usage'] == {} and path.read_bytes() == original_log
+    assert original == before
+
+
+def test_latest_accounting_pairing_keeps_parallel_calls_and_earlier_retry(source):
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, end in [('one', 12.01), ('two', 12.11)]:
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+                'startedAt':9, 'endedAt':end, 'phase':'completed',
+                'usage':{'inputTokens':4, 'outputTokens':2, 'totalTokens':6, 'costUsd':.01}}
+        calls.append(call)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'endedAt':None,
+               'phase':'running', 'usage':{}}, 9)
+    for request, end in [('retry', 11.5), ('one', 12), ('two', 12.1)]:
+        append(path, 'llm:request', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'raw':{'input':request}}, 10)
+        append(path, 'llm:response', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'status':'error' if request == 'retry' else 'ok', 'error':request+' details',
+               'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, end)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':calls}
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = {node['id']:node for node in session['execution']['nodes']}
+        assert set(nodes) == {'one', 'two', 'llm:native:retry'}
+        for identity, request in [('one','one'), ('two','two'), ('llm:native:retry','retry')]:
+            assert nodes[identity]['error'] == request+' details'
+            assert json.loads(read_text(session, {**nodes[identity]['requestDetail'], 'complete':'true'})['value']) == {'input':request}
+        assert session['execution']['aggregateUsage']['calls'] == 3
+        assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(.03)
+        assert usage_snapshot(session)['calls'] == 2
+        assert usage_snapshot(session)['metrics']['costUsd']['value'] == pytest.approx(.02)
+
+
+@pytest.mark.parametrize('field,value', [('rootSessionId','other'), ('sessionId','other'),
+                                        ('id','other'), ('kind','worker')])
+def test_model_pairing_does_not_borrow_unrelated_accounting(source, field, value):
+    session, path = source
+    call = {'id':'call', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+            'startedAt':10, 'endedAt':12, 'phase':'completed',
+            'usage':{'inputTokens':4, 'outputTokens':2, 'costUsd':.01}}
+    append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+           'endedAt':None, 'usage':{}}, 10)
+    append(path, 'llm:request', {'request_id':'native-call', 'provider':'test', 'model':'fixture'}, 10.1)
+    append(path, 'llm:response', {'request_id':'native-call', 'provider':'test', 'model':'fixture',
+           'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, 12)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':[{**call, field:value}]}
+    tree = EventLogView(None).read(session)
+    assert {node['id'] for node in tree['nodes']} == {'call', 'llm:native:native-call'}
+    node = next(node for node in tree['nodes'] if node['id'] == 'call')
+    assert node['endedAt'] is None and node['usage'] == {}
+    assert tree['aggregateUsage']['costUsd'] == pytest.approx(.01)
 
 
 def test_native_model_keeps_observed_identity_across_repeated_reads(source):
@@ -582,3 +766,142 @@ def test_unfinished_history_does_not_reopen_a_terminal_turn(source, session_stat
     assert turn['phase'] == 'completed' and turn['endedAt'] == 11
     assert session['execution']['nodes'][1]['phase'] == 'recorded'
     assert session['status'] == session_status
+
+
+@pytest.mark.parametrize("host_log", ["native", "app"])
+def test_resumed_alias_logs_merge_host_and_provider_after_display_retirement(source, host_log):
+    session, native_path = source
+    session['status'] = 'idle'
+    call = {'id': 'host-call', 'kind': 'llm', 'sessionId': 'app', 'rootSessionId': 'native',
+            'turnId': 'turn', 'producerId': 'worker', 'revision': 2,
+            'provider': 'test', 'model': 'fixture', 'phase': 'completed', 'startedAt': 10,
+            'endedAt': 26.001, 'usage': {'inputTokens': 3, 'outputTokens': 465, 'costUsd': 3.14}}
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'turn', 'anchorMessageId': 'user'}],
+                            'retiredUsageNodes': [call]}
+    path = event_path(session, host_log)
+    append(path, 'provider:request', {**call, 'phase': 'running', 'endedAt': None, 'usage': {}}, 10)
+    append(native_path, 'llm:request', {'request_id': 'provider-call', 'provider': 'test', 'model': 'fixture',
+                                     'message_count': 699}, 11.1)
+    append(native_path, 'llm:response', {'request_id': 'provider-call', 'provider': 'test', 'model': 'fixture',
+           'usage': {'input_tokens': 3, 'output_tokens': 465, 'cost_usd': 3.14}}, 26)
+    append(path, 'llm:response', call, 26.002)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = session['execution']['nodes']
+        assert len(nodes) == 1
+        assert nodes[0]['id'] == 'host-call'
+        assert nodes[0]['requestInfo']['message_count'] == 699
+        assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(3.14)
+        assert session['execution']['retiredUsageNodes'] == [call]
+
+
+def test_resumed_root_alias_pairing_keeps_identical_child_call_separate(source):
+    session, native_path = source
+    session['workers'] = [{'id': 'child', 'sessionId': 'child', 'status': 'idle'}]
+    call = {'id': 'host-call', 'kind': 'llm', 'sessionId': 'app',
+            'provider': 'test', 'model': 'fixture', 'phase': 'completed', 'startedAt': 10,
+            'endedAt': 26.001, 'usage': {'inputTokens': 3, 'outputTokens': 465, 'costUsd': 3.14}}
+    append(native_path, 'llm:response', call, 26.002)
+    for identity in ('native', 'child'):
+        path = event_path(session, identity)
+        append(path, 'llm:request', {'session_id': identity, 'request_id': 'provider-call',
+                                   'provider': 'test', 'model': 'fixture'}, 11.1)
+        append(path, 'llm:response', {'session_id': identity, 'request_id': 'provider-call',
+               'provider': 'test', 'model': 'fixture',
+               'usage': {'input_tokens': 3, 'output_tokens': 465, 'cost_usd': 3.14}}, 26)
+    tree = EventLogView(None).read(session)
+    assert {row['id'] for row in tree['nodes']} == {'host-call', 'llm:child:provider-call'}
+    assert tree['aggregateUsage']['costUsd'] == pytest.approx(6.28)
+    assert tree['retiredUsageNodes'] == []
+
+
+def test_retired_child_receipts_keep_host_turn_across_restart_and_native_steering(source, tmp_path):
+    """Recovered observations must not move six admitted children into new turns."""
+    from amplifier_web.execution import rollup
+    from amplifier_web.session_projection import accounting_projection
+    session, path = source
+    session['status'] = 'stopped'
+    session['messages'][0].update(nativeIndex=0, inputId='host')
+    session['execution'] = {'nodes': [], 'turns': [
+        {'id': 'host', 'inputId': 'host', 'anchorMessageId': 'user', 'phase': 'completed'}],
+        'currentTurnId': 'host', 'retiredUsageNodes': []}
+    records = session['execution']['retiredUsageNodes']
+    transcript = [{'role': 'user', 'content': 'Inspect it'}]
+    root_call = {'id': 'root-call', 'kind': 'llm', 'sessionId': 'app', 'rootSessionId': 'app',
+        'turnId': 'host', 'producerId': 'worker', 'revision': 2, 'model': 'fixture',
+        'provider': 'test', 'startedAt': 2, 'endedAt': 3, 'phase': 'completed',
+        'usage': {'inputTokens': 84, 'outputTokens': 1, 'costUsd': 28.1, 'costType': 'reported'}}
+    records.append(root_call)
+    append(path, 'execution:node', root_call, 3)
+    for i in range(6):
+        child, tool = f'child-{i}', f'delegate-{i}'
+        if i:
+            transcript.append({'role': 'user', 'content': f'External recovered work observation {i}'})
+        transcript.extend([
+            {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': tool, 'name': 'delegate', 'input': {}}]},
+            {'role': 'tool', 'tool_call_id': tool, 'content': 'Worker completed'}])
+        append(path, 'tool:pre', {'tool_call_id': tool, 'tool_name': 'delegate'}, 10 + i * 10)
+        append(path, 'delegate:agent_spawned', {'tool_call_id': tool, 'sub_session_id': child}, 11 + i * 10)
+        append(path, 'tool:post', {'tool_call_id': tool, 'result': 'Worker completed'}, 19 + i * 10)
+        worker = {'id': 'worker:' + child, 'kind': 'worker', 'sessionId': child, 'rootSessionId': 'app',
+            'parentId': 'tool:native:' + tool, 'turnId': 'host', 'phase': 'completed', 'revision': 2,
+            'producerId': 'worker', 'startedAt': 11 + i * 10, 'endedAt': 18 + i * 10}
+        call = {**root_call, 'id': 'call-' + child, 'sessionId': child, 'parentId': worker['id'],
+            'startedAt': 12 + i * 10, 'endedAt': 18 + i * 10,
+            'usage': {'inputTokens': i + 1, 'outputTokens': 1, 'costUsd': i + .1, 'costType': 'reported'}}
+        records.extend([worker, call])
+        append(event_path(session, child), 'execution:node', {**call, 'session_id': child}, 18 + i * 10)
+    (path.parent.parent / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in transcript))
+    expected = rollup([r for r in records if r['kind'] == 'llm'])
+    unchanged = copy.deepcopy(records)
+    canonical = {file: file.read_bytes() for file in path.parent.parent.parent.rglob('*.jsonl')}
+    for _ in range(3):
+        session['execution'] = EventLogView(None).read(session)
+        host = next(t for t in session['execution']['turns'] if t['id'] == 'host')
+        assert host['aggregateUsage'] == expected
+        assert session['execution']['aggregateUsage'] == expected
+        assert accounting_projection(session['execution']) == unchanged
+        assert [segment['id'] for segment in page(session, 'nodes')['segments']] == ['host@user']
+        persist(tmp_path / 'app', {'sessions': [session]}, {})
+        session = json.loads((path.parent.parent / 'unified/view.json').read_text())
+    assert all(file.read_bytes() == content for file, content in canonical.items())
+
+
+@pytest.mark.parametrize('worker_root', ['app', 'another-root'])
+def test_worker_accounting_turn_requires_current_root_binding(source, worker_root):
+    session, path = source
+    session['messages'] = [
+        {'id': 'user', 'role': 'user', 'text': 'First', 'createdAt': 1, 'nativeIndex': 0, 'inputId': 'first'},
+        {'id': 'later', 'role': 'user', 'text': 'Recovered observation', 'createdAt': 5, 'nativeIndex': 1}]
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'first', 'inputId': 'first', 'anchorMessageId': 'user'}],
+        'retiredUsageNodes': [{'id': 'worker:child', 'kind': 'worker', 'sessionId': 'child',
+            'rootSessionId': worker_root, 'turnId': 'first', 'parentId': 'tool:native:delegate'}]}
+    append(path, 'tool:pre', {'tool_call_id': 'delegate', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate', 'sub_session_id': 'child'}, 11)
+    append(event_path(session, 'child'), 'tool:post', {'session_id': 'child', 'tool_call_id': 'child-tool', 'result': 'done'}, 12)
+    transcript = [{'role': 'user', 'content': 'First'}, {'role': 'user', 'content': 'Recovered observation'},
+        {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'delegate', 'name': 'delegate', 'input': {}}]}]
+    (path.parent.parent / 'transcript.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in transcript))
+    original = copy.deepcopy(session['execution']['retiredUsageNodes'])
+    tree = EventLogView(None).read(session)
+    assert {row['turnId'] for row in tree['nodes']} == ({'first'} if worker_root == 'app' else {'native-turn:later'})
+    assert tree['retiredUsageNodes'] == original
+
+
+def test_child_call_exact_turn_survives_later_worker_turn(source):
+    session, path = source
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'old'}, {'id': 'new', 'anchorMessageId': 'user'}],
+        'retiredUsageNodes': [{'id': 'worker:child', 'kind': 'worker', 'sessionId': 'child',
+            'rootSessionId': 'app', 'turnId': 'new', 'parentId': 'tool:native:delegate'}]}
+    append(path, 'tool:pre', {'tool_call_id': 'delegate', 'tool_name': 'delegate'}, 10)
+    append(path, 'delegate:agent_spawned', {'tool_call_id': 'delegate', 'sub_session_id': 'child'}, 11)
+    for turn in ('old', 'new'):
+        call = {'id': turn + '-call', 'kind': 'llm', 'sessionId': 'child', 'rootSessionId': 'app',
+            'turnId': turn, 'producerId': 'host', 'revision': 2, 'phase': 'completed',
+            'startedAt': 12, 'endedAt': 13, 'model': 'fixture', 'usage': {'totalTokens': 2, 'costUsd': .1}}
+        session['execution']['retiredUsageNodes'].append(call)
+        append(event_path(session, 'child'), 'execution:node', {**call, 'session_id': 'child'}, 13)
+    tree = EventLogView(None).read(session)
+    assert {row['id']: row['turnId'] for row in tree['nodes'] if row['kind'] == 'llm'} == {'old-call': 'old', 'new-call': 'new'}
+    assert {row['id']: row['aggregateUsage']['calls'] for row in tree['turns']} == {'old': 1, 'new': 1}

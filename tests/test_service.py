@@ -551,6 +551,43 @@ async def test_non_ready_status_does_not_hide_unresolved_runtime_failure(service
     assert service.get_state()['attention']['unread']==1
 
 
+@pytest.mark.parametrize('status', ['idle', 'stopped'])
+async def test_late_settled_status_preserves_terminal_error_and_execution(service, status):
+    from amplifier_web.execution import ensure_turn
+    sid = service.get_state()['selectedSessionId']
+    session = service._session(sid)
+    ensure_turn(session, 'failed-turn')
+    await service.on_runtime_event('runtime.error', {
+        'sessionId': sid, 'errorType': 'ContextLengthError', 'error': 'context limit',
+    })
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': status})
+    turn = session['execution']['turns'][0]
+    assert session['status'] == 'error'
+    assert turn['phase'] == 'error'
+    assert session['failure']['category'] == 'context_limit'
+
+
+async def test_child_generation_cannot_clear_or_replace_root_failure_state(service):
+    sid = service.get_state()['selectedSessionId']
+    session = service._session(sid)
+    await service.on_runtime_event('runtime.error', {
+        'sessionId': sid, 'errorType': 'ContextLengthError', 'error': 'context limit',
+    })
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': 'child', 'rootSessionId': sid, 'event': 'generation.started',
+    })
+    assert session['status'] == 'error'
+    assert session['failure']['category'] == 'context_limit'
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.finished',
+    })
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': 'child', 'rootSessionId': sid, 'event': 'generation.failed',
+        'error_type': 'ChildFailure',
+    })
+    assert 'turnErrorType' not in session
+
+
 async def test_send_does_not_clear_newer_or_other_session_draft(service):
     original = service.state['selectedSessionId']
     await service.dispatch('view.update', {'patch': {'draft': 'Already typing another message'}})
@@ -588,19 +625,20 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         await app.dispatch('session.create', {})
         await runtime.close()
         request = {'text': 'Keep this unsent request'}
-        with pytest.raises(RuntimeError, match='host is closing'):
+        with pytest.raises(AppError, match='did not send your message') as failure:
             await app.dispatch('conversation.send', request, command_id='failed-start')
+        assert failure.value.status == 503 and failure.value.code == 'worker_startup_failed'
         session = app.get_state()['sessions'][0]
         assert session['status'] == 'error'
-        assert 'not automatically replayed' in session['error']
+        assert 'message has been saved' in session['error']
         message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
         assert message['text'] == request['text']
-        assert message['delivery']['status'] == 'unknown'
+        assert message['delivery']['status'] == 'failed'
         assert session['execution']['turns'][-1]['phase'] == 'error'
         assert not UpdateManager(app).busy()
         duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
         assert duplicate['duplicate'] is True
-        assert duplicate['delivery'] == 'unknown'
+        assert duplicate['accepted'] is False and duplicate['delivery'] == 'failed'
         assert not runtime.workers
     finally:
         await app.close()

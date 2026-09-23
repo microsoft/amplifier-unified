@@ -6,12 +6,14 @@ This module never writes a capture, changes capture policy, or executes work.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 import copy
 from datetime import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -40,6 +42,55 @@ def same_model_call(observed, native):
                     observed['usage'][key] == native['usage'][key]
                     for key in ('inputTokens', 'outputTokens')))
 
+
+def merge_model_observations(rows, *, aliases=()):
+    """Join host/provider display telemetry across a resumed root's log files.
+
+    Only this root's explicit app/native IDs are aliases. Child sessions remain
+    separate, and timing matches never create admission-accounting authority.
+    """
+    app = [row for row in rows if row.get('_appModel')]
+    # Terminal observations can match only within one second. Index that
+    # necessary condition before the identity/usage checks instead of comparing
+    # every historical host call with every provider call on each refresh.
+    # Pending observations retain the existing ambiguity rules below.
+    def finite_timestamp(value):
+        return isinstance(value, (int, float)) and (not isinstance(value, float) or math.isfinite(value))
+    ended = sorted((row['endedAt'], position) for position, row in enumerate(app)
+                   if finite_timestamp(row.get('endedAt')))
+    times = [at for at, _ in ended]
+    pending = [position for position, row in enumerate(app) if not row.get('endedAt')]
+    pairs = []
+    for row in rows:
+        if row['kind'] != 'llm' or row.get('_appModel'):
+            continue
+        end = row.get('endedAt')
+        positions = pending if not end else []
+        if finite_timestamp(end):
+            positions = [*positions, *(position for _, position in
+                         ended[bisect_left(times, end - 1):bisect_right(times, end + 1)])]
+        # Keep original host order for equally close matches and include zero
+        # timestamps in both pending and terminal cases without duplicating them.
+        candidates = (app[position] for position in sorted(set(positions)))
+        matches = [other for other in candidates if (other.get('sessionId') == row.get('sessionId') or
+                       other.get('sessionId') in aliases and row.get('sessionId') in aliases)
+                   and same_model_call(other, row)]
+        if row.get('endedAt') is not None or len(matches) == 1:
+            for other in matches:
+                distance = abs((other.get('endedAt') or other.get('startedAt') or 0) -
+                               (row.get('endedAt') or row.get('startedAt') or 0))
+                pairs.append((distance, row, other))
+    matched, omitted = set(), set()
+    # A host call can span provider retries. Match its nearest terminal
+    # native attempt once; preserve earlier attempts and their own details.
+    for _, row, closest in sorted(pairs, key=lambda pair: pair[0]):
+        if row['id'] in omitted or closest['id'] in matched:
+            continue
+        matched.add(closest['id']);omitted.add(row['id'])
+        for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+            if field in row:closest[field] = row[field]
+        if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+    return [row for row in rows if row['id'] not in omitted]
 
 def text(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
@@ -105,7 +156,7 @@ class EventIndex:
                 self.reset()
             return False
         identity = (stat.st_dev, stat.st_ino)
-        revision = (identity, stat.st_size, stat.st_mtime_ns)
+        revision = (identity, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         if revision == self.revision:
             return True
         reset = self.file_id != identity or stat.st_size <= self.offset
@@ -266,7 +317,7 @@ class EventIndex:
         for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
             try:
                 stat = (directory / name).stat()
-                stamps.append((stat.st_ino, stat.st_mtime_ns, stat.st_size))
+                stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
             except FileNotFoundError:
                 stamps.append(None)
         revision = (self.revision, tuple(stamps))
@@ -285,32 +336,20 @@ class EventIndex:
         self.association_revision, self.association_cache = revision, result
         return result
 
-    def rows(self):
+    def rows(self, model_binding=None, *, coalesce=True):
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
         app = [row for row in rows if row.get('_appModel')]
-        pairs = []
-        for row in rows:
-            if row['kind'] != 'llm' or row.get('_appModel'):
-                continue
-            matches = [other for other in app if other.get('sessionId') == row.get('sessionId')
-                       and same_model_call(other, row)]
-            if row.get('endedAt') is not None or len(matches) == 1:
-                for other in matches:
-                    distance = abs((other.get('endedAt') or other.get('startedAt') or 0) -
-                                   (row.get('endedAt') or row.get('startedAt') or 0))
-                    pairs.append((distance, row, other))
-        matched, omitted = set(), set()
-        # A host call can span provider retries. Match its nearest terminal
-        # native attempt once; preserve earlier attempts and their own details.
-        for _, row, closest in sorted(pairs, key=lambda pair: pair[0]):
-            if row['id'] in omitted or closest['id'] in matched:
-                continue
-            matched.add(closest['id']);omitted.add(row['id'])
-            for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
-                if field in row:closest[field] = row[field]
-            if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
-        return [row for row in rows if row['id'] not in omitted]
+        if model_binding:
+            for row in app:
+                binding = model_binding(row)
+                if binding and binding.get('kind') == 'llm':
+                    # The host completion can precede its lifecycle log flush.
+                    # Pair with its latest state, retaining native session IDs
+                    # here; full accounting metadata is joined later by ID.
+                    row.update({key: copy.deepcopy(binding[key]) for key in
+                                ('provider', 'model', 'startedAt', 'endedAt', 'phase', 'usage') if key in binding})
+        return merge_model_observations(rows) if coalesce else rows
 
 
 class EventLogView:
@@ -319,6 +358,20 @@ class EventLogView:
         self.indexes = OrderedDict()
         self.task = None
         self.lock = asyncio.Lock()
+        self.projected = OrderedDict()
+        self.read_paths = {}
+        self.read_revisions = {}
+
+    @staticmethod
+    def projection_input(session):
+        """Only canonical association/lifecycle inputs, never draft or progress."""
+        result = {key: session[key] for key in ('id', 'workspace', 'nativeProject', 'nativeIdentity',
+                  'runtimeSessionId', 'status', 'execution') if key in session}
+        result['messages'] = [{key: row[key] for key in ('id', 'role', 'createdAt', 'nativeIndex', 'inputId', 'source')
+                               if key in row} for row in session.get('messages', [])]
+        result['workers'] = [{key: row[key] for key in ('id', 'sessionId', 'status') if key in row}
+                            for row in session.get('workers', [])]
+        return result
 
     def start(self):
         self.task = asyncio.create_task(self.loop())
@@ -330,11 +383,8 @@ class EventLogView:
 
     async def loop(self):
         while not self.service.closed:
-            from .history_demand import subscribed_sessions
-            selected = subscribed_sessions(self.service)
-            sessions = [row['id'] for row in self.service.state['sessions'] if row['id'] in selected
-                        or row.get('status') in {'working', 'running', 'starting', 'stopping'}]
-            for identity in sessions:
+            from .history_demand import event_sessions
+            for identity in event_sessions(self.service):
                 try:
                     await self.refresh(identity)
                 except (OSError, ValueError):
@@ -345,9 +395,10 @@ class EventLogView:
 
     def read(self, session):
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
-        queue = [root]
+        queue = [root, session['id']]
         queue.extend(row.get('sessionId') or row.get('id') for row in session.get('workers', []))
         seen, indexes, nodes, workers = set(), [], [], {}
+        inputs = []
         while queue:
             sid = queue.pop(0)
             if not sid or sid in seen:
@@ -360,14 +411,17 @@ class EventLogView:
                 continue
             index = self.indexes.setdefault(str(path), EventIndex(path, sid))
             self.indexes.move_to_end(str(path))
-            if not index.refresh():
+            available = index.refresh()
+            inputs.append((path, index.revision))
+            if not available:
                 continue
             indexes.append(index)
-            nodes.extend(index.rows())
             workers.update(index.children)
             queue.extend(index.children)
         while len(self.indexes) > max(64, len(seen)):
             self.indexes.popitem(last=False)
+        self.read_paths[session['id']] = tuple(path for path, _ in inputs)
+        self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
         if not indexes:
             return None
         live = session.get('execution', {})
@@ -386,6 +440,9 @@ class EventLogView:
         bound_sessions.update(row.get('sessionId') for row in session.get('workers', []) if row.get('sessionId'))
         bindings = {model_key(row): row for row in accounting
                     if row.get('rootSessionId') == session['id'] and row.get('sessionId') in bound_sessions}
+        for index in indexes:
+            nodes.extend(index.rows(lambda row: bindings.get(model_key(row)), coalesce=False))
+        nodes = merge_model_observations(nodes, aliases=aliases)
         def call_key(row):
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))
@@ -406,6 +463,11 @@ class EventLogView:
         root_index = next((index for index in indexes if index.identity == root), None)
         source = {**session, 'nativeProject': session.get('nativeProject') or project_slug(session['workspace'])}
         associations = root_index.associations(directory(source)) if root_index else {}
+        if root_index:
+            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup'))
+            self.read_paths[session['id']] += transcript_paths
+            self.read_revisions[session['id']] += tuple(
+                (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
         native_messages = [row for row in messages if type(row.get('nativeIndex')) is int]
         associated_turns = {}
         for node in nodes:
@@ -513,10 +575,23 @@ class EventLogView:
             worker['parentId'] = remap.get(worker['parentId'], worker['parentId'])
             parent = by_id.get(worker['parentId'])
             if parent:
-                worker['turnId'] = parent['turnId']
+                binding = bindings.get(model_key(worker))
+                bound_turn = binding.get('turnId') if binding and binding.get('kind') == 'worker' else None
+                bound_turn = bound_turn if bound_turn in host_turns else None
+                worker['turnId'] = bound_turn or parent['turnId']
+                # Recovery/steering observations can look like new native user
+                # turns. A recorded host admission keeps its delegated work on
+                # the original turn when this disposable view is rebuilt.
+                if bound_turn and parent.get('turnId') not in host_turns:
+                    parent['turnId'] = bound_turn
+                    if parent.get('anchorMessageId') is None:
+                        parent.pop('anchorMessageId', None)
                 members = [row for row in nodes if row.get('sessionId') == child]
                 for row in members:
-                    row['parentId'] = worker['id'];row['turnId'] = parent['turnId']
+                    row['parentId'] = worker['id']
+                    member_binding = bindings.get(model_key(row))
+                    member_turn = member_binding.get('turnId') if member_binding and member_binding.get('kind') == row.get('kind') else None
+                    row['turnId'] = member_turn if member_turn in host_turns else worker['turnId']
                 ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
                 if ends:worker.update(endedAt=max(ends), phase='completed')
                 nodes.append(worker)
@@ -558,14 +633,41 @@ class EventLogView:
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
-            previous = copy.deepcopy(session)
+            inputs = self.projection_input(session)
+            cached = self.projected.get(identity)
+            paths = self.read_paths.get(identity, ())
+            def stamps():
+                result = []
+                for path in paths:
+                    try:
+                        info = path.stat()
+                        result.append((str(path), ((info.st_dev, info.st_ino), info.st_size, info.st_mtime_ns, info.st_ctime_ns)))
+                    except FileNotFoundError:
+                        result.append((str(path), None))
+                return tuple(result)
+            before = await asyncio.to_thread(stamps)
+            # Compare detached inputs before copying or rebuilding the model
+            # tree. External appends/replacements and live metadata still win.
+            root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
+            same_root = paths and paths[0] == event_path(session, root)
+            if cached and same_root and cached[0] == inputs and cached[1] == before:
+                return
+            previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
-            if tree is None or self.service.closed:
+            if self.service.closed:
                 return
             async with self.service.lock:
                 session = self.service._session(identity)
-                if session.get('execution') != previous.get('execution') or session.get('messages') != previous.get('messages'):
+                if self.projection_input(session) != previous:
                     return  # A newer live update won; retry from it next tick.
-                if session.get('execution') != tree:
+                if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
                     self.service._publish()
+                # Use the signatures actually read, not a later stat that may
+                # already describe bytes appended after the projection.
+                self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])
+                self.projected.move_to_end(identity)
+                while len(self.projected) > 64:
+                    expired, _ = self.projected.popitem(last=False)
+                    self.read_paths.pop(expired, None)
+                    self.read_revisions.pop(expired, None)

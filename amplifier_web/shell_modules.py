@@ -77,15 +77,16 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navSimple', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
 }}
 COMMAND_CAPABILITIES = {
     'session.select': 'navigation.select', 'workspace.select': 'navigation.select',
+    'workspace.prepare': 'workspaces.manage', 'workspace.add': 'workspaces.manage', 'workspace.list': 'navigation.read',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
-    'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
+    'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
     'locations.create': 'workspaces.manage', 'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
@@ -304,14 +305,25 @@ class ShellModules:
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
         chat_page = projections.chats(scoped)
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
+        from .workspace_placement import listing
+        home_view = {**view, 'navChatScope': 'all', 'navArchive': 'active', 'navCollection': None,
+                     'navFilter': '', 'navStatusFilter': 'all', 'navLocationFilter': 'all', 'navSort': 'activity'}
+        home_view.pop('navChatPage', None)
+        pinned_scope = instance.get('scope', {}).get('mode') == 'pinned'
+        home = chat_page if pinned_scope else projections.chats({**scoped, 'view': home_view})
+        overview = {'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         return {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
+                'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
+                'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
+                'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
+                'homeNavigation': home, 'workspaceOverview': overview,
                 'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),
                 'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
-                'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error']},
+                'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
                 'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
@@ -409,7 +421,7 @@ class ShellModules:
             if not capability or capability not in self.manifest(instance['package'])['capabilities']:
                 fail('Module has not declared this capability.', 403)
             receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
-            if args['action'] in {'workspace.select', 'workspace.create'} and instance['package'] == 'builtin.workspaces':
+            if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':
                 client = self.client(identity)
                 composition = client['preview']['composition'] if client.get('preview') else client['composition']
                 target = instance.get('hideWhen', {}).get('instanceId')

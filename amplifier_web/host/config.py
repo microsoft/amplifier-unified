@@ -5,7 +5,7 @@ import copy
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
@@ -186,9 +186,24 @@ class HostConfig:
             if replacement:
                 if replacement.startswith("git+"):
                     base, _, fragment = replacement.partition("#")
-                    sub = fragment.removeprefix("subdirectory=").rstrip("/") if fragment else ""
-                    return base + "#subdirectory=" + "/".join(v for v in (sub, suffix) if v)
-                return str(Path(replacement.removeprefix("file://")) / suffix)
+                    # Foundation treats fragment values as literal paths. Keep
+                    # their spelling and unrelated fragment options unchanged.
+                    fields = {}
+                    for field in fragment.split("&"):
+                        key, separator, value = field.partition("=")
+                        if separator:
+                            fields[key] = value
+                    sub = fields.get("subdirectory", "").rstrip("/")
+                    # Bundle sources may point at a manifest, not just a folder.
+                    # Includes are relative to the directory containing that file.
+                    if PurePosixPath(sub).suffix.lower() in {".md", ".yaml", ".yml"}:
+                        sub = str(PurePosixPath(sub).parent)
+                        if sub == ".":
+                            sub = ""
+                    fields["subdirectory"] = "/".join(v for v in (sub, suffix) if v)
+                    return base + "#" + "&".join(f"{key}={value}" for key, value in fields.items())
+                path = Path(replacement.removeprefix("file://"))
+                return str((path.parent if path.is_file() else path) / suffix)
         return None
 
 
@@ -206,12 +221,12 @@ def load_config(workspace, *, home=None, legacy_home=None, session_id=None, glob
     return read_config(workspace, home=home, shared_home=shared, session_id=session_id, global_only=global_only)
 
 
-def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False):
+def read_config(workspace, *, home=None, shared_home=None, session_id=None, global_only=False, settings_cache=None):
     """Read runtime settings without loading keys, preparing caches or writing."""
     home = Path(home or app_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve(strict=True)
     shared = Path(shared_home or amplifier_home()).expanduser().resolve()
-    settings = read_settings(workspace, shared_home=shared, session_id=session_id, global_only=global_only)
+    settings = read_settings(workspace, shared_home=shared, session_id=session_id, global_only=global_only, cache=settings_cache)
     from ..updates import foundation_home
     registry_home = foundation_home(home)
     # Keep explicit app-cache source overrides aligned with the active snapshot.

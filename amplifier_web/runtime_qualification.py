@@ -198,6 +198,22 @@ def frozen_manifest(content, graph):
             '\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value) for key, value in data.items()) + '\n').encode()
 
 
+def _local_directory_identity(row):
+    """Compare PEP 610's absent/false editable default without changing evidence.
+
+    https://packaging.python.org/en/latest/specifications/direct-url-data-structure/#local-directories
+    Only the literal boolean False is optional; malformed values stay distinct.
+    """
+    direct = row.get('directUrl')
+    if isinstance(direct, dict) and isinstance(direct.get('url'), str):
+        info = direct.get('dir_info')
+        if (urlsplit(direct['url']).scheme == 'file' and isinstance(info, dict)
+                and info.get('editable') is False):
+            return {**row, 'directUrl': {**direct, 'dir_info': {
+                key: value for key, value in info.items() if key != 'editable'}}}
+    return row
+
+
 async def freeze(manager, generation, project):
     """Freeze the post-probe graph into a distinct project and verify its install."""
     from .updates import process
@@ -238,6 +254,7 @@ async def freeze(manager, generation, project):
     def identity(rows):
         result = []
         for row in rows:
+            row = _local_directory_identity(row)
             direct = json.loads(json.dumps(row.get('directUrl') or {}))
             if direct.get('vcs_info'):
                 direct['vcs_info'].pop('requested_revision', None)
@@ -263,7 +280,8 @@ def verify_recorded(project, receipt, *, allow_additions=False):
     if allow_additions:
         names = {row['name'] for row in expected}
         actual = [row for row in actual if row['name'] in names]
-    if actual != expected:
+    if ([_local_directory_identity(row) for row in actual]
+            != [_local_directory_identity(row) for row in expected]):
         raise ValueError('The worker graph changed after qualification; its recorded generation was preserved.')
 
 
