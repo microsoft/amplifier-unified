@@ -62,6 +62,7 @@ ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
 
 
 def accounting_projection(tree):
+    scalar_types = (str, int, float, bool, type(None))
     rows = [(row, False) for row in tree.get('retiredUsageNodes', [])]
     rows.extend((row, True) for row in tree.get('nodes', [])
                 if row.get('liveObservation') and row.get('kind') in {'llm', 'worker'}
@@ -82,12 +83,23 @@ def accounting_projection(tree):
             continue
         if prior and (row.get('revision', 0), bool(row.get('endedAt'))) < (prior.get('revision', 0), bool(prior.get('endedAt'))):
             continue
-        record = {key: copy.deepcopy(value) for key, value in row.items() if key in ACCOUNTING_FIELDS}
-        if isinstance(record.get('usage'), dict):
-            record['usage'] = {key: value for key, value in record['usage'].items()
-                              if key in ACCOUNTING_USAGE_FIELDS and type(value) in (str, int, float)}
-        else:
-            record.pop('usage', None)
+        # Scalar fields are already immutable. Retain deep isolation for any
+        # structured/custom value, but avoid copying every primitive in every
+        # saved accounting row on each publication.
+        record = {}
+        for field, value in row.items():
+            if field not in ACCOUNTING_FIELDS:
+                continue
+            if field == 'usage':
+                detached = type(value) is not dict
+                usage = copy.deepcopy(value) if detached else value
+                if isinstance(usage, dict):
+                    # Only exact scalar types survive this filter. Do not copy
+                    # nested provider payloads excluded from accounting.
+                    record[field] = {name if detached or type(name) is str else copy.deepcopy(name): amount for name, amount in usage.items()
+                                   if name in ACCOUNTING_USAGE_FIELDS and type(amount) in (str, int, float)}
+            else:
+                record[field] = value if type(value) in scalar_types else copy.deepcopy(value)
         saved[key] = record
     return list(saved.values())
 
