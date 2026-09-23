@@ -1,4 +1,6 @@
+from functools import partial
 import json
+import sys
 from pathlib import Path
 import sqlite3
 
@@ -6,6 +8,15 @@ import pytest
 
 from amplifier_web.capture_index import index_shared
 from amplifier_web.session_files import capture_dir, read_event
+
+
+@pytest.fixture(params=[False, True], autouse=True)
+def metadata_validation_mode(request, monkeypatch):
+    # Exercise indexing contracts through legacy and cached metadata validation.
+    if request.param:
+        from amplifier_web.capture_index import CaptureMetadataCache
+        monkeypatch.setattr(sys.modules[__name__], 'index_shared',
+                            partial(index_shared, metadata_cache=CaptureMetadataCache()))
 
 
 @pytest.fixture
@@ -200,3 +211,16 @@ def test_unchanged_eof_still_propagates_read_errors_without_advancing(db, tmp_pa
         index_shared(db, scopes, config)
     assert db.execute('SELECT offset,inode FROM captures').fetchone() == before
     assert db.total_changes == changes
+
+
+def test_stream_configuration_changes_keep_current_offset_without_backfill(db, tmp_path):
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'not-enabled')
+    scopes = [(workspace, 'root')]
+    assert index_shared(db, scopes, {'streams': []}) == []
+    write_capture(workspace, 'root', 'enabled-now', append=True)
+    assert [row[-1]['result'] for row in index_shared(db, scopes, {'streams': ['tools']})] == ['enabled-now']
+    write_capture(workspace, 'root', 'disabled-again', append=True)
+    assert index_shared(db, scopes, {'streams': []}) == []
+    assert db.execute('SELECT count(*) FROM records').fetchone()[0] == 1
+    assert db.execute('SELECT offset FROM captures').fetchone()[0] == (directory / 'events.jsonl').stat().st_size
