@@ -674,10 +674,12 @@ class Worker:
                 result = {"delivery": "unknown"}
             elif op in {"send", "retry"}:
                 from amplifier_module_loop_live.runtime import Input
+                from amplifier_web.host.mentions import expand_input
+                text = await expand_input(self.session.coordinator, data['text'], max_chars=self.runtime.max_input_chars)
                 self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
                 self.context_bindings = dict(list(self.context_bindings.items())[-64:])
                 input_id = await self.runtime.submit(Input(
-                    "user", data["text"], id=data["input_id"],
+                    "user", text, id=data["input_id"],
                     attachments=tuple(data.get("attachments", [])),
                     activation=self.activation))
                 result = {"accepted": True, "inputId": input_id}
@@ -701,10 +703,12 @@ class Worker:
                     if self.approvals or self.bridges or not self.runtime.inbox.empty():
                         raise ValueError('Finish pending interactions before editing history.')
                     from amplifier_web.history_revision import rewind
+                    from amplifier_web.host.mentions import expand_input
+                    text = await expand_input(self.session.coordinator, arguments['text'], max_chars=self.runtime.max_input_chars)
                     result = await rewind(self.controls, arguments)
                     publish({'type': 'history.revised', **result})
                     from amplifier_module_loop_live.runtime import Input
-                    await self.runtime.submit(Input('user', arguments['text'], id=arguments['operationId'],
+                    await self.runtime.submit(Input('user', text, id=arguments['operationId'],
                         attachments=tuple(arguments.get('attachments', [])), activation=self.activation))
                 elif data["operation"] == "bundle.switch":
                     from amplifier_web.bundle_selection import switch

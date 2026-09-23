@@ -58,10 +58,12 @@ async def admit(controls, runtime, args, activation=None):
             controls.coordinator.register_capability('live.continuation_guard', marker['guard'])
             controls.coordinator.session_state['goal'] = goal
             raise
-    # Runtime.submit enqueues without yielding, then reports admission. The
-    # command lock never waits for model execution or tool permissions.
+    # Expand the requested references before admission. The command lock never
+    # waits for model execution or tool permissions.
     try:
-        identity = await runtime.submit(Input('user', args['text'], id=args['inputId'], activation=activation))
+        from .host.mentions import expand_input
+        text = await expand_input(controls.coordinator, args['text'], max_chars=runtime.max_input_chars)
+        identity = await runtime.submit(Input('user', text, id=args['inputId'], activation=activation))
     except BaseException:
         if args['inputId'] not in runtime.accepted:
             finish(controls, {'type': 'generation.failed', 'input_ids': [args['inputId']]})
