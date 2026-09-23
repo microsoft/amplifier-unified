@@ -24,18 +24,18 @@ try{
  await dispatch('session.select',{id:sessions[1]});await api('/fixture/progress',{running:true});await wait(1500);
  measuring=true;await wait(4000);measuring=false;
  assert.deepEqual(await order(),before);assert.deepEqual(traffic,[],'steady streaming must not refetch shell or echo conversation text');
- await api('/fixture/progress',{running:false});await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.chatNavigation.items[0].id===id,sessions[0]);
+ await api('/fixture/progress',{running:false});await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.sidebarNavigation.recent.items[0].id===id,sessions[0]);
  assert.equal((await order())[0],sessions[0]);
  // Explicit user preferences run through the same shared actions as agents.
- await page.getByRole('combobox',{name:'Sort conversations'}).selectOption('name');
- await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.chatNavigation.scope.sort==='name');
- const names=(await shell()).chatNavigation.items.map(r=>r.title.toLowerCase());assert.deepEqual(names,[...names].sort());
+ await page.locator('[data-sidebar-section=recent] summary').click();await page.getByRole('combobox',{name:'Sort conversations'}).selectOption('name');
+ await page.waitForFunction(()=>window.amplifier.getShellState().snapshots.chats.sidebarNavigation.recent.scope.sort==='name');
+ const names=(await shell()).sidebarNavigation.recent.items.map(r=>r.title.toLowerCase());assert.deepEqual(names,[...names].sort());
  await dispatch('session.pin',{id:sessions[1],pinned:true});await dispatch('session.pin',{id:sessions[0],pinned:true});
  await page.waitForFunction(ids=>JSON.stringify(window.amplifier.getShellState().snapshots.chats.pinnedSessionIds)===JSON.stringify(ids),[sessions[1],sessions[0]]);
- await expect(page.locator('.a-pin-handle')).toHaveCount(2);
- await page.locator(`[data-session-id="${sessions[0]}"] .a-pin-handle`).dragTo(page.locator(`[data-session-id="${sessions[1]}"]`));
+ await expect(page.locator('.a-reorder-grip')).toHaveCount(2);
+ const grip=page.locator(`[data-sidebar-section=pinned] [data-session-id="${sessions[0]}"] .a-reorder-grip`);await grip.scrollIntoViewIfNeeded();const from=await grip.boundingBox(),to=await page.locator(`[data-sidebar-section=pinned] [data-session-id="${sessions[1]}"]`).boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:10});await page.mouse.up();
  await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.pinnedSessionIds[0]===id,sessions[0]);
- await page.locator(`[data-session-id="${sessions[0]}"] .a-pin-handle`).focus();await page.keyboard.press('Alt+ArrowDown');
+ await expect(grip).not.toHaveAttribute('aria-disabled','true');await grip.focus();await page.keyboard.press('Alt+ArrowDown');
  await page.waitForFunction(id=>window.amplifier.getShellState().snapshots.chats.pinnedSessionIds[0]===id,sessions[1]);
  // Browser-only draft/focus and custom content remain observable; full explicit
  // readback still includes messages. display:contents must not lose slot text.
@@ -54,7 +54,7 @@ try{
  await api('/fixture/progress',{running:true});await wait(1000);await api('/fixture/progress',{running:false});await wait(500);measuring=false;
  assert.deepEqual(traffic,[]);
  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});await wait(700);
- await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.view?.navSort==='name');
+ await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.view?.navRecentView?.navSort==='name');
  assert.deepEqual((await shell()).pinnedSessionIds,[sessions[1],sessions[0]]);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this private draft');
  assert.deepEqual(errors,[]);

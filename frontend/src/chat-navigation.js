@@ -41,33 +41,36 @@ function orderedChats(state,workspace,mode='workspace'){
   .map(row=>({...row.chat,workspace:row.workspace?.path||row.chat.workspace,workspaceId:row.chat.location?.kind==='managed'?null:row.workspace.id,workspaceName:row.chat.location?.kind==='managed'?'No workspace':row.workspace.name||'',workspaceLabel:row.chat.location?.kind==='managed'?'No workspace':row.workspace?.label,pinned:pinned.has(row.chat.id),recentActivityAt:recentActivity(row.chat),position:row.position}))
   .sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(a.pinned?pinOrder.get(a.id)-pinOrder.get(b.id):sort==='name'?((a.title||'Untitled conversation').toLowerCase()<(b.title||'Untitled conversation').toLowerCase()?-1:(a.title||'Untitled conversation').toLowerCase()>(b.title||'Untitled conversation').toLowerCase()?1:0):sort==='created'?(b.createdAt||0)-(a.createdAt||0):b.recentActivityAt-a.recentActivityAt)||a.position-b.position);
 }
-export function chatPage(state,workspace){
+export function chatPage(state,workspace,{section=null}={}){
  const view=state.view||{},mode=view.navChatScope==='all'?'all':'workspace',filter=view.navFilter||'',selectedSessionId=state.selectedSessionId??null;
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
+ if(section)scope.section=section;
  if(view.navSort&&view.navSort!=='activity')scope.sort=view.navSort;
  if(mode==='all'&&view.navLocationFilter==='managed')scope.locationFilter='managed';
  const statusFilter=view.navStatusFilter||'all';
  if(statusFilter!=='all')scope.statusFilter=statusFilter;
  if(view.navArchive&&view.navArchive!=='active')scope.archive=view.navArchive;
- const projection=state.chatNavigation;
+ const projection=section?state.sidebarNavigation?.[section]:state.chatNavigation;
  const sameSort=value=>(value?.sort||'activity')===(scope.sort||'activity');
  const sameLocation=value=>(value?.locationFilter||'all')===(scope.locationFilter||'all');
  const saved=view.navChatPage,matches=saved&&sameLocation(saved)&&sameSort(saved)&&Object.entries(scope).every(([key,value])=>saved[key]===value);
- const requestedIndex=matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
+ const requestedIndex=section==='pinned'?Math.max(0,Math.min((projection?.pages||1)-1,view.navPinnedPage||0)):matches&&Number.isSafeInteger(saved.index)?Math.max(0,Math.min((projection?.pages||1)-1,saved.index)):null;
  if(projection?.scope&&sameLocation(projection.scope)&&sameSort(projection.scope)&&Array.isArray(projection.items)&&Object.entries(scope).every(([key,value])=>projection.scope[key]===value)&&(requestedIndex===null||projection.index===requestedIndex))return projection;
  // A bounded snapshot cannot answer a different search or page locally. The
  // control updates immediately, while the shared action fetches its real rows.
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
  let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
+ if(section==='pinned'||section==='recent')chats=chats.filter(chat=>chat.pinned===(section==='pinned'));
  const activityCounts={attention:0,working:0,unread:0,idle:0};
  chats=chats.map(chat=>({...chat,activity:activityFor(chat,state)}));
  for(const chat of chats)activityCounts[chat.activity.kind]++;
  if(statusFilter!=='all')chats=chats.filter(chat=>chat.activity.kind===statusFilter);
- const inferred=mode==='all'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/CHAT_PAGE_SIZE);
- const requested=matches&&Number.isSafeInteger(saved.index)?saved.index:inferred;
- const pages=Math.max(1,Math.ceil(chats.length/CHAT_PAGE_SIZE)),index=Math.max(0,Math.min(pages-1,requested));
- const start=index*CHAT_PAGE_SIZE,end=Math.min(chats.length,start+CHAT_PAGE_SIZE);
+ const pageSize=section?(chats.length>50?40:50):CHAT_PAGE_SIZE;
+ const inferred=mode==='all'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/pageSize);
+ const requested=section==='pinned'?(view.navPinnedPage||0):matches&&Number.isSafeInteger(saved.index)?saved.index:inferred;
+ const pages=Math.max(1,Math.ceil(chats.length/pageSize)),index=Math.max(0,Math.min(pages-1,requested));
+ const start=index*pageSize,end=Math.min(chats.length,start+pageSize);
  return {items:chats.slice(start,end),total:chats.length,index,pages,start,end,scope,activityCounts};
 }
 export function headerChatChoices(state){

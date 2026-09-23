@@ -8,7 +8,7 @@ The running Amplifier PWA on this Mac was inspected at `spark-1:8443/`. Its shel
 
 The change is to organization and workflow, not a replacement visual language. Keep model, reasoning, bundle, attachment, and voice controls in the existing composer. Preserve the shell's navigation pinning/resizing and Canvas focus behavior. Existing chat naming, export, recovery, and diagnostics actions remain available in the chat overflow menu. They are omitted from the prototype to focus on workspace changes.
 
-Move the current sidebar's Active/Archived, Location, activity, and pattern filters into the full **All chats** library and search. Keep one compact attention affordance when there is something actionable. People should see their work before seeing the controls for filtering it.
+Keep chat search visible and put Active/Archived, Sort, Location, and activity filters under **Filters** in each chat list. The September 23 follow-up combines the former simple sidebar and full-library entrance into one view. People should see their work before filtering controls.
 
 Use the existing Canvas region for chat details, outputs, references, and agent reports. It is one right-hand inspection area, with tabs when needed—not another permanent fourth column. Opening details preserves any existing Canvas tabs and selected output. The prototype shows one selected panel at a time; retained multi-tab behavior is an implementation requirement.
 
@@ -63,7 +63,7 @@ A saved chat's native project scope remains authoritative. Do not introduce an a
 
 ## 4. Keep the sidebar predictable
 
-The default order is **New chat**, **Search**, **Pinned**, **Workspaces**, **Recent**, then a quiet **All chats** entrance. Hide empty groups. Recent means recent unpinned chats without a workspace; the full library includes everything. Pinned chats appear once in the sidebar. A workspace home still lists all its chats and can indicate which are pinned.
+The default order is **New chat**, then collapsible **Pinned**, **Workspaces**, and **Recent** sections. Recent includes unpinned chats across all available locations, with pages of 40 above 50 matches. Pins have one shared rich-row control; Settings and pins share the full-row drag preview and keyboard reorder. The single workspace explorer includes available empty registrations, path qualifiers, search, and drill-in to all chats in that workspace. Section state and each chat list's filters remain independent. This supersedes the earlier separate All chats entrance.
 
 Workspace rows expand to a short set of recent chats, with **View all** for more. Clicking the workspace name opens its home. Helpers remain under their parent chat, not as automatically generated sidebar rows. Explicitly continuing a helper as an independent chat preserves its history and parent reference.
 

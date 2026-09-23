@@ -1,7 +1,7 @@
 // Public host fixtures for the extracted builtins. Production snapshots come
 // from the bounded /api/shell projection; these small fixtures are synthetic.
 export function shellFor(state,act){
- const composition={instances:[{id:'workspaces',package:'builtin.workspaces',slot:'navigation'},{id:'chats',package:'builtin.chats',slot:'navigation'}],presentation:{}};
+ const composition={instances:[{id:'workspaces',package:'builtin.workspaces',slot:'navigation',hideWhen:{instanceId:'chats',navChatScope:'all'}},{id:'chats',package:'builtin.chats',slot:'navigation'}],presentation:{}};
  const snapshots=Object.fromEntries(composition.instances.map(instance=>{
   const draft=state.view?.workspaceDraft||{},chat=draft.mode?.startsWith('chat-');
   const view={...state.view,workspaceDraft:(instance.id==='chats'?chat:!chat)?draft:{}};

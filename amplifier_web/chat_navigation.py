@@ -8,6 +8,8 @@ from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
+SIDEBAR_FILTER_KEYS = {'navSort', 'navArchive', 'navCollection', 'navLocationFilter',
+                       'navStatusFilter', 'navFilter', 'navChatPage'}
 
 
 def timestamp(value):
@@ -85,6 +87,18 @@ def initialize(state):
 
 
 def view_patch(patch):
+    if 'navSectionsCollapsed' in patch:
+        value = patch['navSectionsCollapsed']
+        if not isinstance(value, list) or len(value) > 3 or any(
+                item not in ('pinned', 'workspaces', 'recent') for item in value):
+            raise ValueError('Choose sidebar sections to collapse.')
+    if 'navPinnedPage' in patch and (type(patch['navPinnedPage']) is not int or not 0 <= patch['navPinnedPage'] <= 1_000_000):
+        raise ValueError('Pinned page index must be a nonnegative integer.')
+    if 'navRecentView' in patch:
+        value = patch['navRecentView']
+        if not isinstance(value, dict) or set(value) - SIDEBAR_FILTER_KEYS:
+            raise ValueError('Invalid Recent chat filters.')
+        view_patch(value)
     if 'navSort' in patch and patch['navSort'] not in ('activity', 'created', 'name'):
         raise ValueError('Choose recent activity, newest created, or name.')
     if 'navArchive' in patch and patch['navArchive'] not in ('active', 'archived', 'all'):
@@ -218,17 +232,34 @@ def catalog(state, *, indexed=None):
     return rows, scope, counts
 
 
-def snapshot(state, *, indexed=None):
-    rows, scope, counts = catalog(state) if indexed is None else indexed
-    scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
-    mode = scope['mode']
+def snapshot(state, *, indexed=None, section=None):
     view = state.get('view', {})
+    # Section counts are computed before the activity filter, so switching from
+    # Attention to Working still reports the full matching count for each.
+    catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
+    rows, scope, counts = catalog(catalog_state) if indexed is None else indexed
+    scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
+    if section:
+        scope['section'] = section
+        if section in ('pinned', 'recent'):
+            rows = [row for row in rows if row['pinned'] == (section == 'pinned')]
+        counts = {kind: sum(row['activity']['kind'] == kind for row in rows)
+                  for kind in counts}
+        status = view.get('navStatusFilter', 'all')
+        scope.pop('statusFilter', None)
+        if status != 'all':
+            scope['statusFilter'] = status
+            rows = [row for row in rows if row['activity']['kind'] == status]
+    page_size = (40 if len(rows) > 50 else 50) if section else PAGE_SIZE
+    mode = scope['mode']
     saved = view.get('navChatPage')
     matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(key) == value for key, value in scope.items())
-    inferred = next((i // PAGE_SIZE for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0
+    inferred = next((i // page_size for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0
     requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
-    pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
+    if section == 'pinned':
+        requested = view.get('navPinnedPage', 0)
+    pages = max(1, (len(rows) + page_size - 1) // page_size)
     index = max(0, min(pages - 1, requested))
-    start, end = index * PAGE_SIZE, min(len(rows), (index + 1) * PAGE_SIZE)
+    start, end = index * page_size, min(len(rows), (index + 1) * page_size)
     return {'items': rows[start:end], 'total': len(rows), 'index': index, 'pages': pages,
             'start': start, 'end': end, 'scope': scope, 'activityCounts': counts}

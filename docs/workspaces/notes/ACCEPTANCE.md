@@ -64,8 +64,8 @@ Usability sessions should include an information worker who does not use Git, a 
 ## Decisions implemented
 
 - Placement uses the current installation account and an explicit host label.
-- Pins are suppressed from duplicate workspace rows in the simple sidebar and remain available in the full chat list.
-- Recent contains chats without a workspace. Workspace conversations remain under their workspace.
+- Pins appear in one shared Pinned section, are excluded from Recent, and remain available in workspace drill-in. Check identical pin contents during workspace browsing, search, and dragging.
+- Recent contains unpinned chats across all locations. Check totals 50 and 51, pages of 40, independent workspace filters, and persisted collapse state for all three sections.
 
 ## Decisions left for review
 
