@@ -328,3 +328,27 @@ test('runtime preflight identifies the module and recovery action and completes 
  assert.match(html,/Switch staged source/);
  assert.equal(JSON.parse(diagnosticReceipt(diagnostics)).lastFailure.reason,'protected-runtime-source');
 });
+
+
+test('main update box summarizes ordered component phases without the source inventory',()=>{
+ const html=render({lastCheck:100,sequence:{stage:'included',included:{status:'available',available:3,missing:1},other:{status:'waiting',available:0}}});
+ const banner=html.slice(html.indexOf('data-part="application-update"'),html.indexOf('data-part="update-controls"'));
+ assert.match(banner,/Included components/);
+ assert.match(banner,/3 available · 1 to install/);
+ assert.match(banner,/Other components/);
+ assert.match(banner,/After included components/);
+ assert.doesNotMatch(banner,/a-source-list/);
+ assert.match(html,/Install included updates/);
+});
+
+test('app update leaves both component summaries waiting instead of claiming current',()=>{
+ const html=render({sequence:{stage:'application',included:{status:'waiting'},other:{status:'waiting'}},application:{...application,status:'update'}});
+ assert.equal((html.match(/After app update/g)||[]).length,2);
+ assert.doesNotMatch(html,/Up to date/);
+});
+
+test('component check failures and explicit source policies remain visible in the banner',()=>{
+ const html=render({sequence:{stage:'included',included:{status:'attention',issues:2},other:{status:'current',protected:1}}});
+ assert.match(html,/2 need attention/);
+ assert.match(html,/1 kept as configured/);
+});

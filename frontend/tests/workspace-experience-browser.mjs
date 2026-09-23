@@ -28,7 +28,7 @@ try{
  await expect(form).toHaveCount(0);await expect(composer).toHaveValue('Keep this draft through workspace setup');
  let current=await state();assert.equal(current.sessions.length,0);assert.equal(current.draftAttachments.length,1);assert.equal(current.view.newSessionDraft.workspace,path.join(current.workspaceDefaults.root,'launch-plan'));
  assert.equal(current.view.newSessionDraft.location.kind,'workspace');
- await expect(page.getByRole('button',{name:'Launch plan',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Open chats in '+current.view.newSessionDraft.workspace,exact:true})).toBeVisible();
  const home=path.dirname(current.workspaceDefaults.root),existing=path.join(home,'borrowed');await mkdir(existing);await writeFile(path.join(existing,'keep.txt'),'Do not replace');
  await picker.selectOption(':attach:');form=page.getByRole('form',{name:'Use existing folder'});
  await form.getByRole('textbox',{name:/Folder on/}).fill(existing);
@@ -63,8 +63,8 @@ try{
  await expect.poll(order).toEqual([first,second,third]);
  await handle('Second pinned chat').focus();await page.keyboard.press('Alt+ArrowUp');
  await expect.poll(order).toEqual([second,first,third]);await expect(handle('Second pinned chat')).toBeFocused();
- await page.keyboard.press('Alt+ArrowDown');await expect.poll(order).toEqual([first,second,third]);
- await handle('Third pinned chat').dragTo(pinned.locator('[data-session-id="'+first+'"]'));
+ await expect(handle('Second pinned chat')).not.toHaveAttribute('aria-disabled','true');await page.keyboard.press('Alt+ArrowDown');await expect.poll(order).toEqual([first,second,third]);
+ await expect(handle('Third pinned chat')).not.toHaveAttribute('aria-disabled','true');const from=await handle('Third pinned chat').boundingBox(),to=await pinned.locator('[data-session-id="'+first+'"]').boundingBox();await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2,to.y+to.height/2,{steps:8});await page.mouse.up();
  await expect.poll(order).toEqual([third,first,second]);await expect.poll(async()=>(await state()).pinnedSessionIds).toEqual([third,first,second]);
  assert.equal((await state()).selectedSessionId,first);await expect(composer).toHaveValue('Keep this unsent draft while moving pins');
  await page.screenshot({path:out+'/pins-reordered.png'});

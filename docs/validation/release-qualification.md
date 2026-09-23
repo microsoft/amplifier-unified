@@ -18,11 +18,44 @@ and require `git diff --exit-code -- amplifier_web/static` to pass before mergin
 the release candidate; a version-only edit still changes generated bundle hashes.
 Keep the release workflow's committed-assets comparison enabled.
 
+## Temporary rapid-development policy (September 23, 2026)
+
+Browser scenarios and the complete Python suite are opt-in for the current
+development period. Neither release publication nor PR integration runs the
+complete Python suite or browser scenarios. Run the full suite locally before
+release preparation with `uv sync --locked --group dev --group artifacts` and
+`uv run --no-sync pytest -q --tb=short`, retaining the tested commit and result
+in the release handoff. This local result is not an automatic publication gate.
+Focused contract workflows, frontend unit tests/builds, committed-assets
+comparison, package installation probes, and the short real-runtime suite remain
+automatic. Release receipts explicitly name `package`, `frontend`, and `runtime`;
+none of these claims that the full Python or browser suite ran.
+
+**Python checks (on demand)** also runs the complete suite on a selected branch
+or tag. It is a read-only manual workflow without a publish step or a release
+dependency. No tests were deleted, and restoring automatic coverage is an
+explicit workflow change.
+
+Run **Browser checks (on demand)** from GitHub Actions, selecting the branch or
+tag to test. It retains every former release browser command, plus the capacity,
+coordination and connector browser checks from the PR workflows, in one isolated
+runner. It has read-only permissions and cannot publish or block a release.
+Tests remain available locally through the existing frontend scripts. There is
+no scheduled browser/Python run or automatic expiration of this temporary policy.
+
+For v0.20.13, merge-to-publication took 10m02s; its Python lane took 8m31s,
+frontend 1m13s, and runtime 43s with a cache hit. Those lanes overlap, so removing
+the full Python suite will expose another longest lane rather than subtracting
+8m31s from every release. The next release must measure the resulting critical
+path. Actual duration still depends on queues, dependency resolution and builds. Ordinary
+feature merges still need a versioned release before published-release clients
+can update.
+
 ## Execution and identity
 
 `prepare` selects the same immutable merged application commit as before,
 resolves current host dependencies once, and records their exact requirements.
-Python, browser, and runtime jobs then run independently against that commit
+Package, frontend, and runtime jobs then run independently against that commit
 and restored host graph. Each verifies the graph before and after its checks.
 The publication job requires all three jobs to succeed and checks their
 candidate identifiers plus the original wheel/source/checksum bytes before
@@ -53,14 +86,14 @@ the dedicated-key checkout does not grant other cache readers its package build.
 
 | Previous serial stage | Job |
 |---|---|
-| Full pytest suite | Python |
-| Distribution verification, isolated wheel install and import/assets/login probe | Python |
-| npm tests, frontend build and committed-assets comparison | Browser |
-| Every existing browser command and its conditional file guard | Browser |
+| Full pytest suite | Local or manual Python workflow; outside publication |
+| Distribution verification, isolated wheel install and import/assets/login probe | Package |
+| npm tests, frontend build and committed-assets comparison | Frontend |
+| Browser scenarios and their conditional file guards | Manual browser workflow; outside publication |
 | Real Core/loop-live surface, child, component and cache tests | Runtime |
 | Immutable tag/asset checks and publication | Release, after all jobs |
 
-The active-client performance check runs once; independent live-client behavior
+In the manual workflow, the active-client performance check runs once; independent live-client behavior
 is checked separately. All four session-health invocations remain, including context-limit and context-limit with an active
 worker. Browser fixtures retain their serial ordering within an isolated runner;
 fixed-port fixtures and performance checks do not compete with other lanes.
@@ -91,8 +124,8 @@ select an already published tag's full original commit SHA. All jobs execute, an
 the existing publisher leaves that tag and its published assets unchanged. The
 default newer main commit with an already released package version is rejected
 at planning; this guard prevents accidental publication but does not exercise
-the downstream jobs. A new release still requires its own version and complete
-qualification.
+the downstream jobs. A new release still requires its own version and all required
+qualification lanes.
 
 An exact-candidate promotion system that reuses matching PR/merge qualification,
 shared prebuilt wheels, and merge-policy changes remain separate proposals.

@@ -20,7 +20,10 @@ async def computer(tmp_path):
     sid = app.state['selectedSessionId']
     app.clients.attach('browser-one')
     app.clients.attach('browser-two')
+    for identity in ('browser-one', 'browser-two'):
+        with app.clients.bind(identity): app.subscribe()
     yield app, sid
+    for queue in list(app.queues): app.unsubscribe(queue)
     await app.close()
 
 async def grant(app, sid, client='browser-one'):
@@ -68,7 +71,7 @@ async def test_shared_navigation_targets_calling_chat_without_consent_or_work(co
 async def test_agent_and_browser_cannot_borrow_wrong_client_or_chat(computer):
     app, sid = computer
     visual, row = await grant(app, sid)
-    with pytest.raises(AppError, match='Multiple clients'):
+    with pytest.raises(AppError, match='Multiple connected clients'):
         await app.app_bridge('dispatch', {'action':'computer.visual.capture'}, sid)
     with app.clients.bind('browser-two'), pytest.raises(AppError, match='cannot be borrowed'):
         await app.dispatch('computer.visual.capture', {'sessionId':sid,'clientId':'browser-one'})
@@ -122,7 +125,8 @@ async def test_scope_end_invalidates_inflight_and_late_callbacks_even_after_retu
             await app.dispatch('session.create', {})
             await app.dispatch('session.select', {'id':sid})
         elif end == 'disconnect':
-            queue = app.subscribe(); app.unsubscribe(queue)
+            for queue in list(app.queues):
+                if app.queue_clients.get(queue) == 'browser-one': app.unsubscribe(queue)
         else:
             app._state['sessions'] = [s for s in app._state['sessions'] if s['id'] != sid]
             app.clients.reconcile('browser-one')
@@ -169,7 +173,7 @@ async def test_native_grant_inflight_cannot_survive_switch_away_and_back(compute
         with pytest.raises(AppError, match='changed chats or disconnected'): await task
     assert visual.grant is None
 
-async def test_connecting_voice_ends_text_consent_without_promoting_or_restoring_it(computer):
+async def test_same_source_and_inflight_capture_survive_voice_start_and_end(computer):
     app, sid = computer
     visual, row = await grant(app, sid)
     task = await begin(app, sid)
@@ -177,13 +181,41 @@ async def test_connecting_voice_ends_text_consent_without_promoting_or_restoring
     app.voice_service = SimpleNamespace(call=call)
     try:
         await app.set_voice_status({'id':'call','sessionId':sid,'status':'connected'})
-        with pytest.raises(AppError, match='permission ended'): await task
-        assert visual.detached and not visual.grant and not app.voice_visual.grant
-        with app.clients.bind('browser-one'), pytest.raises(AppError, match='not promoted'):
-            app.computer_visual.for_client(sid)
-        await app.set_voice_status({'status':'ended'})
+        assert visual.grant == row and not visual.detached
         with app.clients.bind('browser-one'):
-            fresh = app.computer_visual.for_client(sid)
-            assert fresh is not visual and fresh.grant is None
+            assert app.computer_visual.for_client(sid) is visual
+            assert app.browser_state()['computerVisual']['available']
+        await complete(app, visual)
+        receipt = await task
+        await app.set_voice_status({'status':'ended'})
+        assert visual.grant == row
+        assert app.computer_visual.read(sid, receipt['result']['id'])['_image'] == PNG
+        assert not app.voice_visual.grant
+        with app.clients.bind('browser-one'):
+            await app.dispatch('computer.visual.revoke', {'sessionId':sid})
+        assert visual.grant is None
+    finally:
+        app.voice_service = None
+
+async def test_source_can_be_chosen_during_voice_and_remains_after_call(computer):
+    app, sid = computer
+    call = SimpleNamespace(id='call',session_id=sid,client_id='browser-one',closed=False,closing=False)
+    app.voice_service = SimpleNamespace(call=call)
+    try:
+        await app.set_voice_status({'id':'call','sessionId':sid,'status':'connected'})
+        visual, row = await grant(app, sid)
+        task = await begin(app, sid, origin='ui')
+        await complete(app, visual); await task
+        with app.clients.bind('browser-two'):
+            app.computer_visual.bind_input(sid, 'wrong-voice-browser')
+        assert 'inputId' not in app._session(sid)['messages'][-1]
+        with app.clients.bind('browser-one'):
+            # Same binding used by the ordinary voice_delegate path.
+            app.computer_visual.bind_input(sid, 'spoken-input')
+        assert app._session(sid)['messages'][-1]['inputId'] == 'spoken-input'
+        await app.set_voice_status({'status':'ended'})
+        assert visual.grant == row
+        visual.grant['expiresAt'] = time.time()-1
+        assert not app.computer_visual.project('browser-one')['available']
     finally:
         app.voice_service = None

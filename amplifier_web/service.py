@@ -110,7 +110,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. clientId selects a browser displaying the calling chat when ambiguous; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
@@ -1006,12 +1006,21 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
+        if action in {'smartTools.viewStatus', 'smartTools.reconnectView'} and origin == 'agent' and (
+                not caller_session_id or self.state.get('selectedSessionId') != caller_session_id):
+            raise AppError('Choose a client displaying the calling conversation before recovering its tool view.', 409)
+        if action == 'smartTools.viewStatus':
+            from .mcp_view_recovery import inspect
+            if not self.smart_tools:
+                raise AppError('Smart Tools service is unavailable.')
+            async with self.lock:
+                return {'accepted': True, 'result': inspect(self, args['canvasId']), 'effects': []}
         if action.startswith("kernels."):
             from .computation import dispatch
             return await dispatch(self, action, args, origin)
@@ -1115,7 +1124,9 @@ class AppService:
             from .session_health import inspect_session
             async with self.lock:
                 snapshot = copy.deepcopy(self._session(args['id']))
+                captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
+            prepared_health['capturedAt'] = captured_at
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
@@ -1199,7 +1210,7 @@ class AppService:
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
-                target(self, caller_session_id, client_id, required=True)
+                target(self, caller_session_id, client_id, required=True, connected_only=True)
             if action == 'view.update' and client_id is not None:
                 from .client_layout import accepts, update
                 if accepts(args['patch']):
@@ -1534,8 +1545,13 @@ class AppService:
                     pending.append((self._send,(copy.deepcopy(session),text,input_id)))
             elif action == 'session.inspect':
                 diagnostic_result = prepared_health
-                if self._session(args['id']).get('errorAt') == snapshot.get('errorAt'):
+                from .session_health import inspection_stamp
+                if inspection_stamp(self._session(args['id'])) == inspection_stamp(snapshot):
                     self._session(args['id'])['health'] = diagnostic_result
+                else:
+                    # A lifecycle/failure can change while the bounded disk
+                    # inspection runs. Never cache that older view as current.
+                    diagnostic_result = {**diagnostic_result, 'stale': True}
             elif action in {"session.fork", "session.recover"}:
                 source = self._session(args["id"])
                 if source.get("configurationBusy"):
@@ -1722,7 +1738,7 @@ class AppService:
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
                 patch = args["patch"]
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "diagnosticsDraft"}
                 allowed.update({'navArchive', 'navCollection', 'navSort'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
@@ -1790,6 +1806,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
+                    if action == 'smartTools.reconnectView':
+                        from .mcp_view_recovery import admit
+                        admit(self, args)
                     pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action == 'bundle.default':
                 from .preferences import SettingsStore
@@ -2623,6 +2642,43 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        if '_inputClients' not in args:
+            return await self._app_bridge(operation, args, session_id)
+        # The worker stamps this from accepted inputs, replacing any tool args.
+        # Do not inherit the browser context captured when the runtime started.
+        clients = args['_inputClients']
+        identity = (clients[0] if isinstance(clients, list) and clients
+                    and all(isinstance(value, str) and value and value == clients[0] for value in clients) else None)
+        origin = {'clientId': identity, 'status': 'client' if identity else 'unavailable'}
+        with self.clients.bind(identity if identity in self.clients.records else None):
+            return await self._app_bridge(operation, args, session_id, input_origin=origin)
+
+    async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        def visual_origin(explicit=None):
+            if input_origin is None:
+                return
+            identity = input_origin['clientId']
+            if identity is None or explicit not in (None, identity):
+                raise AppError("Screen consent requires one originating browser; another client's consent cannot be borrowed.",
+                               409, code='visual_owner')
+            from .agent_canvas import target
+            target(self, session_id, identity, required=True, connected_only=True)
+
+        def agent_snapshot(client_id=None, **options):
+            from .agent_canvas import state
+            if input_origin is not None and client_id is None:
+                client_id = input_origin['clientId']
+                options.update(connected_only=True, allow_detached=True, detached=client_id is None)
+            snapshot = state(self, session_id, client_id, **options)
+            if input_origin is not None:
+                origin_id = input_origin['clientId']
+                live = origin_id in snapshot['canvasContext']['connectedClientIds']
+                snapshot['inputOrigin'] = {**input_origin, 'status': 'client' if live else 'unavailable'}
+                if not live or snapshot['canvasContext']['clientId'] != origin_id:
+                    snapshot['computerVisual'] = {'available': False, 'captureMode': 'explicit-frame',
+                                                 'reason': 'Screen consent requires the connected originating browser.'}
+            return snapshot
+
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == "questions.admit":
@@ -2639,6 +2695,11 @@ class AppService:
         if operation == "operations.observe":
             return await self.operations.observe(session_id, args["runtimeSessionId"], args["event"])
         if operation == "computer.visual.read":
+            visual_origin()
+            if input_origin is not None:
+                visual = self.computer_visual.clients.get(input_origin['clientId'])
+                if visual is None or args.get('captureId') not in visual.receipts:
+                    raise AppError("This capture belongs to another originating browser.", 409, code='visual_owner')
             return self.computer_visual.read(session_id, args.get("captureId"))
         if operation == "voice.visual.read":
             return self.voice_visual.read(session_id, args.get("captureId"))
@@ -2664,8 +2725,7 @@ class AppService:
         if operation in {"get_state", "state.get"}:
             await self._flush_pending_progress()
             from .agent_state import read_state
-            from .agent_canvas import state
-            return read_state(state(self, session_id, args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
+            return read_state(agent_snapshot(args.get('clientId')), args, session_id=session_id, resolve=self.state_resource)
         if operation in {"list_actions", "actions.list"}:
             actions = self.get_actions()
             prefix = args.get('prefix', '')
@@ -2742,17 +2802,30 @@ class AppService:
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
             if args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
+                if args['action'].startswith('computer.visual.'):
+                    visual_origin(action_args.get('clientId'))
+                elif input_origin is not None and not action_args.get('clientId') and input_origin['clientId'] is None:
+                    raise AppError('Choose an explicit connected navigation target; the input has no single originating browser.',
+                                   409, code='ui_client_required')
                 from .agent_canvas import target
-                canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
+                requested_client = action_args.get('clientId', input_origin['clientId'] if input_origin is not None else None)
+                canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
-            elif args['action'] == 'canvas.select':
+            elif args['action'] in {'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}:
                 from .agent_canvas import selection_target
-                canvas_client = selection_target(self, session_id, action_args)
+                canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
                 if canvas_client is not None:
                     action_args['clientId'] = canvas_client
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id)
+            elif input_origin is not None and 'clientId' in action_args and (
+                    args['action'].startswith(('canvas.views.', 'canvas.apps.'))
+                    or args['action'] in {'canvas.visibility', 'theme.preview', 'theme.revert'}):
+                # An explicit Canvas target is independent of screen consent.
+                canvas_client = action_args['clientId']
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
                 result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
             await self._flush_pending_progress()
@@ -2765,8 +2838,7 @@ class AppService:
                 from .agent_state import surface_context
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:
-                from .agent_canvas import state
-                context = read_state(state(self, session_id, canvas_client, allow_detached=True), {}, session_id=session_id, resolve=self.state_resource)
+                context = read_state(agent_snapshot(canvas_client, allow_detached=True, connected_only=args['action'] == 'view.update' or args['action'].startswith('computer.visual.')), {}, session_id=session_id, resolve=self.state_resource)
             return {**result, 'effects':[{'id':e.get('id'),'type':e.get('type')} for e in result.get('effects',[])], 'state':context}
         raise AppError("Unknown app bridge operation.")
 
@@ -2804,12 +2876,6 @@ class AppService:
             self.state["voice"].update(payload)
             if self.state["voice"].get("status") != "connected":
                 self.voice_visual.revoke()
-            else:
-                call = getattr(self.voice_service, "call", None)
-                client_id = getattr(call, "client_id", None)
-                visual = self.computer_visual.clients.get(client_id)
-                if visual and visual.session_id == self.state["voice"].get("sessionId"):
-                    self.computer_visual.reconcile(client_id, disconnect=True)
             self.voice_visual.publish()
 
     async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
@@ -2836,6 +2902,7 @@ class AppService:
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
             self.voice_visual.bind_input(session["id"], command_id)
+            self.computer_visual.bind_input(session["id"], command_id)
             session.setdefault('surfaceInputs', {})[command_id] = input_context
             session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()

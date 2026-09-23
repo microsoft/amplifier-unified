@@ -2,6 +2,41 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.13",
+      "title": "Ordered updates and clearer conversation recovery",
+      "changes": [
+        "Check and install the app first, then included components, then other sources. Continue an installation after a verified restart and show component summaries alongside the app version.",
+        "Install missing included components and preserve active work, explicit source choices, and rollback history while moving through update stages.",
+        "Resolve file mentions and composed bundle namespaces in conversation, child, and scheduled inputs using the same Foundation mechanism as the CLI.",
+        "Preserve the original attachment message during history refresh instead of displaying its expanded runtime copy as another user message.",
+        "Keep failed-turn details through passive preparation and copy fresh diagnostics when inspecting a conversation.",
+        "Simplify onboarding and document the per-user macOS service.",
+        "Keep browser validation available on demand while shortening automatic PR and release checks."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.12",
+      "title": "Screen sharing that follows the conversation",
+      "changes": [
+        "Share a browser tab, window or screen in text and voice, using the same explicitly granted source throughout the conversation.",
+        "Keep a visible sharing indicator and Stop control outside Chat controls, including when a voice call starts or ends.",
+        "Use the browser that sent the current message for shared-screen availability and capture, keeping other connected browsers separate."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.11",
+      "title": "A consistent sidebar and easier computer controls",
+      "changes": [
+        "Organize the sidebar into independently collapsible Pinned, Workspaces and Recent sections, with shared navigation and separate saved filters.",
+        "Reorder pinned chats and Settings lists with the same full-row drag preview, keyboard controls, cancellation and failed-save recovery.",
+        "Keep newly created empty workspaces visible, preserve native CLI and terminal chat discovery, and page larger chat lists.",
+        "Open scoped computer-use controls from Chat controls in text and voice, keeping source selection and capture permission explicit."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.10",
       "title": "Reliable voice snapshots, clearer startup failures and lighter background work",
       "changes": [

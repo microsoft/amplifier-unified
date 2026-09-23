@@ -31,5 +31,4 @@ jobs:
           node-version: '22'
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
-      - run: cd frontend && npx playwright install --with-deps chromium
-      - run: npm --prefix frontend run test:connectors-browser
+      # Browser coverage is available in browser-checks.yml (manual only).

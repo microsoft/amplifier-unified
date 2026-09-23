@@ -15,8 +15,8 @@ availability preflight, not a successful physical observation.
 
 | Capability | Owner | Evidence and next step |
 | --- | --- | --- |
-| Native foreground voice observation | Serving app host, using its exact `sys.executable` with an isolated helper | Status distinguishes missing library, unsupported OS, required/unknown Screen Recording permission, and ready for explicit consent. **Install native screen observation** explicitly adds the optional `native-desktop` extra through the guarded app updater. A worker install does not suffice. Ordinary updates preserve installed extras and do not opt into an absent extra. |
-| Browser-selected voice observation | Browser owning the connected call | Only an explicit source grant supplies its browser-reported kind and label. Use **Choose screen source** on localhost/HTTPS in a browser supporting display capture and fresh video frames. The browser picker needs a user click. No tab URL, browser profile, account, or accessibility text is exposed. |
+| Native foreground screen observation | Serving app host, using its exact `sys.executable` with an isolated helper | Status distinguishes missing library, unsupported OS, required/unknown Screen Recording permission, and ready for explicit consent. **Install native screen observation** explicitly adds the optional `native-desktop` extra through the guarded app updater. A worker install does not suffice. Ordinary updates preserve installed extras and do not opt into an absent extra. |
+| Browser-selected screen observation | Browser displaying the conversation (text or voice) | Only an explicit source grant supplies its browser-reported kind and label. Use **Choose screen source** on localhost/HTTPS in a browser supporting display capture and fresh video frames. The browser picker needs a user click. No tab URL, browser profile, account, or accessibility text is exposed. |
 | Optional mutable desktop/browser tools | Conversation worker or selected tool transport | The report shows the worker interpreter, configured tool modules including disabled entries, actual mounted tool names, and whether desktop doctor is advertised. Missing/retired workers remain unavailable rather than being started by inspection. Package installation alone is not a mounted tool or successful operation. |
 
 The local host label uses Foundation's owner hostname and includes a distinct
@@ -71,7 +71,7 @@ Readiness results are returned directly, not saved as global current state.
 The UI clears its snapshot when its conversation, active voice call, source
 grant or confirmed installation changes, and discards delayed responses from the old context. Check again
 after changing tools or OS permissions. Shared source grants still expire and
-are revalidated at capture time by the [voice observation contract](VOICE-VISUAL.md).
+are revalidated at capture time by the [screen observation contract](VOICE-VISUAL.md).
 
 ## Validation boundaries
 
@@ -92,5 +92,5 @@ These tests do not prove OS consent, physical microphone audio, native capture,
 commercial account behavior, or installed-host adoption. Those require an
 explicitly granted real-device acceptance: one connected call, the named host
 grant, a harmless foreground-window capture, then revocation/source replacement
-and call-end cleanup. Voice observation requires Screen Recording, not
+and call-end cleanup. Screen observation requires Screen Recording, not
 Accessibility. No control or permission grants are restored after restart.

@@ -40,7 +40,9 @@ try{
  else await expect(dialog.getByText('The provider rejected an image or computer-tool result in the conversation context.',{exact:true})).toBeVisible();
  const copy=dialog.getByRole('button',{name:'Copy session ID',exact:true});
  assert.equal(await copy.textContent(),'');await copy.click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),ready.sessionId);
- await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();const diagnostics=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));if(moduleFailure)assert.equal(diagnostics.moduleFailures[0].reason_code,'invalid_module_metadata');else assert.equal(diagnostics.failure.category,contextLimit?'context_limit':'invalid_image');
+ await dialog.getByRole('button',{name:'Copy diagnostics',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toContain('"capturedAt"');
+ const diagnostics=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));if(moduleFailure)assert.equal(diagnostics.moduleFailures[0].reason_code,'invalid_module_metadata');else assert.equal(diagnostics.failure.category,contextLimit?'context_limit':'invalid_image');
  const automatic=dialog.getByRole('checkbox',{name:'Automatic chat naming'});
  const refresh=dialog.getByRole('button',{name:'Regenerate chat name'});
  await automatic.check();await expect(automatic).toBeChecked();

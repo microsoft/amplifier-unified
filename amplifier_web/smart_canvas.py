@@ -41,6 +41,8 @@ def definitions(schema, string):
         'smartTools.resources': ('List a connected MCP server’s resources or resource templates, one page at a time. Resource reads are bounded to 2 MB; use the tool’s chunk resources for media.', schema({**identity,'kind':{'enum':['list','templates']},'cursor':string(4000)}, ['id'])),
         'smartTools.readResource': ('Read a resource URI through this connected MCP server. The host never fetches the URI directly. Use tool-provided bounded chunks for large media.', schema({**identity,'uri':string(4000)}, ['id','uri'])),
         'smartTools.open': ('Open a discovered MCP App in a durable canvas tab. Supply operationId to send that call’s arguments and result to the view. Closing a tab does not cancel tool work.', schema({**identity,'tool':string(200),'operationId':string(100),'sessionId':string(200)}, ['id','tool'])),
+        'smartTools.viewStatus': ('Inspect saved source and live connection availability for the active tool view in the calling chat. Does not connect or replay calls.', schema({'canvasId':string(100),'clientId':string(100)}, ['canvasId'])),
+        'smartTools.reconnectView': ('Reconnect the same saved tool view without replacing its document or replaying calls. Inspect first; older views return a contract review. Supply that exact reviewedContract fingerprint only after reviewing the existing grants.', schema({'canvasId':string(100),'clientId':string(100),'expectedBindingRevision':string(64),'reviewedContract':string(64)}, ['canvasId','expectedBindingRevision'])),
         'smartTools.appCall': ('Call an app-visible tool through the current canvas binding. Cannot select a different server. Results also appear in shared smartTools.operations.', schema({'canvasId':string(100),'name':string(200),'arguments':{'type':'object'}}, ['canvasId','name'])),
         'smartTools.context': ('Record the current MCP App view context as untrusted display data, visible to the agent on its next state read. Does not start a model turn.', schema({'canvasId':string(100),'context':{'type':'object'}}, ['canvasId','context'])),
     }
@@ -51,13 +53,16 @@ class SmartCanvas:
         self.service = service
 
     def binding(self, identity):
-        canvas = self.service.state.get('canvas', {})
-        if canvas.get('id') != identity or canvas.get('kind') != 'mcp-app' or not canvas.get('open'):
-            raise api.AppError('This tool view is no longer active. Reopen its canvas tab.', 409)
+        from .mcp_view_recovery import saved, account
+        canvas, _ = saved(self.service, identity)
         binding = canvas['mcp']
         server = next((s for s in self.service.state['smartTools']['servers'] if s['id'] == binding['serverId']), None)
         if not server or configuration_key(server) != binding['configuration'] or (binding.get('catalogRevision') and (binding['catalogRevision'] != server.get('catalogRevision') or server.get('catalogState') != 'current')):
-            raise api.AppError('This server configuration changed. Open a fresh tool view.', 409)
+            from .mcp_view_recovery import inspect
+            status = inspect(self.service, identity)
+            raise api.AppError(status['message'], 409, code=status['status'])
+        if 'accountIdentity' in binding and binding['accountIdentity'] != account(server):
+            raise api.AppError('This tool view’s account changed. Review the account in Settings.', 409)
         return canvas, binding
 
     async def resource(self, identity, kind, *, uri=None, cursor=None):
@@ -81,7 +86,7 @@ class SmartCanvas:
 
     async def command(self, action, args, operation_id, origin, *, defer_publish=False):
         manager = self.service.smart_tools
-        if action == 'smartTools.open':
+        if action in {'smartTools.open', 'smartTools.reconnectView'}:
             record = {'id':operation_id,'action':action,'origin':origin,'target':copy.deepcopy(args),
                       'status':'running','createdAt':time.time(),'updatedAt':time.time()}
             async with self.service.lock:
@@ -91,7 +96,11 @@ class SmartCanvas:
                 manager.persist_operation(record)
                 self.service._publish()
             try:
-                result = await self.open(args)
+                if action == 'smartTools.reconnectView':
+                    from .mcp_view_recovery import reconnect
+                    result = await reconnect(self.service, args)
+                else:
+                    result = await self.open(args)
                 record.update(status='completed',result=result)
             except Exception as exc:
                 record.update(status='failed',error=str(exc)[:2000])
@@ -142,6 +151,7 @@ class SmartCanvas:
         if not uri:
             raise api.AppError('This tool does not advertise an MCP App.')
         key = configuration_key(server)
+        catalog_revision = server.get('catalogRevision')
         session = self.service._session(args.get('sessionId'))
         sid = session['id']
         from .managed_chats import is_managed
@@ -154,7 +164,7 @@ class SmartCanvas:
         app = await self.service.smart_tools.read_app(args['id'], uri)
         async with self.service.lock:
             latest = next((s for s in state['smartTools']['servers'] if s['id'] == args['id']), None)
-            if not latest or configuration_key(latest) != key:
+            if not latest or configuration_key(latest) != key or latest.get('catalogRevision') != catalog_revision:
                 raise api.AppError('The server changed while loading its view. Try again.')
             self.service._session(sid)
             # Loading the app awaits I/O; a viewer can become dirty meanwhile.
@@ -167,6 +177,10 @@ class SmartCanvas:
                              'toolArguments':copy.deepcopy((operation or {}).get('arguments',{})),
                              'requestedCsp':app.get('csp',{}),'requestedPermissions':app.get('permissions',{}),
                              'context':{}}}
+            from .mcp_view_recovery import account, contract
+            captured = contract(self.service, canvas['mcp'])
+            if captured:
+                canvas['mcp'].update(contractFingerprint=captured['fingerprint'], accountIdentity=account(latest))
             scoped = {**state,'canvas':canvas,'selectedSessionId':sid,'selectedWorkspaceId':workspace['id']}
             remember(scoped,self.service.db)
             if state.get('selectedSessionId') == sid and state.get('selectedWorkspaceId') == workspace['id']:
@@ -189,5 +203,6 @@ def document_response(canvas):
     # Self-contained resources only in this first profile. Advertise the exact
     # denied permissions to Apps, rather than silently granting network access.
     return web.Response(text=canvas['content'], content_type='text/html', headers={
+        'Cache-Control': 'no-store',
         'Content-Security-Policy': "sandbox allow-scripts allow-downloads; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src data: blob:; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
         'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()'})

@@ -396,9 +396,9 @@ async def _activate(manager):
                         **({'featureSelection':selected,'dependencyDigest':components.digest([row for row in graph if row['name']!='amplifier-unified'])} if selected else {})},detail='Application installed. Restarting the local host…')
     if selected:
         await record(manager, selected['requestId'], 'restart_pending', detail='Feature installed; awaiting the restarted host and exact component validation.')
-    # A generated systemd unit owns its process lifecycle.  Asking systemd to
-    # restart that unit avoids racing its restart policy with a second detached
-    # process spawned by this in-process updater.
+    # A generated systemd unit or launchd agent owns its process lifecycle.
+    # Asking it to restart avoids racing its restart policy with a second
+    # detached process spawned by this in-process updater.
     from .deployment_service import current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
         await request_managed_restart(manager)
@@ -433,12 +433,12 @@ with open(logpath,'a') as log:
 async def request_managed_restart(manager):
     """Queue an OS-owned restart; only a ready successor confirms completion.
 
-    Even with --no-block, systemd can stop this entire cgroup before the
-    systemctl client receives its reply. A signal, timeout, or cancelled await
-    therefore leaves the request outcome unknown, not successful or rejected.
-    The durable marker and work gate survive every outcome of the handoff.
+    A service manager can stop this process before its client receives a reply.
+    A signal, timeout, or cancelled await therefore leaves the request outcome
+    unknown, not successful or rejected. The durable marker and work gate
+    survive every outcome of the handoff.
     """
-    from .deployment_service import UNIT_NAME
+    from .deployment_service import managed_restart_command
     from .update_diagnostics import CommandFailure, exception_type
 
     marker=dict(manager.service.state['updates']['pendingRestart'])
@@ -448,7 +448,7 @@ async def request_managed_restart(manager):
     manager.diagnostics.record('service-restart-request','started',commandId=command_id)
     started=time.monotonic()
     try:
-        result=await process('systemctl','--user','--no-block','restart',UNIT_NAME,timeout=30)
+        result=await process(*managed_restart_command(),timeout=30)
     except BaseException as error:
         if not isinstance(error,(Exception,asyncio.CancelledError)):raise
         facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}

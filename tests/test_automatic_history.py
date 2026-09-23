@@ -547,6 +547,42 @@ async def web_owned_chat(app_factory, workspace):
     return app, session, directory
 
 
+async def test_attachment_history_refresh_and_restart_preserve_original_bubble_and_files(tmp_path, app_factory):
+    workspace = tmp_path / 'attachment-project'
+    native = {'role': 'user', 'content': [
+        {'type': 'text', 'text': 'Inspect this'},
+        {'type': 'text', 'text': 'User attachment: image.png\nLocal file: /fixture/content'},
+        {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'fixture'}},
+    ], 'metadata': {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'upload-input', 'source': 'chat'}}}
+    directory = native_session(workspace, 'attachment-runtime', [native])
+    unchanged = files_snapshot(directory)
+    app = app_factory(workspace=workspace)
+    session = app._new_session({})
+    visible = {'id': 'web-upload', 'role': 'user', 'text': 'Inspect this', 'via': 'chat',
+               'inputId': 'upload-input', 'createdAt': 42,
+               'attachments': [{'id': 'fixture-file', 'name': 'image.png'}]}
+    session.update(runtimeSessionId='attachment-runtime', messages=[visible])
+    app.state['sessions'].append(session)
+    app.state['selectedSessionId'] = session['id']
+    await app.history.refresh()
+    await app.history.load(session['id'])
+    assert len(session['messages']) == 1
+    assert {k: session['messages'][0][k] for k in visible} == visible
+    assert not app.runtime.started and not app.runtime.sent
+    await app.close()
+    resumed = app_factory(workspace=workspace)
+    await resumed.history.refresh()
+    await resumed.history.load(session['id'])
+    restored = resumed._session(session['id'])
+    assert len(restored['messages']) == 1
+    assert {k: restored['messages'][0][k] for k in visible} == visible
+    assert not restored.get('historyError')
+    after = files_snapshot(directory)
+    assert {name: after[name] for name in unchanged} == unchanged
+    assert after.keys() - unchanged.keys() == {'unified/view.json'}  # App display sidecar only.
+    assert not resumed.runtime.started and not resumed.runtime.sent
+
+
 async def test_web_history_merge_keeps_repeated_turns_long_cli_continuations_and_ui_ids(tmp_path, app_factory):
     app, session, directory = await web_owned_chat(app_factory, tmp_path / 'web-project')
     # More than one page is appended before the first web/native alignment.

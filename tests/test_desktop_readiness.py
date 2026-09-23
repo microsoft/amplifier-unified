@@ -445,3 +445,33 @@ def test_environment_identifies_owning_interpreter_without_importing_optional_li
     assert result["computerUsePackage"] == {
         "status": "installed" if version else "missing", "version": version, "importVerified": False,
     }
+
+
+async def test_readiness_reports_own_conversation_source_without_voice(app):
+    app.clients.attach('sharing-browser')
+    app.clients.attach('other-browser')
+    with app.clients.bind('sharing-browser'):
+        sid = app.state['selectedSessionId']
+        visual = app.computer_visual.for_client(sid)
+        await visual.grant_source({'sessionId':sid,'source':{'kind':'window','label':'Shared text window'}})
+        result = await check(app, sid)
+        assert result['voiceObservation']['status'] == 'source_selected'
+        assert result['voiceObservation']['source']['label'] == 'Shared text window'
+        assert 'Connect a voice call' not in result['voiceObservation']['nextStep']
+    with app.clients.bind('other-browser'):
+        result = await check(app, sid)
+        assert result['voiceObservation']['status'] == 'not_shared'
+        assert result['voiceObservation']['source'] is None
+
+
+async def test_readiness_does_not_borrow_another_browsers_legacy_call_grant(app):
+    target = await connect_call(app)
+    await grant_browser(app, target)
+    app.clients.attach('other-browser')
+    with app.clients.bind('other-browser'):
+        result = await check(app, target['sessionId'])
+        assert result['voiceObservation']['status'] == 'not_shared'
+        assert result['voiceObservation']['source'] is None
+    with app.clients.bind('owning-browser'):
+        result = await check(app, target['sessionId'])
+        assert result['voiceObservation']['status'] == 'source_selected'

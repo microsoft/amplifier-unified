@@ -1,0 +1,34 @@
+{
+  "catalogSessions": 22915,
+  "workspaces": 3932,
+  "browsers": 4,
+  "terminalStreams": 1,
+  "health": {
+    "samples": 12,
+    "medianMs": 1,
+    "p95Ms": 116,
+    "maxMs": 116
+  },
+  "admission": {
+    "samples": 12,
+    "medianMs": 32,
+    "p95Ms": 59,
+    "maxMs": 59
+  },
+  "actions": {
+    "samples": 12,
+    "medianMs": 4,
+    "p95Ms": 272,
+    "maxMs": 272
+  },
+  "viewMaxInFlight": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "ticks": 11,
+  "terminalFrames": 8,
+  "draftsRetained": true,
+  "modelCalls": 0
+}

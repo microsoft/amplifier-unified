@@ -34,6 +34,4 @@ jobs:
       - run: uv run --no-sync pytest tests/test_capacity.py tests/test_execution.py tests/test_execution_events.py tests/test_task_continuity.py tests/test_runtime.py -q
       - run: npm ci --prefix frontend
       - run: npm run build --prefix frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run test:capacity-browser --prefix frontend
+      # Browser coverage is available in browser-checks.yml (manual only).

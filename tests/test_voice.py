@@ -405,3 +405,48 @@ async def test_provider_finalization_releases_call_without_cancelling_work():
     await asyncio.gather(*list(call.tasks))
     assert call.closed and socket.closed and call.final.is_set()
     assert call.close_result['workContinues'] is True
+
+
+def test_voice_context_uses_only_its_browser_conversation_source():
+    import json
+    from types import SimpleNamespace
+    service = Service()
+    sources = {
+        'call-browser': {'available':True, 'sessionId':'main', 'source':{'kind':'window','label':'Private title'}, '_image':'private-pixels'},
+        'other-browser': {'available':True, 'sessionId':'other', 'source':{'kind':'monitor'}},
+    }
+    service.computer_visual = SimpleNamespace(project=lambda client: sources.get(client, {'available':False}))
+    call = VoiceCall(VoiceService(service), 'main')
+    call.client_id = 'call-browser'
+    context = json.loads(call.context(service.state))
+    assert context['screen_source'] == {'available':True, 'kind':'window'}
+    assert 'Private title' not in str(context) and 'private-pixels' not in str(context)
+    call.client_id = 'other-browser'
+    assert json.loads(call.context(service.state))['screen_source'] == {'available':False}
+    call.client_id = 'missing'
+    assert json.loads(call.context(service.state))['screen_source'] == {'available':False}
+
+
+@pytest.mark.parametrize('provider', ['live', 'realtime'])
+async def test_already_shared_source_is_in_initial_provider_instructions(provider):
+    import json
+    service, socket = Service(), Socket()
+    service.clients = SimpleNamespace(current=SimpleNamespace(get=lambda: 'origin-browser'))
+    seen = []
+    def project(client):
+        seen.append(client)
+        return {'available':True, 'sessionId':'main', 'source':{'kind':'window', 'label':'Private title'}}
+    service.computer_visual = SimpleNamespace(project=project)
+    manager = VoiceService(service, api_key='fixture-key', http=SimpleNamespace(ws_connect=AsyncMock(return_value=socket)))
+    manager.request = AsyncMock(return_value=({'session':{'id':'call-one'},'transport':{'sdp':'answer'}},'answer',{'Location':'/v1/realtime/calls/call-one'}))
+    call = VoiceCall(manager, 'main')
+    try:
+        await call.create('synthetic-sdp', provider)
+        kwargs = manager.request.call_args.kwargs
+        config = kwargs['json']['session'] if provider == 'live' else json.loads(next(value for headers,_,value in kwargs['data']._fields if headers['name']=='session'))
+        context = json.loads(config['instructions'].split('Current context: ', 1)[1])
+        assert context['screen_source'] == {'available':True, 'kind':'window'}
+        assert seen == ['origin-browser']
+        assert 'Private title' not in config['instructions']
+    finally:
+        call.final.set(); await call.close()

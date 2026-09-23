@@ -71,7 +71,7 @@ jobs:
           name: host-source-resolution
           path: ${{ runner.temp }}/host-resolution
           if-no-files-found: ignore
-  python:
+  package:
     needs: prepare
     runs-on: ubuntu-latest
     env:
@@ -100,8 +100,7 @@ jobs:
           uv sync --locked --group dev --group artifacts
           uv pip install --python .venv/bin/python --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" --requirements "$RUNNER_TEMP/host-resolution/qualified-overrides.txt"
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
-      - name: Validate Python
-        run: uv run --no-sync pytest -q
+      # Full Python coverage runs locally or in python-checks.yml on demand.
       - name: Build and verify distributions
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -113,8 +112,8 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" dist/*.whl
           cd "$RUNNER_TEMP"
           env -u PYTHONPATH "$RUNNER_TEMP/release-smoke/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
-      - name: Bind tested distributions to the candidate
-        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane python --destination "$RUNNER_TEMP/python.json"
+      - name: Bind verified distributions to the candidate
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane package --destination "$RUNNER_TEMP/package.json"
       - uses: actions/upload-artifact@v4
         with:
           name: release-distributions
@@ -122,10 +121,10 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: python-qualification
-          path: ${{ runner.temp }}/python.json
+          name: package-qualification
+          path: ${{ runner.temp }}/package.json
           if-no-files-found: error
-  browser:
+  frontend:
     needs: prepare
     runs-on: ubuntu-latest
     env:
@@ -165,144 +164,14 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
-      - name: Install browser dependencies
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
-      - name: Check active-client latency and state transport
-        working-directory: frontend
-        run: |
-          npm run test:active-client-performance-browser
-          npm run test:state-transport-browser
-      - name: Verify candidate module source validation
-        if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:registry-browser
-      - name: Verify first launch with empty storage
-        if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:empty-host-browser
-      - name: Verify draft-first chat setup and composer controls
-        working-directory: frontend
-        run: npm run test:new-chat-browser
-      - name: Verify new-chat recovery and submission drafts
-        working-directory: frontend
-        run: |
-          npm run test:new-chat-recovery-browser
-          node tests/feedback-browser.mjs
-          node tests/feedback-followup-browser.mjs
-      - name: Restored composer readiness
-        working-directory: frontend
-        run: |
-          npm run test:composer-readiness-browser
-          npm run test:composer-primary-action-browser
-      - name: Verify live surface awareness and draft checkpoints
-        working-directory: frontend
-        run: npm run test:surface-context-browser
-      - name: Verify shared Work workflow controls
-        if: ${{ hashFiles('frontend/tests/desktop-readiness-browser.mjs', 'frontend/tests/memory-personalization-browser.mjs', 'frontend/tests/publishing-browser.mjs', 'frontend/tests/portability-browser.mjs') != '' }}
-        working-directory: frontend
-        run: |
-          node tests/desktop-readiness-browser.mjs
-          node tests/memory-personalization-browser.mjs
-          node tests/publishing-browser.mjs
-          node tests/portability-browser.mjs
-      - name: Verify settings navigation and retained capabilities
-        working-directory: frontend
-        run: |
-          npm run test:settings-browser
-          npm run test:settings-completeness-browser
-          npm run test:settings-collections-browser
-          npm run test:settings-mobile-browser
-      - name: Verify complete themes and saved appearance startup
-        working-directory: frontend
-        run: |
-          npm run test:themes-browser
-          npm run test:appearance-startup-browser
-          npm run test:appearance-library-browser
-      - name: Verify review during a pending send
-        if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:review-during-send-browser
-      - name: Verify action content and execution detail loading
-        working-directory: frontend
-        run: |
-          npm run test:execution-browser
-          npm run test:execution-actions-browser
-      - name: Verify stable navigation and workspace drill-in
-        if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:navigation-browser
-      - name: Verify pending message delivery and editing
-        working-directory: frontend
-        run: |
-          npm run test:message-outbox-browser
-          npm run test:message-delivery-browser
-      - name: Verify embedded HTML audio and video playback
-        working-directory: frontend
-        run: npm run test:canvas-media-browser
-      - name: Verify canvas toolbar and app options
-        if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:toolbar-browser
-      - name: Verify embedded tool visibility acknowledgements
-        working-directory: frontend
-        run: npm run test:smart-tools-browser
-      - name: Verify validated shell component controls
-        working-directory: frontend
-        run: npm run test:shell-components-browser
-      - name: Verify responsive navigation and immediate Canvas visibility
-        working-directory: frontend
-        run: npm run test:mobile-navigation-browser
-      - name: Verify cached-source update reporting
-        if: ${{ hashFiles('frontend/tests/cache-usage-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:cache-usage-browser
-      - name: Verify bundle selection and scoped defaults
-        working-directory: frontend
-        run: npm run test:bundle-browser
-      - name: Verify drafts survive rapid chat switching
-        if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:draft-switch-browser
-      - name: Verify history paging in live conversations
-        working-directory: frontend
-        run: npm run test:live-history-browser
-      - name: Verify independent live clients
-        working-directory: frontend
-        run: npm run test:live-clients-browser
-      - name: Verify composer ownership and explicit takeover
-        working-directory: frontend
-        run: npm run test:ownership-browser
-      - name: Verify unsaved artifact edits survive navigation
-        if: ${{ hashFiles('frontend/tests/canvas-dirty-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:canvas-dirty-browser
-      - name: Verify shared conversation surfaces and isolation
-        working-directory: frontend
-        run: npm run test:canvas-apps-browser
-      - name: Verify shared drawing, resize and save recovery
-        working-directory: frontend
-        run: npm run test:canvas-drawing-browser
-      - name: Verify conversation diagnosis and recovery
-        if: ${{ hashFiles('frontend/tests/session-health-browser.mjs') != '' }}
-        working-directory: frontend
-        run: |
-          npm run test:session-health-browser
-          node tests/session-health-browser.mjs --context-limit
-          node tests/session-health-browser.mjs --context-limit --active-worker
-          node tests/session-health-browser.mjs --module-failure
-      - name: Verify activity feedback and dismissal
-        if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
-        working-directory: frontend
-        run: npm run test:activity-feedback-browser
-      - name: Record browser qualification for this candidate
+      - name: Record frontend qualification for this candidate
         run: |
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
-          python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane browser --destination "$RUNNER_TEMP/browser.json"
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane frontend --destination "$RUNNER_TEMP/frontend.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: browser-qualification
-          path: ${{ runner.temp }}/browser.json
+          name: frontend-qualification
+          path: ${{ runner.temp }}/frontend.json
           if-no-files-found: error
   runtime:
     needs: prepare
@@ -410,7 +279,7 @@ jobs:
             ${{ runner.temp }}/surface-runtime/build-identity.json
           if-no-files-found: ignore
   release:
-    needs: [prepare, python, browser, runtime]
+    needs: [prepare, package, frontend, runtime]
     runs-on: ubuntu-latest
     permissions:
       contents: write

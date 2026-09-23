@@ -183,6 +183,14 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
             state.update(phase='installed', pendingRestart=None, pendingReplacement=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
                          installedAt=time.time(), error=None, detail=detail)
+            if not selected:
+                # Resume only after this exact restarted installation is healthy.
+                # A manual Install request covers the remaining component phases.
+                sequence = state.get('sequence') or {'install': manager.service.state['settings'].get('updates', {}).get('autoInstall', False)}
+                state['sequence'] = {**sequence, 'stage': 'included', 'nextStage': 'included',
+                                     'included': {'status':'waiting','available':0,'missing':0,'issues':0},
+                                     'other': {'status':'waiting','available':0,'missing':0,'issues':0}}
+                state['detail'] += ' Continuing with included components, then other sources.'
             if selected:
                 row = state.setdefault('featureResults', {}).setdefault(selected['requestId'], {})
                 row.update(requestId=selected['requestId'], feature=selected['feature'], phase='installed',

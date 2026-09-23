@@ -150,6 +150,8 @@ class Children:
     async def install(self, session, prepared):
         from .prompt_events import install
         install(session.coordinator)
+        from .mentions import install as install_mentions
+        install_mentions(session.coordinator)
         self.prepared[session.session_id] = prepared
         self.sessions[session.session_id] = session
         coordinator = session.coordinator
@@ -341,6 +343,9 @@ class Children:
             row["status"] = "running"
             self._emit(row)
             await checkpoint()
+            from .mentions import expand_input
+            instruction = await expand_input(coordinator, instruction,
+                max_chars=row['runtime'].max_input_chars if persistent else None)
             if persistent:
                 owner = asyncio.create_task(child.execute(""))
                 row["_owner"] = owner
@@ -375,6 +380,7 @@ class Children:
             row.pop("task", None)
             row.pop("_owner", None)
             row.pop("runtime", None)
+            row.pop('_input_sources', None)
 
     async def control(self, identity, action, text="", input_id=None, attachments=()):
         row = self.rows.get(identity)
@@ -394,9 +400,25 @@ class Children:
         runtime = row.get("runtime")
         if not runtime:
             raise ValueError("Worker is still preparing; try again when it is ready")
+        if action in {'message', 'steer'}:
+            from .mentions import expand_input
+            source = (action, text, tuple(attachments))
+            previous = runtime.accepted.get(input_id)
+            sources = row.setdefault('_input_sources', {})
+            if previous and input_id in sources:
+                if sources[input_id] != source:
+                    raise ValueError('Command identity reused with different content')
+                text = previous.text
+            else:
+                text = await expand_input(self.sessions[identity].coordinator, text, max_chars=runtime.max_input_chars)
         command = Input("stop" if action in {"finish", "cancel"} else "steer" if action == "steer" else "user", text,
             target=action if action in {"finish", "cancel"} else None, attachments=tuple(attachments), **({"id": input_id} if input_id else {}))
-        await runtime.submit(command)
+        try:
+            await runtime.submit(command)
+        finally:
+            if action in {'message', 'steer'} and runtime.accepted.get(command.id) == command:
+                # Kept with the runtime's bounded input receipts, never exported.
+                sources[command.id] = copy.deepcopy(source)
         if action in {"finish", "cancel"}:
             row["status"] = "stopping"
         self._emit(row)

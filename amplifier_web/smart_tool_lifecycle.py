@@ -149,16 +149,25 @@ class Lifecycle:
         names = [tool.get("name") for tool in tools]
         if any(not isinstance(name, str) or not name or len(name) > 200 for name in names) or len(set(names)) != len(names):
             raise ValueError("The server returned invalid or duplicate tool names.")
-        self.schemas[identity] = self._redact(tools)
+        definitions = self._redact(tools)
         revision = uuid.uuid4().hex
-        await self._change(lambda _: self._server(identity).update(tools=[summary(t) for t in self.schemas[identity]],
-            loadedSchemas={}, catalogRevision=revision, catalogState="current", catalogEpoch=epoch,
-            catalogCheckedAt=time.time(), toolCount=len(tools), uiCapable=any(_ui(tool).get("resourceUri") for tool in tools)))
+        def publish(_):
+            # Schemas and their generation are one authority snapshot. A saved
+            # view must never observe new definitions under its old generation.
+            if epoch != connection.catalog_epoch or self.connections.get(identity) is not connection:
+                raise ValueError('The tool connection changed before discovery could be published.')
+            self.schemas[identity] = definitions
+            self._server(identity).update(tools=[summary(t) for t in definitions],
+                loadedSchemas={}, catalogRevision=revision, catalogState="current", catalogEpoch=epoch,
+                catalogCheckedAt=time.time(), toolCount=len(tools), uiCapable=any(_ui(tool).get("resourceUri") for tool in tools))
+        await self._change(publish)
 
-    async def connect(self, identity, reconnect=False, *, auth=None, auth_timeout=30):
-        from .smart_tools import _bounded
+    async def connect(self, identity, reconnect=False, *, auth=None, auth_timeout=30, expected_configuration=None):
+        from .smart_tools import _bounded, configuration_key
         async with self.connection_locks.setdefault(identity, asyncio.Lock()):
             row = self._server(identity)
+            if expected_configuration is not None and configuration_key(row) != expected_configuration:
+                raise ValueError('This server configuration changed before reconnecting. The saved view was not rebound.')
             connection = self.connections.get(identity)
             if connection and not connection.task.done() and not connection.failure and not reconnect:
                 return copy.deepcopy(row)

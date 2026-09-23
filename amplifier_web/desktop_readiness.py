@@ -47,13 +47,13 @@ def worker_report(controls):
 def native_next_step(native):
     code = native.get("code") or native.get("status")
     if code == "backend_not_installed":
-        return "Install Unified's optional native-desktop extra in the serving app environment shown here, then check again. Installing it only in a conversation worker does not enable native voice observation. Coordinate any managed app replacement or restart with its owner."
+        return "Install Unified's optional native-desktop extra in the serving app environment shown here, then check again. Installing it only in a conversation worker does not enable native screen observation. Coordinate any managed app replacement or restart with its owner."
     if code == "unsupported":
-        return "Native foreground observation supports a local macOS app host. Use Choose screen source in the connected voice call to share from the browser device instead."
+        return "Native foreground observation supports a local macOS app host. Use Choose screen source in Chat controls → Computer use to share from the browser device instead."
     if code in {"permission_required", "permission_unknown"}:
-        return "On the named Mac host, check System Settings → Privacy & Security → Screen Recording for the application running this Python process. If permission is missing, the user must grant it there, then check again. Accessibility permission is not required for voice observation."
+        return "On the named Mac host, check System Settings → Privacy & Security → Screen Recording for the application running this Python process. If permission is missing, the user must grant it there, then check again. Accessibility permission is not required for screen observation."
     if native.get("available") is True:
-        return "In a connected voice call, check the desktop host and explicitly allow foreground snapshots from that host. Each capture is a separate action."
+        return "In Chat controls → Computer use, check the desktop host and explicitly allow foreground snapshots from that host. Each capture is a separate action."
     return "Check the named host's desktop session and optional native-desktop installation, then retry. A failed check does not grant permission or capture a screen."
 
 
@@ -73,6 +73,12 @@ async def inspect(service, sid):
         worker = await service.runtime.desktop_readiness(sid)
     voice = service.state.get("voice", {})
     visual = service.voice_visual.status(sid, voice.get("id")) if sid and voice.get("sessionId") == sid else {}
+    client_id = service.clients.current.get()
+    if client_id is not None and visual.get("clientId") != client_id:
+        visual = {}
+    computer = service.computer_visual.project(client_id)
+    if computer.get("available") and computer.get("sessionId") == sid:
+        visual = computer
     source = visual.get("source") if visual.get("available") else None
     native_source = source and source.get("kind") == "native-foreground"
     return {"schemaVersion": 1, "observedAt": time.time(), "sessionId": sid,
@@ -85,8 +91,8 @@ async def inspect(service, sid):
             "source": source, "expiresAt": visual.get("expiresAt") if source else None,
             "browserContext": "The native source is bound to the named host and app instance. Window identity is supplied only by an explicit capture; browser tabs and accounts are not exposed."
                 if native_source else "The browser reports only the selected source label and kind. Tab URL, browser profile and signed-in account are not exposed by this transport.",
-            "nextStep": "Use Capture screen for one snapshot from the selected source, or Stop screen sharing to revoke this call's grant. Screen observation grants no desktop control."
-                if source else "Connect a voice call and use Choose screen source on its owning browser. A direct user click opens the browser picker. Screen observation grants no desktop control."},
+            "nextStep": "Use Capture screen for one snapshot from the selected source, or Stop screen sharing to revoke the selected source permission. Screen observation grants no desktop control."
+                if source else "Open Chat controls → Computer use and choose a screen source in this browser. Text and voice use the same sharing permission. A direct user click opens the browser picker. Screen observation grants no desktop control."},
         "nextActions": [
             {"label": "Updates", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "maintenance", "settingsExpanded": ["updates"]}}},
             {"label": "Bundles & modules", "action": "view.update", "args": {"patch": {"panel": "settings", "settingsSection": "capabilities", "settingsExpanded": ["app-bundles"]}}},

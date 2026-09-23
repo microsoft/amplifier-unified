@@ -37,7 +37,7 @@ try{
  const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'?[]:[{x,y,id:1}]});
  await touch('touchStart',from.x+from.width/2,from.y+from.height/2);
  await touch('touchMove',from.x+from.width/2,to.y+to.height/2);
- await expect(order.locator('.a-order-floating')).toBeVisible();await expect(order.locator('.a-order-insertion')).toBeVisible();
+ await expect(page.locator('.a-order-floating')).toBeVisible();await expect(order.locator('.a-order-insertion')).toBeVisible();
  const preview=await ids();assert.deepEqual(preview,['three','one','two']);await touch('touchEnd');await expect.poll(ids).toEqual(preview);
  await back();await providers.getByRole('button',{name:'Preference order',exact:true}).click();assert.deepEqual(await ids(),preview);
  await footer.getByRole('button',{name:'Cancel',exact:true}).click();assert.deepEqual((await state()).setup.providers.map(p=>p.id),['two','three','one']);

@@ -60,7 +60,7 @@ def group_sources(items):
             groups[row['id']]=row
             continue
         key=tuple(row.get(k) for k in ('label','ref','current','latest','status'))
-        key = (*key, row.get('usage'), tuple(row.get('usageEvidence', [])))
+        key = (*key, row.get('usage'), tuple(row.get('usageEvidence', [])), row.get('updateTier'))
         if key in groups:
             groups[key]['cacheCopies']+=row.get('cacheCopies',1)
         else:
@@ -526,7 +526,8 @@ class UpdateManager:
                 'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
         from .runtime_environment import update_inventory
         rows.extend(await update_inventory(self.home))
-        return rows
+        from .update_sequence import classify
+        return classify(self.home, rows)
 
     async def command(self, action, args=None, command_id=None):
         if self.awaiting_restart() and action != 'featureInstall':return
@@ -548,54 +549,87 @@ class UpdateManager:
             if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
             await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
 
-    async def check(self):
+    async def check(self, *, tier='application', install=False):
         if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease'): return
+        from .update_sequence import summary
         async with self.lock:
-            await self.publish(phase='checking', lastAttempt=time.time(), detail='Checking cached ecosystem sources…', error=None)
+            state = self.service.state['updates']
+            sequence = ({'stage': 'application', 'install': install,
+                         'included': summary([], checked=False), 'other': summary([], checked=False)}
+                        if tier == 'application' else {**state.get('sequence', {}), 'stage': tier, 'install': install})
+            sequence.pop('nextStage', None)
+            await self.publish(phase='checking', sequence=sequence, lastAttempt=time.time(),
+                               detail='Checking the application release…' if tier == 'application' else 'Checking included components…' if tier == 'included' else 'Checking other components…', error=None)
             try:
+                application = state.get('application', {})
+                if tier == 'application':
+                    from .app_updates import check as check_application
+                    application = await check_application()
+                    previous=self.service.state['updates'].get('application',{})
+                    if application.get('status')=='check_failed':
+                        from .release_notes import history
+                        from .app_updates import version_tuple
+                        application['releaseNotes']=history(previous.get('releaseNotes',[]),previous.get('latest') if version_tuple(previous.get('latest')) else None)
+                        application['releaseNotesWarning']='The update check failed. Showing saved release notes; check again to confirm the latest release.'
+                    elif application.get('releaseNotesWarning') and application.get('revision')==previous.get('revision'):
+                        from .release_notes import history
+                        application['releaseNotes']=history(previous.get('releaseNotes',[]),application.get('latest'))
+                        application['releaseNotesWarning']='Release notes could not be refreshed. Showing saved release history.'
+                    application['runningRevision'] = self.running_identity['revision']
+                    app_available = application.get('status') == 'update'
+                    # Do not inventory or resolve dependencies against an app
+                    # version that is about to be replaced.
+                    self.inventory = []
+                    write_private(self.directory/'inventory.json', '[]')
+                    await self.publish(application=application, appAvailable=app_available,
+                                       items=[application], available=int(app_available))
+                    if app_available or application.get('status') != 'current':
+                        await self.publish(phase='available' if app_available else 'error', lastCheck=time.time(),
+                            error=None if app_available else application.get('detail') or 'The application release could not be checked. Try again before checking components.',
+                            detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
+                        return
+                    tier = 'included'
                 rows = await self.inventory_sources()
                 semaphore = asyncio.Semaphore(5)
                 remote_tasks = {}
                 async def remote(url, ref):
                     async with semaphore:
-                        pattern = ref if ref in {'HEAD'} or ref.startswith('refs/') else 'refs/heads/'+ref
+                        pattern = ref if ref == 'HEAD' or ref.startswith('refs/') else 'refs/heads/'+ref
                         output = await process('git','ls-remote',url,pattern,timeout=35)
                         sha = output.split()[0] if output else ''
                         if not re.fullmatch('[a-f0-9]{40}',sha): raise ValueError('Remote ref unavailable')
                         return sha
                 async def check_row(row):
-                    if not row.get('eligible'): return
-                    if row.get('kind') == 'runtime environment': return
+                    if not row.get('eligible') or row.get('kind') == 'runtime environment': return
                     key = (row['url'],row['ref'])
                     task = remote_tasks.setdefault(key, None)
                     if task is None:
                         task = remote_tasks[key] = asyncio.create_task(remote(*key))
                     try:
                         row['latest'] = await task
-                        row['status'] = 'update' if row['latest'] != row['current'] else 'current'
+                        row['status'] = 'update' if row['latest'] != row.get('current') else 'current'
                     except (ValueError, RuntimeError, TimeoutError): row['status']='check_failed'
-                await asyncio.gather(*(check_row(row) for row in rows))
-                self.inventory = rows
-                write_private(self.directory/'inventory.json',json.dumps(rows))
-                public = group_sources(rows)
-                from .app_updates import check as check_application
-                application=await check_application()
-                previous=self.service.state['updates'].get('application',{})
-                if application.get('status')=='check_failed':
-                    from .release_notes import history
-                    from .app_updates import version_tuple
-                    application['releaseNotes']=history(previous.get('releaseNotes',[]),previous.get('latest') if version_tuple(previous.get('latest')) else None)
-                    application['releaseNotesWarning']='The update check failed. Showing saved release notes; check again to confirm the latest release.'
-                elif application.get('releaseNotesWarning') and application.get('revision')==previous.get('revision'):
-                    from .release_notes import history
-                    application['releaseNotes']=history(previous.get('releaseNotes',[]),application.get('latest'))
-                    application['releaseNotesWarning']='Release notes could not be refreshed. Showing saved release history.'
-                application['runningRevision'] = self.running_identity['revision']
-                app_available=application.get('status')=='update'
-                await self.publish(phase='available' if app_available or any(r['status']=='update' for r in rows) else 'checked',
-                    items=public+[application],application=application,appAvailable=app_available,
-                    available=sum(r['status']=='update' for r in public)+int(app_available),
-                    lastCheck=time.time(), detail='Check complete. Bundle, module and worker dependency sources were checked.')
+                checked = []
+                for stage in (['included', 'other'] if tier == 'included' else ['other']):
+                    selected = [row for row in rows if row.get('updateTier', 'other') == stage]
+                    sequence['stage'] = stage
+                    await self.publish(sequence={**sequence}, detail='Checking included components…' if stage == 'included' else 'Checking other components…')
+                    await asyncio.gather(*(check_row(row) for row in selected))
+                    checked.extend(selected)
+                    sequence.update(stage=stage)
+                    sequence[stage] = summary(group_sources(selected))
+                    if sequence[stage]['available'] or (stage == 'included' and sequence[stage]['issues']):break
+                self.inventory = checked
+                write_private(self.directory/'inventory.json',json.dumps(checked))
+                public = group_sources(checked)
+                available = sum(row.get('status') == 'update' for row in public)
+                blocked = sequence['stage'] == 'included' and sequence['included']['issues']
+                if not available and not blocked:sequence['stage'] = 'complete';sequence['install'] = False
+                await self.publish(phase='error' if blocked else 'available' if available else 'checked',
+                    sequence=sequence, items=public+[application], application=application, appAvailable=False,
+                    available=available, lastCheck=time.time(),
+                    error='An included component could not be checked or has local changes. Review its details before continuing.' if blocked else None,
+                    detail='Included components will be installed before checking the remaining sources.' if sequence['stage']=='included' and available else 'Component check complete.')
             except Exception:
                 await self.publish(phase='error', error='Update check failed. Your installed sources are unchanged.')
 
@@ -635,7 +669,13 @@ class UpdateManager:
         await activate(self)
 
     async def install(self):
-        if self.awaiting_restart():return
+        if self.awaiting_restart() or self.lock.locked():return
+        state = self.service.state['updates']
+        if state.get('sequence', {}).get('stage') == 'included' and state['sequence'].get('included', {}).get('issues'):
+            await self.publish(detail='Resolve the included component issues and check again before installing.')
+            return
+        if state.get('sequence'):
+            await self.publish(sequence={**state['sequence'], 'install': True})
         if self.service.state['updates'].get('pendingApp'):
             from .app_updates import activate
             await activate(self)
@@ -683,6 +723,10 @@ class UpdateManager:
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
                 for row in candidates:
+                    if row.get('kind') == 'included source':
+                        from .update_sequence import stage_missing
+                        await self.diagnostics.run('ecosystem-fetch', stage_missing, self, stage/'foundation', row)
+                        continue
                     if row.get('kind') in {'runtime dependency', 'runtime environment'}:
                         continue
                     target=stage/'foundation'/row['path']
@@ -707,7 +751,7 @@ class UpdateManager:
                 await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
                 phase='ecosystem-validation'
                 await self.validate(stage,release)
-                write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__}))
+                write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,detail='Update validated; waiting for conversations and calls to be idle.')
@@ -822,8 +866,22 @@ class UpdateManager:
                 if rollback:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
-                items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' else {})} for row in self.service.state['updates'].get('items',[])]
+                tier = marker.get('updateTier') if target else None
+                items=[row for row in self.service.state['updates'].get('items',[]) if row.get('id')=='application'] if rollback else [{**row, **({'status':'current','current':row['latest']} if row.get('status')=='update' and row.get('id')!='application' and (not tier or row.get('updateTier') == tier) else {})} for row in self.service.state['updates'].get('items',[])]
+                sequence = self.service.state['updates'].get('sequence')
+                if sequence:
+                    from .update_sequence import summary
+                    tier_summary = summary([row for row in items if row.get('updateTier') == tier])
+                    sequence = {**sequence}
+                    if rollback:
+                        sequence.update(stage='complete', install=False)
+                        sequence.pop('nextStage', None)
+                    elif tier == 'included':
+                        sequence.update(nextStage='other', included=tier_summary)
+                    else:
+                        sequence.update(stage='complete', install=False, other=tier_summary)
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
+                    **({'sequence': sequence} if sequence else {}),
                     available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
@@ -862,10 +920,13 @@ class UpdateManager:
         if state.get('pendingRelease'):
             await self.activate()
             return
-        if settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',24)*3600:
+        sequence = state.get('sequence', {})
+        if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
+            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False))
+        elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',24)*3600:
             await self.check()
         state=self.service.state['updates']
-        if settings.get('autoInstall',False) and state.get('phase')=='available' and state.get('available',0):
+        if (settings.get('autoInstall',False) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
             await self.install()
 
     async def loop(self):
@@ -881,7 +942,11 @@ class UpdateManager:
                     self.diagnostics.record('background-update','failed',errorType=exception_type(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
-            await asyncio.sleep(60)
+            sequence = self.service.state['updates'].get('sequence', {})
+            # Continue promptly, with a bounded wait even if another command
+            # holds the update lock. Ordinary checks retain their cadence.
+            delay = 1 if sequence.get('nextStage') and self.service.state['updates'].get('phase') == 'installed' else 60
+            await asyncio.sleep(delay)
 
     async def close(self):
         self.closed=True

@@ -35,6 +35,12 @@ async def main(home):
             return {'image':'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
                     'capturedAt':time.time(),'window':{'id':'fixture-42','title':'Synthetic native window','application':'Fixture application','bounds':[0,0,1,1]}}
     service.voice_visual.native=SyntheticNative()
+    original_visual = service.computer_visual.for_client
+    def computer_visual(*args, **kwargs):
+        visual = original_visual(*args, **kwargs)
+        visual.native = service.voice_visual.native
+        return visual
+    service.computer_visual.for_client = computer_visual
     async def config(request):return web.json_response({'available':True})
     async def connect(request):
         data=await request.json();sid=data['sessionId'];call=SimpleNamespace(id='fixture-call',session_id=sid,closed=False,closing=False,client_id=service.clients.current.get())
