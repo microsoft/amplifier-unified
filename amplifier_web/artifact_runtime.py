@@ -7,6 +7,7 @@ No dependency is installed or workspace code run.
 from __future__ import annotations
 
 import asyncio
+import base64
 from importlib import metadata
 import json
 import os
@@ -28,6 +29,79 @@ ARTIFACT_IMPORTS = {"python-docx": "docx", "python-pptx": "pptx", "openpyxl": "o
     "reportlab": "reportlab", "pypdf": "pypdf", "Pillow": "PIL"}
 
 
+async def _close_probe(proc):
+    """Ask the still-owned supervisor to clean its group; never signal its PID."""
+    try:
+        proc.stdin.close()
+        async with asyncio.timeout(2):
+            trailer = await proc.stdout.read(128)
+            await proc.wait()
+        return trailer == b'{"cleanup":"group"}\n' and proc.returncode == -signal.SIGKILL
+    except (OSError, TimeoutError, ValueError):
+        return False
+
+
+async def _finish_probe(start):
+    try:
+        proc = await start
+    except OSError:
+        return False
+    return await _close_probe(proc)
+
+
+async def _await_cleanup(cleanup):
+    # A second cancellation must not abandon spawn recovery or pipe closure.
+    # The independent finalizer owns both; cancellation still reaches the caller
+    # after it completes, even when it first arrives during successful cleanup.
+    cancelled = False
+    while True:
+        try:
+            result = await asyncio.shield(cleanup)
+            break
+        except asyncio.CancelledError:
+            if cleanup.cancelled():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
+async def _probe(command, *, limit, timeout, stderr=False, cwd=None):
+    # There is no portable Windows process-group equivalent here. Do not run a
+    # probe whose descendants this helper cannot own and close.
+    if os.name != 'posix':
+        return None
+    result = None
+    start = asyncio.create_task(asyncio.create_subprocess_exec(sys.executable, '-I',
+        str(Path(__file__).with_name('_artifact_probe.py')), cwd=cwd,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, limit=32768, start_new_session=True))
+    try:
+        # Recover the owned process if cancellation arrives during creation.
+        proc = await asyncio.shield(start)
+        async with asyncio.timeout(timeout + 1):
+            proc.stdin.write(json.dumps({'command': list(command), 'limit': limit,
+                'timeout': timeout, 'stderr': stderr}).encode() + b'\n')
+            await proc.stdin.drain()
+            result = json.loads(await proc.stdout.readline())
+    except (OSError, TimeoutError, ValueError):
+        pass
+    finally:
+        closed = await _await_cleanup(asyncio.create_task(_finish_probe(start)))
+    if not closed or not isinstance(result, dict):
+        return None
+    if result.get('status') == 'completed':
+        try:
+            output = base64.b64decode(result['output'], validate=True)
+            if len(output) > limit or type(result['returncode']) is not int:
+                return None
+            return {**result, 'output': output}
+        except (KeyError, ValueError, TypeError):
+            return None
+    return result
+
+
 async def verify_imports(packages):
     """Probe only fixed public libraries in a clean child of this interpreter.
 
@@ -39,34 +113,17 @@ async def verify_imports(packages):
         ' try:\n  importlib.import_module(module)\n  results[name]="passed"\n'
         ' except Exception as error:\n  results[name]=type(error).__name__\n'
         'print("ARTIFACT_IMPORTS="+json.dumps(results))\n')
-    proc = None
     observed = {}
     try:
         with tempfile.TemporaryDirectory(prefix='amplifier-artifact-probe-') as cwd:
-            proc = await asyncio.create_subprocess_exec(sys.executable, '-I', '-c', code,
-                cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL, limit=16384, start_new_session=os.name != 'nt')
-            async with asyncio.timeout(15):
-                data = await proc.stdout.read(16385)
-                if len(data) <= 16384:
-                    await proc.wait()
-                    if proc.returncode == 0:
-                        line = next((line for line in data.decode('utf-8', 'replace').splitlines()
-                            if line.startswith('ARTIFACT_IMPORTS=')), '')
-                        observed = json.loads(line.partition('=')[2]) if line else {}
+            result = await _probe([sys.executable, '-I', '-c', code],
+                cwd=cwd, limit=16384, timeout=15)
+            if result and result['status'] == 'completed' and result['returncode'] == 0:
+                line = next((line for line in result['output'].decode('utf-8', 'replace').splitlines()
+                    if line.startswith('ARTIFACT_IMPORTS=')), '')
+                observed = json.loads(line.partition('=')[2]) if line else {}
     except (OSError, TimeoutError, ValueError):
         pass
-    finally:
-        if proc is not None:
-            try:
-                if os.name != 'nt': os.killpg(proc.pid, signal.SIGKILL)
-                elif proc.returncode is None: proc.kill()
-            except ProcessLookupError:
-                pass
-            async with asyncio.timeout(2):
-                while await proc.stdout.read(4096):
-                    pass
-                await proc.wait()
     for row in packages:
         if row['name'] in ARTIFACT_IMPORTS:
             status = observed.get(row['name'], 'unknown')
@@ -110,37 +167,15 @@ def _executable(spec):
 async def _version(row, spec):
     if row["status"] != "available":
         return row
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(row["path"], *spec["args"],
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, limit=4096, start_new_session=os.name != "nt")
-        async with asyncio.timeout(2):
-            output = await proc.stdout.read(2049)
-            if len(output) > 2048:
-                return {**row, "versionStatus": "unknown", "reason": "Version output exceeded its limit."}
-            await proc.wait()
-        match = re.search(spec["pattern"], output.decode("utf-8", "replace"))
-        if proc.returncode == 0 and match:
-            return {**row, "version": match[1], "versionStatus": "verified"}
-        return {**row, "versionStatus": "unknown", "reason": "Executable did not return a recognized version."}
-    except (TimeoutError, OSError):
+    result = await _probe([row['path'], *spec['args']], limit=2048, timeout=2, stderr=True)
+    if result and result.get('status') == 'overflow':
+        return {**row, "versionStatus": "unknown", "reason": "Version output exceeded its limit."}
+    if not result or result.get('status') != 'completed':
         return {**row, "versionStatus": "unknown", "reason": "Version probe failed or timed out."}
-    finally:
-        if proc is not None:
-            try:
-                if os.name != "nt":
-                    os.killpg(proc.pid, signal.SIGKILL)
-                elif proc.returncode is None:
-                    proc.kill()
-            except ProcessLookupError:
-                pass
-            # A full StreamReader pauses its pipe and can keep wait() pending
-            # even after SIGKILL. Drain without retaining any further output.
-            async with asyncio.timeout(2):
-                while await proc.stdout.read(4096):
-                    pass
-                await proc.wait()
+    match = re.search(spec['pattern'], result['output'].decode('utf-8', 'replace'))
+    if result['returncode'] == 0 and match:
+        return {**row, "version": match[1], "versionStatus": "verified"}
+    return {**row, "versionStatus": "unknown", "reason": "Executable did not return a recognized version."}
 
 
 def _packages():
