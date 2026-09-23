@@ -14,7 +14,7 @@ class PortabilityFixtureProvider:
 
     def get_info(self):
         return {'id': 'portability-fixture', 'name': 'Local portability fixture',
-                'capabilities': ['completion:single_attempt:v1'],
+                'capabilities': ['completion:single_attempt:v1', 'completion:single_attempt:v2'],
                 'config_fields': [{'id': 'api_key', 'field_type': 'secret', 'required': True}]}
 
     async def complete(self, request, **kwargs):
@@ -22,7 +22,7 @@ class PortabilityFixtureProvider:
         assert self.config['api_key'] == self.api_key
         assert request.model == 'fixture-model'
         assert request.max_output_tokens == 1024 and request.reasoning_effort == 'high'
-        assert kwargs == {'request_options': {'single_attempt': True}}
+        assert kwargs == {'request_options': {'single_attempt': True, 'single_attempt_version': 2}}
         assert request.tools is None and request.stream is False
         assert request.metadata == {'purpose': 'destination-execution-probe'}
         assert len(request.messages) == 1 and request.messages[0].content == 'Reply with OK.'
@@ -32,7 +32,7 @@ class PortabilityFixtureProvider:
             stream.write(json.dumps({'host': os.environ['PORTABILITY_FIXTURE_HOST'],
                 'pid': os.getpid(), 'model': request.model, 'maxOutputTokens': request.max_output_tokens,
                 'destinationCredentialVerified': True, 'purpose': request.metadata['purpose']}) + '\n')
-        receipt = {'version': 1, 'model': request.model, 'reasoning_effort': request.reasoning_effort,
+        receipt = {'version': 2, 'model': request.model, 'reasoning_effort': request.reasoning_effort,
             'max_output_tokens': request.max_output_tokens, 'timeout_seconds': request.timeout,
             'native_count_requests': 1, 'generation_requests': 1, 'native_input_tokens': 6,
             'retries': 0, 'continuations': 0, 'closed': True,

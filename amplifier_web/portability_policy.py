@@ -1,11 +1,13 @@
 """Internal, versioned readiness bounds; never a caller-supplied run budget."""
 import hashlib
 import json
+import math
 import re
 
-CAPABILITY = 'completion:single_attempt:v1'
+CAPABILITY = 'completion:single_attempt:v2'
+LEGACY_CAPABILITY = 'completion:single_attempt:v1'
 MAX_OUTPUT_TOKENS = 1024
-REQUEST_TIMEOUT_SECONDS = 45
+LEGACY_REQUEST_TIMEOUT_SECONDS = 45
 PROMPT = 'Reply with OK.'
 
 
@@ -14,22 +16,38 @@ def policy_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def readiness_policy(module, instance, model, effort):
+def _policy(module, instance, model, effort, *, version, timeout_seconds):
     for value, maximum in ((module, 128), (instance, 200), (model, 200), (effort, 50)):
         if (not isinstance(value, str) or not 1 <= len(value) <= maximum
                 or any(ord(char) < 33 for char in value)):
             raise ValueError('Readiness requires an explicit provider, model and effective reasoning effort')
-    return {'version': 1, 'capability': CAPABILITY, 'providerModule': module,
+    if timeout_seconds is not None:
+        try:
+            valid = type(timeout_seconds) in (int, float) and math.isfinite(timeout_seconds) and timeout_seconds > 0
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError('An explicit readiness deadline must be finite and positive')
+    return {'version': version, 'capability': LEGACY_CAPABILITY if version == 1 else CAPABILITY, 'providerModule': module,
             'providerInstance': instance, 'model': model, 'reasoningEffort': effort,
             'maxOutputTokens': MAX_OUTPUT_TOKENS, 'maxCountRequests': 1,
             'maxGenerationRequests': 1, 'retries': 0, 'continuations': 0,
-            'timeoutSeconds': REQUEST_TIMEOUT_SECONDS, 'prompt': PROMPT, 'tools': False}
+            'timeoutSeconds': timeout_seconds, 'prompt': PROMPT, 'tools': False}
+
+
+def readiness_policy(module, instance, model, effort, *, timeout_seconds=None):
+    """New admission has no elapsed deadline; experiments may explicitly bind one."""
+    return _policy(module, instance, model, effort, version=2, timeout_seconds=timeout_seconds)
 
 
 def validate_policy(policy, expected_hash=None):
     try:
-        expected = readiness_policy(policy['providerModule'], policy['providerInstance'],
-                                    policy['model'], policy['reasoningEffort'])
+        version = policy['version']
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError()
+        timeout = LEGACY_REQUEST_TIMEOUT_SECONDS if version == 1 else policy['timeoutSeconds']
+        expected = _policy(policy['providerModule'], policy['providerInstance'],
+                           policy['model'], policy['reasoningEffort'], version=version, timeout_seconds=timeout)
         # Hash comparison also distinguishes bools from ints, unlike dict equality.
         if policy_digest(policy) != policy_digest(expected) or (expected_hash is not None and expected_hash != policy_digest(policy)):
             raise ValueError()
@@ -48,14 +66,18 @@ def effective_effort(selection, config):
 
 
 def completion_receipt(value, policy):
-    """Require the advertised provider's closed, single-attempt v1 evidence."""
-    expected = {'version': 1, 'model': policy['model'], 'reasoning_effort': policy['reasoningEffort'],
+    """Require closed evidence for the exact historical or new admitted policy."""
+    expected = {'version': policy['version'], 'model': policy['model'], 'reasoning_effort': policy['reasoningEffort'],
                 'max_output_tokens': policy['maxOutputTokens'], 'timeout_seconds': policy['timeoutSeconds'],
                 'native_count_requests': 1, 'generation_requests': 1, 'retries': 0, 'continuations': 0, 'closed': True}
     if not isinstance(value, dict) or set(value) != set(expected) | {'native_input_tokens', 'input_sha256', 'request_sha256'}:
         raise ValueError('Missing bounded completion receipt')
     for key, expected_value in expected.items():
-        if value[key] != expected_value or (key != 'timeout_seconds' and type(value[key]) is not type(expected_value)):
+        if key == 'timeout_seconds':
+            valid_type = value[key] is None if expected_value is None else type(value[key]) in (int, float)
+        else:
+            valid_type = type(value[key]) is type(expected_value)
+        if not valid_type or value[key] != expected_value:
             raise ValueError('Completion receipt differs from admitted readiness policy')
     if type(value['native_input_tokens']) is not int or value['native_input_tokens'] < 0:
         raise ValueError('Invalid native token-count receipt')

@@ -29,7 +29,7 @@ from amplifier_web.provider_environment import (
     materialize_provider_config,
     provider_class,
 )
-from amplifier_web.portability_policy import CAPABILITY, PROMPT, MAX_OUTPUT_TOKENS, REQUEST_TIMEOUT_SECONDS, completion_receipt, policy_digest, validate_policy
+from amplifier_web.portability_policy import PROMPT, MAX_OUTPUT_TOKENS, completion_receipt, policy_digest, validate_policy
 
 
 MAX_REQUEST_BYTES = 65536
@@ -141,13 +141,13 @@ async def _strict_close(provider):
         raise ProbeFailure('provider_close_failed') from None
 
 
-async def _bounded_info(provider):
+async def _bounded_info(provider, capability):
     info = provider.get_info()
     if inspect.isawaitable(info):
         info = await info
     value = info.model_dump(mode='json') if hasattr(info, 'model_dump') else info
     capabilities = value.get('capabilities', []) if isinstance(value, dict) else []
-    if not isinstance(capabilities, (list, tuple, set)) or CAPABILITY not in capabilities:
+    if not isinstance(capabilities, (list, tuple, set)) or capability not in capabilities:
         raise ProbeFailure('single_attempt_unsupported')
     return info
 
@@ -184,22 +184,28 @@ async def _probe(request):
     provider = None
     try:
         provider = construct_provider(cls, config)
-        await _bounded_info(provider)
+        await _bounded_info(provider, policy['capability'])
         complete = getattr(provider, "complete", None)
         if not callable(complete):
             raise ProbeFailure("inference_unsupported")
         from amplifier_core.message_models import ChatRequest, ChatResponse, Message
         prompt = ChatRequest(messages=[Message(role="user", content=PROMPT)], model=request["model"],
             reasoning_effort=policy['reasoningEffort'], max_output_tokens=MAX_OUTPUT_TOKENS,
-            tools=None, stream=False, timeout=REQUEST_TIMEOUT_SECONDS,
+            tools=None, stream=False, timeout=policy['timeoutSeconds'],
             metadata={"purpose": "destination-execution-probe"})
+        options = {'single_attempt': True}
+        if policy['version'] == 2:
+            options['single_attempt_version'] = 2
         if not inspect.iscoroutinefunction(complete):
             raise ProbeFailure("inference_unsupported")
         try:
-            inspect.signature(complete).bind(prompt, request_options={'single_attempt': True})
+            inspect.signature(complete).bind(prompt, request_options=options)
         except TypeError:
             raise ProbeFailure('single_attempt_unsupported') from None
-        response = await asyncio.wait_for(complete(prompt, request_options={'single_attempt': True}), REQUEST_TIMEOUT_SECONDS)
+        # None leaves healthy calls running; only an explicitly admitted finite
+        # experiment or historical policy imposes an elapsed deadline.
+        async with asyncio.timeout(policy['timeoutSeconds']):
+            response = await complete(prompt, request_options=options)
         try:
             response = ChatResponse.model_validate(response)
         except Exception:

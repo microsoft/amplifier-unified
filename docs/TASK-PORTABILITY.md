@@ -86,7 +86,7 @@ task resumption. A static provider catalog is never accepted as account proof.
 
 Readiness uses one fixed, internal versioned policy for each stage and activation
 attempt: at most one native input-token count and one generation, 1,024 total
-output tokens (including reasoning), a 45-second completion timeout, no tools,
+output tokens (including reasoning), no elapsed-time deadline by default, no tools,
 and no retries or continuations. The request is only `Reply with OK.` with the
 saved model and effective reasoning effort. A saved explicit effort wins;
 otherwise the destination must explicitly configure `reasoning_effort` or
@@ -95,14 +95,22 @@ Stage saves the policy and hash before restoring the checkout or probing.
 Its signed readiness checks bind that policy, and activation authenticates those
 checks and reuses the exact saved policy even if destination defaults change.
 Success requires completed, nonempty, nonrefused output and confirmed client
-closure with a receipt matching the request. There is no caller budget option.
+closure with a receipt matching the request. New version 2 policies bind
+`timeoutSeconds: null`; an explicitly admitted internal experiment can bind a
+finite positive deadline instead. There is no action/UI budget option. The host
+does not impose a separate default probe-process deadline. Explicit cancellation
+still closes the owned process and preserves the uncertain, non-replaying attempt.
+Close-only cleanup bounds are separate from the healthy completion lifetime.
 
-The current bounded completion capability (`completion:single_attempt:v1`) is
+The current bounded completion capability (`completion:single_attempt:v2`) is
 implemented by the updated standard OpenAI provider using a fresh client.
 Older provider versions, other providers and unsupported endpoints cannot pass
 this check: they fail before a completion request is sent. Update the destination
-provider or use a supported provider before starting a new transfer. Existing
-legacy readiness records, missing policies and unknown policy versions are never
+provider or use a supported provider before starting a new transfer. Historical
+version 1 policies and signed checks retain their originally admitted 45-second
+deadline and v1 provider contract; an already-admitted activation reuses that
+exact policy. They are not silently upgraded to the new default. Existing
+legacy readiness records without policies and unknown policy versions are never
 automatically upgraded or given a new probe budget; retain them for operator
 investigation. A transfer already recorded as `active` can still finish native
 fence clearing without a provider request.

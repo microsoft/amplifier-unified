@@ -18,11 +18,11 @@ from amplifier_worktrees.git import digest
 SECRET = "destination-private-credential"
 
 
-def receipt(model='selected-model', effort='high'):
+def receipt(model='selected-model', effort='high', *, version=2, timeout=None):
     fixed_input = [{'role':'user','content':[{'type':'input_text','text':'Reply with OK.'}]}]
     input_hash = hashlib.sha256(json.dumps(fixed_input, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return {'version': 1, 'model': model, 'reasoning_effort': effort, 'max_output_tokens': 1024,
-            'timeout_seconds': 45.0, 'native_count_requests': 1, 'generation_requests': 1,
+    return {'version': version, 'model': model, 'reasoning_effort': effort, 'max_output_tokens': 1024,
+            'timeout_seconds': timeout, 'native_count_requests': 1, 'generation_requests': 1,
             'native_input_tokens': 6, 'retries': 0, 'continuations': 0, 'closed': True,
             'input_sha256': input_hash, 'request_sha256': 'b' * 64}
 
@@ -49,7 +49,7 @@ def provider(monkeypatch):
             self.instances.append(self)
 
         def get_info(self):
-            return {'capabilities': ['completion:single_attempt:v1'],
+            return {'capabilities': ['completion:single_attempt:v1', 'completion:single_attempt:v2'],
                     "config_fields": [{"id": "api_key", "field_type": "secret", "required": True}]}
 
         async def list_models(self):
@@ -87,9 +87,9 @@ async def test_fixed_request_uses_destination_secret_selected_model_and_no_tools
     assert SECRET not in json.dumps(result)
     assert len(provider.requests) == 1
     prompt, options = provider.requests[0]
-    assert prompt.model == "selected-model" and options == {'request_options': {'single_attempt': True}}
+    assert prompt.model == "selected-model" and options == {'request_options': {'single_attempt': True, 'single_attempt_version': 2}}
     assert prompt.reasoning_effort == 'high'
-    assert prompt.max_output_tokens == 1024 and prompt.timeout == 45
+    assert prompt.max_output_tokens == 1024 and prompt.timeout is None
     assert prompt.tools is None and prompt.tool_choice is None
     assert prompt.conversation_id is None and prompt.stream is False
     assert [(message.role, message.content) for message in prompt.messages] == [("user", "Reply with OK.")]
@@ -186,7 +186,7 @@ async def test_capability_uses_materialized_destination_endpoint(provider, monke
 
 
 @pytest.mark.parametrize('change', [
-    {'version': 2}, {'maxOutputTokens': 16}, {'maxOutputTokens': 2048}, {'retries': True},
+    {'version': 3}, {'maxOutputTokens': 16}, {'maxOutputTokens': 2048}, {'retries': True},
     {'continuations': 1}, {'maxGenerationRequests': 2}, {'reasoningEffort': None},
     {'tools': []}, {'prompt': 'Continue the saved task.'}, {'model': 'another-model'},
     {'providerModule': 'provider-other'}, {'extra': 'unsupported'},
@@ -271,15 +271,15 @@ class FixtureProvider:
         self.config = config
     def get_info(self):
         print("destination-private-credential")
-        return {"config_fields": [], 'capabilities': ['completion:single_attempt:v1']}
+        return {"config_fields": [], 'capabilities': ['completion:single_attempt:v1', 'completion:single_attempt:v2']}
     async def complete(self, request, **kwargs):
         os.write(1, b"destination-private-credential")
         os.write(2, b"destination-private-credential")
         assert request.model == "selected-model"
         assert request.max_output_tokens == 1024 and request.tools is None
-        assert request.reasoning_effort == 'high' and kwargs == {'request_options': {'single_attempt': True}}
-        receipt = {'version': 1, 'model': request.model, 'reasoning_effort': request.reasoning_effort,
-            'max_output_tokens': 1024, 'timeout_seconds': 45, 'native_count_requests': 1,
+        assert request.reasoning_effort == 'high' and kwargs == {'request_options': {'single_attempt': True, 'single_attempt_version': 2}}
+        receipt = {'version': 2, 'model': request.model, 'reasoning_effort': request.reasoning_effort,
+            'max_output_tokens': 1024, 'timeout_seconds': None, 'native_count_requests': 1,
             'generation_requests': 1, 'native_input_tokens': 6, 'retries': 0, 'continuations': 0,
             'closed': True, 'input_sha256': hashlib.sha256(json.dumps(
                 [{'role':'user','content':[{'type':'input_text','text':'Reply with OK.'}]}],
