@@ -304,6 +304,36 @@ def test_duplicate_model_telemetry_matches_once_after_admission_delay(source):
     assert [row['id'] for row in index.rows()]==['stable-0','stable-1']
 
 
+def test_completed_call_logged_under_app_alias_stays_single_after_reprojection(source):
+    from amplifier_web.capacity import usage_snapshot
+    session, native_path = source
+    session['status'] = 'working'
+    call = {'id':'host-call', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'turnId':'turn', 'producerId':'worker', 'revision':2, 'liveObservation':True,
+            'provider':'test', 'model':'fixture', 'phase':'completed', 'startedAt':10,
+            'endedAt':26.001, 'usage':{'inputTokens':3, 'outputTokens':465,
+                'cacheWriteTokens':249877, 'totalTokens':468, 'costUsd':3.1467425, 'costType':'reported'}}
+    session['execution'] = {'nodes':[dict(call)], 'turns':[{'id':'turn','anchorMessageId':'user'}]}
+    # The host capture is stored under the app ID, while the resumed provider's
+    # capture is under the original CLI ID. Both represent the same request.
+    app_path = event_path(session, 'app')
+    append(app_path, 'provider:request', {**call,'phase':'running','endedAt':None,'usage':{}}, 10)
+    append(native_path, 'llm:request', {'request_id':'provider-call','provider':'test','model':'fixture'}, 11.1)
+    append(native_path, 'llm:response', {'request_id':'provider-call','provider':'test','model':'fixture',
+           'usage':{'input_tokens':3,'output_tokens':465,'cache_write_tokens':249877,'cost_usd':3.1467425}}, 26)
+    original_capacity = usage_snapshot(session)
+    view = EventLogView(None)
+    for delayed in (True, False):
+        if not delayed:append(app_path, 'llm:response', call, 26.002)
+        for _ in range(3):
+            session['execution'] = view.read(session)
+            nodes = session['execution']['nodes']
+            assert len(nodes) == 1
+            assert nodes[0]['id'] == 'host-call'
+            assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(3.1467425)
+            assert usage_snapshot(session)['receipts'] == original_capacity['receipts']
+
+
 def test_unfinished_historical_record_is_not_a_perpetually_running_call(source):
     session,path=source
     append(path,'tool:pre',{'tool_call_id':'one','tool_name':'bash','tool_input':{'command':'old'}})
@@ -736,3 +766,51 @@ def test_unfinished_history_does_not_reopen_a_terminal_turn(source, session_stat
     assert turn['phase'] == 'completed' and turn['endedAt'] == 11
     assert session['execution']['nodes'][1]['phase'] == 'recorded'
     assert session['status'] == session_status
+
+
+@pytest.mark.parametrize("host_log", ["native", "app"])
+def test_resumed_alias_logs_merge_host_and_provider_after_display_retirement(source, host_log):
+    session, native_path = source
+    session['status'] = 'idle'
+    call = {'id': 'host-call', 'kind': 'llm', 'sessionId': 'app', 'rootSessionId': 'native',
+            'turnId': 'turn', 'producerId': 'worker', 'revision': 2,
+            'provider': 'test', 'model': 'fixture', 'phase': 'completed', 'startedAt': 10,
+            'endedAt': 26.001, 'usage': {'inputTokens': 3, 'outputTokens': 465, 'costUsd': 3.14}}
+    session['execution'] = {'nodes': [], 'turns': [{'id': 'turn', 'anchorMessageId': 'user'}],
+                            'retiredUsageNodes': [call]}
+    path = event_path(session, host_log)
+    append(path, 'provider:request', {**call, 'phase': 'running', 'endedAt': None, 'usage': {}}, 10)
+    append(native_path, 'llm:request', {'request_id': 'provider-call', 'provider': 'test', 'model': 'fixture',
+                                     'message_count': 699}, 11.1)
+    append(native_path, 'llm:response', {'request_id': 'provider-call', 'provider': 'test', 'model': 'fixture',
+           'usage': {'input_tokens': 3, 'output_tokens': 465, 'cost_usd': 3.14}}, 26)
+    append(path, 'llm:response', call, 26.002)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = session['execution']['nodes']
+        assert len(nodes) == 1
+        assert nodes[0]['id'] == 'host-call'
+        assert nodes[0]['requestInfo']['message_count'] == 699
+        assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(3.14)
+        assert session['execution']['retiredUsageNodes'] == [call]
+
+
+def test_resumed_root_alias_pairing_keeps_identical_child_call_separate(source):
+    session, native_path = source
+    session['workers'] = [{'id': 'child', 'sessionId': 'child', 'status': 'idle'}]
+    call = {'id': 'host-call', 'kind': 'llm', 'sessionId': 'app',
+            'provider': 'test', 'model': 'fixture', 'phase': 'completed', 'startedAt': 10,
+            'endedAt': 26.001, 'usage': {'inputTokens': 3, 'outputTokens': 465, 'costUsd': 3.14}}
+    append(native_path, 'llm:response', call, 26.002)
+    for identity in ('native', 'child'):
+        path = event_path(session, identity)
+        append(path, 'llm:request', {'session_id': identity, 'request_id': 'provider-call',
+                                   'provider': 'test', 'model': 'fixture'}, 11.1)
+        append(path, 'llm:response', {'session_id': identity, 'request_id': 'provider-call',
+               'provider': 'test', 'model': 'fixture',
+               'usage': {'input_tokens': 3, 'output_tokens': 465, 'cost_usd': 3.14}}, 26)
+    tree = EventLogView(None).read(session)
+    assert {row['id'] for row in tree['nodes']} == {'host-call', 'llm:child:provider-call'}
+    assert tree['aggregateUsage']['costUsd'] == pytest.approx(6.28)
+    assert tree['retiredUsageNodes'] == []
