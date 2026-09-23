@@ -12,6 +12,19 @@ from amplifier_web import deployment_service
 from amplifier_web.cli import _parse
 
 
+@pytest.fixture(autouse=True)
+def isolated_service_backend(tmp_path, monkeypatch):
+    # These cases default to systemd; macOS cases select Darwin explicitly.
+    # Never let the machine running the tests choose a real service manager.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(deployment_service, "unit_path", lambda: tmp_path / "unit.service")
+    monkeypatch.setattr(deployment_service, "launchd_path", lambda: tmp_path / "agent.plist")
+    def unexpected(*args, **kwargs):
+        pytest.fail("Service manager calls must be mocked by the test")
+    monkeypatch.setattr(deployment_service, "_systemctl", unexpected)
+    monkeypatch.setattr(deployment_service, "_launchctl", unexpected)
+
+
 def test_install_refuses_unmanaged_unit(tmp_path, monkeypatch):
     unit = tmp_path / "amplifier-unified.service"
     unit.write_text("[Service]\n")
