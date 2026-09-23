@@ -341,14 +341,20 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             raise AppError("Canvas document no longer available", 404)
         if canvas.get("kind") == "mcp-app":
             from .smart_canvas import document_response
-            service.smart_canvas.binding(canvas["id"])
-            return document_response(canvas)
+            from .mcp_view_recovery import source
+            return document_response({**canvas, 'content': source(service, canvas['id'])})
         identity = json.dumps(canvas["id"])
         bridge = 'canvas_app_bridge.js' if canvas.get('app') else 'canvas_bridge.js'
         bootstrap = "<!doctype html><script data-canvas-bridge>" + (Path(__file__).parent / bridge).read_text().replace("__CANVAS_ID__", identity) + "</script>"
         return web.Response(text=bootstrap + canvas_source(canvas,service.db), content_type="text/html", headers={
             "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})
+
+    async def smart_canvas_status(request):
+        from .mcp_view_recovery import inspect
+        return web.json_response(inspect(service, request.match_info['identity']), headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/canvas/{identity}/status', smart_canvas_status)
 
     async def smart_canvas_tools(request):
         _, binding = service.smart_canvas.binding(request.match_info['identity'])

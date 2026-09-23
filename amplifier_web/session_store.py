@@ -10,6 +10,10 @@ from .host.config import write_private
 from .host.storage import SessionStore
 
 
+class _BoundaryUnavailable(ValueError):
+    """No boundary evidence exists, rather than conflicting saved evidence."""
+
+
 def text_content(row):
     content = row.get("content", "")
     if isinstance(content, str):
@@ -39,7 +43,60 @@ def matches_user(row, visible):
                 and content[0].get('text') == text)
 
 
-def user_boundaries(messages, visible_messages):
+def _input_identity(row):
+    marker = (row.get('metadata') or {}).get('amplifier_input')
+    if (row.get('role') == 'user' and isinstance(marker, dict)
+            and marker.get('version') == 1 and marker.get('kind') == 'user'
+            and isinstance(marker.get('id'), str) and 0 < len(marker['id']) <= 200):
+        return marker['id']
+    return None
+
+
+def _native_anchor(messages, visible, source=None):
+    """Validate a canonical index or unique input binding, never a text guess."""
+    changed = 'The saved transcript changed. Refresh this chat before forking or editing it.'
+    index = visible.get('nativeIndex')
+    voice = visible.get('voiceId') or visible.get('via') == 'call'
+    identity = visible.get('inputId') if visible.get('role') == 'user' and not voice else None
+    bound = visible.get('nativeMessageId')
+    if identity:
+        if not isinstance(identity, str) or len(identity) > 200:
+            raise ValueError(changed)
+        matches = [i for i, row in enumerate(messages) if _input_identity(row) == identity]
+        if len(matches) > 1 or matches and type(index) is int and matches[0] != index:
+            raise ValueError(changed)
+        if matches:
+            index = matches[0]
+        elif bound:
+            raise ValueError(changed)
+    if bound and type(index) is not int:
+        from .automatic_history import display_identity
+        matches = [i for i, row in enumerate(messages)
+                   if source is not None and display_identity(source, i, row.get('role'), text_content(row)) == bound]
+        if len(matches) != 1:
+            raise ValueError(changed)
+        index = matches[0]
+    if type(index) is not int:
+        return None
+    if not 0 <= index < len(messages):
+        raise ValueError(changed)
+    row = messages[index]
+    if row.get('role') != visible.get('role'):
+        raise ValueError(changed)
+    if bound:
+        from .automatic_history import display_identity
+        if source is None or display_identity(source, index, row.get('role'), text_content(row)) != bound:
+            raise ValueError(changed)
+    native_identity = _input_identity(row)
+    if identity and 'amplifier_input' in (row.get('metadata') or {}) and identity != native_identity:
+        raise ValueError(changed)
+    same_text = matches_user(row, visible) if row.get('role') == 'user' else text_content(row) == visible.get('text')
+    if not (bound or identity and native_identity == identity or same_text):
+        raise ValueError(changed)
+    return index
+
+
+def user_boundaries(messages, visible_messages, *, source=None):
     """Locate visible inputs, including spoken turns without a delegated input.
 
     Voice bubbles are not one-to-one with manager inputs. Native context timestamps
@@ -51,9 +108,9 @@ def user_boundaries(messages, visible_messages):
     boundaries = []
     cursor = 0
     for visible in (r for r in visible_messages if r.get('role') == 'user'):
-        native_index = visible.get('nativeIndex')
-        if type(native_index) is int:
-            if native_index < cursor or native_index >= len(messages) or not matches_user(messages[native_index], visible):
+        native_index = _native_anchor(messages, visible, source)
+        if native_index is not None:
+            if native_index < cursor:
                 raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
             boundaries.append(native_index)
             cursor = native_index + 1
@@ -75,7 +132,7 @@ def user_boundaries(messages, visible_messages):
                 boundaries.append(cursor)
                 continue
         if match is None:
-            raise ValueError("This older transcript has no reliable boundary for that message. Fork the full conversation instead.")
+            raise _BoundaryUnavailable("This older transcript has no reliable boundary for that message. Fork the full conversation instead.")
         boundaries.append(match)
         cursor = match + 1
     return boundaries
@@ -154,19 +211,19 @@ def complete_tool_exchanges(messages, *, positions=None):
     return result
 
 
-def _index_visible(messages, visible, display_offset=0):
+def _index_visible(messages, visible, display_offset=0, *, source=None, verify_anchors=False):
     """Retain exact anchors; only unindexed legacy web rows need alignment."""
     display_indexes = [index for index, row in enumerate(messages)
                        if row.get('role') in {'user', 'assistant'} and text_content(row)
                        and not (row.get('metadata') or {}).get('ephemeral')]
     cursor = display_indexes[display_offset] if 0 <= display_offset < len(display_indexes) else 0
     for row in visible:
-        if type(row.get('nativeIndex')) is int:
-            cursor = max(cursor, row['nativeIndex'] + 1)
+        if type(row.get('nativeIndex')) is not int and (row.get('voiceId') or row.get('via') == 'call'):
             continue
-        # Spoken bubbles can precede their eventual delegated prompt. Preserve
-        # the existing timestamp-based boundary policy for those UI-only rows.
-        if row.get('voiceId') or row.get('via') == 'call':
+        anchor = _native_anchor(messages, row, source) if verify_anchors else row.get('nativeIndex')
+        if type(anchor) is int:
+            row['nativeIndex'] = anchor
+            cursor = max(cursor, anchor + 1)
             continue
         if row.get('role') == 'user':
             match = next((index for index in range(cursor, len(messages))
@@ -178,6 +235,27 @@ def _index_visible(messages, visible, display_offset=0):
         if match is not None:
             row['nativeIndex'] = match
             cursor = match + 1
+
+
+def _checkpoint_end(messages, visible, cut, explicit_anchors, source):
+    """A missing final input can follow a proven complete saved prefix."""
+    target = visible[cut]
+    if cut != len(visible) - 1 or not cut or target.get('voiceId') or target.get('via') == 'call':
+        return None
+    previous = visible[cut - 1]
+    if previous.get('role') != 'assistant' or previous.get('voiceId') or previous.get('via') == 'call':
+        return None
+    anchor = _native_anchor(messages, previous, source)
+    if anchor != len(messages) - 1:
+        return None
+    if cut - 1 not in explicit_anchors:
+        # An inferred legacy text match is insufficient if a repeated answer
+        # could refer to a different native position.
+        matches = [row for row in messages if row.get('role') == 'assistant'
+                   and text_content(row) == previous.get('text')]
+        if len(matches) != 1:
+            return None
+    return len(messages)
 
 
 def _full_fork_view(messages, visible, target_id, created_at):
@@ -241,7 +319,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
-    _index_visible(messages, visible, source.get('sharedHistoryOffset', 0))
+    explicit_anchors = {i for i, row in enumerate(visible)
+                        if type(row.get('nativeIndex')) is int or row.get('nativeMessageId')}
     user_indexes = [i for i, row in enumerate(visible) if row.get('role') == 'user']
     user_offset = source.get('sharedHistoryUserTurnOffset', 0)
     before_turn = None
@@ -257,20 +336,33 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             raise ValueError("Choose an existing user turn for the fork")
         if turn < len(user_indexes):
             cut = user_indexes[turn]
+    # Later rows are irrelevant to an earlier cut. Validate only its retained
+    # prefix and the requested boundary, including immutable attachment binds.
+    _index_visible(messages, visible[:cut + 1], source.get('sharedHistoryOffset', 0),
+                   source=source, verify_anchors=cut < len(visible))
     if cut < len(visible):
-        # Only the requested boundary matters. A later failed or uncheckpointed
-        # submission must not prevent branching an earlier completed exchange.
-        if cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') == 'failed':
-            # An explicitly rejected input never entered runtime context.
-            boundary = len(messages)
+        target_anchor = _native_anchor(messages, visible[cut], source)
+        anchored_input = (target_anchor is not None and visible[cut].get('inputId')
+                          and _input_identity(messages[target_anchor]) == visible[cut]['inputId'])
+        if target_anchor is not None and (cut in explicit_anchors or anchored_input):
+            # Exact current provenance establishes this cut independently of
+            # earlier UI-only failed inputs. Never retain an anchored future row.
+            boundary = target_anchor
+            if any(type(row.get('nativeIndex')) is int and row['nativeIndex'] >= boundary for row in visible[:cut]):
+                raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
         else:
             try:
-                boundary = user_boundaries(messages, visible[:cut + 1])[-1]
-            except ValueError:
-                if prepare_only and cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') in {'unknown','sending'}:
+                boundary = user_boundaries(messages, visible[:cut + 1], source=source)[-1]
+            except _BoundaryUnavailable:
+                boundary = _checkpoint_end(messages, visible, cut, explicit_anchors, source)
+                if boundary is not None:
+                    # This is evidence about the saved prefix, not a claim that
+                    # an unconfirmed submission never executed.
+                    pass
+                elif prepare_only and cut == len(visible)-1 and visible[cut].get('delivery', {}).get('status') in {'unknown','sending'}:
                     # The owned idle worker has no outstanding input. A final
                     # unconfirmed browser input may never have entered context.
-                    user_boundaries(messages, visible[:cut])
+                    user_boundaries(messages, visible[:cut], source=source)
                     boundary = len(messages)
                 else:
                     raise
@@ -327,6 +419,14 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
+    # UI message IDs remain stable, while canonical content bindings belong to
+    # the independent target and its remapped native indices.
+    from .automatic_history import display_identity
+    for row in visible:
+        if row.get('nativeMessageId') and type(row.get('nativeIndex')) is int:
+            index = row['nativeIndex']
+            row['nativeMessageId'] = display_identity({'id': target_id}, index,
+                                                      messages[index].get('role'), text_content(messages[index]))
     if prepare_only:
         return {'messages': visible, 'context': messages, 'throughTurn': through_turn}
     from .managed_chats import is_managed, allocate
