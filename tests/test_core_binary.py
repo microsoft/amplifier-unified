@@ -50,8 +50,9 @@ def test_core_source_build_is_rejected_before_executing_its_backend(tmp_path, in
         command = [uv, 'sync', '--project', str(project), '--python', sys.executable, '--no-index']
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     assert result.returncode != 0
-    assert ('Building source distributions is disabled' in result.stderr
-            or 'marked as `--no-build` but has no binary distribution' in result.stderr)
+    diagnostic = ' '.join(result.stderr.split())  # uv wraps diagnostics to the terminal width.
+    assert ('Building source distributions is disabled' in diagnostic
+            or 'marked as `--no-build` but has no binary distribution' in diagnostic)
     assert not marker.exists()
 
 
