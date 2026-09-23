@@ -7,6 +7,8 @@ on:
       - amplifier_web/__init__.py
       - .github/workflows/release.yml
       - scripts/release.py
+      - scripts/release_qualification.py
+      - scripts/qualify_host_dependencies.py
   workflow_dispatch:
     inputs:
       release_revision:
@@ -14,14 +16,19 @@ on:
         required: false
         type: string
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: application-release
   cancel-in-progress: false
 jobs:
-  release:
+  prepare:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.release.outputs.revision }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      candidate: ${{ steps.candidate.outputs.candidate }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,51 +36,139 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v6
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          enable-cache: false
       - name: Resolve immutable release target
         id: release
         env:
           SELECTED_RELEASE_REVISION: ${{ inputs.release_revision }}
         run: |
-          cp scripts/release.py "$RUNNER_TEMP/release.py"
-          python "$RUNNER_TEMP/release.py" plan --revision "$SELECTED_RELEASE_REVISION" --output "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/release-tools"
+          cp scripts/release.py scripts/release_qualification.py "$RUNNER_TEMP/release-tools/"
+          python "$RUNNER_TEMP/release-tools/release.py" plan --revision "$SELECTED_RELEASE_REVISION" --output "$GITHUB_OUTPUT"
       - name: Pin the verified selected commit
         env:
           RELEASE_REVISION: ${{ steps.release.outputs.revision }}
         run: git checkout --detach "$RELEASE_REVISION"
-      - name: Install build dependencies
+      - name: Resolve current installed host dependencies once
         run: |
-          python -m pip install uv
           uv sync --locked --group dev --group artifacts
-          npm ci --prefix frontend
-      - name: Resolve current installed host dependencies
-        run: uv run --no-sync python scripts/qualify_host_dependencies.py --evidence "$RUNNER_TEMP/host-resolution"
-      - name: Validate Python and frontend
+          uv run --no-sync python scripts/qualify_host_dependencies.py --evidence "$RUNNER_TEMP/host-resolution"
+      - name: Bind the selected app and resolved host graph
+        id: candidate
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" candidate --evidence "$RUNNER_TEMP/host-resolution" --output "$GITHUB_OUTPUT"
+      - name: Share qualification tools from this workflow revision
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+          if-no-files-found: error
+      - name: Retain selected candidate and qualified host dependency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-source-resolution
+          path: ${{ runner.temp }}/host-resolution
+          if-no-files-found: ignore
+  python:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: host-source-resolution
+          path: ${{ runner.temp }}/host-resolution
+      - name: Restore and verify the exact candidate host graph
         run: |
-          uv run --no-sync pytest -q
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-candidate --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE"
+          uv sync --locked --group dev --group artifacts
+          uv pip install --python .venv/bin/python --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" --requirements "$RUNNER_TEMP/host-resolution/qualified-overrides.txt"
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
+      - name: Validate Python
+        run: uv run --no-sync pytest -q
+      - name: Build and verify distributions
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
+          uv build
+          python "$RUNNER_TEMP/release-tools/release.py" verify --version "$RELEASE_VERSION"
+          uv venv "$RUNNER_TEMP/release-smoke"
+          uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" dist/*.whl
+          cd "$RUNNER_TEMP"
+          env -u PYTHONPATH "$RUNNER_TEMP/release-smoke/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
+      - name: Bind tested distributions to the candidate
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane python --destination "$RUNNER_TEMP/python.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-qualification
+          path: ${{ runner.temp }}/python.json
+          if-no-files-found: error
+  browser:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: host-source-resolution
+          path: ${{ runner.temp }}/host-resolution
+      - name: Restore and verify the exact candidate host graph
+        run: |
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-candidate --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE"
+          uv sync --locked --group dev --group artifacts
+          uv pip install --python .venv/bin/python --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" --requirements "$RUNNER_TEMP/host-resolution/qualified-overrides.txt"
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Validate frontend and committed assets
+        run: |
+          npm ci --prefix frontend
           npm test --prefix frontend
           npm run build --prefix frontend
           git diff --exit-code -- amplifier_web/static
-      - name: Resolve declared private runtime dependency
-        id: runtime-dependency
-        run: |
-          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
-      - name: Check out loop-live with its dedicated read-only key
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/amplifier-module-loop-live
-          ref: ${{ steps.runtime-dependency.outputs.revision }}
-          path: .ci/loop-live
-          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
-          persist-credentials: false
       - name: Install browser dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Check active-client latency before runtime qualification
+      - name: Check active-client latency and state transport
         working-directory: frontend
         run: |
           npm run test:active-client-performance-browser
@@ -82,21 +177,6 @@ jobs:
         if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:registry-browser
-      - name: Check out the community recipe contract
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/amplifier-bundle-recipes
-          ref: main
-          path: .ci/recipes
-          persist-credentials: false
-      - name: Verify surface context and recipe children through Core and loop-live
-        run: |
-          mkdir -p "$RUNNER_TEMP/surface-runtime"
-          cp amplifier_web/runtime_deps/pyproject.toml "$RUNNER_TEMP/surface-runtime/pyproject.toml"
-          uv add --project "$RUNNER_TEMP/surface-runtime" --no-sync --editable "$GITHUB_WORKSPACE/.ci/loop-live"
-          uv sync --project "$RUNNER_TEMP/surface-runtime"
-          uv pip install --python "$RUNNER_TEMP/surface-runtime/.venv/bin/python" pytest pytest-asyncio 'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
       - name: Verify first launch with empty storage
         if: ${{ hashFiles('frontend/tests/empty-host-browser.mjs') != '' }}
         working-directory: frontend
@@ -217,28 +297,156 @@ jobs:
         if: ${{ hashFiles('frontend/tests/activity-feedback-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:activity-feedback-browser
-      - name: Build and verify distributions
-        env:
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+      - name: Record browser qualification for this candidate
         run: |
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
-          uv build
-          python "$RUNNER_TEMP/release.py" verify --version "$RELEASE_VERSION"
-          uv venv "$RUNNER_TEMP/release-smoke"
-          uv pip install --python "$RUNNER_TEMP/release-smoke/bin/python" --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" dist/*.whl
-          cd "$RUNNER_TEMP"
-          env -u PYTHONPATH "$RUNNER_TEMP/release-smoke/bin/python" -I -c 'from amplifier_web.app_updates import PROBE; exec(PROBE)'
-      - name: Publish immutable tag and release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-          RELEASE_REVISION: ${{ steps.release.outputs.revision }}
-          RELEASE_REPOSITORY: ${{ github.repository }}
-        run: python "$RUNNER_TEMP/release.py" publish --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION" --repository "$RELEASE_REPOSITORY"
-      - name: Retain qualified host dependency evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane browser --destination "$RUNNER_TEMP/browser.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-qualification
+          path: ${{ runner.temp }}/browser.json
+          if-no-files-found: error
+  runtime:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+      - uses: actions/download-artifact@v4
         with:
           name: host-source-resolution
           path: ${{ runner.temp }}/host-resolution
+      - name: Restore and verify the exact candidate host graph
+        run: |
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-candidate --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE"
+          uv sync --locked --group dev --group artifacts
+          uv pip install --python .venv/bin/python --overrides "$RUNNER_TEMP/host-resolution/qualified-overrides.txt" --requirements "$RUNNER_TEMP/host-resolution/qualified-overrides.txt"
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
+      - name: Resolve declared private runtime dependency
+        id: runtime-dependency
+        run: |
+          python -c 'import tomllib; p=tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb")); print("revision=" + p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])' >> "$GITHUB_OUTPUT"
+      - name: Check out loop-live with its dedicated read-only key
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-module-loop-live
+          ref: ${{ steps.runtime-dependency.outputs.revision }}
+          path: .ci/loop-live
+          ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
+          persist-credentials: false
+      - name: Check out the community recipe contract
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/amplifier-bundle-recipes
+          ref: main
+          path: .ci/recipes
+          persist-credentials: false
+      - name: Resolve fresh runtime sources before selecting any build cache
+        run: |
+          python -m pip install maturin
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" runtime-project --runtime "$RUNNER_TEMP/surface-runtime"
+          uv add --project "$RUNNER_TEMP/surface-runtime" --frozen --editable "$GITHUB_WORKSPACE/.ci/loop-live"
+          uv add --project "$RUNNER_TEMP/surface-runtime" --frozen pytest pytest-asyncio 'amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/tool-delegate'
+          uv lock --project "$RUNNER_TEMP/surface-runtime" --refresh --upgrade
+      - name: Identify exact sources, Python ABI, platform and build toolchain
+        id: runtime-cache
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" cache-key --runtime "$RUNNER_TEMP/surface-runtime" --output "$GITHUB_OUTPUT"
+      - name: Restore only the matching runtime build cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/runtime-build-cache
+          key: ${{ steps.runtime-cache.outputs.key }}
+      - name: Install the frozen resolved runtime
+        env:
+          UV_CACHE_DIR: ${{ runner.temp }}/runtime-build-cache
+        run: |
+          uv sync --project "$RUNNER_TEMP/surface-runtime" --locked
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" runtime-snapshot --runtime "$RUNNER_TEMP/surface-runtime"
+          uv cache prune --ci
+      - name: Save successful source builds independently of later test results
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/runtime-build-cache
+          key: ${{ steps.runtime-cache.outputs.key }}
+      - name: Verify surface context and recipe children through Core and loop-live
+        run: |
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
+      - name: Record the unchanged runtime graph and selected candidate
+        run: |
+          uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"
+          python "$RUNNER_TEMP/release-tools/release_qualification.py" receipt --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --lane runtime --runtime "$RUNNER_TEMP/surface-runtime" --destination "$RUNNER_TEMP/runtime.json"
+          cp "$RUNNER_TEMP/surface-runtime/qualified-runtime.json" "$RUNNER_TEMP/qualified-runtime.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-qualification
+          path: |
+            ${{ runner.temp }}/runtime.json
+            ${{ runner.temp }}/qualified-runtime.json
+          if-no-files-found: error
+      - name: Retain resolved runtime inputs without its environment or credentials
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-source-resolution
+          path: |
+            ${{ runner.temp }}/surface-runtime/uv.lock
+            ${{ runner.temp }}/surface-runtime/pyproject.toml
+            ${{ runner.temp }}/surface-runtime/build-constraints.txt
+            ${{ runner.temp }}/surface-runtime/build-identity.json
           if-no-files-found: ignore
+  release:
+    needs: [prepare, python, browser, runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-tools
+          path: ${{ runner.temp }}/release-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: host-source-resolution
+          path: ${{ runner.temp }}/host-resolution
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-qualification'
+          path: ${{ runner.temp }}/qualification
+          merge-multiple: true
+      - name: Require all matching qualification receipts and original artifact bytes
+        run: python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-receipts --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --receipts "$RUNNER_TEMP/qualification" --dist dist
+      - name: Publish immutable tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: python "$RUNNER_TEMP/release-tools/release.py" publish --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION" --repository "$RELEASE_REPOSITORY"
