@@ -75,7 +75,7 @@ def _parse() -> argparse.Namespace:
     get = config_commands.add_parser("get"); get.add_argument("key")
     set_value = config_commands.add_parser("set"); set_value.add_argument("key"); set_value.add_argument("value")
     reset = config_commands.add_parser("reset"); reset.add_argument("key", nargs="?", default="all")
-    service = subcommands.add_parser("service", help="Manage the Linux systemd user service")
+    service = subcommands.add_parser("service", help="Manage the systemd or launchd user service")
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
     service.add_argument("--replace", action="store_true", help="Back up and replace an existing generated unit (install only)")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")

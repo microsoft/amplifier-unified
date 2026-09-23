@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 import os
+import plistlib
 import shlex
 import shutil
 import sys
@@ -204,3 +206,108 @@ def test_shared_state_control_characters_cannot_inject_unit_directives(tmp_path,
     with pytest.raises(ValueError, match="control characters"):
         deployment_service.install(tmp_path / "data", tmp_path)
     assert not unit.exists()
+
+
+def _macos_launchctl(monkeypatch, calls):
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "print":
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(deployment_service, "_launchctl", run)
+
+
+def test_macos_install_writes_private_launch_agent_and_bootstraps(tmp_path, monkeypatch):
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.microsoft.amplifier-unified.plist"
+    calls = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service, "launchd_path", lambda: plist)
+    monkeypatch.setattr(deployment_service.shutil, "which",
+                        lambda name: "/opt/homebrew/bin/amplifier-unified" if name == "amplifier-unified" else "/bin/launchctl")
+    monkeypatch.setenv("PATH", "/custom/bin:/usr/bin:/bin")
+    monkeypatch.setenv("AMPLIFIER_SESSION_STATE_HOME", str(tmp_path / "shared-state"))
+    _macos_launchctl(monkeypatch, calls)
+
+    data_dir, workspace = tmp_path / "data", tmp_path / "workspace"
+    deployment_service.install(data_dir, workspace)
+
+    with plist.open("rb") as stream:
+        contents = plistlib.load(stream)
+    assert contents["Label"] == deployment_service.LAUNCHD_LABEL
+    assert contents["AmplifierUnifiedMarker"] == deployment_service.LAUNCHD_MARKER
+    assert contents["ProgramArguments"] == [
+        "/opt/homebrew/bin/amplifier-unified", "--no-open", "--data-dir", str(data_dir),
+        "--workspace", str(workspace), "serve",
+    ]
+    assert contents["WorkingDirectory"] == str(workspace)
+    assert contents["EnvironmentVariables"]["PATH"] == "/custom/bin:/usr/bin:/bin"
+    assert contents["EnvironmentVariables"]["AMPLIFIER_SESSION_STATE_HOME"] == str(tmp_path / "shared-state")
+    assert contents["EnvironmentVariables"]["AMPLIFIER_UNIFIED_LAUNCHD_LABEL"] == deployment_service.LAUNCHD_LABEL
+    assert Path(contents["StandardOutPath"]).parent == data_dir / "logs"
+    assert plist.stat().st_mode & 0o777 == 0o600
+    assert ("bootout", f"gui/{os.getuid()}/{deployment_service.LAUNCHD_LABEL}") in [call[0] for call in calls]
+    assert ("bootstrap", f"gui/{os.getuid()}", str(plist)) in [call[0] for call in calls]
+
+
+def test_macos_install_refuses_unmanaged_launch_agent(tmp_path, monkeypatch):
+    plist = tmp_path / "agent.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    with plist.open("wb") as stream:
+        plistlib.dump({"Label": deployment_service.LAUNCHD_LABEL}, stream)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service, "launchd_path", lambda: plist)
+    with pytest.raises(RuntimeError, match="unmanaged"):
+        deployment_service.install(tmp_path / "data")
+
+
+def test_macos_service_command_restarts_launch_agent(tmp_path, monkeypatch):
+    plist = tmp_path / "agent.plist"
+    calls = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service, "launchd_path", lambda: plist)
+    monkeypatch.setattr(deployment_service, "managed_launchd", lambda data_dir=None: True)
+    _macos_launchctl(monkeypatch, calls)
+
+    deployment_service.command("restart")
+
+    commands = [call[0] for call in calls]
+    assert commands[0] == ("bootout", f"gui/{os.getuid()}/{deployment_service.LAUNCHD_LABEL}")
+    assert ("bootstrap", f"gui/{os.getuid()}", str(plist)) in commands
+
+
+def test_macos_service_logs_uses_installed_launch_agent_paths(tmp_path, monkeypatch):
+    plist = tmp_path / "agent.plist"
+    stdout, stderr = tmp_path / "custom-data" / "logs" / "launchd.out.log", tmp_path / "custom-data" / "logs" / "launchd.err.log"
+    plistlib.dump({
+        "Label": deployment_service.LAUNCHD_LABEL,
+        "AmplifierUnifiedMarker": deployment_service.LAUNCHD_MARKER,
+        "StandardOutPath": str(stdout),
+        "StandardErrorPath": str(stderr),
+    }, plist.open("wb"))
+    calls = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service, "launchd_path", lambda: plist)
+    monkeypatch.setattr(deployment_service, "managed_launchd", lambda data_dir=None: True)
+    monkeypatch.setattr(deployment_service.subprocess, "run",
+                        lambda args, **kwargs: calls.append((args, kwargs)))
+
+    deployment_service.command("logs")
+
+    assert calls == [(["tail", "-n", "100", str(stdout), str(stderr)], {"check": False})]
+
+
+def test_macos_current_process_requires_managed_launch_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service, "managed_launchd", lambda data_dir=None: True)
+    monkeypatch.delenv("AMPLIFIER_UNIFIED_LAUNCHD_LABEL", raising=False)
+    assert not deployment_service.current_process_is_unit_managed(tmp_path)
+    monkeypatch.setenv("AMPLIFIER_UNIFIED_LAUNCHD_LABEL", deployment_service.LAUNCHD_LABEL)
+    assert deployment_service.current_process_is_unit_managed(tmp_path)
+
+
+def test_macos_managed_restart_uses_launchctl(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(deployment_service.os, "getuid", lambda: 501)
+    assert deployment_service.managed_restart_command() == (
+        "launchctl", "kickstart", "-k", "gui/501/" + deployment_service.LAUNCHD_LABEL,
+    )
