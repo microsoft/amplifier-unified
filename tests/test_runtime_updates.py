@@ -38,6 +38,7 @@ def environment(tmp_path, monkeypatch):
                         'requires-python=">=3.13"\ndependencies=["fixture-runtime"]\n'
                         '[tool.uv.sources]\nfixture-runtime={git="' + repo.as_uri() + '",branch="main"}\n')
     monkeypatch.setattr(environments, 'manifest_path', lambda: manifest)
+    monkeypatch.setattr('amplifier_web.update_sequence.included_sources', lambda: ({'fixture-runtime'}, []))
     home = tmp_path / 'app'
     current = environments.prepare_project(home)
     uv = shutil.which('uv')

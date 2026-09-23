@@ -331,6 +331,13 @@ async def stage(manager, generation, candidates, *, finalize=True):
     declared = tomllib.loads(content.decode()).get('tool', {}).get('uv', {}).get('sources', {})
     packages = sorted({row['package'] for row in observed if row.get('kind') == 'runtime dependency' and row.get('eligible')} |
                       {name for name, source in declared.items() if source.get('git') and not pinned(source.get('branch') or source.get('rev') or '')})
+    # A phased update refreshes only the chosen tier. Preserve other resolved
+    # sources until their own check; required transitive resolution still belongs
+    # to uv. Older callers without tiers retain their existing refresh policy.
+    if any(row.get('updateTier') for row in selected):
+        packages = sorted({row['package'] for row in selected if row.get('kind') == 'runtime dependency'} |
+                          ({name for name, source in declared.items() if source.get('git') and not pinned(source.get('branch') or source.get('rev') or '')}
+                           if any(row.get('kind') == 'runtime environment' for row in selected) else set()))
     # A new generation also needs a lock when only bundle/module caches changed.
     flags = ['--locked'] if receipt.exists() else [arg for name in packages for arg in ('--upgrade-package', name, '--refresh-package', name)]
     await manager.diagnostics.run('ecosystem-runtime-lock', process, uv, 'lock', '--project', str(project),

@@ -212,7 +212,8 @@ async def test_managed_service_restart_does_not_spawn_a_second_host(tmp_path,mon
     monkeypatch.setattr(app_updates.asyncio,'create_subprocess_exec',lambda *args,**kwargs: pytest.fail('managed service must not spawn a helper'))
     monkeypatch.setattr(app_updates.os,'kill',lambda *args: pytest.fail('managed service must not terminate itself'))
     await app_updates.activate(manager)
-    assert calls[-1]==('systemctl','--user','--no-block','restart','amplifier-unified.service')
+    from amplifier_web.deployment_service import managed_restart_command
+    assert calls[-1]==managed_restart_command()
     assert service.state['updates']['pendingRestart']['version']=='99.0.0'
     await service.close()
 
