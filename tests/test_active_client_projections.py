@@ -181,7 +181,7 @@ async def test_session_streams_share_duplicate_projection_and_keep_private_draft
     assert all(queue.get_nowait()['sessions'] == [] for queue in queues)
 
 
-async def test_workspace_preferences_do_not_evict_other_clients_or_stale_on_file_change(app_factory):
+async def test_workspace_preferences_do_not_evict_other_clients_or_stale_on_file_change(app_factory, monkeypatch):
     app, rows = fixture(app_factory, count=20)
     from pathlib import Path
     paths = []
@@ -190,6 +190,12 @@ async def test_workspace_preferences_do_not_evict_other_clients_or_stale_on_file
         path.parent.mkdir(parents=True)
         path.write_text(f'voice:\n  preferred_model: voice-{index}\n')
         paths.append(path)
+    from amplifier_web import shared_settings
+    original, reads = shared_settings.read_settings, []
+    def settings(*args, **kwargs):
+        reads.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(shared_settings, 'read_settings', settings)
     def read(identity):
         with app.clients.bind(identity):
             return app.browser_state()
@@ -197,9 +203,11 @@ async def test_workspace_preferences_do_not_evict_other_clients_or_stale_on_file
     assert first['settings']['preferredVoice'] == 'voice-0'
     assert second['settings']['preferredVoice'] == 'voice-1'
     assert read('client-0') is first and read('client-1') is second
+    assert len(reads) == 2
     paths[0].write_text('voice:\n  preferred_model: updated-voice\n')
     assert read('client-0')['settings']['preferredVoice'] == 'updated-voice'
     assert read('client-1') is second
+    assert len(reads) == 3
 
 
 async def test_shell_key_tracks_offpage_navigation_not_unrelated_progress(app_factory):
