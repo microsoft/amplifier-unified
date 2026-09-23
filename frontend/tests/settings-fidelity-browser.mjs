@@ -74,6 +74,9 @@ try{
  await expect(page.getByRole('button',{name:'Back to catalog',exact:true})).toBeVisible();
  await page.screenshot({path:out+'/tool-detail-dark.png'});
  await page.getByRole('button',{name:'Back to catalog',exact:true}).click();
+ await openSettingsPage(page,'ai-connections');
+ await page.getByRole('button',{name:'Back',exact:true}).click();
+ await page.getByRole('button',{name:'Back',exact:true}).click();
  const screens=['ai-connections','smart-tools','appearance','voice','notifications','privacy','updates','advanced'];
  for(const mode of ['dark','light']){
   await page.emulateMedia({colorScheme:mode});
@@ -83,9 +86,10 @@ try{
     await openSettingsPage(page,id);
     if(id==='smart-tools')await page.getByRole('button',{name:'Browse',exact:true}).click();
     if(id==='appearance')await expect(page.getByRole('button',{name:'Preview Amplifier',exact:true})).toBeVisible();
+    if(id==='notifications')await page.waitForFunction(()=>window.amplifier.getState().actionStatus?.['notifications.get']?.phase==='ready');
     await expect(page.locator('.a-settings-page-content:not([hidden]) [data-region-pending]')).toHaveCount(0);
     assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1),id+' overflow');
-    await page.screenshot({path:out+'/'+id+'-'+mode+'-'+width+'.png'});
+    await page.screenshot({path:out+'/'+id+'-'+mode+'-'+width+'.png',animations:'disabled'});
    }
   }
  }
