@@ -34,6 +34,10 @@ def definitions(schema, string):
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
     return {
         **followup_definitions(schema, string),
+        "feedback.diagnostics": (
+            "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
+            schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
+        ),
         "feedback.submit": (
             "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
@@ -161,6 +165,18 @@ class Feedback:
         if sum(row["size"] for row in rows) > feedback_attachments.MAX_TOTAL_BYTES:
             raise ValueError("Feedback attachments can total up to 24 MB.")
         return rows
+
+    def diagnostics(self, args):
+        """Read on demand; never put per-conversation facts in shared broadcasts."""
+        if args.get('requestId'):
+            row = self.service.db.execute("SELECT payload,receipt FROM feedback_requests WHERE id=?", (args['requestId'],)).fetchone()
+            if row is None:
+                raise ValueError('No saved feedback submission has that request ID.')
+            payload, receipt = map(json.loads, row)
+            return {'snapshot': 'accepted', 'capturedAt': receipt.get('createdAt'),
+                    'diagnostics': payload.get('_diagnostics')}
+        return {'snapshot': 'current', 'capturedAt': time.time(),
+                'diagnostics': feedback_diagnostics.snapshot(self.service.state_context(), args.get('deviceDiagnostics'))}
 
     def accept(self, args):
         """Called under service.lock, committed with the shared action receipt."""
