@@ -54,6 +54,9 @@ function useHostTheme(scheme){
 
 export function McpAppViewer({canvas,act}){
  const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
+ const connection=useRef(null),booted=useRef(false),[recovery,setRecovery]=useState(null),[recovering,setRecovering]=useState(false);
+ const renderReport=useRef(null),resetCatalog=useRef(null);
+ const rememberConnection=value=>{connection.current=value;setRecovery(value)};
  const theme=useHostTheme(useMcpAppTheme());
  const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
  visibleRef.current=visible;
@@ -70,9 +73,15 @@ export function McpAppViewer({canvas,act}){
   const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='';
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
+  const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
   const listTools=()=>catalog||(catalog=request(`/api/canvas/${canvas.id}/tools`,{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
+  renderReport.current=report;
   const start=async()=>{
+   const availability=await request(`/api/canvas/${canvas.id}/status`,{signal:controller.signal});
+   if(!live)return;
+   rememberConnection(availability);
+   if(availability.source!=='available'){report('error',availability.message);return}
    hostContext.current={theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
     {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
@@ -102,13 +111,14 @@ export function McpAppViewer({canvas,act}){
     await command('smartTools.context',{canvasId:canvas.id,context},controller.signal);return {};
    };
    bridge.oninitialized=async()=>{
-    initialized=true;
+    initialized=true;booted.current=true;
     try{
      await bridge.sendToolInput({arguments:current.current.mcp?.toolArguments||{}});
      const operationId=current.current.mcp?.operationId;
      const result=operationId?(await request(`/api/smart-tools/operations/${encodeURIComponent(operationId)}`,{signal:controller.signal})).result:current.current.mcp?.result;
      if(result)await bridge.sendToolResult(result);
-     report('ready','Tool view connected');
+     const availability=connection.current;
+     report(availability?.status==='ready'?'ready':'error',availability?.message||'Tool view connected');
     }catch(error){report('error',error.message)}
    };
    bridge.onerror=error=>report('error',error.message);
@@ -122,15 +132,33 @@ export function McpAppViewer({canvas,act}){
     frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
    }
   };
-  report('loading','Connecting tool view…');start().catch(error=>report('error',error.message));
-  const timeout=setTimeout(()=>{if(live&&!initialized)setStatus(s=>s.phase==='loading'?{phase:'error',text:'The tool view has not connected. Check that this server supplies a self-contained MCP App.'}:s)},15000);
-  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
+  booted.current=false;rememberConnection(null);
+  report('loading','Checking saved tool view…');start().catch(error=>report('error',error.message));
+  const timeout=setTimeout(()=>{if(live&&!initialized)report('error',connection.current?.source==='available'?'The saved tool document did not initialize. Reload it to retry. Its scripts must work within the self-contained MCP App sandbox.':connection.current?.message||'The saved tool document could not be checked. Retry when the host is available.')},15000);
+  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(renderReport.current===report)renderReport.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
  },[canvas.id,canvas.view?.reload]);
+ const reconnect=async reviewedContract=>{
+  setRecovering(true);
+  try{
+   const available=await request(`/api/canvas/${canvas.id}/status`);rememberConnection(available);
+   if(!available.canReconnect)throw new Error(available.message);
+   const result=await command('smartTools.reconnectView',{canvasId:canvas.id,expectedBindingRevision:available.bindingRevision,...(reviewedContract?{reviewedContract}:{})});
+   rememberConnection(result);
+   if(result.status==='ready')resetCatalog.current?.();
+   renderReport.current?.(result.status==='ready'&&booted.current?'ready':'error',result.status==='ready'&&!booted.current?'Tool reconnected. Reload the saved view to retry initialization.':result.message);
+  }catch(error){
+   try{rememberConnection(await request(`/api/canvas/${canvas.id}/status`))}catch{}
+   renderReport.current?.('error',error.message);
+  }
+  finally{setRecovering(false)}
+ };
  return <div className="a-mcp-app-viewer" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
   <CanvasControl inline={status.phase==='error'}><div data-phase={status.phase} className={`a-mcp-status a-canvas-result ${status.phase==='error'?'error':status.phase==='ready'?'success':''}`} role="status">
    {status.phase==='error'?<AlertCircle/>:status.phase==='ready'?<Check/>:<Loader className="a-progress-spinner"/>}<span>{status.text}</span>
-   <button type="button" className="a-icon" aria-label="Reconnect tool server" data-action="smartTools.connect" onClick={async()=>{try{await command('smartTools.connect',{id:canvas.mcp.serverId});await act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}catch(error){setStatus({phase:'error',text:error.message})}}}><RefreshCw/></button>
+   <button type="button" className="a-icon" aria-label="Reconnect tool view" data-action="smartTools.reconnectView" disabled={recovering||recovery?.canReconnect===false} onClick={()=>reconnect()}><RefreshCw/></button>
+   {status.phase==='error'&&recovery?.source==='available'&&<button type="button" className="a-link" style={{whiteSpace:'nowrap'}} title="Reloading resets unfinished inputs in this tool view" data-action="canvas.view" onClick={()=>act('canvas.view',{id:canvas.id,patch:{reload:Date.now()}})}>Reload saved view</button>}
   </div></CanvasControl>
+  {recovery?.review&&<div className="a-canvas-result" role="region" aria-label="Review saved tool connection"><p>This older view did not save its action schemas. Reconnecting keeps its saved document and existing action names. Review the current definitions before enabling them; no previous calls will run.</p><details><summary>Existing tool actions ({recovery.review.tools.length})</summary><pre>{JSON.stringify(recovery.review.tools,null,2)}</pre></details><button type="button" disabled={recovering} data-action="smartTools.reconnectView" onClick={()=>reconnect(recovery.review.fingerprint)}>Use reviewed actions in this tab</button></div>}
   {canvas.sharedToolView&&<p className="a-caption">This view shares tool work with the original conversation.</p>}
   <iframe ref={frame} title={canvas.title||'Interactive tool'} className="a-canvas-html" style={{flex:1,minHeight:0}} sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer"/>
  </div>;
