@@ -68,7 +68,7 @@ test('available updates are visible without opening the full source inventory',(
 test('no pending updates still distinguishes failed checks from current sources',()=>{
  const state={view:{},settings:{},updates:{lastCheck:1,items:[{id:'failed',label:'Offline source',status:'check_failed'}]}};
  const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state,act}));
- assert.match(html,/No installable updates found; unresolved source conditions are listed below/);assert.match(html,/Needs attention/);assert.match(html,/Offline source/);assert.match(html,/a-check-result error/);
+ assert.match(html,/No installable updates remain, but some checks or local changes need review/);assert.match(html,/Needs attention/);assert.match(html,/Offline source/);assert.match(html,/a-check-result error/);
 });
 
 test('provider model results and metadata choices are visible even after other management actions finish',()=>{

@@ -281,3 +281,46 @@ async def test_model_discovery_for_a_future_workspace_does_not_create_it(manager
     result=await manager.perform('providers.models',{'workspace':str(future),'id':'one'})
     assert result['models']==[{'id':str(tmp_path)}]
     assert not future.parent.exists()
+
+@pytest.mark.asyncio
+async def test_guided_setup_creates_initial_choices_once_and_preserves_private_config(manager,tmp_path):
+    workspace=str(tmp_path)
+    await manager.perform('providers.save',{'workspace':workspace,'id':'first','module':'provider-openai','apiKey':'private-guided-key','config':{'opaque':{'keep':True}}})
+    args={'workspace':workspace,'id':'first','model':'chosen-model','initializeRouting':True}
+    result=await manager.perform('providers.finishSetup',args)
+    assert result['setupCompletion']['routingCreated'] is True
+    assert result['takesEffect']=='new_sessions'
+    active=result['active']
+    matrix=manager.matrix(workspace,active)
+    assert matrix['roles']['general']['candidates']==[{'provider':'first','model':'chosen-model'}]
+    saved=manager.store.read(workspace)['config']['providers'][0]['config']
+    assert saved['opaque']=={'keep':True}
+    assert saved['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
+    assert saved['default_model']=='chosen-model'
+    assert 'private-guided-key' not in str(result)
+    # A retry or later connection edit cannot reset a user's model rules.
+    retry=await manager.perform('providers.finishSetup',{**args,'model':'another-model'})
+    assert retry['setupCompletion']['routingCreated'] is False
+    assert manager.routing(workspace)['active']==active
+    assert manager.matrix(workspace,active)==matrix
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('protection',['custom-balanced','explicit-profile','multiple-providers'])
+async def test_guided_setup_never_replaces_existing_routing(manager,tmp_path,protection):
+    workspace=str(tmp_path)
+    await manager.perform('providers.save',{'workspace':workspace,'id':'one','module':'provider-openai','config':{'default_model':'before'}})
+    if protection=='multiple-providers':
+        await manager.perform('providers.save',{'workspace':workspace,'id':'two','module':'provider-openai','config':{}})
+    else:
+        await manager.perform('routing.save',{'workspace':workspace,'name':'balanced' if protection=='custom-balanced' else 'personal','matrix':MATRIX,'activate':protection=='explicit-profile'})
+    before=manager.routing(workspace)
+    result=await manager.perform('providers.finishSetup',{'workspace':workspace,'id':'one','model':'after','initializeRouting':True})
+    assert not result['setupCompletion']['routingCreated']
+    assert manager.routing(workspace)==before
+
+@pytest.mark.asyncio
+async def test_guided_setup_rejects_blank_or_missing_connection_without_writes(manager,tmp_path):
+    for args,message in [({'id':'missing','model':'chosen'},'connection changed'),({'id':'missing','model':'  '},'Choose a model')]:
+        with pytest.raises(ValueError,match=message):
+            await manager.perform('providers.finishSetup',{'workspace':str(tmp_path),**args})
+    assert manager.store.read(str(tmp_path))=={}

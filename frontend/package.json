@@ -83,7 +83,8 @@
     "test:state-transport-browser": "node tests/state-transport-browser.mjs",
     "test:sidebar-activity-browser": "node tests/sidebar-activity-browser.mjs",
     "test:appearance-library-browser": "node tests/appearance-library-browser.mjs",
-    "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs"
+    "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs",
+    "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

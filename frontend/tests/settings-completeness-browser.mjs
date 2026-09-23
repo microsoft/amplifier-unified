@@ -44,6 +44,7 @@ try{
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
  assert.equal(await page.locator('.a-dialog-head').evaluate(el=>getComputedStyle(el).paddingLeft),'24px');
+ await page.locator('details').filter({has:page.getByText('Send notifications to another device',{exact:true})}).evaluate(el=>el.open=true);
  await page.getByLabel('Notification server',{exact:true}).fill('https://notify.example');
  await page.getByLabel(/^Topic/).fill('fixture-private-topic');
  await page.getByLabel(/^Access token/).fill('fixture-private-token');
@@ -60,7 +61,7 @@ try{
  await page.getByLabel('Include a response preview',{exact:true}).uncheck();
  await page.getByRole('button',{name:'Save notifications',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().notificationSettings?.preview===false);
- await page.reload();await page.getByRole('button',{name:'Load notification settings',exact:true}).click();
+ await page.reload();await page.getByText('Send notifications to another device',{exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().notificationSettings?.server==='https://notify.example');
  let notify=(await state()).notificationSettings;assert.ok(notify.tokenConfigured&&notify.topicConfigured&&notify.enabled&&!notify.preview);assert.equal(notify.topic,undefined);assert.equal(notify.token,undefined);
  // Server-side rejection is visible and does not replace the last good settings.
@@ -71,24 +72,24 @@ try{
  await page.getByLabel('Notification server',{exact:true}).fill('https://notify.example');
  await page.getByRole('button',{name:'Save notifications',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().management?.phase!=='working'&&!window.amplifier.getState().management?.error);
- await openSettingsPage(page,'voice');
+ await openSettingsPage(page,'voice');await page.getByText('Advanced voice options',{exact:true}).click();
  await page.locator('#preferred-voice').selectOption('gpt-realtime-2.1');
  await page.waitForFunction(()=>window.amplifier.getState().settings.preferredVoice==='gpt-realtime-2.1');
  await page.locator('#fallback-voice').selectOption('gpt-live-1');
  await page.waitForFunction(()=>window.amplifier.getState().settings.fallbackVoice==='gpt-live-1');
- await page.reload();await page.locator('#preferred-voice').waitFor();
+ await page.reload();await page.getByText('Advanced voice options',{exact:true}).click();await page.locator('#preferred-voice').waitFor();
  assert.equal(await page.locator('#preferred-voice').inputValue(),'gpt-realtime-2.1');assert.equal(await page.locator('#fallback-voice').inputValue(),'gpt-live-1');
  await openSettingsPage(page,'providers');await page.locator('.a-provider-access summary').click();await page.locator('#provider-key-source').selectOption('private');
  await page.locator('#provider-key').fill('fixture-unsaved-key');
  await openSettingsPage(page,'routing');await openSettingsPage(page,'providers');
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
  assert.ok(!JSON.stringify(await state()).includes('fixture-unsaved-key'));
- await openSettingsPage(page,'appearance');
+ await openSettingsPage(page,'custom-appearance');
  await page.getByText('Advanced customization',{exact:true}).click();
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
  await page.getByRole('button',{name:'Preview',exact:true}).click();
  assert.notEqual((await state()).theme?.name,'Acceptance skin');
- await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');
+ await openSettingsPage(page,'updates');await openSettingsPage(page,'custom-appearance');
  await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
  await page.getByRole('button',{name:'Apply skin',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
@@ -99,15 +100,15 @@ try{
   if(['shell.changes.prepare','shell.changes.apply'].includes(route.request().postDataJSON()?.action))await new Promise(resolve=>setTimeout(resolve,500));
   await route.continue();
  });
- await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
+ await openSettingsPage(page,'appearance');await presentation('scheme','dark');await presentation('layout','work');
+ await page.reload();await openSettingsPage(page,'custom-appearance');await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
- await expect(page.locator('#layout')).toHaveValue('work');
+ await openSettingsPage(page,'appearance');await expect(page.locator('#layout')).toHaveValue('work');
  await page.unrouteAll({behavior:'wait'});
  await page.getByRole('button',{name:'Restore original appearance',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name!=='Acceptance skin');
- await openSettingsPage(page,'smart-tools');
+ await openSettingsPage(page,'tool-connections');
  await page.getByRole('button',{name:'Browse catalog',exact:true}).click();
  await page.getByRole('button',{name:/Fixture catalog tool/}).waitFor();
  await page.locator('#filter-smart-tool-catalog').fill('fixture*');
@@ -144,6 +145,6 @@ try{
  await openSettingsPage(page,'notifications');await page.screenshot({animations:'disabled',path:'/tmp/settings-notifications-final.png'});
  await openSettingsPage(page,'providers');await page.screenshot({animations:'disabled',path:'/tmp/settings-providers-final.png'});
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({destinations:24,layouts,notificationPersistence:true,privateDrafts:true,voicePersistence:true,skinPersistence:true,catalogToConnection:true,browserErrors:0}));
+ console.log(JSON.stringify({destinations:34,layouts,notificationPersistence:true,privateDrafts:true,voicePersistence:true,skinPersistence:true,catalogToConnection:true,browserErrors:0}));
 }catch(error){if(page)await page.screenshot({animations:'disabled',path:'/tmp/settings-completeness-failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}

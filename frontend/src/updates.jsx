@@ -1,3 +1,5 @@
+import {AttentionReview} from './attention';
+import {updateOverview} from './update-overview';
 import {ActivityRegion} from './activity-region';
 import {useListFilter} from './list-filter.jsx';
 import {ResultNotice} from './settings-ui';
@@ -40,37 +42,39 @@ export function UpdateSettings({state,act}){
  const appLabels={restarting:'Restarting',restart_pending:'Awaiting restarted host',staged:'Ready to restart',update:'Update available',current:'Latest release installed',failed:'Needs attention',ahead:'Ahead of published release',not_checked:'Not checked',release_channel_needed:'Release channel not configured',historical:'Older saved configuration'};
  const AppIcon=appState==='current'?Check:appState==='update'?ArrowUpCircle:appState==='failed'?AlertCircle:Clock3;
  const appDetail=replacement?(updates.error||updates.detail||'The installation outcome is unknown. Work remains paused until the qualified app and dependencies are verified on a new host.'):updates.pendingRestart?(updates.error||updates.detail||(restartFailed?'The app installed, but its restart did not complete. Restart Amplifier Unified manually to continue.':'The app is installed. Waiting for a healthy restarted host before resuming work.')):updates.pendingApp?updates.error||'The app passed validation and will restart when conversations, worker lanes, smart tools, and calls are idle.':application.detail;
- const installLabel=replacement?'Installation needs verification':updates.pendingRestart?(restartFailed?'Restart needs attention':restartUncertain?'Awaiting restart…':'Restarting…'):updates.pendingApp?'Apply app update':updates.pendingRelease?'Apply ecosystem update':appAvailable?'Install app update':updates.sequence?.stage==='included'?'Install included updates':'Install available';
+
  const resultPhase=restartFailed||updates.error||['error','interrupted'].includes(updates.phase)?'error':updates.pendingRestart||busy?'working':updates.phase==='installed'?'success':'neutral';
  const resultMessage=updates.error||(['error','interrupted'].includes(updates.phase)?updates.detail||'The update did not finish.':busy||pending||updates.phase==='installed'?updates.detail:'');
+ const overview=updateOverview(updates,options);
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;
  const change=patch=>act('settings.update',{patch:{updates:patch}});
  return <ActivityRegion as="section" name="updates" busy={busy} className="a-updates" data-part="updates">
-  <div className="a-app-update" data-part="application-update" aria-label="Application release status">
-   <div className="a-app-update-heading"><h4>Amplifier Unified</h4><span className={'a-app-update-status '+appState}><AppIcon aria-hidden="true"/>{appLabels[appState]||appState}</span></div>
-   <dl className="a-app-update-versions"><div><dt>Installed</dt><dd>{application.current||'Not reported'}</dd></div><div><dt>Latest release</dt><dd>{application.latest||'Not checked'}</dd></div></dl>
-   <ComponentSummary updates={updates} items={items} busy={busy}/>
-   <p className="a-caption a-app-update-channel">Published GitHub releases · app updates restart the local server.</p>
-   {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-app-update-detail">{appDetail}</p>)}
+  <div className="a-app-update" data-part="application-update" aria-label="Overall update status" role="status" aria-live="polite">
+   <div className="a-update-overall">{overview.tone==='error'?<AlertCircle/>:overview.tone==='ready'?<Check/>:overview.tone==='available'?<ArrowUpCircle/>:<Clock3/>}<div><h4>{overview.title}</h4><p>{overview.detail}</p></div></div>
+   {(overview.tone==='working'||overview.tone==='available')&&<div className="a-update-progress" aria-label="Update order">{[['application','App'],['included','Included components'],['other','Other components']].map(([id,label],i)=><span key={id} data-active={overview.stage===id}>{i>0&&'→ '}{label}</span>)}</div>}
+   <p className="a-update-version-line">Amplifier {application.current||'version not reported'}{application.latest&&application.latest!==application.current?' · Latest '+application.latest:''}{updates.lastCheck?' · Checked '+new Date(updates.lastCheck*1000).toLocaleString():''}</p>
   </div>
   <div className="a-update-controls" data-part="update-controls">
-  <div className="a-dialog-actions"><button className="a-soft" disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check now</button><button className="a-primary" disabled={busy||!!updates.pendingRestart||!!(updates.sequence?.stage==='included'&&updates.sequence?.included?.issues)||(!available.length&&!appAvailable&&!pending)} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>{installLabel}</button>{updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}</div>
-  {(appAvailable||updates.pendingApp)&&available.length>0&&<p className="a-caption">The app updates first and restarts the server. Included components are checked next, then the remaining sources. An installation continues automatically after restart.</p>}
-  <ResultNotice phase={resultPhase} message={resultMessage}/>
-  <UpdateDiagnostics state={state} act={act}/>
-  {updates.lastCheck&&<p className="a-caption a-check-inline"><Check/>Last checked {new Date(updates.lastCheck*1000).toLocaleString()}</p>}
-  <div className="a-update-options">
+  <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check for updates</button>{overview.installable&&(!overview.continuing||overview.tone==='error')&&<button className="a-primary" disabled={busy||overview.blocked} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Update Amplifier</button>}</div>
+  <p className="a-caption">One request handles everything in order. Updates wait for work and calls to finish; an app update may restart the server.</p>
+  <div className="a-update-simple-options"><label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false&&!!options.autoInstall} onChange={e=>change(e.target.checked?{autoCheck:true,autoInstall:true}:{autoInstall:false})}/>Keep Amplifier up to date automatically</label><p className="a-caption">Install eligible app and component updates when work is idle. Existing pins and local edits are kept.</p></div>
+  <details className="a-everyday-disclosure"><summary>Update preferences</summary><div className="a-update-options">
    <label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false} onChange={e=>change({autoCheck:e.target.checked,...(!e.target.checked?{autoInstall:false}:{})})}/>Automatically check for updates</label>
-   <label><input type="checkbox" data-action="settings.update" disabled={options.autoCheck===false} checked={!!options.autoInstall} onChange={e=>change({autoInstall:e.target.checked})}/>Automatically install eligible updates when idle</label>
    <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
+  </div></details>
   </div>
-  <p className="a-caption">Checks run in order: app, included components, then other sources. Installing continues through those stages automatically. Updates activate when work and calls are idle. Automatic app installation includes a server restart. Pins and local edits stay unchanged.</p>
-  </div>
-  <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4><p className="a-caption">Bundles, modules, and libraries load on the next resumed turn after activation.</p>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{busy?'Checking or preparing updates…':updates.lastCheck?(issues.length?'No installable updates found; unresolved source conditions are listed below.':'No updates available from the last check.'):'Check for updates to see what’s new.'}</p>}</div>
-  {!!configuredIssues.length&&<div><h4>Needs attention</h4><SourceList items={configuredIssues} state={state} act={act} id="update-issues"/></div>}
-  {!!unknown.length&&<div><h4>Other cached sources</h4><p className="a-caption">{unknown.length} {unknown.length===1?'source':'sources'}: {unknownSummary}.</p><p className="a-caption">Usage is unknown. These sources may still be needed by your bundles. Checks and updates continue; cached files are kept.</p>{!!unknownIssues.length&&<SourceList items={unknownIssues} state={state} act={act} id="unknown-source-issues"/>}</div>}
-  {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<><p className="a-caption">Source inventory for troubleshooting version pins and checks.</p><SourceList items={items} state={state} act={act} id="update-sources"/></>}</div>}
-  <ReleaseNotices application={application} state={state} act={act}/>
+  <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Review update issue':'Component updates & details'}</summary><div className="a-update-disclosure-body">
+   <ComponentSummary updates={updates} items={items} busy={busy}/>
+   <div className="a-app-update-heading"><h4>App release</h4><span className={'a-app-update-status '+appState}><AppIcon aria-hidden="true"/>{appLabels[appState]||appState}</span></div>
+   {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-wrap">{appDetail}</p>)}
+   <ResultNotice phase={resultPhase} message={resultMessage}/><UpdateDiagnostics state={state} act={act}/>
+   {updates.canRollback&&<button className="a-soft" disabled={busy||!!pending} data-action="updates.rollback" onClick={()=>act('updates.rollback')}><Undo2/>Roll back ecosystem</button>}
+   <div data-part="available-updates"><h4>Ecosystem updates {available.length>0&&<span className="a-update-count">{available.length} available</span>}</h4>{available.length?<SourceList items={available} state={state} act={act} id="available-updates"/>:<p className="a-caption">{overview.stage!=='complete'?'Remaining components are checked after the preceding update stage.':'No eligible component updates remain.'}</p>}</div>
+   {!!configuredIssues.length&&<div><h4>Needs attention</h4><SourceList items={configuredIssues} state={state} act={act} id="update-issues"/></div>}
+   {!!unknown.length&&<div><h4>Other cached sources</h4><p className="a-caption">{unknown.length} sources: {unknownSummary}. Usage is unknown; these files may still be needed and are kept.</p>{!!unknownIssues.length&&<SourceList items={unknownIssues} state={state} act={act} id="unknown-source-issues"/>}</div>}
+   {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<SourceList items={items} state={state} act={act} id="update-sources"/>}</div>}
+  </div></details>
+  <details className="a-update-disclosure"><summary>Release notices</summary><div className="a-update-disclosure-body"><AttentionReview state={state} act={act} page="updates"/><ReleaseNotices application={application} state={state} act={act}/></div></details>
   {items.some(item=>item.kind==='history')&&<details className="a-update-disclosure" data-part="historical-source-settings"><summary>Older conversation settings</summary><div className="a-update-disclosure-body"><SourceList items={items.filter(item=>item.kind==='history')} state={state} act={act} id="historical-source-settings"/></div></details>}
   <ReleaseHistory application={application} state={state}/>
  </ActivityRegion>;

@@ -453,12 +453,12 @@ class Management:
                     setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
                     setup.setdefault('providerCatalogs',{})[result['modelsProviderId']]={'phase':'ready','models':result['models'],'supported':result.get('modelsSupported',True),'metadata':result.get('providerMetadata')}
                 self.service._publish()
-            if action in {'providers.list','providers.save','providers.remove','providers.move','providers.reorder','providers.loginStatus'}:
+            if action in {'providers.list','providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder','providers.loginStatus'}:
                 async with self.service.lock:
                     self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time())
                     self.service._publish()
                 self.background(self.warm_providers(manager,session['workspace']))
-            if action in {'providers.save','providers.remove','providers.move','providers.reorder','routing.save','routing.use'}:await self.invalidate_configuration()
+            if action in {'providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder','routing.save','routing.use'}:await self.invalidate_configuration()
         elif action in {'bundle.preview', 'bundle.switch', 'bundle.fork'}:
             from .bundle_actions import perform
             await perform(self, action, args)

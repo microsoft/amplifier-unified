@@ -49,11 +49,11 @@ test('missing remote notes are honest without hiding installed history or disabl
 
 test('installed app and published release remain visible with source inventory closed',()=>{
  const html=render({items:Array.from({length:87},(_,id)=>({id:String(id),label:'Hidden source '+id,status:'current'}))});
- assert.match(html,/Application release status/);
- assert.match(html,/<dt>Installed<\/dt><dd>0\.6\.3<\/dd>/);
- assert.match(html,/<dt>Latest release<\/dt><dd>v0\.6\.3<\/dd>/);
+ assert.match(html,/Overall update status/);
+ assert.match(html,/Amplifier 0\.6\.3/);
+ assert.match(html,/Latest v0\.6\.3/);
  assert.match(html,/Latest release installed/);
- assert.match(html,/Published GitHub releases/);
+ assert.match(html,/Component updates &amp; details/);
  assert.match(html,/Show all 87 sources/);
  assert.doesNotMatch(html,/Hidden source 0/);
 });
@@ -79,12 +79,12 @@ test('app version is visible before checking, and failed checks retain a clear r
 test('application and component updates have separate effects and no duplicate app row',()=>{
  const app={...application,status:'update',latest:'v0.6.4'};
  const html=render({application:app,items:[app,component],appAvailable:true});
- assert.equal((html.match(/Amplifier Unified/g)||[]).length,1);
- assert.match(html,/Install app update/);
+ assert.equal((html.match(/data-part="application-update"/g)||[]).length,1);
+ assert.match(html,/Update Amplifier/);
  assert.match(html,/1 available/);
  assert.match(html,/Community bundle/);
- assert.match(html,/app updates first and restarts/);
- assert.match(html,/next resumed turn/);
+ assert.match(html,/One request handles everything in order/);
+ assert.match(html,/an app update may restart the server/);
  assert.match(html,/Show all 1 source/);
 });
 
@@ -93,10 +93,10 @@ test('staged app, restart, interrupted install and successful restart report the
  const staged=render({pendingApp,phase:'app-staged',detail:'Waiting for active work to finish.'});
  assert.match(staged,/Ready to restart/);
  assert.match(staged,/smart tools/);
- assert.match(staged,/Apply app update/);
+ assert.match(staged,/Waiting for your work to finish/);
  assert.doesNotMatch(staged,/a-check-result success/);
  const restarting=render({phase:'activating',pendingRestart:{version:'0.6.4'},detail:'Application installed. Restarting the local host…'});
- assert.match(restarting,/Restarting…/);
+ assert.match(restarting,/Restarting Amplifier/);
  assert.match(restarting,/Application installed. Restarting the local host/);
  assert.match(restarting,/a-check-result pending/);
  const interrupted=render({phase:'interrupted',detail:'Application installation was interrupted.'});
@@ -125,10 +125,10 @@ test('a rejected restart keeps its work gate but displays actionable failure ins
   error:'The app installed, but the managed restart request was rejected. Run amplifier-unified service restart.',
   detail:'Waiting for a healthy restarted host. New work remains paused.'});
  assert.match(html,/Needs attention/);
- assert.match(html,/Restart needs attention/);
+ assert.match(html,/needs help finishing its restart/);
  assert.match(html,/a-check-result error/);
  assert.match(html,/amplifier-unified service restart/);
- assert.match(html,/<button class="a-primary" disabled="" data-action="updates.install"/);
+ assert.doesNotMatch(html,/<button class="a-primary" data-action="updates.install"/);
  assert.doesNotMatch(html,/Restarting|this page will reconnect/);
 });
 
@@ -136,7 +136,7 @@ test('unconfirmed restart request waits for readiness without promising completi
  const html=render({phase:'activating',pendingRestart:{version:'0.6.4',requestStatus:'uncertain'},
   detail:'Restart request confirmation was interrupted. Waiting for a healthy restarted host.'});
  assert.match(html,/Awaiting restarted host/);
- assert.match(html,/Awaiting restart…/);
+ assert.match(html,/Waiting for restart confirmation/);
  assert.match(html,/confirmation was interrupted/);
  assert.doesNotMatch(html,/this page will reconnect|installed and restarted successfully|Latest release installed/);
 });
@@ -255,11 +255,11 @@ test('uncertain replacement never appears current or offers another installation
   assert.match(html,/Needs attention/);
   assert.match(html,/installation outcome is unknown/);
   assert.match(html,/Work remains paused/);
-  assert.match(html,/Installation needs verification/);
+  assert.match(html,/installation needs verification/);
   assert.doesNotMatch(html,/Latest release installed/);
   for(const action of ['updates.check','updates.install','updates.rollback']){
    const button=html.match(new RegExp('<button[^>]*data-action="'+action+'"[^>]*>'))?.[0]||'';
-   assert.match(button,/disabled=""/);
+   assert.ok(!button||/disabled=""/.test(button));
   }
  }
 });
@@ -297,7 +297,7 @@ test('unknown usage keeps failure conditions visible separately even with invent
  assert.match(html,/Needs attention/);
  assert.match(html,/Configured source/);
  assert.doesNotMatch(html,/aria-label="Current"|All sources.*current/);
- assert.match(html,/may still be needed by your bundles/);
+ assert.match(html,/files may still be needed and are kept/);
 });
 
 test('unknown update remains installable while unknown pins and current status stay distinct',()=>{
@@ -334,11 +334,11 @@ test('main update box summarizes ordered component phases without the source inv
  const html=render({lastCheck:100,sequence:{stage:'included',included:{status:'available',available:3,missing:1},other:{status:'waiting',available:0}}});
  const banner=html.slice(html.indexOf('data-part="application-update"'),html.indexOf('data-part="update-controls"'));
  assert.match(banner,/Included components/);
- assert.match(banner,/3 available · 1 to install/);
+ assert.match(banner,/3 component updates are ready/);
  assert.match(banner,/Other components/);
- assert.match(banner,/After included components/);
+ assert.match(banner,/One update request handles/);
  assert.doesNotMatch(banner,/a-source-list/);
- assert.match(html,/Install included updates/);
+ assert.match(html,/Update Amplifier/);
 });
 
 test('app update leaves both component summaries waiting instead of claiming current',()=>{

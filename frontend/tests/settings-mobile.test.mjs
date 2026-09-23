@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settingsPatch,settingsSections} from '../src/settings-navigation.js';
+import {settingsPatch,settingsSections,settingsParent} from '../src/settings-navigation.js';
 import {settingsTrail,settingsBaseNavigation,mergeSettingsNavigation,settingsIndexPatch} from '../src/settings-mobile.js';
 test('mobile navigation preserves current editor drafts and resets only navigation flags',()=>{
  const view={providerEditor:{id:'one',model:'latest-draft',detailOpen:true,order:{ids:['two','one']}},settingsFilters:{providers:'latest-filter'}};
@@ -11,12 +11,12 @@ test('mobile navigation preserves current editor drafts and resets only navigati
 });
 test('every settings destination has an index and a section parent',()=>{
  for(const section of settingsSections)for(const [page]of section.pages){
-  const trail=settingsTrail(settingsBaseNavigation(page));assert.deepEqual(trail.map(row=>row.key),['index',page]);
+  const trail=settingsTrail(settingsBaseNavigation(page));assert.deepEqual(trail.map(row=>row.key),['index',...(settingsParent(page)?[settingsParent(page)]:[]),page]);
  }
 });
 test('nested routing navigation excludes editable model/profile contents',()=>{
  const view={...settingsPatch('routing'),routingEditor:{role:'coding',candidate:2,candidateOpen:true,detailOpen:true,matrix:{secretFixture:'never snapshot'}}};
- const trail=settingsTrail(view);assert.deepEqual(trail.map(row=>row.key),['index','routing','routing/role/coding','routing/choice/coding']);
+ const trail=settingsTrail(view);assert.deepEqual(trail.map(row=>row.key),['index','advanced','routing','routing/role/coding','routing/choice/coding']);
  assert.equal(JSON.stringify(trail).includes('never snapshot'),false);
  const parent=mergeSettingsNavigation(view,trail.at(-2).navigation);assert.equal(parent.routingEditor.candidateOpen,false);assert.equal(parent.routingEditor.matrix.secretFixture,'never snapshot');
 });

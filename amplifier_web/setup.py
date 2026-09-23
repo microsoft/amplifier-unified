@@ -338,6 +338,27 @@ class SetupManager:
                 self.store.update(workspace,scope,reorder)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
+        if action=='providers.finishSetup':
+            identity=safe_name(args['id']);model=args['model'].strip()
+            if not model:raise ValueError('Choose a model before finishing setup.')
+            effective=self.config(workspace)
+            row=next((value for value in effective.providers if (value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-'))==identity),None)
+            if not row:raise ValueError('The connection changed. Refresh your connections and try again.')
+            # A guided edit changes only the model. Preserve opaque provider fields,
+            # credential references and custom routing, including a custom balanced file.
+            routing=self.routing(workspace)
+            initialize=bool(args.get('initializeRouting') and not effective.settings.get('routing',{}).get('matrix')
+                and len([p for p in self.provider_rows(workspace) if p.get('enabled',True)])==1
+                and not any(p['name']==routing['active'] and p['source']=='custom' for p in routing['matrices']))
+            result=self._provider_mutation({**args,'module':row['module'],'config':{**row.get('config',{}),'default_model':model}},workspace,scope)
+            if initialize:
+                name='my-ai-'+uuid.uuid4().hex[:8]
+                matrix={'name':name,'description':'Models selected during AI connection setup','roles':{
+                    role:{'description':description,'candidates':[{'provider':identity,'model':model}]}
+                    for role,description in [('general','General conversation and work'),('fast','Quick and lightweight work')]}}
+                result.update(await self.perform('routing.save',{'workspace':workspace,'scope':scope,'name':name,'matrix':matrix,'activate':True}))
+            result['setupCompletion']={'id':identity,'model':model,'routingCreated':initialize,'takesEffect':'new_sessions'}
+            return result
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
         if action=='providers.loginCancel':return await self.cancel_login(args['id'])
         if action=='providers.loginStatus':return {'providerId':args['id'],'login':self.login_state(args['id'])}
