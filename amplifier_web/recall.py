@@ -18,6 +18,11 @@ def definitions(schema, string):
         'authorizationMessageId': string(200),
         'source': schema({'sessionId': string(200), 'messageId': string(200), 'sourceRevision': {}}, ['sessionId', 'messageId'])}
     return {
+        'memory.status': ('Read separate workspace contribution and automatic-use controls, bounded consolidation attempts and context selection evidence.', schema(common, ['sessionId'])),
+        'memory.configure': ('Change opt-in workspace memory controls. Contribution may call the source conversation model after idle, with a daily call cap. Use controls automatic context separately. Excluded conversations contribute no new notes and supply no automatic context. Agent changes require an attributable user request.', schema({**common, 'expectedRevision': {'type':'integer','minimum':0}, 'contribute': {'type':'boolean'}, 'use': {'type':'boolean'}, 'maxCallsPerDay': {'type':'integer','minimum':1,'maximum':10}, 'excludedSessions': {'type':'array','items':string(200),'maxItems':500,'uniqueItems':True}, 'authorizationMessageId':string(200)}, ['sessionId','expectedRevision'])),
+        'memory.consolidate': ('Consolidate eligible idle user conversations in this workspace within the opted-in daily model-call cap. Optional sourceSessionId selects one source in this workspace. Runs in the background. No conversation input or task continuation is sent.', schema({**common,'sourceSessionId':string(200)}, ['sessionId'])),
+        'memory.context': ('Preview the relevant saved references eligible for the current user input. Lexical retrieval is bounded and preserves provenance; preview does not start a model.', schema(common, ['sessionId'])),
+        'memory.source': ('Verify and read the original host-attributed human evidence for a consolidated memory. Withdrawn or changed sources fail visibly.', schema({**common,'id':string(200)}, ['sessionId','id'])),
         'recall.status': ('Inspect derived index coverage. Does not select conversations or start a model.', schema(common)),
         'recall.refresh': ('Index registered conversation text in the background. Originals are read-only. Check coverage and wait before claiming a complete search.', schema(common)),
         'recall.wait': ('Wait for an index progress revision, without sending input or changing the draft.', schema({**common, 'afterRevision': {'type':'integer','minimum':0}, 'waitMs': {'type':'integer','minimum':0,'maximum':60000}}, ['sessionId'])),
@@ -44,6 +49,8 @@ class Recall:
     def __init__(self, app):
         self.app = app
         self.store = RecallStore(app.data_dir / 'recall.sqlite3')
+        from .memory_consolidation import MemoryConsolidation
+        self.personalization = MemoryConsolidation(self)
         self.task = None
         self.changed = asyncio.Event()
         self.state = {'revision':0,'status':'not_checked','indexed':len(self.store.signatures()),
@@ -57,6 +64,7 @@ class Recall:
         event.set()
 
     async def close(self):
+        await self.personalization.close()
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
@@ -125,6 +133,8 @@ class Recall:
             self.notify(status='failed',error=type(exc).__name__)
 
     def start(self):
+        if any(row.get('_deleting') for row in self.app.state['sessions']):
+            raise ValueError('Wait for chat deletion to finish before indexing history.')
         if self.task is None or self.task.done():
             self.task = asyncio.create_task(self.refresh())
 
@@ -183,6 +193,41 @@ class Recall:
                     raise ValueError('The memory is outside this task/workspace scope.')
                 result['versions'] = await asyncio.to_thread(self.store.versions,args['id'])
                 result['historyLimit'] = 50
+            elif action in {'memory.status', 'memory.configure', 'memory.consolidate', 'memory.context', 'memory.source'}:
+                if action == 'memory.status':
+                    result = self.personalization.status(session)
+                elif action == 'memory.context':
+                    result = await self.personalization.context(session['id'])
+                elif action == 'memory.source':
+                    note = self.store.memory(args['id'])
+                    if (note['scope'], note['target']) not in self.scopes(session):
+                        raise ValueError('The memory is outside this task/workspace scope.')
+                    async with self.app.lock:
+                        result = self.personalization.verified_source(note, self.personalization.data.settings(session.get('workspace') or ''))
+                    if result is None:
+                        raise ValueError('This explicit note has no consolidated human source.')
+                elif action == 'memory.configure':
+                    provenance = {'origin': origin, 'sessionId': session['id']}
+                    if origin != 'ui':
+                        from .memory_consolidation import human_rows
+                        source = next((m for m in human_rows(session) if m['id']==args.get('authorizationMessageId')), None)
+                        if source is None:
+                            raise ValueError('Memory configuration requires an attributable user request.')
+                        provenance['authorizationMessageId'] = source['id']
+                    self.personalization.data.configure(session.get('workspace') or '', args, provenance, command_id)
+                    result = self.personalization.status(session)
+                else:
+                    fingerprint = digest([action, args, origin])
+                    if command_id and self.store.receipt(command_id, fingerprint) is not None:
+                        return {'accepted': True, 'result': {**self.personalization.status(session), 'duplicate': True}}
+                    source_id = args.get('sourceSessionId')
+                    if source_id and (source_id not in catalog or catalog[source_id]['workspace'] != session.get('workspace')):
+                        raise ValueError('Choose a source conversation in this workspace.')
+                    self.personalization.start(session, [source_id] if source_id else None)
+                    if command_id:
+                        with self.store.atomic():
+                            self.store.db.execute('INSERT INTO memory_receipts VALUES (?,?,?)', (command_id, fingerprint, '{}'))
+                    result = self.personalization.status(session)
             else:
                 values = copy.deepcopy(args)
                 provenance = {'origin':origin,'sessionId':session['id']}

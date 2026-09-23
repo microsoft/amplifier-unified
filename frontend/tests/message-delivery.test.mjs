@@ -38,3 +38,11 @@ test('a local-only message uses its original outbox identity only after confirma
  assert.equal(retryCalls[0].inputId,'original');assert.equal(calls.length,1);
  await act(async()=>root.unmount());
 });
+test('known startup failure retries the saved identity without an uncertainty confirmation',async()=>{
+ const calls=[],message={id:'m',inputId:'original',role:'user',text:'Request'},session={id:'chat',status:'error',messages:[message]};let root;
+ await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'failed'},localDelivery:{commandId:'original',status:'failed'},dispatch:async(action,args)=>{calls.push({action,args});return {result:{delivery:'accepted'}}},retry:()=>{throw Error('Must reuse saved input')}}))});
+ await act(async()=>button(root,'Retry').props.onClick());
+ assert.deepEqual(calls,[{action:'conversation.retry',args:{sessionId:'chat',inputId:'original',confirmUncertain:true}}]);
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/could repeat that work/);
+ await act(async()=>root.unmount());
+});

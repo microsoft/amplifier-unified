@@ -19,6 +19,11 @@ export function FeedbackPanel({state,act}){
  const result=pending&&requests.find(item=>item.requestId===pending.requestId);
  const shown=pending||draft;
  useEffect(()=>{if(result&&['submitted','failed','unknown'].includes(result.status))setError('')},[result?.status]);
+ useEffect(()=>{
+  if(result?.status!=='submitted'||current.current.pending?.requestId!==result.requestId)return;
+  setRetryUpload(null);
+  void save(empty()).catch(()=>setError('Feedback was sent, but the cleared draft could not be saved. Reconnect and try again.'));
+ },[result?.status,result?.requestId]);
  const working=busy||['queued','sending'].includes(result?.status),done=['submitted','failed','unknown'].includes(result?.status);
  const frozen=!!pending||uploading,preview=draft.previewId,selected=(draft.attachments||[]).filter(row=>!pending||pending.attachmentIds?.includes(row.id));
  const issues=state.feedback?.issuesUrl||'https://github.com/microsoft/amplifier-unified/issues';

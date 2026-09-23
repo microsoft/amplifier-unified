@@ -225,6 +225,82 @@ async def service(tmp_path):
     await app.close()
 
 
+async def test_progress_messages_arrive_during_generation_and_replays_do_not_erase_next_stream(service):
+    from amplifier_web.runtime import normalize_event
+    sid = service.get_state()['selectedSessionId']
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'working'})
+    async def message(text, sequence, at, **extra):
+        event = {'type': 'assistant.message', 'text': text, 'generation_id': 'generation',
+                 'input_ids': ['input'], 'sequence': sequence, 'time': at, **extra}
+        await service.on_runtime_event(*normalize_event(event, sid))
+
+    await message('Direction accepted', 5, 100)
+    await message('Workers running', 9, 120)
+    await message('Workers running', 12, 140)  # New block with identical text.
+    session = service._session(sid)
+    assert session['status'] == 'working'
+    assert [m['text'] for m in session['messages']] == ['Direction accepted', 'Workers running', 'Workers running']
+    assert [m['createdAt'] for m in session['messages']] == [100, 120, 140]
+    await service.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'Next update'})
+    await message('Direction accepted', 5, 100)  # Replayed earlier block.
+    assert len(session['messages']) == 3 and session['streaming'] == 'Next update'
+    await message('Build ready', 16, 160)
+    assert 'streaming' not in session
+    await service.on_runtime_event('runtime.generation', {'sessionId': sid, 'event': 'generation.finished',
+        'generation_id': 'generation', 'input_ids': ['input'], 'text': 'Build ready'})
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+    assert len(session['messages']) == 4
+
+
+async def test_message_ids_and_legacy_fallback_are_scoped_without_dropping_later_progress(service):
+    from amplifier_web.runtime import normalize_event
+    sid = service.get_state()['selectedSessionId']
+    async def message(text, generation='generation', **extra):
+        await service.on_runtime_event(*normalize_event({'type': 'assistant.message', 'text': text,
+            'generation_id': generation, 'input_ids': ['input'], **extra}, sid))
+
+    await message('Starting')
+    await message('Progress')
+    await message('Progress')  # Legacy replay, no per-message identity.
+    await message('Finished', message_id='final', event_id='event-final')
+    await message('Finished', message_id='final', event_id='replayed-envelope')
+    await message('Finished')  # Legacy final-result fallback after content block.
+    await message('Finished', message_id='another-final', event_id='event-next')
+    await message('Finished', generation='next', message_id='final', event_id='event-final')
+    assert [m['text'] for m in service._session(sid)['messages']] == ['Starting', 'Progress', 'Finished', 'Finished', 'Finished']
+
+
+async def test_missing_generation_and_message_ids_do_not_make_a_session_wide_dedup_key(service):
+    from amplifier_web.runtime import normalize_event
+    sid = service.get_state()['selectedSessionId']
+    for input_id, text in [('one', 'Starting'), ('one', 'Progress'), ('one', 'Progress'), ('two', 'Progress')]:
+        await service.on_runtime_event(*normalize_event({'type': 'assistant.message', 'text': text, 'sequence': 1}, sid, input_id))
+    for _ in range(2):
+        await service.on_runtime_event(*normalize_event({'type': 'assistant.message', 'text': 'Uncorrelated'}, sid))
+    assert [m['text'] for m in service._session(sid)['messages']] == ['Starting', 'Progress', 'Progress', 'Uncorrelated', 'Uncorrelated']
+
+
+async def test_message_replay_identity_survives_host_restart_without_reusing_a_worker_sequence(tmp_path):
+    from amplifier_web.runtime import normalize_event
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    sid = app.get_state()['selectedSessionId']
+    event = {'type':'assistant.message', 'text':'Saved progress', 'generation_id':'first',
+             'input_ids':['input'], 'sequence':5, 'time':123}
+    await app.on_runtime_event(*normalize_event(event, sid))
+    await app.close()
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await restored.on_runtime_event(*normalize_event(event, sid))
+        await restored.on_runtime_event(*normalize_event({**event, 'generation_id':'second', 'time':140}, sid))
+        messages = restored._session(sid)['messages']
+        assert len(messages) == 2
+        assert [m['generationId'] for m in messages] == ['first', 'second']
+        assert [m['createdAt'] for m in messages] == [123, 140]
+    finally:
+        await restored.close()
+
+
 async def test_conversation_survives_restart_and_deduplication(tmp_path):
     runtime = Runtime()
     app = AppService(tmp_path, runtime, workspace=tmp_path)
@@ -549,19 +625,20 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         await app.dispatch('session.create', {})
         await runtime.close()
         request = {'text': 'Keep this unsent request'}
-        with pytest.raises(RuntimeError, match='host is closing'):
+        with pytest.raises(AppError, match='did not send your message') as failure:
             await app.dispatch('conversation.send', request, command_id='failed-start')
+        assert failure.value.status == 503 and failure.value.code == 'worker_startup_failed'
         session = app.get_state()['sessions'][0]
         assert session['status'] == 'error'
-        assert 'not automatically replayed' in session['error']
+        assert 'message has been saved' in session['error']
         message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
         assert message['text'] == request['text']
-        assert message['delivery']['status'] == 'unknown'
+        assert message['delivery']['status'] == 'failed'
         assert session['execution']['turns'][-1]['phase'] == 'error'
         assert not UpdateManager(app).busy()
         duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
         assert duplicate['duplicate'] is True
-        assert duplicate['delivery'] == 'unknown'
+        assert duplicate['accepted'] is False and duplicate['delivery'] == 'failed'
         assert not runtime.workers
     finally:
         await app.close()

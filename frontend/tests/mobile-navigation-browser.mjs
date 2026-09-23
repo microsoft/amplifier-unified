@@ -30,7 +30,7 @@ try{
    return {viewport:innerWidth,body:document.documentElement.scrollWidth,header:box('.a-top'),title:box('.a-mobile-chat-title'),nav:box('.a-nav-slot'),chat:box('.a-conversation'),font:getComputedStyle(document.querySelector('#amp-one')).fontSize,actions:[...document.querySelectorAll('.a-top button')].filter(b=>b.getClientRects().length).map(b=>({label:b.getAttribute('aria-label'),width:b.getBoundingClientRect().width}))};
   });
   results.push(metrics);assert.equal(metrics.body,width);assert.equal(metrics.font,'14px');
-  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.equal(metrics.actions.length,3);assert.ok(metrics.actions.every(row=>row.width>=44))}
+  if(width<=760){assert.equal(metrics.chat.width,width);assert.equal(metrics.nav.display,'none');assert.ok(metrics.title.width>100);assert.deepEqual(metrics.actions.map(row=>row.label),['Open navigation','Send feedback','More app options','Open canvas']);assert.ok(metrics.actions.every(row=>row.width>=44))}
   await page.screenshot({path:`${out}/chat-${width}.png`});
   if(width<=760){
    await page.getByRole('button',{name:'Open navigation',exact:true}).tap();await drawer.waitFor();
@@ -55,7 +55,7 @@ try{
  assert.ok(await page.locator('.a-conversation').evaluate(el=>el.inert));
  await page.screenshot({path:`${out}/drawer.png`});assert.ok(await drawer.locator('input').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).every(node=>parseFloat(getComputedStyle(node).fontSize)>=16)));
  await page.keyboard.press('Shift+Tab');assert.ok(await drawer.evaluate(el=>el.contains(document.activeElement)));
- const details=drawer.locator('.a-navigation-more').first();await details.click();await page.getByRole('button',{name:'Close details',exact:true}).waitFor();
+ const details=drawer.locator('.a-navigation-more').first();await details.click();await page.locator('.a-navigation-flyout').waitFor();
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);
  await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelector('.a-nav-slot').hidden);

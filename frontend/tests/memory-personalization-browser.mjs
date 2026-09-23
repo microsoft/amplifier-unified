@@ -1,0 +1,34 @@
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+import {openSettingsPage} from './browser-settings.mjs';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/recall_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exited '+code)))});
+ browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(ready.url);await openSettingsPage(page,'recall');
+ const region=page.getByRole('region',{name:'Automatic memory'});
+ const contribute=region.getByLabel('Contribute memory from idle conversations in this workspace');
+ const use=region.getByLabel('Use relevant saved memory automatically in this workspace');
+ const exclude=region.getByLabel('Exclude this conversation from contribution and automatic use');
+ await expect(contribute).not.toBeChecked();await expect(use).not.toBeChecked();
+ await contribute.click();await expect(contribute).toBeChecked();await expect(use).not.toBeChecked();await use.click();await expect(use).toBeChecked();await exclude.click();await expect(exclude).toBeChecked();
+ await region.getByLabel('Maximum model attempts per day').fill('2');await expect(contribute).toBeEnabled();
+ let state=await page.request.get(ready.url+'/fixture').then(r=>r.json());
+ assert.equal(state.personalization.settings.contribute,true);assert.equal(state.personalization.settings.use,true);
+ assert.deepEqual(state.personalization.settings.excludedSessions,[ready.sessionId]);assert.equal(state.personalization.settings.maxCallsPerDay,2);
+ await page.screenshot({path:'/tmp/amplifier-memory-controls-desktop.png',animations:'disabled'});
+ await page.setViewportSize({width:390,height:844});await region.scrollIntoViewIfNeeded();
+ assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth));
+ await page.screenshot({path:'/tmp/amplifier-memory-controls-mobile.png',animations:'disabled'});
+ await page.reload();await page.locator('.a-settings-experience[data-settings-page="recall"]').waitFor();
+ await expect(contribute).toBeChecked();await expect(use).toBeChecked();await expect(exclude).toBeChecked();
+ await contribute.click();await expect(contribute).not.toBeChecked();await expect(use).toBeChecked();await use.click();await expect(use).not.toBeChecked();
+ state=await page.request.get(ready.url+'/fixture').then(r=>r.json());
+ assert.equal(state.personalization.settings.contribute,false);assert.equal(state.personalization.settings.use,false);
+ assert.equal(state.selected,ready.sessionId);assert.equal(state.draft,'Preserve this draft');assert.deepEqual(state.sent,[]);assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({passed:true,defaultOff:true,separateControls:true,sourceExclusion:true,cap:true,reload:true,mobileBounds:true,noModelInvocations:true}));
+}finally{await browser?.close();fixture.kill()}

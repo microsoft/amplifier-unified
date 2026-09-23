@@ -30,6 +30,81 @@ def snapshot(service, client):
     with service.clients.bind(client):
         return service.browser_state()
 
+
+async def test_reconcile_observes_unsaved_catalog_changes_without_losing_other_client_state(live):
+    from copy import deepcopy
+    service, first, second = live
+    a, b = (service.clients.records[name] for name in ('browser-a', 'browser-b'))
+    a.update(selectedSessionId=first, canvas={'id': 'canvas-a', 'kind': 'markdown', 'content': 'Private canvas'})
+    a['drafts'].update({first: 'Private first draft', '': 'Pre-chat draft'})
+    b.update(selectedSessionId=second, canvas={'id': 'canvas-b', 'kind': 'markdown', 'content': 'Other canvas'})
+    b['drafts'][second] = 'Other draft'
+    service.clients.reconcile('browser-a')
+    service.clients.reconcile('browser-b')
+    before_b, revision = deepcopy(b), service.state['revision']
+    original = service._session(first)
+    # Membership must stay fresh before any save/revision, even when length and
+    # list identity remain unchanged. Reordering must not change selection.
+    service._state['sessions'].reverse()
+    service.clients.reconcile('browser-a')
+    assert a['selectedSessionId'] == first and a['canvas']['content'] == 'Private canvas'
+    index = service._state['sessions'].index(original)
+    service._state['sessions'][index] = {**original, 'id': 'replacement'}
+    service.clients.reconcile('browser-a')
+    assert a['selectedSessionId'] is None and a['canvas'] == {}
+    assert a['view']['draft'] == 'Pre-chat draft'
+    assert a['drafts'][first] == 'Private first draft'
+    assert b == before_b
+    service._state['sessions'][index] = original
+    a['selectedSessionId'] = first
+    service.clients.reconcile('browser-a')
+    assert a['selectedSessionId'] == first and a['view']['draft'] == 'Private first draft'
+    assert service.state['revision'] == revision
+
+
+async def test_reconcile_refreshes_workspace_fallback_and_restores_retained_canvas(live):
+    from amplifier_web.resource_files import put
+    service, first, _ = live
+    record = service.clients.records['browser-a']
+    fallback = service._state['selectedWorkspaceId']
+    extra = {**service._state['workspaces'][0], 'id': 'temporary-workspace'}
+    service._state['workspaces'].append(extra)
+    record.update(selectedSessionId=first, selectedWorkspaceId=extra['id'],
+        canvas={'id': 'retained', 'kind': 'markdown', 'contentResource': put(service.db, {'content': 'Retained source'})})
+    record['drafts'][first] = 'Unsent'
+    service.clients.reconcile('browser-a')
+    assert record['selectedWorkspaceId'] == extra['id']
+    assert record['canvas']['content'] == 'Retained source'
+    assert 'contentResource' not in record['canvas']
+    service._state['workspaces'][-1] = {**extra, 'id': 'replacement-workspace'}
+    service.clients.reconcile('browser-a')
+    assert record['selectedWorkspaceId'] == fallback
+    assert record['selectedSessionId'] == first and record['view']['draft'] == 'Unsent'
+    assert record['canvas']['content'] == 'Retained source'
+    service._state['workspaces'].pop()
+
+
+async def test_reconcile_stops_after_finding_each_selected_identity(live):
+    service, first, _ = live
+    class ObservedRow(dict):
+        reads = 0
+        def __getitem__(self, key):
+            if key == 'id':
+                self.reads += 1
+            return super().__getitem__(key)
+    record = service.clients.records['browser-a']
+    record['selectedSessionId'] = first
+    sessions, workspaces = service._state['sessions'], service._state['workspaces']
+    unused_session, unused_workspace = ObservedRow(id='unused-session'), ObservedRow(id='unused-workspace')
+    service._state['sessions'] = [service._session(first), unused_session]
+    service._state['workspaces'] = [workspaces[0], unused_workspace]
+    try:
+        service.clients.reconcile('browser-a')
+        assert unused_session.reads == unused_workspace.reads == 0
+    finally:
+        service._state.update(sessions=sessions, workspaces=workspaces)
+
+
 async def test_pre_conversation_drafts_are_private_and_survive_reload_and_restart(tmp_path):
     service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
     for identity in ("browser-a", "browser-b"):

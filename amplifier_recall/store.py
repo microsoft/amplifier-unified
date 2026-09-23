@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 
 def digest(value):
@@ -34,6 +35,20 @@ class RecallStore:
     def close(self):
         with self.lock:
             self.db.close()
+
+    @contextmanager
+    def atomic(self):
+        """Nestable memory transaction, including correction/supersession batches."""
+        with self.lock:
+            name = 'memory_' + uuid.uuid4().hex
+            self.db.execute('SAVEPOINT '+name)
+            try:
+                yield
+                self.db.execute('RELEASE SAVEPOINT '+name)
+            except BaseException:
+                self.db.execute('ROLLBACK TO SAVEPOINT '+name)
+                self.db.execute('RELEASE SAVEPOINT '+name)
+                raise
 
     def signatures(self):
         with self.lock:
@@ -130,7 +145,7 @@ class RecallStore:
 
     def mutate(self, action, args, *, command_id, provenance, request_fingerprint=None):
         fingerprint = request_fingerprint or digest([action,args,provenance])
-        with self.lock, self.db:
+        with self.atomic():
             old = self.db.execute('SELECT fingerprint,result FROM memory_receipts WHERE id=?', (command_id,)).fetchone()
             if old:
                 if old[0] != fingerprint:
@@ -145,6 +160,8 @@ class RecallStore:
                 record = self.memory(args['id'])
                 if record['revision'] != args['expectedRevision']:
                     raise ValueError('This memory changed. Read its current revision before editing.')
+                if record.get('automationSourceKey'):
+                    self.db.execute('INSERT OR IGNORE INTO memory_suppression VALUES (?)', (record['automationSourceKey'],))
             if action == 'memory.delete':
                 self.db.execute('DELETE FROM memories WHERE id=?', (record['id'],))
                 self.db.execute('DELETE FROM memory_versions WHERE id=?', (record['id'],))
@@ -154,7 +171,10 @@ class RecallStore:
                 if not text or len(text)>8000:
                     raise ValueError('Memory text must contain 1–8000 characters.')
                 record.update(text=text, updatedAt=time.time(), revision=record['revision']+1,
-                    provenance=copy.deepcopy(provenance), source=copy.deepcopy(args.get('source')))
+                    provenance=copy.deepcopy(provenance), source=copy.deepcopy(args.get('source', record.get('source'))))
+                for key in ('automationKey', 'automationSourceKey', 'supersedes', 'supersededBy'):
+                    if key in args:
+                        record[key] = copy.deepcopy(args[key])
                 self.db.execute('INSERT OR REPLACE INTO memories VALUES (?,?,?,?,?)',
                     (record['id'],record['scope'],record['target'],record['revision'],json.dumps(record)))
                 self.db.execute('INSERT INTO memory_versions VALUES (?,?,?)',

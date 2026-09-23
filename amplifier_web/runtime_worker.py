@@ -55,6 +55,7 @@ class Worker:
         self.parked_config_stamp = None
         self.config_inputs = ()
         self.command_lock = asyncio.Lock()
+        self.memory_task = None
         self.start_config = None
         self.remounting = False
         self.context_bindings = {}
@@ -148,6 +149,9 @@ class Worker:
                     providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider)
             return
         coordinator.register_capability("web.activity", True)
+        # A resumed child reuses its session ID but owns a new coordinator.
+        # Bind hooks to their originating run, never the mutable registry row.
+        activity_run_id = coordinator.get_capability("web.worker_run")
         async def observe_operation(event):
             identity = (coordinator.session_id, event.get("operationId"))
             if event.get("phase") == "started":
@@ -217,7 +221,8 @@ class Worker:
                 registry = coordinator.get_capability("live.children")
                 row = registry.rows.get(identity, {}) if registry else {}
                 publish({"type": "worker.activity", "workerId": identity, "phase": phase,
-                    "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"), "time": time.time(), **retry})
+                    "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
+                    "runId": activity_run_id, "time": time.time(), **retry})
             return HookResult()
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
@@ -532,6 +537,13 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
+        if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
+            # Auxiliary personalization must never delay foreground admission.
+            # Cancellation cannot retract an already accepted provider request;
+            # its source attempt is recorded interrupted and is not replayed.
+            if self.memory_task and not self.memory_task.done():
+                self.memory_task.cancel()
         if op == "park":
             await self.park()
             publish({"op": "reply", "id": data.get("id"), "result": {"parked": self.parked}})
@@ -557,11 +569,17 @@ class Worker:
                 if self.ownership.yielding:
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
+                # A memory call can finish admission while a foreground command
+                # waits for this lock, so also cancel after acquiring it.
+                if op in {'send', 'retry', 'resume', 'worker.message', 'worker.steer', 'worker.stop'} and self.memory_task and not self.memory_task.done():
+                    self.memory_task.cancel()
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
-                detached_cancel = op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
+                detached_cancel = memory_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
                     self.operation_controls += 1
+                    if memory_control:
+                        self.memory_task = asyncio.current_task()
                 else:
                     try:
                         await self._command_serial(data)
@@ -573,10 +591,16 @@ class Worker:
                 finally:
                     self.operation_controls -= 1
                     self.activation_gate.reset(token)
+                    if memory_control and self.memory_task is asyncio.current_task():
+                        self.memory_task = None
             if op in {"control", "retry"}:
                 # A control-only action or duplicate retry does not wake the inbox.
                 # It must therefore schedule its own settled release.
                 await self.park(activation=self.activation)
+        except asyncio.CancelledError:
+            if not memory_control:
+                raise
+            publish({'op':'reply', 'id':data.get('id'), 'result':{'interrupted':True}})
         except Exception as exc:
             reply = {"op": "reply", "id": data.get("id"),
                      "error": f"{type(exc).__name__}: {exc}"}
@@ -584,6 +608,9 @@ class Worker:
                 reply["code"] = "session_busy"
                 reply["owner"] = getattr(exc, "owner", None)
             publish(reply)
+        finally:
+            if memory_control and self.memory_task is asyncio.current_task():
+                self.memory_task = None
 
     async def _command_serial(self, data):
         identity = data.get("id")
@@ -624,7 +651,13 @@ class Worker:
                     from .artifact_runtime import discover
                 else:
                     from artifact_runtime import discover
-                result = await discover('worker')
+                result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
+            elif op == "desktop.readiness":
+                if not self.controls:
+                    result = {"status": "unavailable", "reason": "Conversation tools are not mounted."}
+                else:
+                    from amplifier_web.desktop_readiness import worker_report
+                    result = worker_report(self.controls)
             elif not self.session or not self.execution:
                 raise RuntimeError("Session is not ready")
             elif op in {"delivery", "retry"} and (
@@ -732,18 +765,20 @@ class Worker:
                 if task and not task.done():
                     task.cancel()
             await asyncio.gather(*(t for t in [read, self.start_task, self.execution, *self.tasks] if t), return_exceptions=True)
-            await self.checkpoint_terminal_outcome()
-            if self.ownership.registration:
-                await self.ownership.registration.close()
-            if self.controls:
-                await self.controls.close()
-            if self.session:
-                await self.session.cleanup()
-            if self.shared_handle is not None:
-                try:
-                    await asyncio.to_thread(self.shared_handle.release)
-                finally:
-                    self.shared_handle = None
+            try:
+                await self.checkpoint_terminal_outcome()
+            finally:
+                if self.ownership.registration:
+                    await self.ownership.registration.close()
+                if self.controls:
+                    await self.controls.close()
+                if self.session:
+                    await self.session.cleanup()
+                if self.shared_handle is not None:
+                    try:
+                        await asyncio.to_thread(self.shared_handle.release)
+                    finally:
+                        self.shared_handle = None
 
 
 if __name__ == "__main__":

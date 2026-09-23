@@ -40,6 +40,36 @@ async def test_default_local_capture_never_infers_remote_destination(service,mon
     with collector._db() as db:assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0]==0
 
 
+async def test_auxiliary_failure_keeps_label_and_safe_category_without_error_payload(service):
+    collector=service.diagnostics
+    collector.runtime_event('execution.event', {'id':'summary-call','kind':'llm','phase':'error',
+        'label':'Context compaction','failure':{'errorType':'ContextLengthError','category':'context_limit',
+        'summary':'private prompt must never leak','raw':'secret'}}, {'id':'fixture','workspace':service.default_workspace})
+    await collector.flush()
+    records=collector.read()['items']
+    row=next(row for row in records if row['event']=='llm:error')
+    assert row['data']['errorType']=='ContextLengthError'
+    assert row['data']['errorCode']=='context_limit'
+    assert row['data']['label']=='Context compaction'
+    assert 'private prompt' not in json.dumps(records) and 'secret' not in json.dumps(records)
+
+
+@pytest.mark.parametrize('kind,payload_kind,label',[
+    ('execution.event','llm','private prompt content'),
+    ('execution.event','worker','private prompt content'),
+    ('worker.updated','worker','Context compaction'),
+])
+async def test_runtime_metadata_omits_arbitrary_labels(service,kind,payload_kind,label):
+    collector=service.diagnostics
+    collector.runtime_event(kind,{'id':'fixture-label','kind':payload_kind,
+        'phase':'completed','label':label}, {'id':'fixture','workspace':service.default_workspace})
+    await collector.flush()
+    rows=[row for row in collector.read()['items'] if row['data'].get('id')=='fixture-label']
+    assert rows
+    assert all('label' not in row['data'] for row in rows)
+    assert 'private prompt' not in json.dumps(rows)
+
+
 async def test_independent_stream_routes_and_paths(service):
     await configure(service,destination(),destination('team',streams=['usage'],includePaths=True))
     collector=service.diagnostics
@@ -389,3 +419,44 @@ async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnost
     assert {r['data']['runtimeSessionId'] for r in rows}=={'root:worker-1','historical-root'}
     assert not native_root.exists()
     assert not (tmp_path/'unavailable-cli-folder').exists()
+
+
+async def test_background_capture_counts_do_not_publish_until_observed_but_health_does(service, monkeypatch):
+    collector = service.diagnostics
+    current = {'config': {}, 'local': {'records': 1, 'oldest': 1, 'newest': 1,
+        'dropped': 0, 'storageError': False}, 'destinations': [], 'results': {}}
+    monkeypatch.setattr(collector, '_summary', lambda: copy.deepcopy(current))
+    await collector.publish(background=True)
+    revision = service.state['revision']
+    for number in range(2, 12):
+        current['local'].update(records=number, oldest=number, newest=number)
+        await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    assert service.state['diagnostics']['local']['records'] == 1
+    # Opening another settings page or a disconnected client's retained view
+    # is not a subscription to diagnostics counters.
+    record = service.clients.attach('diagnostics-client')
+    record['view'].update(panel='settings', settingsExpanded=['diagnostics'])
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision
+    with service.clients.bind('diagnostics-client'):
+        queue = service.subscribe()
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    assert service.state['diagnostics']['local']['records'] == 11
+    record['view']['settingsExpanded'] = ['appearance']
+    current['local']['newest'] = 12
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 1
+    current['local']['storageError'] = True
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 2
+    assert service.state['diagnostics']['local']['storageError'] is True
+    current['local'].update(storageError=False, dropped=1)
+    await collector.publish(background=True)
+    assert service.state['revision'] == revision + 3
+    service.unsubscribe(queue)
+    # Explicit inspection remains available to agent callers without UI demand.
+    current['local']['records'] = 20
+    await collector.publish()
+    assert service.state['diagnostics']['local']['records'] == 20

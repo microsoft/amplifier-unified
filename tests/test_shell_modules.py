@@ -10,13 +10,16 @@ from test_chat_navigation import state_fixture, chat
 
 
 @pytest.fixture
-def service(tmp_path):
+async def service(tmp_path):
     app = AppService(tmp_path / 'app', workspace=tmp_path)
     app.state.update(state_fixture())
     app.state['view']['draft'] = 'Keep this unsent message'
     app.state['sessions'] = [chat('alpha'), chat('beta', 'two')]
+    paths = {workspace['id']: workspace['path'] for workspace in app.state['workspaces']}
+    for session in app.state['sessions']:
+        session.update(workspace=paths[session['workspaceId']], messages=[])
     yield app
-    app.db.close()
+    await app.close()
 
 
 async def command(app, name, **args):
@@ -150,6 +153,7 @@ async def test_recovery_and_saved_composition_survive_restart(service):
     composition['instances'] = []
     change = await prepare(service, composition)
     await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
+    await service.close()
     restored = AppService(service.data_dir, workspace=service.default_workspace)
     try:
         assert restored.shell.client('browser-one')['composition'] == composition
@@ -187,7 +191,7 @@ async def test_unknown_package_unsupported_api_and_invalid_form_rejected(service
 
 @pytest.mark.asyncio
 async def test_pin_resets_only_originating_page_and_new_clients_keep_own_defaults(service):
-    service.state['sessions'] = [{**chat(str(index)), 'workspace': '/projects/one/shared'} for index in range(250)]
+    service.state['sessions'] = [{**chat(str(index)), 'workspace': '/projects/one/shared', 'messages': []} for index in range(250)]
     service.shell.client('browser-two')
     scope = service.shell.inspect('browser-one', snapshots=True)['snapshots']['chats']['chatNavigation']['scope']
     await command(service, 'shell.view.update', clientId='browser-one', instanceId='chats', patch={'navChatPage': {**scope, 'index': 2}})
@@ -245,3 +249,20 @@ async def test_shell_summaries_derive_current_unread_without_acknowledging_it(se
     assert row['activity']['kind'] == 'unread'
     assert result['attention']['sessions'][session['id']] == 1
     assert service.state.get('attentionRead', {}) == before
+
+
+async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(service):
+    for session in service.state['sessions']:
+        session.update(workspace=str(service.default_workspace), messages=[])
+    await command(service,'session.pin',id='alpha',pinned=True)
+    await command(service,'session.pin',id='beta',pinned=True)
+    await command(service,'shell.view.update',clientId='browser-one',instanceId='chats',patch={'navSort':'name','navChatScope':'all'})
+    await command(service,'shell.command',clientId='browser-one',instanceId='chats',action='session.pinOrder',args={'ids':['beta','alpha']})
+    first=service.shell.inspect('browser-one',snapshots=True)['snapshots']['chats']
+    second=service.shell.inspect('browser-two',snapshots=True)['snapshots']['chats']
+    assert first['pinnedSessionIds']==second['pinnedSessionIds']==['beta','alpha']
+    assert first['chatNavigation']['scope']['sort']=='name'
+    assert 'sort' not in second['chatNavigation']['scope']
+    assert [r['id'] for r in first['chatNavigation']['items']]==['beta','alpha']
+    with pytest.raises(AppError,match='every current ID'):
+        await command(service,'session.pinOrder',ids=['alpha'])

@@ -67,6 +67,35 @@ test('durable success and uncertainty render meaningful results without allowing
  }
 });
 
+test('only confirmed feedback clears the saved form and receipts never clear a newer draft',async()=>{
+ for(const status of ['submitted','failed','unknown','sending']){
+  let state=base(),root;const calls=[],requestId='form-reset-'+status;
+  state.view.feedbackDraft.pending={...draft,requestId};
+  state.feedback.requests=[{requestId,status,title:draft.title,message:'Receipt '+status,url:'https://github.com/microsoft/amplifier-unified/issues/42'}];
+  const action=async(name,args)=>{
+   calls.push({name,args});state={...state,view:{...state.view,...args.patch}};
+   root.update(React.createElement(FeedbackPanel,{state,act:action}));return {accepted:true};
+  };
+  await renderAct(async()=>{root=create(React.createElement(FeedbackPanel,{state,act:action}))});
+  if(status==='submitted'){
+   assert.equal(root.root.findByProps({id:'feedback-title'}).props.value,'');
+   assert.equal(root.root.findByProps({id:'feedback-body'}).props.value,'');
+   assert.deepEqual(state.view.feedbackDraft.attachments,[]);
+   assert.equal(state.view.feedbackDraft.pending,undefined);
+   assert.match(JSON.stringify(root.toJSON()),/Receipt submitted/);
+   await renderAct(async()=>root.root.findByProps({id:'feedback-body'}).props.onChange({target:{value:'Next feedback'}}));
+   await renderAct(async()=>root.update(React.createElement(FeedbackPanel,{state:{...state,feedback:{...state.feedback,requests:[...state.feedback.requests]}},act:action})));
+   assert.equal(root.root.findByProps({id:'feedback-body'}).props.value,'Next feedback');
+  }else{
+   assert.equal(root.root.findByProps({id:'feedback-body'}).props.value,draft.body);
+   assert.equal(root.root.findByProps({id:'feedback-body'}).props.disabled,true);
+   assert.equal(calls.length,0);
+  }
+  assert.ok(calls.every(call=>call.name==='view.update'),'Receipt handling never submits feedback');
+  await renderAct(async()=>root.unmount());
+ }
+});
+
 test('every editable form control publishes shared view state, including optional diagnostics',async()=>{
  const calls=[];let root;
  await renderAct(async()=>{root=create(React.createElement(FeedbackPanel,{state:base(),act:async(name,args)=>calls.push({name,args})}))});

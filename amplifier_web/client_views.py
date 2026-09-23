@@ -111,14 +111,25 @@ class ClientViews:
         sync(self.service)
         record = self.records[identity]
         self.dirty.add(identity)
-        sessions = {row["id"]: row for row in self.service._state.get("sessions", [])}
         sid = record.get("selectedSessionId")
-        if sid is not None and sid not in sessions:
+        if sid is not None and not any(row["id"] == sid for row in self.service._state.get("sessions", [])):
             record["selectedSessionId"] = None
             record["canvas"] = {}
-        workspaces = {row["id"] for row in self.service._state.get("workspaces", [])}
-        if record.get("selectedWorkspaceId") not in workspaces:
+        from .managed_chats import is_managed
+        selected = next((row for row in self.service._state.get("sessions", []) if row["id"] == sid), {})
+        managed = is_managed(selected) or (sid is None and is_managed(record.get("view", {}).get("newSessionDraft", {})))
+        workspace = record.get("selectedWorkspaceId")
+        if managed and workspace is None:
+            pass
+        elif not any(row["id"] == workspace for row in self.service._state.get("workspaces", [])):
             record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
+        if record.get('selectedSessionId') is None:
+            # Older clients could persist an open Canvas without a chat. Hide
+            # that presentation on reconnect; never discard its saved content.
+            if record.get('canvas', {}).get('open'):
+                record['canvas']['open'] = False
+            if record['view'].get('canvasFocused'):
+                record['view']['canvasFocused'] = False
         from .canvas_library import restore_body
         restore_body(record.get("canvas", {}), self.service.db)
         # The empty key is the client's pre-conversation draft. Unlike None,

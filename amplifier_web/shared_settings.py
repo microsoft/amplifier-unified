@@ -33,7 +33,7 @@ def update_settings(path, mutator):
     return update(path, mutator)
 
 
-def settings_paths(workspace, *, shared_home=None, session_id=None):
+def settings_paths(workspace, *, shared_home=None, session_id=None, global_only=False):
     root = Path(shared_home or amplifier_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve()
     paths = {
@@ -41,17 +41,21 @@ def settings_paths(workspace, *, shared_home=None, session_id=None):
         "project": workspace / ".amplifier" / "settings.yaml",
         "local": workspace / ".amplifier" / "settings.local.yaml",
     }
+    from .managed_chats import metadata
+    if global_only or metadata(workspace):
+        paths = {"global": paths["global"]}
     if session_id:
         paths["session"] = root / "projects" / project_slug(workspace) / "sessions" / validate_id(session_id) / "settings.yaml"
     return paths
 
 
-def read_settings(workspace, *, shared_home=None, session_id=None):
+def read_settings(workspace, *, shared_home=None, session_id=None, global_only=False):
     from amplifier_foundation.settings import read_settings as read_scoped_settings
-    return read_scoped_settings(settings_paths(workspace, shared_home=shared_home, session_id=session_id).values())
+    return read_scoped_settings(settings_paths(workspace, shared_home=shared_home, session_id=session_id, global_only=global_only).values())
 
 
-def routing_dirs(workspace, *, shared_home=None):
+def routing_dirs(workspace, *, shared_home=None, global_only=False):
     root = Path(shared_home or amplifier_home()).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve()
-    return [workspace / ".amplifier" / "routing.local", workspace / ".amplifier" / "routing", root / "routing"]
+    from .managed_chats import metadata
+    return [root / "routing"] if global_only or metadata(workspace) else [workspace / ".amplifier" / "routing.local", workspace / ".amplifier" / "routing", root / "routing"]

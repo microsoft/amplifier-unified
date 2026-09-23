@@ -4,6 +4,7 @@ import math
 import time
 
 from .session_navigation import is_top_level
+from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels
 
 PAGE_SIZE = 100
@@ -26,7 +27,22 @@ def recent_activity(session):
 
 
 def touch(session):
+    # Preserve the last ready position while a turn makes progress. Raw recency
+    # remains available to history/reconciliation and diagnostics.
+    session.setdefault('navigationActivityAt', recent_activity(session))
+    session['navigationActivityPending'] = True
     session['recentActivityAt'] = max(recent_activity(session), time.time())
+
+
+def navigation_activity(session):
+    saved = timestamp(session.get('navigationActivityAt'))
+    return saved if saved is not None else recent_activity(session)
+
+
+def settle_activity(session):
+    """Commit activity once the conversation is ready for the user's attention."""
+    if session.pop('navigationActivityPending', False):
+        session['navigationActivityAt'] = max(navigation_activity(session), recent_activity(session), time.time())
 
 
 def runtime_activity(session, kind, payload):
@@ -63,9 +79,14 @@ def initialize(state):
         state['view']['navChatScope'] = 'workspace'
     for session in state.get('sessions', []):
         session['recentActivityAt'] = recent_activity(session)
+        if session.get('navigationActivityPending') and session.get('status') == 'interrupted':
+            session['navigationActivityAt'] = recent_activity(session)
+            session.pop('navigationActivityPending', None)
 
 
 def view_patch(patch):
+    if 'navSort' in patch and patch['navSort'] not in ('activity', 'created', 'name'):
+        raise ValueError('Choose recent activity, newest created, or name.')
     if 'navArchive' in patch and patch['navArchive'] not in ('active', 'archived', 'all'):
         raise ValueError('Choose active, archived or all conversations.')
     if 'navCollection' in patch and patch['navCollection'] is not None and (not isinstance(patch['navCollection'], str) or len(patch['navCollection']) > 200):
@@ -82,6 +103,8 @@ def view_patch(patch):
             raise ValueError('Worker history page index must be a nonnegative integer.')
     if 'navWorkspaceList' in patch and type(patch['navWorkspaceList']) is not bool:
         raise ValueError('navWorkspaceList must be a boolean.')
+    if 'navLocationFilter' in patch and patch['navLocationFilter'] not in ('all', 'managed'):
+        raise ValueError('Choose all locations or no workspace.')
     if 'navStatusFilter' in patch and patch['navStatusFilter'] not in ('all', 'attention', 'working', 'unread'):
         raise ValueError('Choose all, attention, working, or unread conversations.')
     if 'navChatScope' in patch and patch['navChatScope'] not in ('workspace', 'all'):
@@ -109,12 +132,26 @@ def _matches(terms, query):
     return any(query in str(term).casefold() for term in terms)
 
 
-def snapshot(state):
+def registry(state):
+    """Shared workspace resolution and root grouping for navigation queries."""
     workspaces = [row for row in state.get('workspaces', [])
                   if row.get('available') is True and isinstance(row.get('path'), str) and row['path']]
     by_id = {row['id']: row for row in workspaces}
     by_path = {row['path']: row for row in workspaces}
     labels = path_labels(by_path)
+    roots, grouped = [], {}
+    for row in state.get('sessions', []):
+        if is_top_level(row):
+            roots.append(row)
+            workspace = by_id.get(row.get('workspaceId')) or by_path.get(row.get('workspace'))
+            if workspace is not None:
+                grouped.setdefault(workspace['id'], []).append(row)
+    return by_id, by_path, labels, roots, grouped
+
+
+def catalog(state, *, indexed=None):
+    """Filter/sort once; selected chat and pagination belong to each client."""
+    by_id, by_path, labels, roots, grouped = registry(state) if indexed is None else indexed
     selected = by_id.get(state.get('selectedWorkspaceId'))
     view = state.get('view', {})
     mode = 'all' if view.get('navChatScope') == 'all' else 'workspace'
@@ -122,6 +159,12 @@ def snapshot(state):
     query = query if isinstance(query, str) else ''
     scope = {'mode': mode, 'workspaceId': selected['id'] if mode == 'workspace' and selected else None,
              'filter': query, 'selectedSessionId': state.get('selectedSessionId')}
+    sort = view.get('navSort', 'activity')
+    if sort != 'activity':
+        scope['sort'] = sort
+    location_filter = view.get('navLocationFilter', 'all') if mode == 'all' else 'all'
+    if location_filter != 'all':
+        scope['locationFilter'] = location_filter
     status_filter = view.get('navStatusFilter', 'all')
     if status_filter != 'all':
         scope['statusFilter'] = status_filter
@@ -134,24 +177,21 @@ def snapshot(state):
     archive_filter = view.get('navArchive', 'active')
     if archive_filter != 'active':
         scope['archive'] = archive_filter
-    collection_id = view.get('navCollection')
-    collection = next((row for row in organization.get('collections', []) if row['id'] == collection_id), None)
-    collection_order = {sid: i for i, sid in enumerate(collection['sessionIds'])} if collection else {}
-    if collection_id:
-        scope['collectionId'] = collection_id
-    memberships = {sid: row['id'] for row in organization.get('collections', []) for sid in row['sessionIds']}
     rows = []
-    for session in state.get('sessions', []):
-        if not is_top_level(session):
-            continue
+    for session in roots if mode == 'all' else grouped.get(selected['id'], []) if selected else []:
         is_archived = session['id'] in archived
         if (archive_filter == 'active' and is_archived) or (archive_filter == 'archived' and not is_archived):
             continue
-        if collection_id and session['id'] not in collection_order:
-            continue
         workspace = by_id.get(session.get('workspaceId')) or by_path.get(session.get('workspace'))
-        if workspace is None or (mode == 'workspace' and (selected is None or workspace['id'] != selected['id'])):
+        managed = is_managed(session)
+        if location_filter == 'managed' and not managed:
             continue
+        if mode == 'workspace' and (managed or selected is None or workspace is None or workspace['id'] != selected['id']):
+            continue
+        if workspace is None:
+            if not managed:
+                continue
+            workspace = {'id': None, 'path': session.get('workspace', ''), 'name': 'No workspace'}
         title = session.get('title') or 'Untitled conversation'
         description = session.get('description') or ''
         shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
@@ -164,18 +204,27 @@ def snapshot(state):
         rows.append({'id': session['id'], 'title': title, 'description': description,
                      'status': session.get('status', 'idle'), 'workspace': workspace['path'],
                      'workspaceId': workspace['id'], 'workspaceName': workspace.get('name', ''),
-                     'workspaceLabel': labels[workspace['path']], 'activity': summary,
+                     'workspaceLabel': 'No workspace' if managed else labels[workspace['path']], 'activity': summary,
+                     **({'location': {'kind': 'managed'}} if managed else {}),
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
                      **({'archived': True} if is_archived else {}),
-                     **({'collectionId': memberships[session['id']]} if session['id'] in memberships else {}),
-                     'recentActivityAt': recent_activity(session)})
+                     'recentActivityAt': navigation_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
     rows.sort(key=lambda row: (not row['pinned'],
-        pin_order.get(row['id'], 0) if row['pinned'] and state.get('pinOrderCustomized')
-        else collection_order.get(row['id'], 0) if collection_id and not row['pinned'] else -row['recentActivityAt']))
+        pin_order.get(row['id'], 0) if row['pinned'] else
+        (row['title'].lower() if sort == 'name' else
+         -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'])))
+    return rows, scope, counts
+
+
+def snapshot(state, *, indexed=None):
+    rows, scope, counts = catalog(state) if indexed is None else indexed
+    scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
+    mode = scope['mode']
+    view = state.get('view', {})
     saved = view.get('navChatPage')
-    matched = isinstance(saved, dict) and all(saved.get(key) == value for key, value in scope.items())
+    matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(key) == value for key, value in scope.items())
     inferred = next((i // PAGE_SIZE for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0
     requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)

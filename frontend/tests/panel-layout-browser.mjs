@@ -15,20 +15,38 @@ const toolbarsMatch=visible=>page.locator('.a-canvas-toolbar').evaluateAll((node
 try{
  await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
  await action('canvas.show',{kind:'html',title:'A canvas that keeps its place',content:'<!doctype html><html><head><style>body{margin:0;background:linear-gradient(135deg,#eef2ff,#e6f9f5);font:18px system-ui;min-height:100vh}main{padding:40px}button{font:inherit;padding:12px 20px;border:0;border-radius:12px;background:#6261db;color:white}</style></head><body><main><h1>Room to explore</h1><p>This interactive view stays alive as you resize and focus it.</p><button onclick="this.textContent=String(Number(this.textContent)+1)">0</button></main></body></html>'});
+ await patch({canvasControlsPinned:false,canvasControlsExpanded:false});await page.mouse.move(100,30);await settled();
+ const beforeHover=await box('.a-canvas-html');await page.screenshot({path:'/tmp/amplifier-canvas-before-hover.png'});
+ assert.equal(await page.getByRole('button',{name:'Canvas controls',exact:true}).count(),0);
  // Hover stays engaged while moving from the header into viewer-specific tools.
  await page.locator('.a-canvas-head').hover();await page.getByRole('button',{name:'Copy canvas source'}).hover();
- assert.equal(await toolbarsMatch(true),true);
+ assert.equal(await toolbarsMatch(true),true);assert.deepEqual(await box('.a-canvas-html'),beforeHover);await page.screenshot({path:'/tmp/amplifier-canvas-hover.png'});
  await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
  const frame=page.frameLocator('.a-canvas-html');await frame.getByRole('button',{name:'0',exact:true}).click();
  await patch({canvasControlsPinned:false,canvasControlsExpanded:false});await page.mouse.move(100,30);
  assert.equal(await toolbarsMatch(false),true);
+ await page.getByRole('button',{name:'Pin canvas controls',exact:true}).focus();await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='true');
+ await page.getByRole('textbox',{name:'Message Amplifier'}).focus();await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+ // Opening a form and clicking its input must not keep unpinned controls open.
+ for(const [button,input,value] of [['Open a file in canvas','#canvas-file-path','notes.md'],['Open a website in canvas','#canvas-browser-url','https://example.com/']]){
+  await page.locator('.a-canvas-head').hover();await page.getByRole('button',{name:button,exact:true}).click();
+  const field=page.locator(input);await field.fill(value);
+  await page.mouse.move(100,30);await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+  assert.deepEqual(await box('.a-canvas-html'),beforeHover,'unpinning and dismissing do not move Canvas content');
+  await page.locator('.a-canvas-head').hover();assert.equal(await field.inputValue(),value,'hiding controls keeps the unfinished form');
+  await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();
+  assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-controls'),'true');
+  await page.getByRole('button',{name:'Unpin canvas controls',exact:true}).click();await page.mouse.move(100,30);
+  await page.waitForFunction(()=>document.querySelector('.a-canvas-panel').dataset.controls==='false');
+ }
+ await patch({canvasDraft:{},canvasControlsExpanded:false});
  const header=await box('.a-canvas-head'),body=await box('.a-canvas-body'),iframe=await box('.a-canvas-html');
  assert.equal(header.height,36);assert.ok(Math.abs(body.x-iframe.x)<1&&Math.abs(body.width-iframe.width)<1);assert.ok(Math.abs(body.y-iframe.y)<1);assert.ok(Math.abs(iframe.y+iframe.height-950)<1);
  const separator=page.getByRole('separator',{name:'Resize canvas'});await separator.focus();await page.keyboard.press('End');await settled();
  const expanded=await box('.a-canvas-panel'),chat=await box('.a-conversation');assert.ok(expanded.width>1000);assert.ok(chat.width>=360&&chat.width<=361);
  const composer=await box('.a-composer');assert.ok(composer.x>=chat.x&&composer.x+composer.width<=chat.x+chat.width);assert.ok(await page.locator('.a-compose-bottom').evaluate(el=>el.scrollWidth<=el.clientWidth));
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();
- const models=await box('.a-model-popover');assert.ok(models.x>=chat.x&&models.x+models.width<=chat.x+chat.width);
+ const models=await box('.a-model-popover');assert.ok(models.x>=0&&models.x+models.width<=1600); // Compact selectors are positioned in the viewport.
  await page.getByRole('button',{name:'Close model settings'}).click();
  await page.screenshot({path:'/tmp/amplifier-canvas-wide.png'});
  // Mouse drag reaches the same bounds and persists only its completed preference.
@@ -38,7 +56,7 @@ try{
  const nav=page.getByRole('separator',{name:'Resize navigation'});await nav.focus();await page.keyboard.press('End');await settled();
  assert.ok((await box('.a-nav-slot')).width>700);assert.ok((await box('.a-canvas-panel')).width>=300);assert.ok((await box('.a-conversation')).width>=360);
  await nav.focus();await page.keyboard.press('Home');await separator.focus();await page.keyboard.press('End');await settled();assert.equal(Math.round((await box('.a-nav-slot')).width),216);assert.equal(Math.round((await box('.a-conversation')).width),360);
- await patch({canvasControlsExpanded:true});await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();assert.equal(await toolbarsMatch(true),true);
+ await patch({canvasControlsExpanded:true});await page.getByRole('button',{name:'Pin canvas controls',exact:true}).click();await page.mouse.move(100,30);await settled();assert.equal(await toolbarsMatch(true),true);assert.ok((await box('.a-canvas-body')).y>(await box('.a-canvas-head')).y+36);
  await patch({canvasControlsPinned:false,canvasControlsExpanded:false});
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();await page.mouse.move(500,400);await patch({canvasControlsExpanded:false});await settled();
  assert.deepEqual(await box('.a-canvas-panel'),{x:0,y:0,width:1600,height:950});assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),true);

@@ -94,7 +94,7 @@ async def main():
                     } for i in range(count)])
                     row['execution']={'turns':[{'id':'turn','phase':'completed','startedAt':1700000000,'anchorMessageId':row['messages'][0]['id']}],
                         'nodes':[{'id':f'node-{i}','turnId':'turn','kind':'tool','phase':'completed','label':'Synthetic tool result',
-                        'summary':'x'*args.get('nodeBytes',10000)} for i in range(args.get('nodes',0))]}
+                        'summary':'Synthetic tool result', 'output':'x'*args.get('nodeBytes',10000)} for i in range(args.get('nodes',0))]}
                 for index, count in enumerate(args.get('extraMessageCounts', [])):
                     row=copy.deepcopy(service._session(aid))
                     identity=f'extra-{index}'

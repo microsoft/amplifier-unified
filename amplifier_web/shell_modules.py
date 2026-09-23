@@ -77,7 +77,7 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -85,10 +85,9 @@ EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
 COMMAND_CAPABILITIES = {
     'session.select': 'navigation.select', 'workspace.select': 'navigation.select',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
-    'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.pin': 'chats.manage',
+    'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
-    **{f'collection.{name}': 'chats.manage' for name in ('create', 'rename', 'remove', 'reorder', 'assign', 'order')},
-    'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
+    'locations.create': 'workspaces.manage', 'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
 
 
@@ -130,6 +129,7 @@ class ShellModules:
         self.db.execute('CREATE TABLE IF NOT EXISTS shell_records (kind TEXT, id TEXT, value TEXT NOT NULL, PRIMARY KEY(kind,id))')
         self.db.commit()
         self.validations = {}
+        self.change_tokens = {}
 
     def get(self, kind, identity, default=None):
         row = self.db.execute('SELECT value FROM shell_records WHERE kind=? AND id=?', (kind, identity)).fetchone()
@@ -151,8 +151,10 @@ class ShellModules:
         return saved
 
     def notify(self, identity):
-        # Multiplex on the existing transport. A full client reconciliation on
-        # every normal state event also repairs a dropped invalidation.
+        # Ordinary snapshots retain this token if a full queue drops the shell
+        # event. A host epoch also repairs reconnects after a restart.
+        self.change_tokens[identity] = self.change_tokens.get(identity, 0) + 1
+        self.service._client_snapshots.pop(identity, None)
         for queue in self.service.queues:
             if self.service.queue_sessions.get(queue) is not None:
                 continue
@@ -161,6 +163,9 @@ class ShellModules:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait({'shellClientId': identity})
+
+    def change_token(self, identity):
+        return f'{self.service.instance_id}:{self.change_tokens.get(identity, 0)}'
 
     def manifest(self, package, *, validated=True):
         if package in BUILTINS:
@@ -285,31 +290,32 @@ class ShellModules:
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
-        if scope.get('mode') == 'all':
+        from .managed_chats import is_managed
+        selected = next((s for s in state.get('sessions', []) if s['id'] == state.get('selectedSessionId')), {})
+        if scope.get('mode') == 'all' or scope.get('mode') != 'pinned' and is_managed(selected) and view.get('navChatScope', 'workspace') == 'workspace' and not view.get('navWorkspaceList'):
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
     def navigation(self, client, instance):
         from .conversation_library import projection as organization_projection
-        from .chat_navigation import snapshot as chats
-        from .workspace_navigation import snapshot as workspaces
-        from .attention import snapshot as attention
         state = self.service.state
-        scoped = {**self.scoped_state(client, instance), 'attention': attention(state)}
+        projections = self.service.projections
+        scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
-        chat_page = chats(scoped)
+        chat_page = projections.chats(scoped)
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         return {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
                 'workspaces': [copy.deepcopy(workspace)] if workspace else [],
-                'chatNavigation': chat_page, 'workspaceExplorer': workspaces(scoped),
+                'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
+                'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),
                 'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error']},
                 'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
-                'actionStatus': {'locations.list': state.get('actionStatus', {}).get('locations.list')}}
+                'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
     async def validate_package(self, digest):
         self.source(digest)

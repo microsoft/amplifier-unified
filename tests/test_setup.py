@@ -32,6 +32,16 @@ async def test_keys_are_private_and_redacted_across_scopes(manager,tmp_path,monk
     assert manager.store.read(tmp_path,'project')['config']['providers'][0]['config']['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
 
 @pytest.mark.asyncio
+async def test_nested_image_configuration_roundtrips_without_replacing_chat_instance(manager,tmp_path):
+    config={'default_model':'kept-chat-model','reasoning_effort':'high','image_generation':{'enabled':True,'id':'images','model':'chosen-image-model'}}
+    result=await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'kept-instance','config':config,'scope':'project'})
+    row=next(row for row in result['providers'] if row['id']=='kept-instance')
+    assert row['config']==config
+    saved=manager.store.read(tmp_path,'project')['config']['providers'][0]
+    assert saved['id']=='kept-instance' and saved['config']==config
+
+
+@pytest.mark.asyncio
 async def test_provider_removal_tombstones_inherited_instance(manager,tmp_path):
     args={'workspace':str(tmp_path),'module':'provider-test','id':'one','config':{}}
     await manager.perform('providers.save',args)
@@ -259,3 +269,15 @@ async def test_complete_provider_order_is_atomic_and_rejects_stale_list(tmp_path
     assert manager.store.read(tmp_path)==before
     with pytest.raises(ValueError):
         await manager.perform('providers.reorder',{**args,'ids':['three','three','two'],'expectedIds':['three','one','two']})
+
+
+async def test_model_discovery_for_a_future_workspace_does_not_create_it(manager,tmp_path):
+    import sys
+    await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'one','config':{}})
+    child=tmp_path/'draft-probe.py'
+    child.write_text("import os,json; print(json.dumps({'info':{},'configSchema':{'fields':[]},'models':[{'id':os.getcwd()}]}))")
+    manager.probe_command=[sys.executable,str(child)]
+    future=tmp_path/'not-created'/'project'
+    result=await manager.perform('providers.models',{'workspace':str(future),'id':'one'})
+    assert result['models']==[{'id':str(tmp_path)}]
+    assert not future.parent.exists()

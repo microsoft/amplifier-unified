@@ -62,6 +62,20 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(kind, 'runtime.generation')
         self.assertEqual((payload['sessionId'], payload['rootSessionId']), ('child', 'root'))
 
+    def test_assistant_keeps_public_message_provenance_and_known_event_time(self):
+        _, payload = normalize_event({'type':'assistant.message', 'text':'progress', 'generation_id':'g',
+            'message_id':'m', 'event_id':'e', 'sequence':12, 'time':123.5, 'reasoning':'private'}, 'parent')
+        self.assertEqual(payload['runtimeMessage'], {'messageId':'m', 'eventId':'e', 'sequence':12})
+        self.assertEqual(payload['createdAt'],123.5)
+        self.assertTrue(payload['timestampKnown'])
+        self.assertNotIn('reasoning',payload)
+
+    def test_assistant_does_not_invent_provenance_or_accept_invalid_times(self):
+        for value in (None, 'yesterday', True, float('nan'), float('inf'), -1):
+            _, payload = normalize_event({'type':'assistant.message', 'text':'progress', 'sequence':1, 'time':value}, 'parent')
+            self.assertNotIn('runtimeMessage',payload)
+            self.assertNotIn('createdAt',payload)
+
     def test_background_activity_reports_waiting_without_exposing_extra_fields(self):
         kind, payload = normalize_event({'type':'runtime.activity','phase':'waiting-workers',
             'detail':'Waiting for 5 delegated tasks to report back.', 'activeWorkers':5,
@@ -336,7 +350,7 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_child_retries_show_public_identity_and_count_without_error_body(self):
         worker=Worker();worker.runtime=SimpleNamespace(session_id='parent')
         callbacks={}
-        capabilities={'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1'}})}
+        capabilities={'web.worker_run':'child-run', 'live.children':SimpleNamespace(rows={'child':{'agent':'foundation:explorer','callId':'tool-1','runId':'child-run'}})}
         coordinator=SimpleNamespace(session_id='child',
             get_capability=capabilities.get,
             register_capability=lambda key,value:capabilities.update({key:value}),
@@ -353,6 +367,9 @@ class PublicActivityHookTests(unittest.IsolatedAsyncioTestCase):
             kind,payload=normalize_event(event,'parent')
             self.assertEqual(kind,'worker.updated')
             self.assertEqual(payload['callId'],'tool-1')
+            self.assertEqual(payload['runId'],'child-run')
+            self.assertTrue(payload['activityOnly'])
+            self.assertNotIn('status',payload)
             self.assertEqual(payload['retryMax'],5)
             self.assertNotIn('private',json.dumps(payload))
 
@@ -461,8 +478,9 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_cold_start_reports_progress_and_bounded_timeout_without_send(self):
         self.manager.startup_timeout = 0.12
         self.manager.progress_interval = 0.02
-        with self.assertRaisesRegex(RuntimeError, 'stopped before accepting your message'):
+        with self.assertRaisesRegex(RuntimeError, 'This attempt did not send your message') as failure:
             await self.manager.send({'id':'slow'}, 'must not be sent', 'pending-input', self.emit)
+        self.assertIn('stopped before accepting your message', str(failure.exception.__cause__))
         progress = [p for k,p in self.events if k=='runtime.status' and p.get('phase')=='bundle-preparation']
         self.assertGreaterEqual(len(progress), 2)
         self.assertTrue(all(p['status']=='starting' and 'elapsedSeconds' in p for p in progress))
@@ -639,3 +657,44 @@ async def test_cancelled_process_exit_delivery_remains_retryable():
         await manager._execution_ended('root',row,'stopped')
         assert attempts==2
     finally:await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [OSError("checkpoint disk failure"), asyncio.CancelledError()])
+async def test_terminal_checkpoint_failure_still_cleans_up_and_releases_ownership(failure):
+    worker = Worker()
+    worker.runtime = SimpleNamespace(session_id="root")
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    steps = []
+
+    async def checkpoint(status):
+        steps.append(("checkpoint", status))
+        raise failure
+
+    async def registration_close():
+        steps.append("registration")
+
+    async def controls_close():
+        steps.append("controls")
+
+    async def cleanup():
+        steps.append("session")
+
+    async def read():
+        await asyncio.Event().wait()
+
+    worker.ownership = SimpleNamespace(yielding=False, registration=SimpleNamespace(close=registration_close))
+    worker.controls = SimpleNamespace(close=controls_close)
+    worker.session = SimpleNamespace(
+        coordinator=SimpleNamespace(get_capability=lambda name: checkpoint if name == "live.checkpoint" else None),
+        cleanup=cleanup)
+    worker.shared_handle = SimpleNamespace(release=lambda: steps.append("release"))
+    worker.root_generation_outcome = "error"
+    worker.read = read
+    worker.shutdown.set()
+    with pytest.raises(type(failure)):
+        await worker.run()
+    assert steps == [("checkpoint", "error"), "registration", "controls", "session", "release"]
+    assert worker.shared_handle is None
+    assert not worker.terminal_checkpointed

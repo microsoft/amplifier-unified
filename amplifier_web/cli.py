@@ -62,7 +62,7 @@ def _parse() -> argparse.Namespace:
     tui.add_argument("--server", default=os.environ.get("AMPLIFIER_UNIFIED_URL"))
     for flag in ("token-file", "ca-file", "client", "state-dir"):
         tui.add_argument("--" + flag)
-    tui.add_argument("--workspace", dest="tui_workspace", help="Workspace path on the host")
+    tui.add_argument("--workspace", dest="tui_workspace", help="Workspace path on the host (defaults to the launch directory)")
     selection = tui.add_mutually_exclusive_group()
     selection.add_argument("--session", "--resume", dest="session")
     selection.add_argument("--new", action="store_true")
@@ -208,6 +208,8 @@ def _tui(args, data_dir):
     if args.tui_command == 'status':
         print('Terminal connected to ' + managed['server'] if managed else 'No managed terminal installation. Run amplifier-unified tui install.')
         return
+    # Connected Terminal uses this scope for Resume, latest and paged listings.
+    args.tui_workspace = args.tui_workspace or str(Path.cwd().resolve())
     if managed:
         import subprocess
         options = []

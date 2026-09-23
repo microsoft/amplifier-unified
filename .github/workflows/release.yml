@@ -48,7 +48,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install uv
-          uv sync --locked --group dev
+          uv sync --locked --group dev --group artifacts
           npm ci --prefix frontend
       - name: Resolve current installed host dependencies
         run: uv run --no-sync python scripts/qualify_host_dependencies.py --evidence "$RUNNER_TEMP/host-resolution"
@@ -73,6 +73,11 @@ jobs:
       - name: Install browser dependencies
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+      - name: Check active-client latency before runtime qualification
+        working-directory: frontend
+        run: |
+          npm run test:active-client-performance-browser
+          npm run test:state-transport-browser
       - name: Verify candidate module source validation
         if: ${{ hashFiles('frontend/tests/registry-validation-browser.mjs') != '' }}
         working-directory: frontend
@@ -99,12 +104,28 @@ jobs:
       - name: Verify draft-first chat setup and composer controls
         working-directory: frontend
         run: npm run test:new-chat-browser
+      - name: Verify new-chat recovery and submission drafts
+        working-directory: frontend
+        run: |
+          npm run test:new-chat-recovery-browser
+          node tests/feedback-browser.mjs
+          node tests/feedback-followup-browser.mjs
       - name: Restored composer readiness
         working-directory: frontend
-        run: npm run test:composer-readiness-browser
+        run: |
+          npm run test:composer-readiness-browser
+          npm run test:composer-primary-action-browser
       - name: Verify live surface awareness and draft checkpoints
         working-directory: frontend
         run: npm run test:surface-context-browser
+      - name: Verify shared Work workflow controls
+        if: ${{ hashFiles('frontend/tests/desktop-readiness-browser.mjs', 'frontend/tests/memory-personalization-browser.mjs', 'frontend/tests/publishing-browser.mjs', 'frontend/tests/portability-browser.mjs') != '' }}
+        working-directory: frontend
+        run: |
+          node tests/desktop-readiness-browser.mjs
+          node tests/memory-personalization-browser.mjs
+          node tests/publishing-browser.mjs
+          node tests/portability-browser.mjs
       - name: Verify settings navigation and retained capabilities
         working-directory: frontend
         run: |
@@ -117,6 +138,7 @@ jobs:
         run: |
           npm run test:themes-browser
           npm run test:appearance-startup-browser
+          npm run test:appearance-library-browser
       - name: Verify review during a pending send
         if: ${{ hashFiles('frontend/tests/review-during-send-browser.mjs') != '' }}
         working-directory: frontend
@@ -135,10 +157,16 @@ jobs:
         run: |
           npm run test:message-outbox-browser
           npm run test:message-delivery-browser
+      - name: Verify embedded HTML audio and video playback
+        working-directory: frontend
+        run: npm run test:canvas-media-browser
       - name: Verify canvas toolbar and app options
         if: ${{ hashFiles('frontend/tests/app-toolbar-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:toolbar-browser
+      - name: Verify embedded tool visibility acknowledgements
+        working-directory: frontend
+        run: npm run test:smart-tools-browser
       - name: Verify validated shell component controls
         working-directory: frontend
         run: npm run test:shell-components-browser
@@ -159,6 +187,11 @@ jobs:
       - name: Verify history paging in live conversations
         working-directory: frontend
         run: npm run test:live-history-browser
+      - name: Verify multiple active clients at large library size
+        working-directory: frontend
+        run: |
+          npm run test:live-clients-browser
+          npm run test:active-client-performance-browser
       - name: Verify composer ownership and explicit takeover
         working-directory: frontend
         run: npm run test:ownership-browser

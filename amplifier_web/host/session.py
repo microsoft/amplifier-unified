@@ -125,6 +125,7 @@ class SelectedProvider:
     def __init__(self, provider, selection, execution_adapter=None):
         self.original, self.selection = provider, selection
         self.execution_adapter = execution_adapter
+        self._selected_requests = []
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
@@ -134,27 +135,74 @@ class SelectedProvider:
             # raise AttributeError, while streaming providers receive the same
             # root-only overrides as complete().
             def selected_stream(request, **kwargs):
-                request, kwargs = self._selected_request(request, kwargs)
-                return method(request, **kwargs)
+                selected, kwargs = self._selected_request(request, kwargs, consume=name == "stream")
+                if name == "request_budget":
+                    # The budget protocol carries completion overrides in
+                    # request_options. Anthropic deliberately has no **kwargs.
+                    # Inspect the original provider, before surface adapters.
+                    parameters = inspect.signature(self.original.request_budget).parameters
+                    if "request_options" in parameters:
+                        options = dict(kwargs.get("request_options") or {})
+                        options.update({key: kwargs.pop(key) for key in ("model", "reasoning_effort") if key in kwargs})
+                        kwargs["request_options"] = options
+                try:
+                    result = method(selected, **kwargs)
+                except BaseException:
+                    self._forget_request(request)
+                    raise
+                if name == "request_budget" and inspect.isawaitable(result):
+                    async def budget():
+                        try:
+                            return await result
+                        except BaseException:
+                            self._forget_request(request)
+                            raise
+                    return budget()
+                return result
             return selected_stream
         return method
     def get_info(self):
         info = self.original.get_info()
-        return info.model_copy(update={"defaults": {**info.defaults, **{key:self.selection[key]
-            for key in ("model", "max_output_tokens") if key in self.selection}}})
-    def _selected_request(self, request, kwargs):
+        overrides = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
+        if self.selection.get("effort") is not None:
+            overrides["reasoning_effort"] = self.selection["effort"]
+        return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
+    def _forget_request(self, request):
+        self._selected_requests = [row for row in self._selected_requests if row[0] is not request]
+
+    def _selected_request(self, request, kwargs, *, consume=False):
         updates = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
         # Community providers may read the model keyword rather than the
         # portable request field. Supply both without changing worker defaults.
         if "model" in self.selection:
             kwargs["model"] = self.selection["model"]
-        if self.selection.get("effort") is not None:
-            updates["reasoning_effort"] = self.selection["effort"]
-            kwargs["reasoning_effort"] = self.selection["effort"]
-        return request.model_copy(update=updates), kwargs
+        effort = self.selection.get("effort")
+        metadata = getattr(request, "metadata", None) or {}
+        if metadata.get("purpose") == "context-compaction" and request.reasoning_effort is not None:
+            # Summaries have their own effort budget. Keep the same explicit
+            # value in preflight and dispatch, including keyword-only providers.
+            effort = request.reasoning_effort
+        if effort is not None:
+            updates["reasoning_effort"] = effort
+            kwargs["reasoning_effort"] = effort
+        # Budget and dispatch must share one selected request so the host's
+        # surface adapter can reuse its prepared observation. Retain a bounded
+        # snapshot to reject in-place input/selection changes, then consume the
+        # identity on dispatch; retries and later calls prepare afresh.
+        selected = next((value for source, snapshot, choices, value in self._selected_requests
+                         if source is request and choices == updates and snapshot == request), None)
+        if selected is None:
+            selected = request.model_copy(update=updates)
+            self._forget_request(request)
+            if not consume:
+                self._selected_requests = (self._selected_requests + [
+                    (request, copy.deepcopy(request), dict(updates), selected)])[-4:]
+        if consume:
+            self._forget_request(request)
+        return selected, kwargs
 
     async def complete(self, request, **kwargs):
-        request, kwargs = self._selected_request(request, kwargs)
+        request, kwargs = self._selected_request(request, kwargs, consume=True)
         return await self._execution_provider().complete(request, **kwargs)
 
 
@@ -182,9 +230,9 @@ def _apply_settings(bundle, config):
     # filesystem denials across that merge so host policy can enforce them.
     filesystem_denials = {
         row.get("id") or row.get("instance_id") or row["module"]:
-            copy.deepcopy(row["config"]["denied_write_paths"])
+            {key: copy.deepcopy(row.get('config', {})[key]) for key in ('denied_write_paths', 'denied_read_paths') if key in row.get('config', {})}
         for row in bundle.tools
-        if row.get("module") == "tool-filesystem" and "denied_write_paths" in row.get("config", {})
+        if row.get("module") == "tool-filesystem"
     }
     bundle.providers = merge(bundle.providers, config.providers)
     bundle.providers.sort(key=lambda row: row.get("config", {}).get("priority", 100))
@@ -198,7 +246,7 @@ def _apply_settings(bundle, config):
         from ..shared_settings import routing_dirs
         for hook in bundle.hooks:
             if hook.get("module") == "hooks-routing":
-                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None))]}
+                patch = {"custom_routing_dirs": [str(path) for path in routing_dirs(config.workspace, shared_home=getattr(config, "config_home", None), global_only=getattr(config, "global_only", False))]}
                 if routing.get("matrix"):
                     patch["default_matrix"] = routing["matrix"]
                 if routing.get("overrides"):
@@ -214,12 +262,12 @@ def _apply_settings(bundle, config):
             row = merge(row, {key:value for key,value in override.items() if key in {"source", "config"}})
             identity = row.get("id") or row.get("instance_id") or row.get("module")
             if kind == "tools" and row.get("module") == "tool-filesystem" and identity in filesystem_denials:
-                original = filesystem_denials[identity]
-                effective = row.get("config", {}).get("denied_write_paths", [])
-                if any(not isinstance(paths, list) or any(not isinstance(path, str) for path in paths)
-                       for paths in (original, effective)):
-                    raise ValueError('File-access paths must be lists of strings.')
-                row.setdefault("config", {})["denied_write_paths"] = list(dict.fromkeys(original + effective))
+                for key, original in filesystem_denials[identity].items():
+                    effective = row.get("config", {}).get(key, [])
+                    if any(not isinstance(paths, list) or any(not isinstance(path, str) for path in paths)
+                           for paths in (original, effective)):
+                        raise ValueError('File-access paths must be lists of strings.')
+                    row.setdefault("config", {})[key] = list(dict.fromkeys(original + effective))
             if kind == "providers" and row.get("id") and not row.get("instance_id"):
                 row["instance_id"] = row["id"]
             if kind == "providers":
@@ -266,12 +314,12 @@ def _expand_module_configuration(node, in_provider=False):
 
 
 def _apply_host_policy(bundle, config, *, execution_workspace=None):
-    """Host write boundaries cover filesystem and patch tools, including snapshots."""
+    """Host write boundaries cover file, patch and image tools, including snapshots."""
     settings = config.settings
     # A managed checkout can differ from the immutable history/config workspace.
     # Resolve only relative write policies against the actual execution folder.
     workspace = str(Path(execution_workspace or config.workspace).expanduser().resolve())
-    policy_keys = {"allowed_write_paths", "denied_write_paths"}
+    policy_keys = {"allowed_write_paths", "denied_write_paths", "allowed_read_paths", "denied_read_paths"}
     def paths(values):
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
             raise ValueError('File-access paths must be lists of strings.')
@@ -311,22 +359,24 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
 
     def restrict(current, policy):
         policy = copy.deepcopy(policy)
-        if "allowed_write_paths" in policy and "allowed_write_paths" in current:
-            shared, patch = paths(policy['allowed_write_paths']), paths(current['allowed_write_paths'])
-            policy['allowed_write_paths'] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
-                for a in shared for b in patch if a.is_relative_to(b) or b.is_relative_to(a)))
-        elif "allowed_write_paths" in policy:
-            policy['allowed_write_paths'] = [str(path) for path in paths(policy['allowed_write_paths'])]
-        if "denied_write_paths" in policy:
-            policy['denied_write_paths'] = list(dict.fromkeys(str(path) for path in
-                paths(current.get('denied_write_paths', [])) + paths(policy['denied_write_paths'])))
+        for kind in ('read', 'write'):
+            allowed, denied = f'allowed_{kind}_paths', f'denied_{kind}_paths'
+            if allowed in policy and allowed in current:
+                shared, local = paths(policy[allowed]), paths(current[allowed])
+                policy[allowed] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
+                    for a in shared for b in local if a.is_relative_to(b) or b.is_relative_to(a)))
+            elif allowed in policy:
+                policy[allowed] = [str(path) for path in paths(policy[allowed])]
+            if denied in policy:
+                policy[denied] = list(dict.fromkeys(str(path) for path in
+                    paths(current.get(denied, [])) + paths(policy[denied])))
         return merge(current, policy)
 
     def apply(rows):
         if not isinstance(rows, list):
             return
         for row in rows:
-            if not isinstance(row, dict) or row.get("module") not in {"tool-filesystem", "tool-apply-patch"}:
+            if not isinstance(row, dict) or row.get("module") not in {"tool-filesystem", "tool-apply-patch", "tool-image"}:
                 continue
             current = copy.deepcopy(row.get("config", {}))
             # Snapshot and child module settings have not been expanded yet.
@@ -342,11 +392,12 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
                 row["config"] = merge(current, policy)
                 row["config"]["allowed_write_paths"] = list(dict.fromkeys([workspace,
                     *(str(path) for path in paths(row["config"].get("allowed_write_paths", [])))]))
-                if "denied_write_paths" in row["config"]:
-                    # Shared settings may add restrictions, but must not erase
-                    # the declaration's explicitly denied directories.
-                    row["config"]["denied_write_paths"] = list(dict.fromkeys(str(path) for path in
-                        paths(current.get("denied_write_paths", [])) + paths(policy.get("denied_write_paths", []))))
+                # Shared settings may add restrictions, but must not erase
+                # the declaration's explicitly denied directories.
+                for key in ('denied_write_paths', 'denied_read_paths'):
+                    if key in row['config']:
+                        row['config'][key] = list(dict.fromkeys(str(path) for path in
+                            paths(current.get(key, [])) + paths(policy.get(key, []))))
             else:
                 # Intersect each effective filesystem policy with any explicitly
                 # narrower patch policy, retaining every denied subtree.
@@ -361,6 +412,21 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
                 agents(agent.get("agents", {}))
     apply(bundle.tools)
     agents(bundle.agents)
+    # Image API calls can create files without using the filesystem tool.
+    # Carry declaration-level restrictions as well as shared settings into
+    # every image writer, including inherited child configurations.
+    def image_policies(rows, children, inherited):
+        local = [{key: row.get('config', {})[key] for key in policy_keys & row.get('config', {}).keys()}
+            for row in rows if isinstance(row, dict) and row.get('module') == 'tool-filesystem']
+        effective = [*inherited, *local]
+        for row in rows:
+            if isinstance(row, dict) and row.get('module') == 'tool-image':
+                for policy in effective:
+                    row['config'] = restrict(row.get('config', {}), policy)
+        for child in children.values():
+            if isinstance(child, dict):
+                image_policies(child.get('tools', []), child.get('agents', {}), effective)
+    image_policies(bundle.tools, bundle.agents, [])
     return bundle
 
 
@@ -371,7 +437,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     if not snapshot:
         from ..builtin_behaviors import resolve_builtin_behavior
         for behavior in config.app_bundles:
-            selected = await registry.load(resolve_builtin_behavior(behavior))
+            selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
             components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
@@ -385,7 +451,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                            'project_slug': project_slug(config.workspace),
                            'additional_events': ['delegate:agent_spawned', 'delegate:agent_resumed', 'delegate:agent_completed', 'delegate:agent_cancelled', 'delegate:error']}})
         if config.settings.get("routing") and not any(row.get("module") == "hooks-routing" for row in loaded.hooks):
-            selected = await registry.load("git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
+            selected, _ = await load_configured_bundle(registry, config, "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml")
             components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         loaded = _apply_settings(loaded, config)
@@ -419,19 +485,51 @@ def module_source(config, snapshot, module, source, components=None):
     return source if snapshot else config.module_sources.get(module) or source
 
 
-async def load_root_bundle(config, chosen, *, execution_workspace=None):
-    """Resolve a root and host composition without per-conversation overrides."""
+async def load_configured_bundle(registry, config, reference):
+    """Apply the same source selections to roots and app behaviors as includes."""
+    replacement = config.resolve_source(reference)
+    if replacement is None:
+        registered = registry.find(reference)
+        if registered:
+            replacement = config.resolve_source(registered)
+    reference = replacement or reference
+    from .bundle_paths import local_bundle_path
+    candidate = local_bundle_path(config, reference)
+    chosen = str(candidate) if candidate is not None else reference
+    return await registry.load(chosen), chosen
+
+
+def session_registry(config):
+    """Keep scoped registrations private, including in older locked workers.
+
+    Host and worker dependencies update independently. Older Foundation
+    registries funnel writes through save(), including constructor cleanup.
+    Override that method before construction, never patch a shared instance.
+    """
     from amplifier_foundation import BundleRegistry
-    registry = BundleRegistry(home=config.registry_home, strict=True, include_source_resolver=config.resolve_source)
+    options = dict(home=config.registry_home, strict=True,
+                   include_source_resolver=config.resolve_source)
+    parameters = inspect.signature(BundleRegistry).parameters
+    if 'persist' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return BundleRegistry(**options, persist=False)
+
+    class SessionRegistry(BundleRegistry):
+        def save(self):
+            """Session composition must never modify shared registrations."""
+
+    return SessionRegistry(**options)
+
+
+async def load_root_bundle(config, chosen, *, execution_workspace=None):
+    """Compose in a session-local registry view; settings own registrations."""
+    registry = session_registry(config)
     registrations = dict(config.registrations)
-    if "foundation" in registry.list_registered():
+    explicit = {**config.settings.get('bundle', {}).get('added', {}),
+                **config.settings.get('sources', {}).get('bundles', {})}
+    if "foundation" in registry.list_registered() and "foundation" not in explicit:
         registrations.pop("foundation", None)
     registry.register(registrations)
-    from .bundle_paths import local_bundle_path
-    candidate = local_bundle_path(config, chosen)
-    if candidate is not None:
-        chosen = str(candidate)
-    loaded = await registry.load(chosen)
+    loaded, chosen = await load_configured_bundle(registry, config, chosen)
     loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
 
@@ -653,6 +751,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 info = await info
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
+                "display_name": getattr(info, "display_name", None),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort"), "models": []})
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),

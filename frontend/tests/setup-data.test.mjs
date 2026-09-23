@@ -6,6 +6,10 @@ test('provider configuration accepts environment references but rejects literal 
  assert.throws(()=>providerConfig('{"api_key":"real-secret"}'),/private API key/);
  assert.throws(()=>providerConfig('[]'),/object/);
 });
+test('advanced image backend config preserves the independent chat model',()=>{
+ const config={default_model:'kept-chat-model',reasoning_effort:'high',api_key:'${TEAM_API_KEY}',image_generation:{enabled:true,id:'images',model:'chosen-image-model'}};
+ assert.deepEqual(providerConfig(JSON.stringify(config)),config);
+});
 test('routing candidate updates preserve fallback configuration and other roles',()=>{
  const original={name:'mine',roles:{coding:{description:'Code',candidates:[{provider:'openai',model:'one',config:{effort:'high'}},{provider:'other',model:'fallback'}]},fast:{candidates:[]}}};
  const changed=updateCandidate(original,'coding',0,{model:'two'});

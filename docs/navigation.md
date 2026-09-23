@@ -45,6 +45,19 @@ index or the existing folder browser. Selecting a workspace opens its chats;
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
 
+**Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
+activity keeps a chat in place while it streams or runs tools, then advances it
+when the turn ends or needs approval. Live working/error indicators still update.
+The separate navigation timestamp is saved across reloads; history and diagnostics
+retain the actual progress timestamps. Imported idle history retains its saved
+activity time. Each chat-list instance stores its own sort choice.
+
+Pins always follow the order in which they were pinned, independent of sorting.
+Drag a pin's grip to reorder it, focus the grip and press Alt+Up/Down, or use
+**Move up** / **Move down** in its details. Reordering preserves pins outside the
+current search, workspace, or page. Agents use the same `session.pinOrder` action
+with the complete `pinnedSessionIds` vector returned by `shell.query`.
+
 Rows reserve their action and activity space. Names and parent labels truncate
 within a fixed 60 px row (52 px with the existing compact shell density). Hovering
 for 550 ms opens details without changing the row geometry. The full title,
@@ -68,6 +81,21 @@ retain the ancestors needed to distinguish them. Folder selection and browsing
 remain separate for a workspace that contains nested workspaces. Missing folders
 remain hidden without removing their registrations or saved histories.
 
+Registry path labels are cached by the complete set of paths, with a bounded
+cache and a fresh result per caller. Activity changes do not recompute suffixes;
+adding or removing a registry path does. Progress projections also avoid creating
+workspace summary dictionaries for each chat already grouped under a workspace.
+Keep these catalog loops allocation-light: small per-row costs multiply across
+large libraries and every active client. The active-client performance gate
+exercises these paths with 22,915 sessions, four browsers, and a Terminal stream.
+
+Attached-client geometry updates (`navExpanded`, pinning, dimensions and Canvas
+control disclosure) save only the client's presentation and command receipt.
+They reuse unchanged catalog projections and notify only that client; they do
+not rewrite conversation or artifact storage. Pending runtime progress retains
+its normal scheduled publication. Mixed view changes, drafts, and legacy actions
+without an attached client continue through the existing shared action path.
+
 ## Shared actions and shell modules
 
 The `builtin.workspaces` and `builtin.chats` instances keep their public host,
@@ -79,7 +107,8 @@ custom modules retain their independent composition.
 Agents use the same `shell.view.update` and `shell.command` paths as the UI:
 
 - Chat instance: `navWorkspaceList` (boolean), `navStatusFilter` (`all`,
-  `attention`, `working`, `unread`), plus the existing scope, search, and page keys.
+  `attention`, `working`, `unread`), `navSort` (`activity`, `created`, `name`),
+  plus the existing scope, search, and page keys.
 - Workspace instance: `navWorkspaceMode` (`recent`, `folders`), plus the existing
   folder path, wildcard search, and page keys.
 - `shell.command` for `workspace.select` or `workspace.create` on the paired
@@ -91,6 +120,28 @@ Agents use the same `shell.view.update` and `shell.command` paths as the UI:
 
 Hover state and flyout placement are ephemeral browser presentation. Viewing
 these summaries does not mark an approval, error, or completion as reviewed.
+
+## Browser observations and refresh
+
+The existing SSE stream carries state changes. Shell snapshots refresh when
+navigation membership, stable activity order, status, or client presentation
+changes; text deltas alone do not invalidate the shell. Hidden documents defer
+shell refresh and view reports, and catch up on visibility restore or reconnect.
+
+Automatic `/api/view` observations identify their `visibleTextScope` as
+`interface`. They include controls, focus, draft values, selected text, geometry,
+and client-owned content such as custom shell components. They exclude repeated
+conversation text and elapsed activity labels that already exist in authoritative
+session state. `sessionId` binds the observation to its selected chat. Explicit
+`window.amplifier.getState().renderedView` inspection still includes full rendered
+text. Reports stay single-flight, retain the latest pending observation, and
+invalidate deduplication on reconnect so the fresh connection receives a report.
+
+`npm run test:sidebar-activity-browser` exercises the packaged UI against real
+HTTP/SSE with synthetic progress: stable ordering, sort/pin persistence, drag and
+keyboard reorder, custom content, drafts, hidden clients, and request counts.
+It makes no model calls. The separate active-client performance gate covers
+four browsers and one Terminal stream together.
 
 ## Session identity
 

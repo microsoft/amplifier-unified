@@ -8,21 +8,16 @@ from amplifier_web.service import AppError
 from test_automatic_history import app_factory, native_session, native_rows, select, finish_actions
 
 
-async def test_delete_keeps_selection_in_same_workspace_and_loads_replacement(tmp_path, app_factory):
+async def test_workspace_chat_deletion_refuses_without_changing_selection(tmp_path, app_factory):
     native_session(tmp_path/'first', 'one')
     native_session(tmp_path/'first', 'two')
-    native_session(tmp_path/'other', 'three')
     app=app_factory(); await app.history.refresh()
     one=next(row for row in native_rows(app) if row['nativeIdentity']=='one')
-    two=next(row for row in native_rows(app) if row['nativeIdentity']=='two')
     await select(app, one['id'])
-    app.state['sessions'].reverse()
-    await app.dispatch('session.delete', {'id':one['id']}); await finish_actions(app)
-    assert app.state['selectedSessionId']==two['id']
-    assert app.state['selectedWorkspaceId']==two['workspaceId']
+    with pytest.raises(AppError, match='Only chats created without a workspace'):
+        await app.dispatch('session.deletePreview', {'id':one['id']})
+    assert app.state['selectedSessionId']==one['id']
     assert app._session()['historyLoaded']
-    await app.dispatch('session.delete', {'id':two['id']}); await finish_actions(app)
-    assert app.state['selectedSessionId'] is None
 
 
 async def test_selection_change_during_lazy_load_cannot_send_to_other_chat(tmp_path, app_factory, monkeypatch):
@@ -161,6 +156,7 @@ async def test_workspace_and_delete_choose_roots_without_hiding_explicit_worker_
     assert app._session()['id']==child['id'] and app._session()['messages']
     await app.dispatch('workspace.select',{'id':root['workspaceId']}); await finish_actions(app)
     assert app.state['selectedSessionId']==root['id']
-    await app.dispatch('session.delete',{'id':root['id']}); await finish_actions(app)
-    assert app.state['selectedSessionId'] is None
+    with pytest.raises(AppError, match='Only chats created without a workspace'):
+        await app.dispatch('session.deletePreview',{'id':root['id']})
+    assert app.state['selectedSessionId'] == root['id']
     assert app._session(child['id'])['messages']

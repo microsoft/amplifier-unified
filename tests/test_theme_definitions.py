@@ -27,14 +27,16 @@ async def test_complete_theme_preview_apply_revert_and_restart(app, tmp_path):
     assert app.state['theme']['css'] == preview
     assert app.state['theme']['definition'] == value
     assert app.clients.records['one']['view']['draft'] == 'Unsent draft'
+    applied = deepcopy(app.state['theme'])
+    await app.close()
     restored = AppService(app.data_dir, workspace=tmp_path)
     try:
-        assert restored.state['theme'] == app.state['theme']
+        assert restored.state['theme'] == applied
         assert restored.clients.records['one']['view']['draft'] == 'Unsent draft'
+        await dispatch(restored, 'theme.revert', {})
+        assert restored.state['theme'] == before
     finally:
         await restored.close()
-    await dispatch(app, 'theme.revert', {})
-    assert app.state['theme'] == before
 
 
 async def test_whole_theme_does_not_inherit_previous_background(app):

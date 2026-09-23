@@ -148,6 +148,7 @@ async def test_slow_canvas_call_does_not_delay_host_shutdown(authenticated_clien
 async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_path):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
     client = await authenticated_client(app)
+    await app['service'].dispatch('session.create', {})
     await app['service'].dispatch('canvas.show', {'kind':'html','content':'<button onclick="this.textContent=42">Test</button>'})
     identity = app['service'].state['canvas']['id']
     response = await client.get('/api/canvas/'+identity+'/document')
@@ -156,6 +157,8 @@ async def test_html_canvas_is_separate_opaque_sandbox(authenticated_client, tmp_
     assert "sandbox allow-scripts;" in csp and 'allow-same-origin' not in csp
     assert "connect-src 'none'" in csp and "form-action 'none'" in csp
     assert "default-src 'none'" in csp
+    media = next(part.strip() for part in csp.split(";") if part.strip().startswith("media-src "))
+    assert media == "media-src data: blob:"
     assert 'canvas-render' in await response.text()
     parent = await client.get('/')
     assert "script-src 'self' 'wasm-unsafe-eval'" in parent.headers['Content-Security-Policy']
@@ -191,6 +194,7 @@ async def test_large_html_is_served_separately_with_same_sandbox(authenticated_c
     (tmp_path/'large.html').write_text(body)
     app=await create_app(tmp_path/'data',preload_providers=False,workspace=tmp_path,runtime=Runtime(),voice=False,background_updates=False)
     client=await authenticated_client(app)
+    await app['service'].dispatch('session.create', {})
     baseline=len(await (await client.get('/api/state')).read())
     await app['service'].dispatch('canvas.show',{'kind':'auto','path':str(tmp_path/'large.html')})
     identity=app['service'].state['canvas']['id']
@@ -235,3 +239,22 @@ async def test_surface_host_is_trusted_and_limits_child_navigation(authenticated
     assert 'Authored HTML stays in the child' in await child.text()
     stale = await client.get(f'/api/canvas/{identity}/app-host', params={**target, 'generation': '99999'})
     assert stale.status == 409
+
+
+async def test_publishing_error_response_preserves_unknown_receipt(authenticated_client, tmp_path, monkeypatch):
+    from amplifier_publishing import PublishingError
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(app)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Publishing uncertainty'})
+    sid = service._session()['id']
+    receipt = {'requestId': 'unknown-import', 'sessionId': sid, 'state': 'unknown',
+               'reconciliationError': {'code': 'invalid_response', 'message': 'Malformed remote receipt'}}
+    async def unresolved(*args, **kwargs):
+        raise PublishingError('unknown_outcome', 'The admitted operation remains unknown', receipt=receipt)
+    monkeypatch.setattr(service.publishing, 'dispatch', unresolved)
+    response = await client.post('/api/actions', json={'action': 'publishing.build', 'args': {
+        'sessionId': sid, 'siteId': 'site', 'sourcePath': 'dist', 'requestId': 'unknown-import'}})
+    payload = await response.json()
+    assert response.status == 503 and payload['accepted'] is False
+    assert payload['code'] == 'unknown_outcome' and payload['receipt'] == receipt

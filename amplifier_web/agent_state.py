@@ -15,20 +15,20 @@ def _size(value):
     return len(json.dumps(value, ensure_ascii=False))
 
 
-def _preview(value, path, budget=2500, depth=0):
+def _preview(value, path, budget=2500, depth=0, *, reference_key='$statePath'):
     if _size(value) <= budget:
         return value
-    ref = {'$statePath':path,'type':type(value).__name__,'size':len(value) if isinstance(value,(dict,list,str)) else None}
+    ref = {reference_key:path,'type':type(value).__name__,'size':len(value) if isinstance(value,(dict,list,str)) else None}
     if depth >= 4 or budget < 250:
         return ref
     if isinstance(value, str):
         return {**ref,'preview':value[:max(0,budget-180)]}
     if isinstance(value, list):
         count = min(5,len(value))
-        return {**ref,'preview':[_preview(v,_pointer(path,i),max(100,(budget-250)//count),depth+1) for i,v in enumerate(value[:count])]}
+        return {**ref,'preview':[_preview(v,_pointer(path,i),max(100,(budget-250)//count),depth+1,reference_key=reference_key) for i,v in enumerate(value[:count])]}
     if isinstance(value, dict):
         keys=list(value)[:10]
-        return {**ref,'preview':{k:_preview(value[k],_pointer(path,k),max(100,(budget-250)//len(keys)),depth+1) for k in keys}}
+        return {**ref,'preview':{k:_preview(value[k],_pointer(path,k),max(100,(budget-250)//len(keys)),depth+1,reference_key=reference_key) for k in keys}}
     return ref
 
 
@@ -36,7 +36,7 @@ def overview(state, session_id):
     from .session_navigation import is_top_level
     selected = session_id or state.get('selectedSessionId')
     index = next((i for i,s in enumerate(state.get('sessions', [])) if s['id']==selected), None)
-    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','workspaceExplorer','chatNavigation','headerChatNavigation','subagentNavigation','pinnedSessionIds','sharedHistory','canvas','view','attention','voice'] if key in state}
+    core = {key:_preview(state[key],'/'+key,3000) for key in ['revision','selectedSessionId','selectedWorkspaceId','workspaces','workspaceExplorer','chatNavigation','headerChatNavigation','subagentNavigation','pinnedSessionIds','sharedHistory','canvas','canvasContext','view','attention','voice'] if key in state}
     core['canvasArtifacts'] = {'items':[{**{k:r.get(k) for k in ('id','title','kind','messageId','tabOpen')},'$statePath':f'/canvasArtifacts/{i}'} for i,r in list(enumerate(state.get('canvasArtifacts',[]))) if r.get('sessionId')==selected][-20:],'total':sum(r.get('sessionId')==selected for r in state.get('canvasArtifacts',[])),'$statePath':'/canvasArtifacts'}
     core['diagnostics'] = _preview(state.get('diagnostics', {}), '/diagnostics', 1200)
     core['smartTools'] = _preview(state.get('smartTools', {}), '/smartTools', 2000)
@@ -52,22 +52,29 @@ def overview(state, session_id):
             'messageCount':len(session.get('messages',[])),
             'model':_preview(state.get('runtimeControl',{}).get(selected,{}).get('configuration.providers',{}).get('effective'),_pointer('/runtimeControl',selected)+'/configuration.providers/effective',1000)})
     if state.get('devices'):
-        device_id,device=max(state['devices'].items(),key=lambda pair:pair[1].get('updatedAt',0))
-        core['visibleUI']={**_preview(device,_pointer('/devices',device_id),4000), 'clientId':device_id}
+        devices = state['devices'].items()
+        canvas_context = state.get('canvasContext')
+        if canvas_context:
+            devices = [(identity, device) for identity, device in devices
+                       if identity == canvas_context.get('clientId')]
+        if devices:
+            device_id,device=max(devices,key=lambda pair:pair[1].get('updatedAt',0))
+            core['visibleUI']={**_preview(device,_pointer('/devices',device_id),4000), 'clientId':device_id}
     core['conversations'] = [{'id':s['id'],'title':s.get('title'),'status':s.get('status'),'messageCount':s.get('sharedHistoryTotal',len(s.get('messages',[])) if s.get('historyLoaded',True) else None),'historyLoaded':s.get('historyLoaded',True),'workspaceId':s.get('workspaceId'),'$statePath':f'/sessions/{i}'} for i,s in enumerate(state.get('sessions',[])) if is_top_level(s)][:50]
     children = [(i,s) for i,s in enumerate(state.get('sessions',[])) if not is_top_level(s) and s.get('parentId') == selected]
     core['subagentChats'] = {'total':len(children), 'items':[{'id':s['id'],'title':s.get('title'),'$statePath':f'/sessions/{i}'} for i,s in children[:20]]}
     core['_stateAccess'] = {'note':'This overview is scoped to the calling session. Other app state and detailed resources are available by JSON Pointer; pass path, offset, limit and optional revision. Follow nextOffset. Text previews and $resource references are not the complete value.',
+        'canvas':'Canvas and selected-chat readback use the calling conversation. canvasContext lists matching clients. canvas.select accepts a caller-owned artifact id and optional clientId; specify clientId for ambiguous clients, including on get_state reads. Open the calling chat in a client before selecting when none matches. This never selects another chat or discards unsaved viewer edits.',
         'shell':'Use visibleUI.clientId to address this browser. shell.inspect returns its composition, resolvedInstances, supported slots, componentCommands schemas and activation evidence; shell.query {clientId,instanceId} returns a bounded snapshot for that module profile. New component slots use shell.command {clientId,instanceId,generation,action,args} with the observed generation. Replaced components reject late actions. shell.view.update {clientId,instanceId,generation,patch} edits its own filters, pages or form without retargeting chat drafts. The default instance IDs are workspaces and chats. Legacy /workspaceExplorer, /chatNavigation and view.update navigation fields are app defaults; modules may have independent overrides. shell.packages.stage and shell.packages.validate precede shell.changes.prepare, preview, apply and revert. These shell commands do not alter runtime modules or bundles.',
         'history':'CLI workspaces and top-level chats are discovered automatically. /workspaceExplorer is the legacy default folder projection: only existing workspaces with top-level chats and their ancestor folders appear. Rows with workspaceId can be selected with workspace.select; rows with canBrowse can be opened with view.update {patch:{navWorkspacePath:path}} without switching the conversation. Search all workspace paths or aliases using navWorkspaceFilter (case-insensitive fnmatch or plain text), navigate 1-based pages with navWorkspacePage, and toggle the ancestor menu with navWorkspaceAncestorsOpen. Browsing persists until a different workspace is selected. workspace.create {path,name?} creates or chooses a folder and opens its first chat without starting model work. Missing or empty folders stay in /workspaces; history.refresh rechecks availability. Subagent histories remain in /sessions with sessionKind=worker and parentId; they are omitted from the conversation list. Unloaded transcripts have no message count yet. Use history.refresh, session.select, and session.history {id,before,limit} to refresh or read earlier messages. Respect historyReadOnlyReason before continuing saved worker or legacy sessions.',
-        'chats':'session.naming {id,automatic:true|false} changes future automatic naming without a model call. session.naming {id,regenerate:true} generates one name from the saved conversation without sending a chat turn or changing the Auto preference. Inspect the session naming.status for completion; a newer rename or policy wins over late results. session.rename disables Auto. /chatNavigation is the legacy default bounded chat list: pins first, then recent conversation activity. Use view.update {patch:{navChatScope:"all"}} for top-level chats across available workspaces or navChatScope:"workspace" for the selected workspace. navFilter searches titles, descriptions, IDs and full workspace paths or names using case-insensitive fnmatch or plain text. Browse pages with navChatPage:{...chatNavigation.scope,index} (zero-based). session.pin {id,pinned:true|false} pins or unpins a root chat; pinnedSessionIds are app preferences and never change its shared transcript. Selecting, renaming or pinning a chat does not make it recent. /headerChatNavigation is the selected workspace menu. /subagentNavigation pages direct children: use view.update {patch:{panel:"subagent-history",subagentHistory:{sessionId,filter,index}}}; index is zero-based, pages hold 50. Browser snapshots contain only visible catalog pages; full /sessions and /workspaces remain available through JSON Pointer paging, and actions accept IDs outside the displayed page.',
+        'chats':'session.naming {id,automatic:true|false} changes future automatic naming without a model call. session.naming {id,regenerate:true} generates one name from the saved conversation without sending a chat turn or changing the Auto preference. Inspect the session naming.status for completion; a newer rename or policy wins over late results. session.rename disables Auto. /chatNavigation is the legacy default bounded chat list: pins in their saved order, then recent ready activity (not intermediate progress). navSort chooses activity, created, or name; activity is the default. Use view.update {patch:{navChatScope:"all"}} for top-level chats across available workspaces or navChatScope:"workspace" for the selected workspace. navFilter searches titles, descriptions, IDs and full workspace paths or names using case-insensitive fnmatch or plain text. Browse pages with navChatPage:{...chatNavigation.scope,index} (zero-based). session.pin {id,pinned:true|false} pins or unpins a root chat; pinnedSessionIds are app preferences and never change its shared transcript. session.pinOrder {ids:[...]} saves every pinned ID in the desired order; include hidden pins too. Selecting, renaming or pinning a chat does not make it recent. /headerChatNavigation is the selected workspace menu. /subagentNavigation pages direct children: use view.update {patch:{panel:"subagent-history",subagentHistory:{sessionId,filter,index}}}; index is zero-based, pages hold 50. Browser snapshots contain only visible catalog pages; full /sessions and /workspaces remain available through JSON Pointer paging, and actions accept IDs outside the displayed page.',
         'canvasApps':'Use canvas.apps.create once for conversation-owned interactive HTML. Keep its id and use inspect/revise/restore to refine the same tab with shared typed state. Read both revisions before mutations. canvas.apps.event invokes the same declared host-side update as a user interaction; state merges validated fields. Agents can resolve user-authorized host requests with canvas.apps.resolve {clientId, requestId, approve:true, ...revisions}. Only the sandbox is prohibited from resolving requests. Events do not automatically start an agent turn. Read the amplifier-shell skill conversation-surfaces guide for the bridge contract.',
         'canvasViews':'Use canvas.views.inspect {clientId} for the intended browser. It returns primary and optional pinned secondary artifact views, validated renderer choices, and exact viewId/resourceId/resourceRevision/generation targets. Include that target and clientId in canvas.views.renderer, command, close, dirty or recover. canvas.views.open {clientId,resourceId,sessionId} pins an ordinary saved artifact without selecting its chat. Stage and validate trusted-native-renderer-v1 packages before choosing their digest. Browser ready/error status is separate from package validation. A second MCP App binding is not supported.',
         'revision':state.get('revision'),'sections':[{'name':key,'path':'/'+key} for key in state]}
     return core
 
 
-def read_state(state, args, *, session_id=None, resolve=None):
+def read_state(state, args, *, session_id=None, resolve=None, reference_key='$statePath'):
     if not isinstance(args,dict):
         raise ValueError('State arguments must be an object.')
     path=args.get('path')
@@ -100,7 +107,7 @@ def read_state(state, args, *, session_id=None, resolve=None):
         items=list(value.items()) if isinstance(value,dict) else list(enumerate(value))
         selected=items[offset:offset+min(limit,50)];rows=[];used=0
         for key,item in selected:
-            preview=_preview(item,_pointer(path,key),2500)
+            preview=_preview(item,_pointer(path,key),2500,reference_key=reference_key)
             row={'key':key,'path':_pointer(path,key),'value':preview};size=_size(row)
             if rows and used+size>24000:break
             rows.append(row);used+=size

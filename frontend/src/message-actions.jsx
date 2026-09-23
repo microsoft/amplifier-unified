@@ -32,7 +32,7 @@ export function RecoveryGroup({messages,renderArtifacts,...props}){
  return <details className="a-recovery-group"><summary>{messages.length} recovered work updates</summary>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
 }
 
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,dispatch=act,expandedObservation=false}){
+export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false}){
  const [saving,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null);
  useEffect(()=>{if(!editing){pendingText.current=null;return}if(pendingText.current===null||edit.text===pendingText.current){setText(edit.text||'');pendingText.current=null}},[editing,edit?.text]);
@@ -46,7 +46,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?content:<details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary>{content}</details>}</article>;
  }
  return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id}>
-  <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&`via ${m.via} · `}{stamp(m.createdAt)}</span></div>
+  <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&`via ${m.via} · `}{m.timestampKnown===false?'Time unavailable':stamp(m.createdAt)}</span></div>
   <AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" onSubmit={submit}>
    <textarea autoFocus aria-label="Edit your message" value={text} data-action="view.update" onChange={e=>{setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();patch(null)}if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.currentTarget.form.requestSubmit()}}}/>
@@ -57,7 +57,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   {!editing&&<div className="a-message-actions">
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {m.role==='user'&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={blocked||saving||!!localDelivery&&delivery.status!=='failed'} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
-   <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry}/>
+   <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
    {forkTurn&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}

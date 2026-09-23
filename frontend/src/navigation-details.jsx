@@ -1,6 +1,6 @@
 import React,{useContext,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {AlertCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal,X} from 'lucide-react';
+import {AlertCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal} from 'lucide-react';
 import {relativeActivity} from './navigation-presentation';
 import './navigation-details.css';
 import {NavigationOpen,useNarrowScreen,useModalFocus} from './responsive-navigation';
@@ -15,7 +15,7 @@ export function NavigationStatus({activity}){
 }
 export function ActivityTime({at,now}){
  const age=relativeActivity(at,now);
- return <span className="a-navigation-age" title={age.long} aria-label={'Last activity: '+age.long}>{age.short}</span>;
+ return <span className="a-navigation-age" data-view-source="activity-time" title={age.long} aria-label={'Last activity: '+age.long}>{age.short}</span>;
 }
 export function CopyDetail({label,value}){
  const [status,setStatus]=useState('');
@@ -75,7 +75,6 @@ export function NavigationRow({className='',label,children,details,expanded=fals
   {children}
   <button ref={trigger} type="button" className="a-icon a-navigation-more" aria-label={'Details and actions for '+label} aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>open&&locked?close():show(true)}><MoreHorizontal/></button>
   {open&&target&&createPortal(<>{narrow&&<div className="a-details-scrim" onClick={()=>close(true)}/>}<section ref={panel} id={id} role="dialog" aria-modal={narrow||undefined} aria-label={'Details for '+label} className="a-navigation-flyout" data-locked={locked} style={position} onPointerEnter={()=>clearTimeout(closing.current)} onPointerLeave={leave} onFocus={()=>{clearTimeout(closing.current);if(!locked)setLocked(true)}}>
-   <button type="button" className="a-icon a-navigation-close" aria-label="Close details" onClick={()=>close(locked)}><X/></button>
    {details({close})}
   </section></>,target)}
  </div>;

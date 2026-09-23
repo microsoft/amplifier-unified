@@ -28,7 +28,9 @@ try{
  const host=page.getByRole('region',{name:'App environment'});
  await expect(host.getByText('openpyxl',{exact:true})).toBeVisible();
  await expect(page.getByRole('region',{name:'Conversation environment'})).toContainText('No ready session runtime.');
- const data=await action('runtime.dependencies',{sessionId:sid});
+ await page.getByRole('button',{name:'Check library imports',exact:true}).click();
+ await expect(host).toContainText(/Import (passed|failed|unknown)/);
+ const data=await action('runtime.dependencies',{sessionId:sid,verifyImports:true});
  await expect(host.locator('code').first()).toHaveText(data.result.host.python.path);
  const inspection=await page.request.get(url+'/fixture').then(response=>response.json());
  assert.equal(inspection.workerCount,0);assert.deepEqual(inspection.sent,[]);

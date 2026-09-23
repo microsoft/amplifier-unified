@@ -185,3 +185,12 @@ def test_structured_computer_stop_survives_exception_chain_without_payload_leak(
     assert failure_details({'code':inner.code,'tool_call_id':'wrong\nsecret','result_kind':'arbitrary secret'})['code']==inner.code
     assert 'toolCallId' not in failure_details({'code':inner.code,'tool_call_id':'wrong\nsecret'})
     assert 'resultKind' not in failure_details({'code':inner.code,'result_kind':'arbitrary secret'})
+
+
+def test_native_tool_definition_rejection_has_safe_actionable_failure():
+    from amplifier_web.session_health import failure_details
+    result = failure_details("tools.45: Input tag 'computer' found using 'type' does not match any expected tags; secret-context", 'BadRequestError')
+    assert result['category'] == 'tool_configuration'
+    assert 'tool definition' in result['summary']
+    assert 'secret-context' not in str(result)
+    assert result['replayed'] is False

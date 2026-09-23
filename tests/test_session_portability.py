@@ -36,6 +36,7 @@ async def test_fallback_is_visible_in_native_metadata_and_reverse_rename_survive
         await app.history.refresh()
         assert app._session(sid)["title"] == "CLI choice"
         app._save()
+        await app.close()
         restored = AppService(app.data_dir, workspace=tmp_path)
         try:
             assert restored._session(sid)["title"] == "CLI choice"

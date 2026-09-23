@@ -80,15 +80,21 @@ def validate_matrix(value):
     return copy.deepcopy(value)
 
 class SetupManager:
-    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None,catalog=None):
+    def __init__(self,home,*,store=None,runtime_operation=None,progress=None,auth_command=None,probe_command=None,catalog=None,allow_missing_workspace=False,global_only=False):
         from .provider_catalog import ProviderCatalog
         self.catalog=catalog or ProviderCatalog()
+        self.global_only=global_only
+        self.allow_missing_workspace=allow_missing_workspace
         self.home=Path(home); self.store=store or SettingsStore(home)
         self.runtime_operation=runtime_operation
         self.progress=progress; self.auth_command=auth_command; self.probe_command=probe_command; self.logins={}
 
     def config(self,workspace):
-        return load_config(workspace,home=self.home)
+        if self.allow_missing_workspace:
+            workspace=Path(workspace).expanduser().resolve()
+            while not workspace.is_dir() and workspace.parent!=workspace:
+                workspace=workspace.parent
+        return load_config(workspace,home=self.home,global_only=self.global_only)
 
     def provider_rows(self,workspace):
         config=self.config(workspace)
@@ -157,7 +163,10 @@ class SetupManager:
         command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)}
         if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
-        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env=env,cwd=workspace)
+        probe_workspace=Path(workspace)
+        while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
+            probe_workspace=probe_workspace.parent
+        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env=env,cwd=probe_workspace)
         try:
             try:
                 output,_=await asyncio.wait_for(process.communicate(json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),90)
@@ -263,7 +272,7 @@ class SetupManager:
     def _routing_dirs(self,workspace):
         # Same first-hit precedence as the mounted routing hook.
         registry=getattr(self.config(workspace),'registry_home',self.home/'foundation')
-        dirs=routing_dirs(workspace,shared_home=self.store.shared_home)
+        dirs=routing_dirs(workspace,shared_home=self.store.shared_home,global_only=self.global_only)
         dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
         return dirs
 

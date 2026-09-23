@@ -13,7 +13,33 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto('http://127.0.0.1:8957/');await page.waitForSelector('#amp-one');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const presentation=async(id,value)=>{if(await page.locator('#'+id).inputValue()===value)return;const applied=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='shell.changes.apply');await page.locator('#'+id).selectOption(value);assert.ok((await applied).ok());await expect(page.locator('#'+id)).toHaveValue(value);};
+ const presentation=async(id,value)=>{
+  const control=id==='scheme'?page.getByRole('button',{name:{light:'Light',dark:'Dark',system:'Device'}[value],exact:true}):page.locator('#'+id);
+  // A prior edit may already be painted but still awaiting persistence. Do not
+  // accidentally accept its response as the acknowledgment for this edit.
+  await expect(control).toBeEnabled();
+  const selected=id==='scheme'?await control.getAttribute('aria-pressed')==='true':await control.inputValue()===value;
+  if(!selected){
+   const prepared=page.waitForResponse(response=>{
+    const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
+    return response.url().endsWith('/api/actions')&&body?.action==='shell.changes.prepare'&&body.args.composition.presentation[id]===value;
+   });
+   const applied=page.waitForResponse(async response=>{
+    const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
+    if(!response.url().endsWith('/api/actions')||body?.action!=='shell.changes.apply')return false;
+    const preparation=await prepared;
+    return body.args.changeId===(await preparation.json()).result.id;
+   });
+   if(id==='scheme')await control.click();else await control.selectOption(value);
+   const preparation=await prepared;assert.ok(preparation.ok());
+   const application=await applied;assert.ok(application.ok());
+   assert.equal((await application.json()).accepted,true);
+  }
+  await expect(control).toBeEnabled();
+  // The actual shell snapshot is separate from the optimistic controls.
+  await expect.poll(()=>page.evaluate(key=>window.amplifier.getShellState()?.effectiveComposition.presentation[key],id)).toBe(value);
+  if(id==='scheme')await expect(control).toHaveAttribute('aria-pressed','true');else await expect(control).toHaveValue(value);
+ };
  await openSettingsPage(page,'notifications');
  assert.equal((await page.locator('.a-dialog').boundingBox()).width,1120);
  assert.equal(await page.locator('.a-dialog').evaluate(el=>getComputedStyle(el).padding),'0px');
@@ -58,19 +84,28 @@ try{
  assert.equal(await page.locator('#provider-key').inputValue(),'fixture-unsaved-key');
  assert.ok(!JSON.stringify(await state()).includes('fixture-unsaved-key'));
  await openSettingsPage(page,'appearance');
+ await page.getByText('Advanced customization',{exact:true}).click();
  await page.locator('#theme-name').fill('Acceptance skin');await page.locator('#theme-css').fill('#amp-one { --a-accent: #6b4dcc; }');
  await page.getByRole('button',{name:'Preview',exact:true}).click();
  assert.notEqual((await state()).theme?.name,'Acceptance skin');
  await openSettingsPage(page,'updates');await openSettingsPage(page,'appearance');
- await page.getByRole('button',{name:'End preview',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
  await page.getByRole('button',{name:'Apply skin',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
+ // Persistence must survive a reload even when appearance paints before the
+ // server accepts it. Keep these real writes in flight long enough to expose
+ // a helper that mistakes optimistic controls for saved settings.
+ await page.route('**/api/actions',async route=>{
+  if(['shell.changes.prepare','shell.changes.apply'].includes(route.request().postDataJSON()?.action))await new Promise(resolve=>setTimeout(resolve,500));
+  await route.continue();
+ });
  await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await page.locator('#theme-name').waitFor();
+ await page.reload();await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
  await expect(page.locator('#layout')).toHaveValue('work');
- await page.getByRole('button',{name:'Restore default skin',exact:true}).click();
+ await page.unrouteAll({behavior:'wait'});
+ await page.getByRole('button',{name:'Restore original appearance',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name!=='Acceptance skin');
  await openSettingsPage(page,'smart-tools');
  await page.getByRole('button',{name:'Browse catalog',exact:true}).click();

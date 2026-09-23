@@ -1,11 +1,12 @@
 [project]
 name = "amplifier-unified"
-version = "0.20.2"
+version = "0.20.8"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
+    "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=1.6.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
@@ -17,6 +18,7 @@ dependencies = [
     "tinycss2>=1.4,<2",
     "pyyaml>=6.0.3,<7",
     "filelock>=3.20,<4",
+    "watchfiles>=1.1,<2",
     "mcp>=2.2,<3",
     "httpx>=0.28,<1",
     "amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main",
@@ -37,7 +39,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/.ci/**"]

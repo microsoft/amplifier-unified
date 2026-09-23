@@ -447,3 +447,37 @@ def test_installed_version_must_match_prepared_release_before_redeeming(tmp_path
         install({'server': 'https://spark.example', 'expiresAt': time.time()+60,
                  'clientVersion': expected}, tmp_path, tmp_path / 'candidate')
     assert (tmp_path / 'default.json').read_text() == '{"id":"original"}'
+
+
+@pytest.mark.parametrize('managed', [False, True])
+@pytest.mark.parametrize('explicit', [None, '/remote/project'])
+def test_tui_resume_scope_defaults_to_launch_directory(tmp_path, monkeypatch, managed, explicit):
+    import subprocess
+    import sys
+    import types
+    from amplifier_web import cli
+    launch = tmp_path / 'launch'
+    launch.mkdir()
+    monkeypatch.chdir(launch)
+    record = {'server': 'https://saved.example', 'tokenFile': '/saved/token',
+              'environment': '/saved/environment'}
+    monkeypatch.setattr('amplifier_web.terminal_cli.saved', lambda: record if managed else None)
+    calls = []
+    monkeypatch.setattr(subprocess, 'call', lambda args: calls.append(args) or 0)
+    module = types.ModuleType('amplifier_tui.connected')
+    module.main = lambda args: calls.append(args)
+    monkeypatch.setitem(sys.modules, 'amplifier_tui', types.ModuleType('amplifier_tui'))
+    monkeypatch.setitem(sys.modules, 'amplifier_tui.connected', module)
+    argv = ['amplifier-unified', 'tui', '--server', 'https://fixture.example', '--list-sessions']
+    if explicit:
+        argv += ['--workspace', explicit]
+    monkeypatch.setattr(sys, 'argv', argv)
+    if managed:
+        with pytest.raises(SystemExit) as result:
+            cli.main()
+        assert result.value.code == 0
+    else:
+        cli.main()
+    options = calls[0]
+    assert options[options.index('--workspace') + 1] == (explicit or str(launch.resolve()))
+    assert '--list-sessions' in options

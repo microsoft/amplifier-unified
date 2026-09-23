@@ -5,11 +5,13 @@ import sys
 from typing import Any
 from mcp.server import MCPServer
 from mcp.server.apps import Apps
+from mcp.types import ToolAnnotations
 
 apps = Apps()
 count = 0
 
-@apps.tool(resource_uri='ui://counter/app', structured_output=True)
+@apps.tool(resource_uri='ui://counter/app', structured_output=True,
+           annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
 def counter_read() -> dict[str, Any]:
     """Read the shared counter without changing it."""
     return {'count':count}

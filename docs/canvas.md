@@ -116,6 +116,14 @@ same-origin permission. Its document CSP blocks network access, external scripts
 subframes, forms and access to the parent app. Use inline code and embedded data
 assets. It cannot call app APIs or turn document messages into app commands.
 
+Audio and video may use embedded `data:` sources or `blob:` URLs created inside
+the document. Include native playback controls and a browser-supported codec.
+Remote media URLs, workspace-relative paths and `file:` URLs remain blocked;
+embed small clips, or serve a larger review page using the browser preview.
+The existing HTML content/file size limits also apply to embedded media.
+A document-ready report confirms the HTML loaded, not that its media decoded or
+played. Check playback before claiming a video review surface works.
+
 A bounded bridge reports visible text and up to 100 standard buttons/form controls
 in `canvas.document`; password and file values are redacted. `canvas.interact`
 accepts the current canvas ID, a listed controlId, event `click` or `input`, and
@@ -192,6 +200,24 @@ workspaces. `clientId` can explicitly target an attached client for agent use.
 The legacy close/reopen lifecycle remains available. Selection and file reads are scoped to the chat and workspace. Agent
 publications default to the calling session even when the user views another
 chat. Background publications do not replace the user's active preview.
+
+For an agent, `canvas.select {id, clientId?}` validates the artifact against the
+calling chat and routes to a client already displaying that chat. A matching
+bound client is preferred; otherwise one matching client is selected. Multiple
+matching clients require an explicit `clientId`. If no client displays the chat,
+selection returns `canvas_client_required` with instructions to open it first.
+It never navigates an unrelated client, and unsaved viewer edits still block
+replacement through the ordinary Canvas guard.
+
+Agent state reads and selection receipts use the same caller scope.
+`canvasContext` reports the chosen client, matching client IDs, and whether the
+presentation is attached, ambiguous, or unattached. `get_state {clientId, ...}`
+can address one matching client explicitly. Without a unique target, `/canvas`
+is a closed placeholder and the caller's saved artifact index remains available;
+the host does not present another chat's Canvas or composer as the caller's.
+If the client navigates after selection commits, the accepted receipt remains
+successful and its readback reports a detached placeholder instead of failing
+the completed action. Explicit reads still reject a client displaying another chat.
 
 Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
 only through the retained user messages. Editing forks before the original user

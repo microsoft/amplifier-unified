@@ -215,12 +215,17 @@ test('native history paging, failures and unavailable workspaces have visible sh
  await renderAct(async()=>root.unmount());
 });
 
-test('remove chat confirmation preserves shared history explicitly',async()=>{
- const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};state.view.workspaceDraft={mode:'chat-delete',id:'a',name:'First plan'};let root;
- await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
- assert.match(JSON.stringify(root.toJSON()),/shared history stays on disk/);
- await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
- assert.deepEqual(calls[0],{name:'session.delete',args:{id:'a'}});
+test('workspace chat actions offer Archive but neither Remove nor Delete',async()=>{
+ const state=initial(),calls=[];let root;
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const model={state,act,draft:{},setDraft:value=>calls.push(value),choose:()=>{}};
+ await renderAct(async()=>{root=create(React.createElement(ChatDetails,{chat:state.sessions[0],model,now:100,close:()=>{}}))});
+ const labels=root.root.findAllByType('button').map(node=>node.props['aria-label']||node.children.join(''));
+ assert.ok(labels.includes('Archive First plan'));assert.ok(!labels.some(label=>/Remove|Delete/.test(label)));
+ await renderAct(async()=>root.update(React.createElement(ChatDetails,{chat:{...state.sessions[0],location:{kind:'managed'}},model,now:100,close:()=>{}})));
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Delete First plan'}).props.onClick());
+ assert.deepEqual(calls,[{mode:'chat-delete',id:'a',name:'First plan'}]);
+ assert.match(JSON.stringify(root.toJSON()),/No workspace/);
  await renderAct(async()=>root.unmount());
 });
 

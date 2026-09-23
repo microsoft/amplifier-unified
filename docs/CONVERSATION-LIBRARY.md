@@ -1,7 +1,7 @@
 # Conversation library
 
-Archive, restore, collections and sharing use the same validated actions from
-the sidebar, conversation settings and `app_control`.
+Archive, restore, managed-chat deletion and sharing use the same validated
+actions from the sidebar, conversation settings and `app_control`.
 
 `session.archive` hides a root conversation from the default active list.
 `session.restore` returns the same conversation. Neither stops work, starts a
@@ -9,21 +9,24 @@ worker, selects a different chat, changes a draft or edits native history.
 Archived active work can still produce a response or attention item. Worker
 histories stay with their parent and cannot be independently archived.
 
-Collections are app-owned organization. A root chat can belong to one collection;
-moving or removing membership never changes its files. Remove a collection to
-ungroup its conversations. `collection.assign` accepts an optional `beforeId`,
-and `collection.order`/`collection.reorder` require exact current ID sets.
-Use command IDs and expected app revisions for retry/CAS behavior. Explicit
-`session.pinOrder` preserves a user-defined pin order; otherwise existing pin
-recency ordering remains unchanged.
+Workspace conversations support Archive and Restore. Chats created without a
+workspace also support permanent Delete after reviewing the exact deletion
+scope. `session.deletePreview` supplies that review, and `session.delete`
+requires its confirmation token. See [managed chats](MANAGED-CHATS.md) for
+ownership checks, independent copies and deletion recovery. The old Remove
+action is no longer exposed.
 
-The sidebar exposes active/archived/all and collection filters. A filter change
-does not select or resume a conversation. Shell module views use
-`shell.view.update`; legacy defaults use `view.update`. App SQLite stores the
-organization, separately from shared Foundation metadata and transcripts. Native
-archive/collection references remain retained across catalog refresh and restart.
-Browser projections include only visible membership, bounded chat pages, and
-collection names/counts, not the entire membership of a large library.
+The sidebar exposes active, archived and all-conversation filters. A filter
+change does not select or resume a conversation. Collections are retired:
+their controls and actions are removed, and legacy stored membership is
+preserved but ignored. Explicit `session.pinOrder` preserves a user-defined
+pin order; otherwise existing pin recency ordering remains unchanged.
+
+Shell module views use `shell.view.update`; legacy defaults use `view.update`.
+App SQLite stores organization separately from shared Foundation metadata and
+transcripts. Native archive references remain retained across catalog refresh
+and restart. Browser projections include bounded chat pages rather than the
+entire library.
 
 ## Immutable sharing
 

@@ -45,26 +45,17 @@ async def test_archive_restore_survive_restart_without_selection_draft_or_histor
         await restored.close()
 
 
-async def test_collections_and_ordering_preserve_chats_and_validate_exact_ids(tmp_path):
+async def test_removed_collections_leave_existing_chats_visible(tmp_path):
     app = AppService(tmp_path / 'app', workspace=tmp_path)
     try:
         first, second = await conversation(app, 'First'), await conversation(app, 'Second')
-        group = (await app.dispatch('collection.create', {'name': 'Research'}))['result']['id']
-        for sid in (first, second):
-            await app.app_bridge('dispatch', {'action': 'collection.assign', 'args': {'sessionId': sid, 'id': group}}, second)
-        await app.dispatch('view.update', {'patch': {'navCollection': group, 'draft': 'still here'}})
-        assert [row['id'] for row in app.browser_state()['chatNavigation']['items']] == [first, second]
-        await app.dispatch('collection.order', {'id': group, 'sessionIds': [second, first]})
-        assert [row['id'] for row in app.browser_state()['chatNavigation']['items']] == [second, first]
+        app.state['conversationOrganization']['collections'] = [{'id':'legacy','name':'Research','sessionIds':[first]}]
+        await app.dispatch('view.update', {'patch': {'navCollection':'legacy','draft':'still here'}})
+        assert {row['id'] for row in app.browser_state()['chatNavigation']['items']} == {first, second}
+        assert 'collections' not in app.browser_state()['conversationOrganization']
         with pytest.raises(AppError):
-            await app.dispatch('collection.order', {'id': group, 'sessionIds': [first]})
-        with pytest.raises(AppError):
-            await app.dispatch('collection.assign', {'sessionId': first, 'id': group, 'beforeId': 'missing'})
-        assert app.state['selectedSessionId'] == second
+            await app.dispatch('collection.create', {'name':'Removed feature'})
         assert app.state['view']['draft'] == 'still here'
-        await app.dispatch('collection.remove', {'id': group})
-        assert {s['id'] for s in app.state['sessions']} == {first, second}
-        assert not app.state['conversationOrganization']['collections']
     finally:
         await app.close()
 
@@ -167,7 +158,7 @@ async def test_large_catalog_projection_keeps_only_visible_membership(tmp_path):
         projected = app.browser_state()['conversationOrganization']
         assert projected['archivedCount'] == 5000
         assert projected['archived'] == {}
-        assert projected['collections'][0]['sessionIds'] == [sid]
+        assert 'collections' not in projected
         assert len(json.dumps(projected)) < 500
     finally:
         await app.close()
@@ -181,8 +172,6 @@ async def test_archived_native_chat_survives_catalog_refresh_without_shared_writ
     await app.history.refresh()
     sid = native_rows(app)[0]['id']
     await app.dispatch('session.archive', {'id': sid})
-    collection = (await app.dispatch('collection.create', {'name': 'CLI archive'}))['result']['id']
-    await app.dispatch('collection.assign', {'sessionId': sid, 'id': collection})
     await app.history.refresh()
     assert sid in app.state['conversationOrganization']['archived']
     assert files_snapshot(native) == before

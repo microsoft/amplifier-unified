@@ -11,12 +11,13 @@ import time
 import uuid
 
 from .session_files import amplifier_home, project_slug
+from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
-INDEX_FIELDS = ('draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
-                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt',
+INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'description', 'bundle', 'workspace',
+                'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind')
@@ -233,7 +234,7 @@ class AutomaticHistory:
     def __init__(self, service):
         from .native_history import NativeHistory
         self.service = service
-        self.index = NativeHistory()
+        self.index = NativeHistory(watch=True)
         self.lock = asyncio.Lock()
         self.loads = {}
         self.task = None
@@ -247,10 +248,13 @@ class AutomaticHistory:
         if self.task:
             self.task.cancel()
             await asyncio.gather(self.task, return_exceptions=True)
+        await asyncio.to_thread(self.index.close)
 
     async def loop(self):
         while not self.service.closed:
-            await self.refresh()
+            known = copy.deepcopy(self.service.state['workspaces'])
+            if await asyncio.to_thread(self.index.needs_scan, known):
+                await self.refresh(force=False)
             await asyncio.sleep(15)
 
     def hide_session(self, session):
@@ -265,17 +269,22 @@ class AutomaticHistory:
         if workspace['id'] not in hidden:
             hidden.append(workspace['id'])
 
-    async def refresh(self):
+    async def refresh(self, *, force=True):
         async with self.lock:
             try:
                 known = copy.deepcopy(self.service.state['workspaces'])
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
-                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known)
+                snapshot = await asyncio.to_thread(self.index.scan, known_workspaces=known, force=force)
+                managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return
                 async with self.service.lock:
                     state = self.service.state
+                    from .managed_deletion import tombstones
+                    deleted_projects = {row['project'] for row in tombstones(self.service.db)}
+                    snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
+                    snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
@@ -292,6 +301,8 @@ class AutomaticHistory:
                             previous['available'] = row['available']
                             changed = True
                     for row in snapshot['workspaces']:
+                        if row.get('path') in managed_paths:
+                            continue
                         unresolved_id = uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
                         if row.get('path') and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
                             hidden_workspaces.add(row['id'])
@@ -346,6 +357,9 @@ class AutomaticHistory:
                                  s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
                     hidden = set(state.get('hiddenNativeSessions', []))
                     for row in snapshot['sessions']:
+                        managed = row.get('workspace') in managed_paths
+                        if managed:
+                            row = {**row, 'workspaceId': None}
                         key = (row['nativeProject'], row['nativeIdentity'])
                         if identity(*key) in hidden or row['workspaceId'] in hidden_workspaces:
                             continue
@@ -354,7 +368,7 @@ class AutomaticHistory:
                             previous = {'id': row['id'], 'title': row.get('name') or row.get('title') or 'Conversation ' + row['nativeIdentity'][:8],
                                         'titleSource': 'native', 'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'bundle': row.get('bundle') or state['settings']['bundle'],
                                         'workspace': row.get('workspace'), 'workspaceId': row['workspaceId'],
-                                        'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False),
+                                        'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False),
                                         'createdAt': row.get('createdAt', 0), 'updatedAt': row.get('updatedAt', 0), 'recentActivityAt': row.get('recentActivityAt', 0),
                                         'status': 'idle', 'messages': [], 'workers': [], 'approvals': [],
                                         'runtimeSessionId': row['nativeIdentity'], 'nativeIdentity': row['nativeIdentity'],
@@ -366,14 +380,17 @@ class AutomaticHistory:
                                         'historyManaged': True, 'historyLoaded': False}
                             state['sessions'].append(previous); existing[key] = previous; changed = True
                         else:
-                            from .chat_navigation import recent_activity
+                            from .chat_navigation import recent_activity, navigation_activity
+                            previous.setdefault('navigationActivityAt', navigation_activity(previous))
                             recent = max(recent_activity(previous), row.get('recentActivityAt', 0))
                             if previous.get('recentActivityAt') != recent:
                                 previous['recentActivityAt'] = recent; changed = True
+                                if previous.get('historyManaged') and previous.get('status') not in BUSY:
+                                    previous['navigationActivityAt'] = recent
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
                                                     'sessionKind': row['sessionKind'],
-                                                    'workspaceAvailable': workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
+                                                    'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True
                             if row.get('name') or (previous.get('historyManaged') and previous.get('titleSource') != 'manual'):
@@ -404,6 +421,8 @@ class AutomaticHistory:
                                 previous['nativeRevision'] = row.get('transcriptRevision')
                             elif 'nativeRevision' not in previous:
                                 previous['nativeRevision'] = row.get('transcriptRevision')
+                        if managed and previous.get('location') != {'kind': 'managed'}:
+                            previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
                         previous['_catalogId'] = row['id']
                     # Parent identities belong to their native project. UI IDs

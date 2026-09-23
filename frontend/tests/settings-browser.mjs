@@ -133,10 +133,10 @@ try{
  assert.equal(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
  await page.getByRole('button',{name:'Close settings',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('session.draft',{}));
- await page.getByText('Chat settings',{exact:true}).click();
- await page.getByLabel('Use the workspace’s default bundle').uncheck();
+ await page.locator('.a-composer').getByRole('button',{name:'Conversation bundle',exact:true}).click();
  await page.getByLabel('Registered root bundles',{exact:true}).selectOption('fixture-root');
- assert.equal(await page.locator('#new-chat-bundle').inputValue(),'fixture-root');
+ await page.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().view.newSessionDraft?.bundle==='fixture-root');
  await page.locator('.a-path-field').filter({has:page.locator('#new-chat-workspace')}).getByRole('button',{name:'Browse',exact:true}).click();
  const workspace=(await state()).settings.workspace;
  await page.locator('#new-chat-workspace-browse-path').fill(workspace+'/missing');
@@ -151,7 +151,10 @@ try{
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}));
  const data=await page.evaluateHandle(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['#amp-one { --a-accent: purple; }'],'dropped.amplifier.css',{type:'text/css'}));return transfer});
  await page.locator('.a-file-drop').dispatchEvent('drop',{dataTransfer:data});
- await page.waitForFunction(()=>window.amplifier.getState().view.themeDraft?.includes('--a-accent: purple'));
+ await expect(page.getByRole('button',{name:'Preview dropped',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Preview dropped',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Use dropped',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Cancel preview',exact:true}).click();
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({attentionTrail:true,reviewClearsBadges:true,compactGroupedUpdates:true,narrowerModalBreakpoint:true,typedFolderPath:true,registeredBundlePicker:true,actionSpacing:true,focusedPages:true,wildcardFilters:true,filterRetainsSelection:true,inlineBundleRadio:true,inlineAddModule:true,singleModelSelector:true,providerResult:true,providerDragOrder:true,activeRoutingEdit:true,inlineCheckbox:true,mobileFullscreen:true,noHorizontalOverflow:true,liveModuleConfig:true,liveModuleToggle:true,folderBrowser:true,fileDrop:true,browserErrors:errors.length}));
 }catch(error){await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-failure.png'});console.error(JSON.stringify({pageErrors:errors,locationListing:(await state()).locationListing,locationPicker:(await state()).view.locationPicker}));throw error}finally{await browser.close();fixture.kill('SIGTERM')}

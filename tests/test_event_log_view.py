@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +23,51 @@ def source(tmp_path, monkeypatch):
     session={'id':'app','runtimeSessionId':'native','workspace':str(tmp_path/'project'),
              'messages':[{'id':'user','role':'user','createdAt':1,'text':'Inspect it'}], 'workers':[]}
     return session, event_path(session,'native')
+
+
+async def test_idle_refresh_skips_projection_but_detects_appends_replacements_and_live_changes(source, monkeypatch):
+    session, path = source
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
+    calls = []
+    service = SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
+                              _publish=lambda:calls.append('publish'))
+    view = EventLogView(service)
+    original = view.read
+    def read(value):
+        calls.append('read')
+        return original(value)
+    monkeypatch.setattr(view, 'read', read)
+    await view.refresh('app')
+    for _ in range(10):
+        await view.refresh('app')
+    assert calls.count('read') == 1
+    # These fields change on every streamed token or worker progress report.
+    # They have no role in mapping canonical events onto messages and turns.
+    for number in range(10):
+        session.update(streaming=f'Token {number}', recentActivityAt=number, draft=f'Draft {number}')
+        session['workers'] = [{'id': 'child', 'sessionId': 'child', 'status': 'running',
+                               'updatedAt': number, 'detail': f'Progress {number}'}]
+        await view.refresh('app')
+    assert calls.count('read') == 2  # New child discovered once.
+    calls.clear()
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'finished'}, 12)
+    await view.refresh('app')
+    assert calls.count('read') == 1
+    assert session['execution']['nodes'][0]['output'] == 'finished'
+    replacement = path.with_suffix('.replacement')
+    append(replacement, 'tool:post', {'tool_call_id': 'two', 'result': 'replacement'}, 15)
+    replacement.replace(path)
+    await view.refresh('app')
+    assert calls.count('read') == 2
+    session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Continue', 'createdAt': 20})
+    await view.refresh('app')
+    assert calls.count('read') == 3
+    # Transcript changes can establish associations without an event append.
+    (path.parent.parent / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Inspect it'})+'\n')
+    await view.refresh('app')
+    assert calls.count('read') == 4
+    await view.refresh('app')
+    assert calls.count('read') == 4
 
 
 def test_canonical_body_exact_unredacted_untruncated_and_never_written(source,tmp_path):
@@ -139,6 +185,93 @@ def test_undated_native_transcript_uses_exact_call_associations(source):
     assert page({**session,'execution':tree},'nodes')['items'][1]['anchorMessageId']=='4'
 
 
+@pytest.mark.parametrize('already_reconciled', [False, True])
+@pytest.mark.parametrize('link', ['inputId', 'messageId', 'userMessageId'])
+def test_native_association_keeps_live_input_turn_and_one_work_group(source, already_reconciled, link):
+    session, path = source
+    session.update(status='working', messages=[{'id':'user', 'role':'user', 'text':'Inspect it',
+                                               'createdAt':1, 'nativeIndex':0, 'inputId':'input'}])
+    transcript = [{'role':'user', 'content':'Inspect it'}]
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    append(path, 'prompt:submit', {'prompt':'Inspect it'}, 2)
+    call = {'id':'model', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'turnId':'input', 'phase':'running', 'startedAt':10, 'liveObservation':True,
+            'revision':1, 'producerId':'worker', 'model':'fixture', 'provider':'test'}
+    append(path, 'provider:request', call, 10)
+    host = {'id':'input', 'inputId':'input', 'anchorMessageId':'user', 'startedAt':2, 'phase':'running'}
+    if link != 'inputId':
+        session['messages'][0].pop('inputId')
+        host[link] = 'user'
+    session['execution'] = {'currentTurnId':'input', 'turns':[host], 'nodes':[dict(call)]}
+    if already_reconciled:
+        session['execution']['nodes'][0]['turnId'] = 'native-turn:user'
+        session['execution']['turns'].append({'id':'native-turn:user', 'anchorMessageId':'user',
+                                              'canonicalHistory':True, 'phase':'completed'})
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        node, = session['execution']['nodes']
+        assert node['turnId'] == 'input'
+        projected = page(session, 'nodes')
+        assert [turn['id'] for turn in projected['turns']] == ['input']
+        assert [segment['id'] for segment in projected['segments']] == ['input@user']
+        assert projected['segments'][0]['phase'] == 'running'
+    from amplifier_web.execution import ingest
+    completed = {**call, 'phase':'completed', 'endedAt':12, 'revision':2,
+                 'usage':{'totalTokens':42, 'costUsd':.01, 'costType':'reported'}}
+    ingest(session, completed)
+    append(path, 'llm:response', completed, 12)
+    session['execution'] = view.read(session)
+    assert page(session, 'nodes')['segments'][0]['phase'] == 'completed'
+    assert page(session, 'nodes')['segments'][0]['aggregateUsage']['totalTokens'] == 42
+
+
+def test_exact_inputs_keep_repeated_prompts_and_interim_work_separate(source):
+    session, path = source
+    transcript = [{'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':'First update'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'one', 'content':'done'},
+                  {'role':'assistant', 'content':'Second update'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'two', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'two', 'content':'done'},
+                  {'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'three', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'three', 'content':'done'}]
+    session['messages'] = [{'id':str(i), 'role':row['role'], 'text':row['content'], 'nativeIndex':i,
+                            'timestampKnown':False, **({'inputId':f'input-{i}'} if row['role']=='user' else {})}
+                           for i, row in enumerate(transcript) if isinstance(row['content'], str) and row['role']!='tool']
+    session['execution'] = {'turns':[{'id':f'input-{i}', 'inputId':f'input-{i}', 'anchorMessageId':str(i),
+                                      'startedAt':1, 'phase':'running'} for i in (0, 7)], 'nodes':[]}
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    for at, call in enumerate(('one', 'two', 'three'), 10):
+        append(path, 'tool:pre', {'tool_call_id':call, 'tool_input':{}}, at)
+        append(path, 'tool:post', {'tool_call_id':call, 'result':'done'}, at+.5)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        assert [node['turnId'] for node in session['execution']['nodes']] == ['input-0', 'input-0', 'input-7']
+        projected = page(session, 'nodes')
+        assert [segment['id'] for segment in projected['segments']] == ['input-0@1', 'input-0@4', 'input-7@7']
+        assert len(projected['turns']) == 2
+
+
+def test_shared_anchor_does_not_infer_an_input_turn(source):
+    session, path = source
+    session['messages'][0].update(nativeIndex=0)
+    session['execution'] = {'turns':[{'id':f'voice:{i}', 'anchorMessageId':'user', 'phase':'completed'}
+                                      for i in (1, 2)], 'nodes':[]}
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(json.dumps({'role':'user', 'content':'Inspect it'})+'\n'+
+        json.dumps({'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]})+'\n')
+    append(path, 'tool:pre', {'tool_call_id':'one', 'tool_input':{}}, 10)
+    append(path, 'tool:post', {'tool_call_id':'one', 'result':'done'}, 11)
+    node, = EventLogView(None).read(session)['nodes']
+    assert node['turnId'] == 'native-turn:user'
+
+
 @pytest.mark.asyncio
 async def test_background_reader_observes_external_append_without_runtime_capture(source):
     import asyncio
@@ -185,6 +318,50 @@ def test_unfinished_historical_record_is_not_a_perpetually_running_call(source):
     assert view.read(session)['nodes'][0]['phase']=='interrupted'
 
 
+@pytest.mark.parametrize('terminal', ['completed', 'interrupted'])
+def test_observed_tool_stays_live_across_refreshes_and_prior_errors_remain_historical(source, terminal):
+    from amplifier_web.execution import ingest
+    session, path = source
+    session['status'] = 'working'
+    session['execution'] = {'turns': [{'id':'turn', 'phase':'running', 'anchorMessageId':'user'}], 'nodes': []}
+    failed = {'id':'tool:native:failed', 'kind':'tool', 'toolCallId':'failed', 'sessionId':'native',
+              'turnId':'turn', 'phase':'error', 'startedAt':10, 'endedAt':11, 'liveObservation':True}
+    live = {'id':'tool:native:sleep', 'kind':'tool', 'toolCallId':'sleep', 'sessionId':'native',
+            'turnId':'turn', 'phase':'running', 'startedAt':12, 'label':'bash', 'liveObservation':True}
+    ingest(session, failed)
+    ingest(session, live)
+    append(path, 'tool:pre', {'tool_call_id':'failed', 'tool_name':'app_control'}, 10)
+    append(path, 'tool:error', {'tool_call_id':'failed', 'error':'Earlier invalid arguments'}, 11)
+    append(path, 'tool:pre', {'tool_call_id':'sleep', 'tool_name':'bash', 'tool_input':{'command':'sleep 60'}}, 12)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = {row.get('toolCallId'): row for row in session['execution']['nodes']}
+        assert nodes['sleep']['phase'] == 'running' and nodes['sleep']['liveObservation']
+        assert nodes['failed']['phase'] == 'error'
+        assert session['execution']['turns'][0]['phase'] == 'running'
+        assert page(session, 'nodes')['segments'][0]['phase'] == 'running'
+    ingest(session, {**live, 'phase':terminal, 'endedAt':20})
+    for _ in range(2):
+        session['execution'] = view.read(session)
+        assert next(n for n in session['execution']['nodes'] if n.get('toolCallId') == 'sleep')['phase'] == terminal
+        assert session['execution']['turns'][0]['phase'] == 'completed'
+        assert page(session, 'nodes')['segments'][0]['phase'] == 'error'  # The genuine prior failure is retained.
+
+
+@pytest.mark.parametrize('status,observed', [('idle',True),('stopped',True),('error',True),('working',False)])
+def test_tool_start_without_live_ownership_stays_recorded_after_repeated_projection(source, status, observed):
+    session, path = source
+    session['status'] = status
+    session['execution'] = {'turns':[], 'nodes':[{'id':'tool:native:old', 'kind':'tool', 'toolCallId':'old',
+        'sessionId':'native', 'phase':'running', 'startedAt':10, 'liveObservation':observed}]}
+    append(path, 'tool:pre', {'tool_call_id':'old', 'tool_name':'bash'}, 10)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        assert session['execution']['nodes'][0]['phase'] == 'recorded'
+
+
 def test_live_completion_usage_survives_delayed_log_flush(source):
     session,path=source
     append(path,'provider:request',{'id':'stable','kind':'llm','sessionId':'native','phase':'running','startedAt':10},10)
@@ -194,6 +371,114 @@ def test_live_completion_usage_survives_delayed_log_flush(source):
     node,=EventLogView(None).read(session)['nodes']
     assert node['phase']=='completed' and node['endedAt']==12
     assert node['usage']['totalTokens']==120 and node['usage']['costUsd']==.004
+
+
+@pytest.mark.parametrize('receipt_location', ['nodes', 'retiredUsageNodes'])
+def test_completed_receipts_pair_before_delayed_app_log_flush(source, receipt_location):
+    """Captured race: the last native response flushes before its app completion."""
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, start, end, inputs, outputs, cost in (
+        ('first', 1790114695.062343, 1790114703.596118, 25625, 401, .0110674),
+        ('last', 1790114704.501729, 1790114708.916924, 26075, 185, .0090629),
+    ):
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'turnId':'turn', 'producerId':'worker', 'revision':2, 'liveObservation':True,
+                'provider':'test', 'model':'fixture', 'phase':'completed',
+                'startedAt':start, 'endedAt':end, 'usage':{'inputTokens':inputs,
+                'outputTokens':outputs, 'totalTokens':inputs+outputs, 'costUsd':cost, 'costType':'reported'}}
+        calls.append(call)
+        append(path, 'llm:request', {'provider':'test', 'model':'fixture', 'raw':{'input':identity}}, start+.4)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+               'revision':1, 'endedAt':None, 'usage':{}}, start+.01)
+        append(path, 'llm:response', {'provider':'test', 'model':'fixture', 'usage':{
+               'input_tokens':inputs, 'output_tokens':outputs, 'cost_usd':cost}}, end-.003)
+        if identity == 'first':
+            append(path, 'llm:response', {**call, 'sessionId':'native'}, end+.001)
+    session['execution'] = {'nodes':[], 'turns':[{'id':'turn', 'anchorMessageId':'user'}],
+                            receipt_location:copy.deepcopy(calls)}
+    original = session['execution']
+    before = copy.deepcopy(original)
+    original_log = path.read_bytes()
+    original_capacity = usage_snapshot(session)
+    view = EventLogView(None)
+    for delayed in (True, False):
+        if not delayed:
+            append(path, 'llm:response', {**calls[-1], 'sessionId':'native'}, calls[-1]['endedAt']+.001)
+        for _ in range(2):
+            session['execution'] = view.read(session)
+            tree = session['execution']
+            assert [row['id'] for row in tree['nodes']] == ['first', 'last']
+            assert tree['aggregateUsage']['calls'] == 2
+            assert tree['aggregateUsage']['costUsd'] == pytest.approx(.0201303)
+            assert tree['aggregateUsage']['totalTokens'] == 52286
+            capacity = usage_snapshot(session)
+            assert capacity['receipts'] == original_capacity['receipts']
+            assert capacity['metrics'] == original_capacity['metrics']
+            for node in tree['nodes']:
+                assert node['requestDetail']['id'] == node['id']
+                assert json.loads(read_text(session, {**node['requestDetail'], 'complete':'true'})['value']) == {'input':node['id']}
+        if delayed:
+            # Projection must not upgrade the cached native evidence in place.
+            indexed = view.indexes[str(path)].nodes['last']
+            assert indexed['phase'] == 'running' and indexed['endedAt'] is None
+            assert indexed['usage'] == {} and path.read_bytes() == original_log
+    assert original == before
+
+
+def test_latest_accounting_pairing_keeps_parallel_calls_and_earlier_retry(source):
+    from amplifier_web.capacity import usage_snapshot
+    session, path = source
+    calls = []
+    for identity, end in [('one', 12.01), ('two', 12.11)]:
+        call = {'id':identity, 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+                'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+                'startedAt':9, 'endedAt':end, 'phase':'completed',
+                'usage':{'inputTokens':4, 'outputTokens':2, 'totalTokens':6, 'costUsd':.01}}
+        calls.append(call)
+        append(path, 'provider:request', {**call, 'sessionId':'native', 'endedAt':None,
+               'phase':'running', 'usage':{}}, 9)
+    for request, end in [('retry', 11.5), ('one', 12), ('two', 12.1)]:
+        append(path, 'llm:request', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'raw':{'input':request}}, 10)
+        append(path, 'llm:response', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'status':'error' if request == 'retry' else 'ok', 'error':request+' details',
+               'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, end)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':calls}
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        nodes = {node['id']:node for node in session['execution']['nodes']}
+        assert set(nodes) == {'one', 'two', 'llm:native:retry'}
+        for identity, request in [('one','one'), ('two','two'), ('llm:native:retry','retry')]:
+            assert nodes[identity]['error'] == request+' details'
+            assert json.loads(read_text(session, {**nodes[identity]['requestDetail'], 'complete':'true'})['value']) == {'input':request}
+        assert session['execution']['aggregateUsage']['calls'] == 3
+        assert session['execution']['aggregateUsage']['costUsd'] == pytest.approx(.03)
+        assert usage_snapshot(session)['calls'] == 2
+        assert usage_snapshot(session)['metrics']['costUsd']['value'] == pytest.approx(.02)
+
+
+@pytest.mark.parametrize('field,value', [('rootSessionId','other'), ('sessionId','other'),
+                                        ('id','other'), ('kind','worker')])
+def test_model_pairing_does_not_borrow_unrelated_accounting(source, field, value):
+    session, path = source
+    call = {'id':'call', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+            'producerId':'worker', 'revision':2, 'provider':'test', 'model':'fixture',
+            'startedAt':10, 'endedAt':12, 'phase':'completed',
+            'usage':{'inputTokens':4, 'outputTokens':2, 'costUsd':.01}}
+    append(path, 'provider:request', {**call, 'sessionId':'native', 'phase':'running',
+           'endedAt':None, 'usage':{}}, 10)
+    append(path, 'llm:request', {'request_id':'native-call', 'provider':'test', 'model':'fixture'}, 10.1)
+    append(path, 'llm:response', {'request_id':'native-call', 'provider':'test', 'model':'fixture',
+           'usage':{'input_tokens':4, 'output_tokens':2, 'cost_usd':.01}}, 12)
+    session['execution'] = {'nodes':[], 'turns':[], 'retiredUsageNodes':[{**call, field:value}]}
+    tree = EventLogView(None).read(session)
+    assert {node['id'] for node in tree['nodes']} == {'call', 'llm:native:native-call'}
+    node = next(node for node in tree['nodes'] if node['id'] == 'call')
+    assert node['endedAt'] is None and node['usage'] == {}
+    assert tree['aggregateUsage']['costUsd'] == pytest.approx(.01)
 
 
 def test_native_model_keeps_observed_identity_across_repeated_reads(source):
@@ -290,3 +575,164 @@ def test_matching_model_names_on_different_providers_keep_own_request(source):
     assert len(rows)==2
     assert 'requestDetail' not in next(row for row in rows if row['id']=='app')
     assert next(row for row in rows if row.get('provider')=='test')['requestDetail']
+
+
+@pytest.mark.parametrize('already_split', [False, True])
+def test_delayed_transcript_link_and_live_completion_keep_model_and_tools_together(source, already_split):
+    """A native refresh can precede both user-index reconciliation and a live receipt."""
+    from amplifier_web.execution import ingest
+    session, path = source
+    session.update(status='working', messages=[
+        {'id':'old-user', 'role':'user', 'text':'Again', 'nativeIndex':0, 'inputId':'old', 'createdAt':1},
+        {'id':'answer', 'role':'assistant', 'text':'An answer', 'nativeIndex':1, 'createdAt':2},
+        {'id':'new-user', 'role':'user', 'text':'Again', 'inputId':'new', 'createdAt':9}])
+    transcript = [{'role':'user', 'content':'Again'}, {'role':'assistant', 'content':'An answer'},
+                  {'role':'user', 'content':'Again'},
+                  {'role':'assistant', 'content':[{'type':'tool_use', 'id':'one', 'name':'bash', 'input':{}}]},
+                  {'role':'tool', 'tool_call_id':'one', 'content':'done'}]
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in transcript))
+    call = {'id':'model', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app', 'turnId':'new',
+            'phase':'running', 'startedAt':10, 'liveObservation':True, 'revision':1,
+            'producerId':'worker', 'model':'fixture', 'provider':'test'}
+    session['execution'] = {'currentTurnId':'new', 'turns':[
+        {'id':'old', 'inputId':'old', 'anchorMessageId':'old-user', 'phase':'completed'},
+        {'id':'new', 'inputId':'new', 'anchorMessageId':'new-user', 'phase':'running', 'startedAt':9}],
+        'nodes':[dict(call)]}
+    append(path, 'prompt:submit', {'prompt':'Again'}, 1)
+    append(path, 'prompt:submit', {'prompt':'Again'}, 9)
+    append(path, 'provider:request', call, 10)
+    append(path, 'tool:pre', {'tool_call_id':'one', 'tool_input':{}}, 12.6)
+    append(path, 'tool:post', {'tool_call_id':'one', 'result':'done'}, 13)
+    if already_split:
+        session['execution']['turns'].append({'id':'native-turn:2', 'canonicalHistory':True,
+                                             'anchorMessageId':None, 'phase':'completed'})
+        session['execution']['nodes'].append({'id':'tool:app:one', 'kind':'tool', 'sessionId':'app',
+            'toolCallId':'one', 'turnId':'native-turn:2', 'canonicalHistory':True, 'phase':'completed'})
+    view = EventLogView(None)
+    session['execution'] = view.read(session)
+    completed = {**call, 'phase':'completed', 'endedAt':12.6, 'revision':2,
+                 'usage':{'totalTokens':42, 'costUsd':.01, 'costType':'reported'}}
+    ingest(session, completed)
+    for _ in range(3):
+        projected = page(session, 'nodes')
+        assert [segment['id'] for segment in projected['segments']] == ['new@new-user']
+        segment, = projected['segments']
+        assert segment['nodeCounts'] == {'models':1, 'tools':1}
+        assert segment['startedAt'] == 10 and segment['endedAt'] == 13
+        assert segment['aggregateUsage']['totalTokens'] == 42
+        assert segment['aggregateUsage']['calls'] == 1
+        assert {node['turnId'] for node in session['execution']['nodes']} == {'new'}
+        session['execution'] = view.read(session)
+    session['messages'][-1]['nativeIndex'] = 2
+    session['execution'] = view.read(session)
+    assert [segment['id'] for segment in page(session, 'nodes')['segments']] == ['new@new-user']
+
+
+def test_native_association_does_not_merge_distinct_exact_host_calls(source):
+    session, path = source
+    session['messages'][0].update(nativeIndex=0)
+    path.parent.parent.mkdir(parents=True)
+    (path.parent.parent/'transcript.jsonl').write_text(json.dumps({'role':'user', 'content':'Inspect it'})+'\n')
+    session['execution'] = {'turns':[{'id':key, 'anchorMessageId':'user', 'phase':'completed'}
+                                    for key in ('voice:one','voice:two')], 'nodes':[]}
+    append(path, 'prompt:submit', {'prompt':'Inspect it'}, 1)
+    for at, key in enumerate(('voice:one','voice:two'), 10):
+        append(path, 'provider:request', {'id':key+'-model', 'kind':'llm', 'sessionId':'native',
+               'turnId':key, 'phase':'completed', 'startedAt':at, 'endedAt':at+.5}, at)
+    append(path, 'tool:pre', {'tool_call_id':'ambiguous', 'tool_input':{}}, 12)
+    append(path, 'tool:post', {'tool_call_id':'ambiguous', 'result':'done'}, 13)
+    session['execution'] = EventLogView(None).read(session)
+    assert [node['turnId'] for node in session['execution']['nodes']] == ['voice:one','voice:two','native-turn:user']
+
+
+@pytest.mark.parametrize('late_host_log', [False, True])
+@pytest.mark.parametrize('already_aliased', [False, True])
+def test_provider_retry_attempts_keep_unique_ids_and_their_own_error_details(source, late_host_log, already_aliased):
+    session, path = source
+    host = {'id':'host-call', 'kind':'llm', 'sessionId':'native', 'turnId':'turn', 'provider':'test',
+            'model':'fixture', 'startedAt':10, 'endedAt':11.51, 'phase':'error', 'liveObservation':True,
+            'usage':{'inputTokens':4, 'outputTokens':2, 'totalTokens':6}}
+    session['execution'] = {'turns':[{'id':'turn', 'anchorMessageId':'user', 'phase':'completed'}],
+                            'nodes':[dict(host)]}
+    def host_log():
+        append(path, 'provider:request', {**host, 'phase':'running', 'endedAt':None}, 10)
+        append(path, 'llm:error', host, 11.51)
+    if not late_host_log:host_log()
+    for request, at in [('first',11),('second',11.3)]:
+        append(path, 'llm:request', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'raw':{'input':request+' request'}}, at)
+        append(path, 'llm:response', {'request_id':request, 'provider':'test', 'model':'fixture',
+               'status':'error', 'error':request+' failure', 'usage':{'input_tokens':4,'output_tokens':2}}, at+.2)
+    if late_host_log:host_log()
+    view = EventLogView(None)
+    for iteration in range(3):
+        session['execution'] = view.read(session)
+        nodes = session['execution']['nodes']
+        assert len(nodes) == len({node['id'] for node in nodes}) == 2
+        by_id = {node['id']:node for node in nodes}
+        assert set(by_id) == {'llm:native:first','host-call'}
+        assert by_id['llm:native:first']['error'] == 'first failure'
+        assert by_id['host-call']['error'] == 'second failure'
+        for identity, request in [('llm:native:first','first'),('host-call','second')]:
+            reference = by_id[identity]['requestDetail']
+            assert reference['id'] == identity
+            assert json.loads(read_text(session,{**reference,'complete':'true'})['value']) == {'input':request+' request'}
+        assert session['execution']['aggregateUsage']['calls'] == 2
+        assert session['execution']['aggregateUsage']['totalTokens'] == 12
+        if already_aliased and iteration == 0:
+            # Recover the old bad projection without rewriting any native log.
+            by_id['llm:native:first']['id'] = 'host-call'
+
+
+@pytest.mark.parametrize('phase', ['running', 'queued', 'retrying'])
+def test_later_observed_member_reopens_only_its_own_turn_summary(source, phase):
+    from amplifier_web.execution import ingest
+    session, path = source
+    session['status'] = 'working'
+    session['execution'] = {'turns':[
+        {'id':'finished', 'anchorMessageId':'user', 'phase':'completed', 'startedAt':1, 'endedAt':2},
+        {'id':'continuing', 'anchorMessageId':'user', 'phase':'running', 'startedAt':10}], 'nodes':[]}
+    for identity, turn, start, end in [('old','finished',1,2),('first','continuing',10,11)]:
+        call = {'id':identity, 'kind':'llm', 'sessionId':'native', 'turnId':turn,
+                'model':'fixture', 'startedAt':start, 'endedAt':end, 'phase':'completed'}
+        append(path, 'llm:response', call, end)
+    view = EventLogView(None)
+    session['execution'] = view.read(session)
+    assert session['execution']['turns'][1]['endedAt'] == 11
+    later = {'id':'later', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app', 'turnId':'continuing',
+             'model':'fixture', 'startedAt':12, 'phase':phase, 'liveObservation':True, 'revision':1}
+    ingest(session, later)
+    append(path, 'provider:request', later, 12)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        finished, continuing = session['execution']['turns']
+        assert finished['phase'] == 'completed' and finished['endedAt'] == 2
+        assert continuing['phase'] == 'running' and 'endedAt' not in continuing
+        assert continuing['startedAt'] == 10
+        assert session['status'] == 'working'
+    completed = {**later, 'phase':'completed', 'endedAt':15, 'revision':2}
+    ingest(session, completed)
+    append(path, 'llm:response', completed, 15)
+    session['execution'] = view.read(session)
+    assert session['execution']['turns'][1]['phase'] == 'completed'
+    assert session['execution']['turns'][1]['endedAt'] == 15
+
+
+@pytest.mark.parametrize('session_status,observed', [('working',False),('idle',True),('stopped',True),('error',True)])
+def test_unfinished_history_does_not_reopen_a_terminal_turn(source, session_status, observed):
+    session, path = source
+    session['status'] = session_status
+    earlier = {'id':'old', 'kind':'llm', 'sessionId':'native', 'turnId':'old-turn', 'model':'fixture',
+               'startedAt':10, 'endedAt':11, 'phase':'completed'}
+    orphan = {'id':'orphan', 'kind':'llm', 'sessionId':'native', 'turnId':'old-turn', 'model':'fixture',
+              'startedAt':12, 'phase':'running', 'liveObservation':observed}
+    session['execution'] = {'turns':[{'id':'old-turn', 'phase':'completed', 'endedAt':11}],
+                            'nodes':[earlier, orphan]}
+    append(path, 'llm:response', earlier, 11)
+    append(path, 'provider:request', orphan, 12)
+    session['execution'] = EventLogView(None).read(session)
+    turn, = session['execution']['turns']
+    assert turn['phase'] == 'completed' and turn['endedAt'] == 11
+    assert session['execution']['nodes'][1]['phase'] == 'recorded'
+    assert session['status'] == session_status

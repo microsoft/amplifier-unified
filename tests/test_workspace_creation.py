@@ -30,6 +30,7 @@ async def test_create_workspace_makes_parents_and_an_uncommitted_draft(service, 
     assert not service.tasks  # Creating a workspace cannot start a model turn.
     assert state['workspaceExplorer']['totalWorkspaces'] == 0  # Drafts are not saved chats.
 
+    await service.close()
     restored = AppService(service.data_dir)
     try:
         assert restored.state['selectedWorkspaceId'] == workspace['id']

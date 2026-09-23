@@ -2,6 +2,117 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.8",
+      "title": "Faster controls and quieter idle work",
+      "changes": [
+        "Keep browser action responses small and stream only changed state after the initial snapshot. Reconnecting restores a complete snapshot automatically.",
+        "Preview appearance changes immediately, preserving saved settings if a change fails.",
+        "Skip unchanged native history and activity scans, react to file changes, and retain periodic reconciliation and explicit refresh.",
+        "Avoid redundant saves for unchanged layout, Canvas visibility and renderer status. Keep historical usage evidence in durable storage while sending only its totals to the browser.",
+        "Keep tool and worker progress updates batched, and avoid background publications for diagnostic timestamps while Diagnostics is closed.",
+        "Keep conversations compatible with older locked Foundation workers. Report a worker startup failure as not sent when no attempt could have received the message, preserving the saved message and safe retry identity."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.7",
+      "title": "Work artifacts, memory, publishing and task transfer",
+      "changes": [
+        "Inspect generated image outputs through the provider's visual input path and check artifact dependencies in the worker that will create the deliverable.",
+        "Opt in separately to memory contribution and relevant-context retrieval, with source exclusions, correction handling and controls shared by the interface and agents.",
+        "Preview immutable publishing releases, record review, deploy or roll back to an inspected target, and reconcile uncertain results without automatically repeating an external action.",
+        "Export and import signed task transfers with preserved history and output evidence. Execution ownership remains fenced until the transfer is reconciled.",
+        "Inspect desktop and browser readiness, explicitly install optional native screen observation, and keep work paused when application replacement has an uncertain outcome until the serving installation is verified.",
+        "Configure optional native Microsoft 365 document tools and live Excel support through the published companion components and account setup guidance.",
+        "Keep late worker progress attached to its original run without reopening completed work or adopting a newer run's identity.",
+        "Use one composer button for voice, send and cancel. Keep chat ordering stable during background activity while reducing browser request traffic.",
+        "Context compaction calls are identified separately from ordinary replies, retain usage and safe failure details, and keep internal summary text out of the conversation.",
+        "Compaction summaries retain their requested reasoning effort when the conversation has a higher effort selected. Budget checks and model dispatch use the same setting.",
+        "Malformed app_control requests receive a clear corrective request shape before any action executes, while valid action receipts remain unchanged."
+      ],
+      "notices": [
+        {
+          "id": "work-companion-components",
+          "title": "Update Work components and review optional setup",
+          "detail": "Work skill and runtime improvements include separately published bundle and module changes. Memory remains opt-in. Microsoft 365, live Excel, image generation and native desktop features require their own configured services, dependencies or permissions; selecting Work does not connect accounts or grant access.",
+          "action": "After updating the app, check available component updates and review the setup guidance for the optional capabilities you want to use. Deliberate source pins remain in effect."
+        },
+        {
+          "id": "publishing-transfer-ownership",
+          "title": "Choose publishing and transfer targets deliberately",
+          "detail": "Publishing requires a configured target and an explicit access policy. Tasks retaining managed publishing state, including stopped sites or receipts, cannot transfer. Transfer requires compatible writers on both hosts and does not migrate credentials or install the destination runtime. Older session writers do not respect its ownership fence.",
+          "action": "Before transferring, update both hosts and upgrade or disable every CLI, TUI and runtime that can write the session, then pair the hosts and verify destination setup. Keep the source available until handoff is confirmed. Inspect saved operation state before retrying an uncertain action."
+        },
+        {
+          "id": "update-compaction-components",
+          "title": "Update companion components for compaction recovery",
+          "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+        }
+      ]
+    },
+    {
+      "version": "0.20.6",
+      "title": "Simpler chats, stable Canvas controls and faster setup",
+      "changes": [
+        "Preview Aurora, Atelier and Graphite appearances in a redesigned gallery, with light/dark modes, optional backgrounds and a persistent shared CSS appearance library.",
+        "Connected Terminal Resume and latest-session listings default to the directory where amplifier-unified tui is launched. An explicit --workspace still selects a server-side directory.",
+        "Unexpected worker startup exits retain a private local diagnostic log instead of discarding the underlying setup error.",
+        "Start chats without choosing a workspace. Each uses a private managed folder; the chat is created only when its first message is sent.",
+        "Delete managed chats through an explicit confirmation that previews the affected saved data. Workspace chats keep Archive and Restore; the ambiguous Remove action is gone.",
+        "Choose provider, model, reasoning effort and bundle directly in the composer. Compact selectors show the actual selection, group duplicate provider labels, and retain bundle descriptions.",
+        "Create folders directly in the workspace chooser. The separate New workspace entry and chat Collections feature have been removed while saved history is retained.",
+        "Canvas controls float over previews until pinned, preserving live frames and unsaved edits. Canvas opens only after a chat exists, and empty canvases offer clear file and website actions.",
+        "Embedded HTML Canvas previews can play self-contained video and audio, with play, pause, seeking and reopening verified. Remote media remains outside this preview sandbox.",
+        "The header exposes Feedback directly, keeps Settings beside More and Canvas at the right edge, and removes Activity. Agent computation and operations controls no longer occupy the chat panel.",
+        "Provider catalogs publish fewer full-state updates and reuse fresh cached models, reducing setup delays and keeping other requests more responsive.",
+        "Sidebar and Canvas layout controls save their own client view without rewriting the conversation catalog, keeping large libraries responsive during active work.",
+        "Model-call rows retain distinct request identities and independent expansion. Continued work updates its own turn summary without reopening completed history.",
+        "Selected-model request budgeting preserves Anthropic request options, and provider tool-configuration failures retain actionable diagnostics."
+      ],
+      "notices": [
+        {
+          "id": "refresh-anthropic-tool-routing",
+          "title": "Update companion modules for Anthropic computer tools",
+          "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
+          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+        }
+      ]
+    },
+    {
+      "version": "0.20.5",
+      "title": "Reliable new chats and clear submission recovery",
+      "changes": [
+        "An ordinary folder named work no longer hides the installed Work bundle when starting a conversation.",
+        "Starting a chat creates an explicitly entered workspace folder when needed and reports path errors without losing the draft.",
+        "New chat shows the correct heading and useful submission errors. Confirmed unsent local messages can be discarded, while uncertain deliveries remain available for checking.",
+        "Successful forms clear their submitted drafts while preserving newer typing, failed submissions, and feedback receipts.",
+        "Native model and tool activity stays grouped with the user turn that started it instead of creating duplicate Working groups."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.4",
+      "title": "Keep the app responsive while preparing conversations",
+      "changes": [
+        "Preparation updates are grouped so loading a conversation does not hold up controls or worker replies. Delivery, approvals, usage and failures remain durably recorded.",
+        "Schedule displays use one shared database read instead of a separate query for every saved conversation.",
+        "Connected browsers reuse folder and navigation calculations while keeping their own selections, filters and drafts, reducing delays in large conversation libraries.",
+        "Embedded tool views wait for visibility acknowledgement before resuming reads, preventing a false error when reopening a hidden panel."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.3",
+      "title": "Responsive conversations with multiple connected clients",
+      "changes": [
+        "Browser observations avoid full-library saves, and connected views share bounded presentation work while keeping separate selections and drafts.",
+        "Canvas tool reads are bounded and visibility-aware, preventing automatic refreshes from accumulating behind slow requests.",
+        "Pinned model choices reuse prepared app context between request budgeting and dispatch."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.2",
       "title": "Refresh history only for connected views",
       "changes": [

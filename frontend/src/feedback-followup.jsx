@@ -9,6 +9,12 @@ export function FeedbackFollowup({state,act}){
  useEffect(()=>()=>{clearTimeout(timer.current);if(dirty.current)void flush().catch(()=>{})},[]);
  useEffect(()=>{if(shared&&!dirty.current&&!sending.current){current.current=shared;setDraft(shared)}},[shared]);
  const pending=draft.pending,result=pending&&(state.feedback?.followups||[]).find(row=>row.requestId===pending.requestId);
+ const receipt=result||(state.feedback?.followups||[]).find(row=>row.requestId===draft.submittedRequestId&&row.feedbackId===draft.feedbackId&&row.status==='submitted');
+ useEffect(()=>{
+  if(result?.status!=='submitted'||current.current.pending?.requestId!==result.requestId)return;
+  setError('');
+  void save({feedbackId:current.current.feedbackId,body:'',submittedRequestId:result.requestId}).catch(()=>setError('The comment was sent, but the cleared draft could not be saved. Reconnect and try again.'));
+ },[result?.status,result?.requestId]);
  const reading=(state.feedback?.followups||[]).find(row=>row.feedbackId===draft.feedbackId&&row.requestId===state.feedback?.readRequestId);
  const report=state.feedback?.report?.feedbackId===draft.feedbackId?state.feedback.report:null;
  const working=busy||['queued','sending'].includes(result?.status),terminal=['submitted','unknown','failed'].includes(result?.status);
@@ -45,9 +51,9 @@ export function FeedbackFollowup({state,act}){
   <form onSubmit={send} data-action="feedback.comment">
    <label htmlFor="feedback-comment">Add a comment</label><textarea id="feedback-comment" data-action="view.update" maxLength={16000} required disabled={!!pending||busy} value={pending?.body??draft.body} onChange={event=>edit({body:event.target.value})} onBlur={()=>save(current.current).catch(()=>setError('The draft could not be saved.'))}/>
    <p className="a-caption">Only this text is added to the selected report, using the host’s GitHub sign-in. The report must belong to that account.</p>
-   {result&&<ResultNotice phase={result.status==='submitted'?'success':['unknown','failed'].includes(result.status)?'error':'working'} message={result.message}/>}
+   {receipt&&<ResultNotice phase={receipt.status==='submitted'?'success':['unknown','failed'].includes(receipt.status)?'error':'working'} message={receipt.message}/>}
    {error&&<ResultNotice phase="error" message={error}/>}
-   {result?.commentUrl&&<a href={result.commentUrl} target="_blank" rel="noopener noreferrer">View comment</a>}
+   {receipt?.commentUrl&&<a href={receipt.commentUrl} target="_blank" rel="noopener noreferrer">View comment</a>}
    {result?.status==='unknown'&&<a href={result.url} target="_blank" rel="noopener noreferrer">Check the issue before starting another comment</a>}
    {!terminal&&<button type="submit" className="a-primary" data-action="feedback.comment" disabled={working||!draft.feedbackId||!draft.body.trim()}>{working?'Sending…':pending?'Check comment status':'Send comment'}</button>}
    {terminal&&<button type="button" className="a-soft" onClick={newComment}>New comment</button>}

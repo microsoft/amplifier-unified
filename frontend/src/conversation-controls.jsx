@@ -90,7 +90,7 @@ export function ConversationSelect({state,session,choices,onSelect}){
  return <select className="a-session-select" aria-label="Select conversation" data-action="session.select" value={isTopLevelChat(session)?session?.id||'':''}
   onFocus={hold} onPointerDown={hold} onBlur={()=>setHeld(null)} onKeyDown={event=>{if(event.key==='Escape')setHeld(null)}}
   onChange={event=>{const id=event.target.value;setHeld(null);onSelect(id)}}>
-  {!isTopLevelChat(session)&&<option value="" disabled>{session?'Viewing subagent history':'New chat'}</option>}
+  {(!session||!isTopLevelChat(session))&&<option value="" disabled>{session?'Viewing subagent history':'New chat'}</option>}
   {rows.map(row=><option key={row.id} value={row.id}>{row.title}{state.attention?.sessions?.[row.id]?' · Needs attention':['working','running','starting','stopping'].includes(row.status)?' · '+(row.status==='starting'?'Preparing':row.status==='stopping'?'Stopping':'Working'):''}</option>)}
   {choices.total>rows.length&&<option disabled>Find all chats in the workspace sidebar</option>}
  </select>;

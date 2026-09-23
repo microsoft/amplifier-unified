@@ -122,9 +122,9 @@ test('all chats include only roots in existing folders and group pins before act
    {id:'unregistered',workspace:'/elsewhere',recentActivityAt:100},
   ]};
  const before=structuredClone(state),page=chatPage(state);
- assert.deepEqual(page.items.map(row=>row.id),['pin-new','pin-old','new','equal-one','equal-two']);
+ assert.deepEqual(page.items.map(row=>row.id),['pin-old','pin-new','new','equal-one','equal-two']);
  assert.deepEqual(page.items.slice(0,2).map(row=>row.pinned),[true,true]);
- assert.equal(page.items[0].workspace,'/personal/project');
+ assert.equal(page.items[0].workspace,'/work/project');
  assert.equal(page.scope.mode,'all');assert.equal(page.scope.workspaceId,null);
  assert.deepEqual(state,before,'navigation must not mutate recency or session records');
 });
@@ -203,4 +203,36 @@ test('subagent projection keeps complete counts and waits for changed searches a
  assert.equal(subagentPage(state,parent),state.subagentNavigation);assert.equal(subagentCount(state,parent),123);
  state.view.subagentHistory.index=1;assert.equal(subagentPage(state,parent).pending,true);
  const other={id:'different-root',subagentCount:5};assert.equal(subagentCount(state,other),5,'a previously browsed parent cannot hide the current parent’s workers');
+});
+
+
+test('managed chats are reachable without workspace rows and location filters cannot reuse a stale page',()=>{
+ const state={sessions:[{id:'managed',title:'My chat',workspace:'/app/chats/id/files',location:{kind:'managed'}},{id:'project',workspace:'/project',workspaceId:'project'}],workspaces:[{id:'project',path:'/project',available:true}],view:{navChatScope:'all'},selectedWorkspaceId:'project'};
+ assert.deepEqual(new Set(chatPage(state).items.map(row=>row.id)),new Set(['managed','project']));
+ assert.equal(chatPage(state).items.find(row=>row.id==='managed').workspaceLabel,'No workspace');
+ state.view.navLocationFilter='managed';const managed=chatPage(state);assert.deepEqual(managed.items.map(row=>row.id),['managed']);
+ state.chatNavigation=managed;state.library={bounded:true};state.view.navLocationFilter='all';
+ assert.equal(chatPage(state).pending,true);
+ state.library={};delete state.chatNavigation;state.view.navChatScope='workspace';
+ assert.deepEqual(chatPage(state).items.map(row=>row.id),['project']);
+});
+
+test('sort choices use ready time and never reorder pins by activity',()=>{
+ const state={view:{navChatScope:'all'},workspaces:[{id:'w',path:'/w',available:true}],pinnedSessionIds:['p1','p2'],sessions:[
+  {id:'p1',workspaceId:'w',recentActivityAt:1},{id:'p2',workspaceId:'w',recentActivityAt:999},
+  {id:'a',workspaceId:'w',title:'Alpha',navigationActivityAt:10,recentActivityAt:999,createdAt:20},
+  {id:'b',workspaceId:'w',title:'beta',recentActivityAt:30,createdAt:10},
+  {id:'c',workspaceId:'w',title:'Charlie',recentActivityAt:20,createdAt:30}]};
+ for(const [sort,expected] of [['activity',['b','c','a']],['created',['c','a','b']],['name',['a','b','c']]]){
+  state.view.navSort=sort;
+  assert.deepEqual(chatPage(state).items.map(row=>row.id),['p1','p2',...expected]);
+ }
+});
+test('moving pins retains every filtered or off-page pin',async()=>{
+ const {movePin}=await import('../src/chat-navigation.js');
+ const ids=['first','hidden','second','off-page'];
+ assert.deepEqual(movePin(ids,'second','first'),['second','first','hidden','off-page']);
+ assert.deepEqual(movePin(ids,'first','second'),['hidden','second','first','off-page']);
+ assert.equal(movePin(ids,'absent','first'),ids);
+ assert.equal(movePin(ids,'first','first'),ids);
 });

@@ -37,44 +37,56 @@ class Management:
 
     async def warm_providers(self,manager,workspace):
         rows=manager.provider_rows(workspace)
-        async with self.service.lock:
-            setup=self.service.state.setdefault('setup',{})
-            if setup.get('providersWorkspace')!=workspace:return
-            valid={row['id'] for row in rows if row.get('enabled',True)}
-            if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
-            for field in ('modelCatalogs','providerCatalogs'):
-                setup[field]={key:value for key,value in setup.get(field,{}).items() if key in valid}
-            self.service._publish()
-        async def load(row):
-            identity=row['id'];args={'id':identity};key=manager.catalog_key(args,workspace)
+        enabled=[row for row in rows if row.get('enabled',True)]
+        catalogs={};pending=[]
+        def catalog_entry(result,cache_key,**values):
+            return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
+        # Publish the cached catalog as one snapshot. Even fresh cache hits used
+        # to rebuild and persist the entire app twice for every provider.
+        for row in enabled:
+            key=manager.catalog_key({'id':row['id']},workspace)
             cache_key=('providers.models',key)
             cached=self.provider_catalog.peek(cache_key)
-            def catalog_entry(result, **values):
-                return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'), 'loadedAt':self.provider_catalog.loaded_at.get(cache_key), **values}
-            async with self.service.lock:
-                setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
-                # Only the exact configuration key may supply cached values.
-                entry=catalog_entry(cached,phase='ready' if self.provider_catalog.fresh(cache_key) else 'working')
-                setup.setdefault('modelCatalogs',{})[identity]=entry['models']
-                setup.setdefault('providerCatalogs',{})[identity]=entry
+            fresh=self.provider_catalog.fresh(cache_key)
+            catalogs[row['id']]=catalog_entry(cached,cache_key,phase='ready' if fresh else 'working')
+            if not fresh:pending.append((row,key,cache_key))
+        async with self.service.lock:
+            setup=self.service.state.setdefault('setup',{})
+            if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
+            before=copy.deepcopy({key:setup.get(key) for key in ('models','modelsProviderId','modelCatalogs','providerCatalogs','metadata')})
+            valid=set(catalogs)
+            if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
+            setup['providerCatalogs']=catalogs
+            setup['modelCatalogs']={identity:entry['models'] for identity,entry in catalogs.items()}
+            for row in enabled:
+                if catalogs[row['id']].get('metadata'):
+                    setup.setdefault('metadata',{})[row['module']]=catalogs[row['id']]['metadata']
+            if before!={key:setup.get(key) for key in before}:
                 self.service._publish()
+        if not pending:return
+        # Yield after the start snapshot so ordinary requests can proceed.
+        await asyncio.sleep(0)
+        async def load(row,key,cache_key):
+            identity=row['id'];args={'id':identity}
             async with self.catalog_limit:
                 try:
                     result=await manager.perform('providers.models',{'id':identity,'workspace':workspace})
-                    entry=catalog_entry(result,phase='ready')
+                    entry=catalog_entry(result,cache_key,phase='ready')
                 except Exception:
-                    entry=catalog_entry(self.provider_catalog.peek(cache_key),phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
+                    entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key,phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
             # An old request must never overwrite a newer config or workspace.
             if manager.catalog_key(args,workspace)!=key:return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if setup.get('providersWorkspace')!=workspace:return
+                if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
-                self.service._publish()
-        await asyncio.gather(*(load(row) for row in rows if row.get('enabled',True)))
+                self.service._publish_progress()
+        try:
+            await asyncio.gather(*(load(*item) for item in pending))
+        finally:
+            await self.service._flush_pending_progress()
 
     async def warm_runtime_models(self,session_id,providers,revision=None):
         async with self.service.lock:
@@ -139,8 +151,10 @@ class Management:
     async def command(self,action,args,command_id=None):
         if action == 'bundles.list':
             return await self.list_bundles(args, command_id)
+        if action == 'providers.list':
+            return await self.list_providers(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
-        independent=action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
+        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
         async with (nullcontext() if independent else self.lock):
             await self.provider_status(action,args,command_id,'working')
             await self.publish(management={'phase':'working','operation':action,'error':None})
@@ -170,6 +184,48 @@ class Management:
                         for session in self.service.state['sessions']:
                             if session['id']==guarded:session['configurationBusy']=False
                         self.service._publish()
+
+    async def list_providers(self,args,command_id):
+        """One start and one result publication for a provider catalog read."""
+        from .setup import SetupManager
+        from .managed_chats import is_managed
+        operation_id=command_id or str(uuid.uuid4())
+        await self._provider_list_transition(args,command_id,operation_id,'working')
+        await asyncio.sleep(0)
+        try:
+            managed=is_managed(args)
+            workspace=(str(self.service.data_dir) if managed else str(Path(args['workspace']).expanduser().resolve())
+                       if args.get('workspace') else self.configuration_session(args)['workspace'])
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,
+                                 allow_missing_workspace=bool(args.get('workspace')),global_only=managed)
+            result=await manager.perform('providers.list',{**args,'workspace':workspace})
+            result['providersRequestedWorkspace']=args.get('workspace',workspace)
+            result['providersLocation']={'kind':'managed' if managed else 'workspace'}
+            if await self._provider_list_transition(args,command_id,operation_id,'ready',result=result):
+                self.background(self.warm_providers(manager,workspace))
+        except asyncio.CancelledError:
+            await self._provider_list_transition(args,command_id,operation_id,'error',error='Provider listing cancelled.')
+            raise
+        except Exception as exc:
+            await self._provider_list_transition(args,command_id,operation_id,'error',error=str(exc)[:1000])
+
+    async def _provider_list_transition(self,args,command_id,operation_id,phase,*,result=None,error=None):
+        async with self.service.lock:
+            state=self.service.state;setup=state.setdefault('setup',{})
+            operations=setup.setdefault('operations',{})
+            current=phase=='working' or operations.get('providers.list:',{}).get('commandId')==operation_id
+            if current:
+                operations['providers.list:']={'phase':phase,'error':error,'commandId':operation_id,'envVar':'','updatedAt':time.time()}
+                state.setdefault('actionStatus',{})['providers.list']={'phase':phase,'error':error,'commandId':operation_id,'updatedAt':time.time(),
+                    'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
+                state['management']={'phase':phase,'operation':'providers.list','error':error}
+                if result is not None:
+                    if setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']:
+                        setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
+                    setup.update(result)
+            if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
+            if current or command_id:self.service._publish()
+            return current
 
     async def list_bundles(self, args, command_id):
         """Read the catalog with one start and one atomic completion snapshot.
@@ -307,7 +363,11 @@ class Management:
                 await self.service.refresh_configuration(session['id'])
 
     async def perform(self,action,args,command_id=None):
-        if action=='locations.list':
+        if action=='locations.create':
+            from .locations import create_folder
+            path = await asyncio.to_thread(create_folder, args['path'], args['name'])
+            await self.publish(locationListing={'controlId':args['controlId'],'path':str(path),'parent':str(path.parent),'entries':[],'truncated':False,'createdBy':command_id})
+        elif action=='locations.list':
             path=Path(args.get('path') or self.service.default_workspace).expanduser()
             if not path.is_absolute():path=Path(self.service.default_workspace)/path
             path=path.resolve()
@@ -333,9 +393,31 @@ class Management:
                 self.service.state.setdefault('registry',{}).update(result)
                 self.service._publish()
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
+        elif action=='configuration.defaults':
+            from .draft_defaults import resolve_defaults
+            from .managed_chats import is_managed
+            managed = is_managed(args)
+            workspace = str(self.service.data_dir) if managed else args.get('workspace', '')
+            if not workspace or managed and args.get('workspace', '').strip():
+                raise ValueError('Choose a workspace or a chat without a workspace.')
+            key=json.dumps(['' if managed else workspace,args.get('bundle') or '']+(['managed'] if managed else []),separators=(',',':'),ensure_ascii=False)
+            try:
+                result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
+                result['phase']='ready'
+            except Exception:
+                result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}
+            async with self.service.lock:
+                entries=self.service.state.setdefault('draftDefaults',{})
+                entries[key]=result
+                while len(entries)>32:entries.pop(next(iter(entries)))
+                self.service._publish()
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
-            session=self.configuration_session(args)
+            from .managed_chats import is_managed
+            managed_draft = action in {'providers.list','providers.models'} and is_managed(args)
+            session=({'workspace':str(self.service.data_dir)} if managed_draft else {'workspace':str(Path(args['workspace']).expanduser().resolve())}
+                     if managed_draft or action in {'providers.list','providers.models'} and args.get('workspace')
+                     else self.configuration_session(args))
             async def runtime_operation(operation,values):
                 current=self.session(args)
                 await self.ensure_runtime(current)
@@ -349,17 +431,20 @@ class Management:
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            if action=='providers.list':
+                result['providersRequestedWorkspace']=args.get('workspace',session['workspace'])
+                result['providersLocation']={'kind':'managed' if managed_draft else 'workspace'}
             if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if action in {'providers.models','providers.schema'} and setup.get('providersWorkspace') not in {None,session['workspace']}:return
+                if action in {'providers.models','providers.schema'} and (setup.get('providersWorkspace') not in {None,session['workspace']} or (setup.get('providersLocation',{}).get('kind')=='managed')!=managed_draft):return
                 if command_id and action.startswith('providers.'):
                     key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
                     if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
-                if action=='providers.list' and setup.get('providersWorkspace')!=result.get('providersWorkspace'):
+                if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
                 setup.update(result)
                 if result.get('providerMetadata'):
@@ -608,8 +693,8 @@ class Management:
             else:await self.download('amplifier-session.json',json.dumps({'messages':rows,'metadata':metadata},indent=2))
         elif action=='history.cleanup':
             cutoff=time.time()-args.get('days',30)*86400
-            async with self.service.lock:
-                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
+            async with self.service.publishing.lock, self.service.lock:
+                eligible=[s for s in self.service.state['sessions'] if s['id']!=self.service.state['selectedSessionId'] and not self.service.publishing.owns_records(s['id']) and s['status'] in {'idle','stopped','interrupted','error'} and max([s.get('createdAt',0),s.get('updatedAt',0)]+[m.get('createdAt',0) for m in s['messages']])<cutoff]
                 if args.get('apply'):
                     identities={s['id'] for s in eligible}
                     for session in eligible:
@@ -621,7 +706,7 @@ class Management:
                         for identity in identities:
                             path=store.directory(identity)
                             if path.exists():shutil.rmtree(path)
-                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Shared CLI transcripts and event files are retained.'}
+                self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Publishing owners, shared CLI transcripts and event files are retained.'}
                 self.service._publish()
         elif action=='maintenance.restoreResource':
             from .resource_files import restore

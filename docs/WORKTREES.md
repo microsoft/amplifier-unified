@@ -79,4 +79,6 @@ The actual release receipt additionally preserves the released writer (if one
 was active) and the temporary held Foundation proof owner's hostname, app, process ID and acquisition ID, excluding username/home details.
 An explicitly different recorded host blocks mutation/handoff; inspection remains
 available. Older records with no recorded host retain unknown provenance and are
-not rewritten. No remote host selection or cross-host migration is implemented.
+not rewritten. For separately paired hosts and canonical history migration, see
+[task portability](TASK-PORTABILITY.md); local handoff itself does not select a
+remote execution host.

@@ -1,5 +1,6 @@
 """Small navigation facts; never load transcripts or acknowledge attention."""
 from collections import Counter
+from functools import lru_cache
 import re
 
 
@@ -18,6 +19,13 @@ def activity(session, unread=False):
 
 def path_labels(paths):
     """Shortest unique suffixes, computed against the full available registry."""
+    # Registry paths, unlike activity, rarely change between stream updates.
+    # Return a copy so callers cannot mutate the shared cached labels.
+    return dict(_path_labels(frozenset(paths)))
+
+
+@lru_cache(maxsize=4)
+def _path_labels(paths):
     parts = {path: tuple(part for part in re.split(r'[\\/]+', path) if part) for path in set(paths)}
     counts = Counter(suffix for chunks in parts.values() for size in range(1, len(chunks) + 1)
                      for suffix in [chunks[-size:]])

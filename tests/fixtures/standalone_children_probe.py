@@ -65,7 +65,8 @@ async def run():
     approvals=Approvals(None,ask)
     parent=await prepared.create_session(session_id='parent-session',approval_system=approvals)
     parent.coordinator.register_capability('model_role_resolver','shared-model-resolver')
-    parent.coordinator.register_capability('web.activity.install',lambda coordinator: activities.append(coordinator.session_id))
+    parent.coordinator.register_capability('web.activity.install',lambda coordinator: activities.append(
+        (coordinator.session_id, coordinator.get_capability('web.worker_run'))))
     with tempfile.TemporaryDirectory() as tmp:
         store=SessionStore(Path(tmp)/'sessions')
         runtime=Runtime('parent-session')
@@ -85,10 +86,12 @@ async def run():
         assert not any(kind == 'child_event' and event.get('event') == 'session.closed' for kind, event in queued), 'Finite result must not trigger duplicate manager turns'
         assert any(kind == 'child_event' and event.get('status') == 'completed' for kind, event in queued)
         assert decisions==['deny']
-        assert activities==['child-session']
+        assert activities==[('child-session', registry.rows['child-session']['runId'])]
         resumed=await registry.resume('child-session','follow-up',parent)
         assert resumed['session_id']=='child-session'
         assert created[-1]['resumed'] is True
+        assert activities[-1]==('child-session', registry.rows['child-session']['runId'])
+        assert activities[-1][1]!=activities[0][1]
         assert len(store.load('child-session')[0])==5
         assert registry.snapshot()[0]['status']=='completed'
         assert all('task' not in row and 'runtime' not in row for row in registry.snapshot())

@@ -678,7 +678,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel{flex:0 0 var(--canvas-width);width:var(--canvas-width);max-width:none;min-width:0;border-bottom:0;border-radius:14px 14px 0 0;container-type:inline-size;container-name:canvas}
 #amp-one.a-chat-shell .a-layout[data-canvas-overlay="true"]>.a-canvas-panel{position:absolute;inset:0;z-index:20;width:auto;flex:none}
 #amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel[data-focused="true"]{position:fixed;inset:0;z-index:60;width:auto;max-width:none;height:100dvh;border:0;border-radius:0;box-shadow:none}
-#amp-one.a-chat-shell .a-canvas-chrome{flex:none;background:var(--a-surface);border-radius:inherit;min-width:0}
+#amp-one.a-chat-shell .a-canvas-chrome{position:relative;z-index:2;flex:none;background:var(--a-surface);border-radius:inherit;min-width:0}
 #amp-one.a-chat-shell .a-canvas-head{height:36px;min-height:36px;padding:2px 8px;gap:6px}
 #amp-one.a-chat-shell .a-canvas-head>svg{width:15px;height:15px;flex:none}
 #amp-one.a-chat-shell .a-canvas-head>strong{font-size:var(--a-text-base,14px);font-weight:550;min-width:0}
@@ -779,3 +779,14 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 .a-message-delivery{display:inline-flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--a-muted);flex-wrap:wrap}.a-message-delivery>svg{width:14px;height:14px;flex-shrink:0}.a-message-delivery .a-link{font-size:inherit}.a-inline-checkbox{display:flex;gap:.5rem;align-items:center;font-size:.85rem}.a-inline-checkbox input{width:auto}
 #amp-one .a-message-actions:has(.a-message-delivery){flex-wrap:wrap}.a-delivery-detail,.a-delivery-confirm{flex:0 0 100%;min-width:0;max-width:100%;box-sizing:border-box;overflow-wrap:break-word}.a-delivery-detail{margin:.35rem 0}.a-delivery-confirm{padding:.75rem;border:1px solid currentColor;border-radius:.75rem}.a-delivery-confirm button{margin:.25rem .5rem .25rem 0;overflow-wrap:normal}
+
+/* Composer pickers fit their contents; positioning is clamped to the viewport. */
+#amp-one.a-chat-shell .a-model-popover.a-compact-popover{position:fixed;right:auto;bottom:auto;max-height:none;overflow:visible;box-sizing:border-box;padding:16px;}
+#amp-one.a-chat-shell .a-compact-popover>select{margin-top:6px;}
+#amp-one.a-chat-shell .a-compact-popover>small{display:block;margin-top:10px;overflow-wrap:anywhere;}
+
+/* Unpinned canvas tools float over a stable, still-mounted preview. */
+#amp-one.a-chat-shell .a-canvas-panel[data-pinned="false"] .a-canvas-controls{position:absolute;top:100%;left:0;right:0;background:var(--a-surface);border-bottom:1px solid var(--a-line);box-shadow:0 10px 20px #0002;border-radius:0 0 12px 12px}
+#amp-one.a-chat-shell .a-canvas-panel[data-pinned="false"]>.a-canvas-event{position:absolute;bottom:0;left:0;right:0;z-index:1;background:var(--a-surface)}
+#amp-one.a-chat-shell .a-canvas-view-tools+.a-canvas-view-tools{border-top:1px solid var(--a-line)}
+#amp-one.a-chat-shell .a-canvas-empty-actions{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}

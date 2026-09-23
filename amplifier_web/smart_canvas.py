@@ -35,7 +35,8 @@ def definitions(schema, string):
         'smartTools.connect': ('Connect this configured MCP server and discover compact tool summaries. Never starts interactive sign-in.', schema(identity)),
         'smartTools.disconnect': ('Disconnect this MCP server. Tool-owned durable work may continue independently.', schema(identity)),
         'smartTools.remove': ('Remove this server registration, keeping installed files and tool-owned work.', schema(identity)),
-        'smartTools.call': ('Call a discovered model-visible tool. Receipt operationId identifies the durable result under smartTools.operations. A timeout is not proof that tool-owned work stopped; inspect its status before retrying.', schema({**identity,'name':string(200),'arguments':{'type':'object'},'catalogRevision':string(100),'sessionId':string(200),'timeoutSeconds':{'type':'number','minimum':1,'maximum':300}}, ['id','name'])),
+        'smartTools.call': ('Call a discovered model-visible tool. Read the returned operationId with smartTools.readResult. A timeout is not proof that tool-owned work stopped; inspect its status before retrying.', schema({**identity,'name':string(200),'arguments':{'type':'object'},'catalogRevision':string(100),'sessionId':string(200),'timeoutSeconds':{'type':'number','minimum':1,'maximum':300}}, ['id','name'])),
+        'smartTools.readResult': ('Read a retained operation by ID synchronously without creating work. Follow $operationPath using path, offset, limit and operationRevision. format=json pages the whole operation without path, also used automatically for oversized keys. Never use rolling list indices as identities.', schema({'operationId':string(100),'path':string(4000),'format':{'enum':['structured','json']},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':16000},'operationRevision':string(64)}, ['operationId'])),
         'smartTools.result': ('Inspect an older or large operation result in /smartTools/inspectedOperation. Follow $resource state paths for paged content.', schema({'operationId':string(100)})),
         'smartTools.resources': ('List a connected MCP server’s resources or resource templates, one page at a time. Resource reads are bounded to 2 MB; use the tool’s chunk resources for media.', schema({**identity,'kind':{'enum':['list','templates']},'cursor':string(4000)}, ['id'])),
         'smartTools.readResource': ('Read a resource URI through this connected MCP server. The host never fetches the URI directly. Use tool-provided bounded chunks for large media.', schema({**identity,'uri':string(4000)}, ['id','uri'])),
@@ -143,7 +144,8 @@ class SmartCanvas:
         key = configuration_key(server)
         session = self.service._session(args.get('sessionId'))
         sid = session['id']
-        workspace = next(w for w in state['workspaces'] if w['path'] == session['workspace'])
+        from .managed_chats import is_managed
+        workspace = ({'id': None} if is_managed(session) else next(w for w in state['workspaces'] if w['path'] == session['workspace']))
         operation = None
         if args.get('operationId'):
             operation = self.service.smart_tools.operation(args['operationId'])

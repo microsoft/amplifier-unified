@@ -3,6 +3,7 @@ import {request} from '../api';
 import {WorkspaceManager,ConversationList} from './navigation-components';
 import './shell.css';
 import {SlotOverflow} from './slot-overflow';
+import {shellRefreshKey} from './refresh-key';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -24,10 +25,13 @@ function renderedStatuses(current,statuses){
 
 export function useShell(state,dispatch,clientId){
  const [data,setData]=useState(null),[error,setError]=useState('');
+ const [presentationEdits,setPresentationEdits]=useState([]),presentationQueue=useRef(Promise.resolve());
  const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false);
  latest.current.dispatch=dispatch;latest.current.state=state;
  const refresh=useCallback(()=>{
+  if(document.hidden){again.current=true;return Promise.resolve()}
   if(inflight.current){again.current=true;return inflight.current}
+  again.current=false;
   inflight.current=request('/api/shell?clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(next=>{
    latest.current.data=next;setData(next);setError('');
    for(const host of hosts.current.values()){
@@ -38,14 +42,16 @@ export function useShell(state,dispatch,clientId){
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
    }
-  }).catch(e=>setError(e.message)).finally(()=>{inflight.current=null;if(again.current){again.current=false;refresh()}});
+  }).catch(e=>setError(e.message)).finally(()=>{inflight.current=null;if(again.current){again.current=false;return refresh()}});
   return inflight.current;
  },[clientId]);
- useEffect(()=>{if(state)refresh()},[state?.revision,refresh]);
+ const refreshKey=shellRefreshKey(state);
+ useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
   const onShell=e=>{if(e.detail.shellClientId===clientId)refresh()};
-  window.addEventListener('amplifier-shell',onShell);
-  return()=>window.removeEventListener('amplifier-shell',onShell);
+  const resume=()=>{if(!document.hidden)refresh()};
+  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',resume);document.addEventListener('visibilitychange',resume);
+  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',resume);document.removeEventListener('visibilitychange',resume)};
  },[clientId,refresh]);
  const hostFor=useCallback(instance=>{
   const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;
@@ -77,20 +83,28 @@ export function useShell(state,dispatch,clientId){
   return hosts.current.get(key).api;
  },[clientId,refresh]);
  const statuses=useRef({}),statusCallbacks=useRef(new Map()),reportTimer=useRef(null);
- const composition=recovery?defaultComposition:data?.effectiveComposition||defaultComposition;
+ const savedComposition=recovery?defaultComposition:data?.effectiveComposition||defaultComposition;
+ const composition=presentationEdits.length?{...savedComposition,presentation:{...savedComposition.presentation,...Object.assign({},...presentationEdits.map(edit=>edit.patch))}}:savedComposition;
  const recover=useCallback(async target=>{
   await dispatch('shell.recover',{clientId,target,expectedRevision:latest.current.data?.revision||0});
   await refresh();
   if(recovery)location.href=location.pathname;
  },[clientId,dispatch,refresh]);
- const setPresentation=useCallback(async patch=>{
-  if(!latest.current.data)await refresh();
-  const current=latest.current.data;
-  if(!current)throw Error('Shell settings are not available yet.');
-  const composition={...current.effectiveComposition,presentation:{...current.effectiveComposition.presentation,...patch}};
-  const prepared=await dispatch('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});
-  await dispatch('shell.changes.apply',{clientId,expectedRevision:current.revision,changeId:prepared.result.id});
-  await refresh();
+ const setPresentation=useCallback(patch=>{
+  const edit={patch:{...patch}};
+  setPresentationEdits(edits=>[...edits,edit]);
+  const execute=async()=>{
+   try{
+    if(!latest.current.data)await refresh();
+    const current=latest.current.data;
+    if(!current)throw Error('Shell settings are not available yet.');
+    const composition={...current.effectiveComposition,presentation:{...current.effectiveComposition.presentation,...patch}};
+    const prepared=await dispatch('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition},{presentation:true});
+    await dispatch('shell.changes.apply',{clientId,expectedRevision:current.revision,changeId:prepared.result.id},{presentation:true});
+    await refresh();
+   }finally{setPresentationEdits(edits=>edits.filter(item=>item!==edit))}
+  };
+  const result=presentationQueue.current.then(execute,execute);presentationQueue.current=result.catch(()=>{});return result;
  },[clientId,dispatch,refresh]);
  const report=useCallback((instances,message='')=>{
   const current=latest.current.data;if(!current||recovery)return;

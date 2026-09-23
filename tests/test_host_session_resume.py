@@ -44,7 +44,7 @@ def mounted_host(tmp_path, monkeypatch):
                                create_session=AsyncMock(return_value=session))
     loaded = SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
-    registry = SimpleNamespace(list_registered=lambda: {}, register=Mock(), save=Mock(),
+    registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
     monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
@@ -78,6 +78,39 @@ def mounted_host(tmp_path, monkeypatch):
 
 def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
+
+
+async def test_prepared_new_chat_selection_reaches_public_controls_and_first_request(mounted_host):
+    from amplifier_web.runtime_controls import RuntimeControls
+    h = mounted_host
+    coordinator = h.session.coordinator
+    coordinator.config, coordinator.session_state = {}, {}
+    loop = coordinator.get('orchestrator')
+    provider = coordinator.get('providers')['fixture']
+    class Info(SimpleNamespace):
+        def model_copy(self, *, update):
+            return Info(**{**vars(self), **update})
+    provider.get_info = lambda: Info(id='fixture', defaults={'model': 'bundle-model', 'reasoning_effort': 'high'})
+    provider.complete = AsyncMock(return_value='done')
+    loop._select_provider = lambda mounted: getattr(loop, 'root_provider', None) or provider
+    selection = {'instance': 'fixture', 'model': 'selected-model', 'effort': 'xhigh'}
+    session, runtime, report = await h.prepare(selection=selection)
+    session.session_id = runtime.session_id
+    coordinator.get_capability('web.configurator').snapshot = lambda: {}
+    controls = RuntimeControls(session, runtime)
+    await controls.restore()
+    controls.persist()
+    current = await controls.perform('configuration.providers')
+    assert current['selection'] == current['effective'] == report['selection'] == selection
+    assert current['pinned']
+    request = Info(model=None, reasoning_effort=None)
+    await loop.root_provider.complete(request)
+    actual = provider.complete.call_args
+    assert actual.args[0].model == 'selected-model' and actual.args[0].reasoning_effort == 'xhigh'
+    assert actual.kwargs == {'model': 'selected-model', 'reasoning_effort': 'xhigh'}
+    assert request.model is None and request.reasoning_effort is None
+    assert provider.get_info().defaults == {'model': 'bundle-model', 'reasoning_effort': 'high'}
+    await controls.close()
 
 
 async def test_module_preparation_uses_active_registry_cache_not_shared_history_home(mounted_host):

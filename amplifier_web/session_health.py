@@ -28,6 +28,8 @@ def failure_details(error, error_type=None):
         guidance = 'Restarting may leave the same invalid history. Create a recovery copy to continue with readable history and without old tool or image payloads.'
     elif kind.rsplit('.', 1)[-1] == 'ContextLengthError' or any(value in text for value in ('contextlengtherror', 'context_length', 'context window', 'maximum context', 'input allowance before dispatch')):
         category, summary, guidance = 'context_limit', 'The conversation exceeded the model context limit.', 'Choose a model with more context or start a new conversation with a summary.'
+    elif re.search(r'tools\.\d+', text) and any(value in text for value in ('input tag', 'extra inputs are not permitted', 'input_schema')):
+        category, summary, guidance = 'tool_configuration', 'The provider rejected a tool definition for the selected model.', 'The provider/tool integration needs correction. Your conversation is saved; changing API keys will not repair a tool-format error.'
     elif 'authentication' in text or 'invalid_api_key' in text or 'unauthorized' in text:
         category, summary, guidance = 'authentication', 'The provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'
     elif 'rate limit' in text or 'ratelimit' in text:

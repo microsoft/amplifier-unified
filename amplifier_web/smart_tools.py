@@ -214,6 +214,55 @@ class SmartToolsManager(Lifecycle):
             return {"operationId": identity, "statePath": "/smartTools/inspectedOperation"}
         return await self._change(inspect)
 
+    def read_operation(self, args):
+        """Read a retained receipt without creating work or moving a shared cursor."""
+        from .agent_state import _preview, read_state
+        identity = args['operationId']
+        operation = self.operation(identity)
+        if operation is None:
+            if identity in getattr(self.service, 'smart_tool_requests', {}):
+                return {'operationId': identity, 'status': 'pending', 'operation': None}
+            raise ValueError('This Smart Tool operation could not be found or is no longer retained.')
+        # Paging must not silently mix a running receipt with its terminal result.
+        revision = hashlib.sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+        if args.get('operationRevision') not in (None, revision):
+            raise ValueError('This operation changed. Read it again before continuing pages.')
+        if args.get('format') == 'json' and args.get('path'):
+            raise ValueError('JSON paging reads the whole operation; omit path.')
+        if 'path' in args and args.get('format') != 'json':
+            value = read_state(operation, {key: args[key] for key in ('path', 'offset', 'limit') if key in args}, reference_key='$operationPath')
+            value.pop('revision', None)
+        else:
+            value = _preview(operation, '', 12000, reference_key='$operationPath')
+
+        def long_reference(item):
+            if isinstance(item, list):
+                return any(long_reference(row) for row in item)
+            if isinstance(item, dict):
+                return any((key in {'$operationPath', 'path'} and isinstance(val, str) and len(val) > 4000)
+                           or long_reference(val) for key, val in item.items())
+            return False
+
+        # Tool-owned keys can be arbitrarily long. Stream the original JSON if
+        # their pointers/previews cannot fit the bounded structured interface.
+        # This preserves every byte of string values without returning huge keys.
+        text_page = 'path' in args and value.get('type') == 'string'
+        oversized = not text_page and len(json.dumps(value, ensure_ascii=False)) > 26000
+        json_mode = args.get('format') == 'json' or oversized or long_reference(value)
+        if json_mode:
+            serialized = json.dumps(operation, ensure_ascii=False)
+            offset = args.get('offset', 0) if args.get('format') == 'json' else 0
+            end = min(len(serialized), offset + min(args.get('limit', 12000), 12000))
+            value = {'type': 'json', 'value': serialized[offset:end], 'offset': offset,
+                     'total': len(serialized), 'nextOffset': end if end < len(serialized) else None}
+
+        return {'operationId': identity, 'status': operation.get('status'),
+                'operationRevision': revision, 'operation': value,
+                'read': {'action': 'smartTools.readResult',
+                         'args': {'operationId': identity, 'operationRevision': revision, **({'format': 'json'} if json_mode else {})},
+                         'note': ('JSON pages contain the whole original operation. Continue with format=json and nextOffset; omit path.' if json_mode else
+                                  'Paths are relative to this operation, not app state. Add path to read a preview in full; page with offset/limit and nextOffset. format=json pages the whole operation losslessly.')}}
+
     @property
     def state(self):
         return self.service.state["smartTools"]

@@ -36,6 +36,22 @@ async def show(app, kind='json', content='[{"name":"alpha"},{"name":"beta"}]'):
     return view(app)
 
 
+async def test_mount_evidence_does_not_rewrite_history_and_identical_reports_are_noops(app, monkeypatch):
+    current = await show(app)
+    original = deepcopy(app._state['sessions'])
+    original_save = app._save
+    monkeypatch.setattr(app, '_save', lambda: pytest.fail('Mount evidence must not persist the whole app'))
+    args = {**target(current), 'status': 'ready', 'message': 'Sandbox document loaded'}
+    first = await command(app, 'canvas.views.status', args, command_id='mounted', include_state=False)
+    second = await command(app, 'canvas.views.status', args, command_id='mounted-again', include_state=False)
+    assert first['revision'] == second['revision']
+    assert app._state['sessions'] == original
+    assert view(app)['activation']['status'] == 'ready'
+    with pytest.raises(AppError):
+        await command(app, 'canvas.views.status', {**args, 'generation': -1}, include_state=False)
+    monkeypatch.setattr(app, '_save', original_save)
+
+
 async def update(app, current, patch, **kwargs):
     return await command(app, 'canvas.views.command', {**target(current), 'action': 'canvas.view', 'args': {'patch': patch}}, **kwargs)
 
@@ -158,6 +174,7 @@ async def test_view_preferences_survive_restart_and_cloned_client_does_not_share
     current = await show(app)
     await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
     await update(app, view(app, 'secondary'), {'query': 'kept'})
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         assert view(restored, 'secondary')['view']['query'] == 'kept'
@@ -326,6 +343,7 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
         row = app.canvas_views.artifact(current['resourceId'])
         row['contentResource'] = row['body']
         app._save()
+    await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         with restored.clients.bind('one'):
@@ -340,7 +358,7 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
 
 @pytest.mark.parametrize('action', [
     'canvas.close', 'canvas.select', 'canvas.tabClose', 'canvas.show',
-    'session.select', 'session.create', 'session.fork', 'session.delete', 'message.edit',
+    'session.select', 'session.create', 'session.fork', 'message.edit',
     'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove', 'smartTools.open',
 ])
 async def test_dirty_primary_blocks_parent_transitions_before_any_side_effect(app, action):
@@ -387,13 +405,14 @@ async def test_dirty_secondary_blocks_panel_close_but_survives_primary_and_chat_
     with pytest.raises(AppError, match='secondary viewer edit'):
         await command(app, 'canvas.close')
     await show(app, 'text', 'New primary')
-    await command(app, 'session.create')
+    await command(app, 'session.create', {'location': {'kind':'managed'}})
     assert target(view(app, 'secondary')) == target(secondary)
     assert view(app, 'secondary')['dirty']
     # Deleting this selected chat from another client would close the parent.
     sid = app.clients.records['one']['selectedSessionId']
+    reviewed=(await command(app, 'session.deletePreview', {'id':sid}, client='two'))['result']
     with pytest.raises(AppError, match='secondary viewer edit'):
-        await command(app, 'session.delete', {'id': sid}, client='two')
+        await command(app, 'session.delete', {'id': sid, 'confirmationToken':reviewed['confirmationToken']}, client='two')
     await command(app, 'canvas.views.recover', target(secondary))
     assert not view(app, 'secondary')['dirty']
     await command(app, 'canvas.close')

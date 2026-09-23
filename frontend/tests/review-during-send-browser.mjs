@@ -32,11 +32,12 @@ try{
   return receipt(route);
  });
  const emit=async()=>{state.revision++;await page.evaluate(state=>window.emitState(state),state)};
- await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('button',{name:'Send message',exact:true}).waitFor();
+ await page.goto(vite.resolvedUrls.local[0]);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this send bound to conversation A.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();await until(()=>heldSend,'Send request should be held');
  state.attention.items=[{id:'completion:b',sessionId:'b',title:'Work finished',label:'Conversation b',fingerprint:'completion-1',read:false}];await emit();
- await page.getByRole('button',{name:'Activity',exact:true}).click();
+ // The header Activity button is removed; the shared review surface remains available.
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'activity'}}));
  await page.getByRole('button',{name:'Mark reviewed: Conversation b',exact:true}).click();
  await until(()=>state.attention.items[0].read,'Review must be acknowledged while the send is still pending');
  assert.equal(calls.filter(call=>call.action==='conversation.send').length,1);

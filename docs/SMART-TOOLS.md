@@ -41,8 +41,20 @@ The UI, `window.amplifier`, and agent `app_control` use the same actions:
 - `smartTools.resources {id,kind?,cursor?}` lists resources or templates one page
   at a time; `smartTools.readResource {id,uri}` reads through that server.
 - `smartTools.open {id,tool,operationId?,sessionId?}` attaches a standard view.
-- `smartTools.result {operationId}` exposes a retained receipt at
-  `/smartTools/inspectedOperation`, including pageable references for large results.
+- `smartTools.readResult {operationId,path?,offset?,limit?,operationRevision?}` reads
+  a retained receipt synchronously, without creating another operation or changing
+  a shared inspection slot. Follow `$operationPath` previews with the same operation
+  ID and a relative JSON Pointer (for example `/result/structuredContent`). Continue
+  pages with `nextOffset` and the returned `operationRevision`; changed receipts
+  reject stale pages. `format: "json"` pages the whole original operation without
+  a path. Oversized object keys automatically use this lossless fallback so keys
+  cannot create unreadable pointers or unbounded previews.
+  Receipt IDs remain valid after the recent-operation list rolls
+  over, until configured result retention removes them. Agent action responses are
+  compact receipts; read full app state separately when needed.
+- The legacy `smartTools.result {operationId}` action still exposes a receipt at
+  `/smartTools/inspectedOperation` for older clients. That shared slot and indices in
+  `/smartTools/operations` are not stable identities for parallel agent reads.
 - `smartTools.appCall` is scoped to the current canvas's server and granted tool names.
   Agent callers still obey model visibility; views obey app visibility.
 - `smartTools.context` records bounded view context. It is observation, not an instruction
@@ -69,6 +81,15 @@ checks flush pending view updates; a crash preserves completed receipts and mark
 unfinished work interrupted rather than replaying it.
 Routine tool interaction does not toggle the host's rendering indicator; the
 tool owns its progress controls, while errors remain visible in the host.
+MCP App frames stay mounted while the canvas or Library hides them, preserving
+local input. The host sends the optional boolean host-context extension
+`com.microsoft.amplifier/visibility`, combining canvas and document visibility,
+so supporting tools can pause automatic reads and resume one refresh. This is a
+namespaced host extension, not a standard MCP field. Explicitly read-only,
+non-destructive tool calls share identical in-flight reads and use a bounded
+per-view lane (two running, four queued). Hidden or overloaded reads fail before
+submission. Unknown tools and mutations retain distinct request IDs and do not
+enter that lane; accepted work is never replayed or cancelled by hiding a frame.
 Small operation receipts persist in SQLite. Full results are retained for at most
 30 days, 200 completed operations and 32 MB (whichever limit comes first), in
 pageable artifact files. Expiry keeps the execution receipt and never replays work.
