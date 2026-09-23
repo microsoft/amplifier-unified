@@ -41,6 +41,37 @@ def same_model_call(observed, native):
                     for key in ('inputTokens', 'outputTokens')))
 
 
+def merge_model_observations(rows, *, aliases=()):
+    """Join host/provider display telemetry across a resumed root's log files.
+
+    Only this root's explicit app/native IDs are aliases. Child sessions remain
+    separate, and timing matches never create admission-accounting authority.
+    """
+    app = [row for row in rows if row.get('_appModel')]
+    pairs = []
+    for row in rows:
+        if row['kind'] != 'llm' or row.get('_appModel'):
+            continue
+        matches = [other for other in app if (other.get('sessionId') == row.get('sessionId') or
+                       other.get('sessionId') in aliases and row.get('sessionId') in aliases)
+                   and same_model_call(other, row)]
+        if row.get('endedAt') is not None or len(matches) == 1:
+            for other in matches:
+                distance = abs((other.get('endedAt') or other.get('startedAt') or 0) -
+                               (row.get('endedAt') or row.get('startedAt') or 0))
+                pairs.append((distance, row, other))
+    matched, omitted = set(), set()
+    # A host call can span provider retries. Match its nearest terminal
+    # native attempt once; preserve earlier attempts and their own details.
+    for _, row, closest in sorted(pairs, key=lambda pair: pair[0]):
+        if row['id'] in omitted or closest['id'] in matched:
+            continue
+        matched.add(closest['id']);omitted.add(row['id'])
+        for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+            if field in row:closest[field] = row[field]
+        if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+    return [row for row in rows if row['id'] not in omitted]
+
 def text(value):
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -285,7 +316,7 @@ class EventIndex:
         self.association_revision, self.association_cache = revision, result
         return result
 
-    def rows(self, model_binding=None):
+    def rows(self, model_binding=None, *, coalesce=True):
         pending = [items[0] for items in self.pending.values() if len(items) == 1 and items[0]['id'] not in self.nodes]
         rows = copy.deepcopy([*self.nodes.values(), *pending])
         app = [row for row in rows if row.get('_appModel')]
@@ -298,28 +329,7 @@ class EventIndex:
                     # here; full accounting metadata is joined later by ID.
                     row.update({key: copy.deepcopy(binding[key]) for key in
                                 ('provider', 'model', 'startedAt', 'endedAt', 'phase', 'usage') if key in binding})
-        pairs = []
-        for row in rows:
-            if row['kind'] != 'llm' or row.get('_appModel'):
-                continue
-            matches = [other for other in app if other.get('sessionId') == row.get('sessionId')
-                       and same_model_call(other, row)]
-            if row.get('endedAt') is not None or len(matches) == 1:
-                for other in matches:
-                    distance = abs((other.get('endedAt') or other.get('startedAt') or 0) -
-                                   (row.get('endedAt') or row.get('startedAt') or 0))
-                    pairs.append((distance, row, other))
-        matched, omitted = set(), set()
-        # A host call can span provider retries. Match its nearest terminal
-        # native attempt once; preserve earlier attempts and their own details.
-        for _, row, closest in sorted(pairs, key=lambda pair: pair[0]):
-            if row['id'] in omitted or closest['id'] in matched:
-                continue
-            matched.add(closest['id']);omitted.add(row['id'])
-            for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
-                if field in row:closest[field] = row[field]
-            if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
-        return [row for row in rows if row['id'] not in omitted]
+        return merge_model_observations(rows) if coalesce else rows
 
 
 class EventLogView:
@@ -368,7 +378,7 @@ class EventLogView:
 
     def read(self, session):
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
-        queue = [root]
+        queue = [root, session['id']]
         queue.extend(row.get('sessionId') or row.get('id') for row in session.get('workers', []))
         seen, indexes, nodes, workers = set(), [], [], {}
         inputs = []
@@ -414,7 +424,8 @@ class EventLogView:
         bindings = {model_key(row): row for row in accounting
                     if row.get('rootSessionId') == session['id'] and row.get('sessionId') in bound_sessions}
         for index in indexes:
-            nodes.extend(index.rows(lambda row: bindings.get(model_key(row))))
+            nodes.extend(index.rows(lambda row: bindings.get(model_key(row)), coalesce=False))
+        nodes = merge_model_observations(nodes, aliases=aliases)
         def call_key(row):
             sid = row.get('sessionId')
             return (root if sid in aliases else sid, row.get('toolCallId'))
