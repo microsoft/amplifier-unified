@@ -174,3 +174,7 @@ def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     assert '--refresh --upgrade' in steps[resolve]['run']
     assert 'restore-keys' not in steps[restore]['with']
     assert 'runtime-build-cache' in steps[restore]['with']['path']
+    install = next(i for i, step in enumerate(steps) if 'uv sync --project' in step.get('run', ''))
+    save = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/save@v4')
+    assert install < save
+    assert 'uv cache clean amplifier-module-loop-live' in steps[install]['run']

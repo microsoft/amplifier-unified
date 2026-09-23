@@ -376,6 +376,8 @@ jobs:
         run: |
           uv sync --project "$RUNNER_TEMP/surface-runtime" --locked
           python "$RUNNER_TEMP/release-tools/release_qualification.py" runtime-snapshot --runtime "$RUNNER_TEMP/surface-runtime"
+          # The dedicated-key private checkout must not become a shared cache.
+          uv cache clean amplifier-module-loop-live
           uv cache prune --ci
       - name: Save successful source builds independently of later test results
         if: steps.cache.outputs.cache-hit != 'true'

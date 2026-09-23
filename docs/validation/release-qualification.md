@@ -34,7 +34,9 @@ candidate resolves moving sources again.
 Only a matching uv build cache is restored. Successful builds are saved before
 runtime tests so that a test failure does not force a repeat compilation. Cache
 contents are pruned with uv's CI policy, retaining source-built wheels. Runtime
-graph and source identities are checked again after tests.
+graph and source identities are checked again after tests. The private loop-live
+package is explicitly removed from this job's cache before saving it; access to
+the dedicated-key checkout does not grant other cache readers its package build.
 
 ## Coverage map
 
@@ -73,7 +75,7 @@ source build, and all 24 real runtime tests passed in 5.59s. These are local
 measurements, not proof of GitHub Actions cache transfer or the complete new
 release duration. No publication workflow was dispatched for validation.
 
-After this workflow is merged, an explicitly authorized end-to-end validation can
+After this workflow is merged, end-to-end validation can
 select an already published tag's full original commit SHA. All jobs execute, and
 the existing publisher leaves that tag and its published assets unchanged. The
 default newer main commit with an already released package version is rejected
