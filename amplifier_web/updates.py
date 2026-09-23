@@ -91,8 +91,10 @@ def configured_sources(service):
     Never prepare a bundle, import credentials or mutate configuration here.
     """
     from .host.config import read_config
+    from .shared_settings import SettingsReadCache
     import yaml
     sources, incomplete = {}, False
+    settings_cache = SettingsReadCache()
     issues = getattr(service, 'source_issues', None)
     def issue(reason, *, workspace=None, session_id=None, reference=None, historical=False):
         nonlocal incomplete
@@ -153,7 +155,7 @@ def configured_sources(service):
             # history. Their unavailable directories are not configuration errors.
             if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
-            config = read_config(workspace, home=home, session_id=session_id)
+            config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache)
             registrations = {name: row['uri'] for name, row in registry.items()
                              if isinstance(row, dict) and isinstance(row.get('uri'), str)}
             configured = dict(config.registrations)
