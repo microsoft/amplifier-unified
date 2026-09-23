@@ -20,7 +20,10 @@ async def computer(tmp_path):
     sid = app.state['selectedSessionId']
     app.clients.attach('browser-one')
     app.clients.attach('browser-two')
+    for identity in ('browser-one', 'browser-two'):
+        with app.clients.bind(identity): app.subscribe()
     yield app, sid
+    for queue in list(app.queues): app.unsubscribe(queue)
     await app.close()
 
 async def grant(app, sid, client='browser-one'):
@@ -68,7 +71,7 @@ async def test_shared_navigation_targets_calling_chat_without_consent_or_work(co
 async def test_agent_and_browser_cannot_borrow_wrong_client_or_chat(computer):
     app, sid = computer
     visual, row = await grant(app, sid)
-    with pytest.raises(AppError, match='Multiple clients'):
+    with pytest.raises(AppError, match='Multiple connected clients'):
         await app.app_bridge('dispatch', {'action':'computer.visual.capture'}, sid)
     with app.clients.bind('browser-two'), pytest.raises(AppError, match='cannot be borrowed'):
         await app.dispatch('computer.visual.capture', {'sessionId':sid,'clientId':'browser-one'})
@@ -122,7 +125,8 @@ async def test_scope_end_invalidates_inflight_and_late_callbacks_even_after_retu
             await app.dispatch('session.create', {})
             await app.dispatch('session.select', {'id':sid})
         elif end == 'disconnect':
-            queue = app.subscribe(); app.unsubscribe(queue)
+            for queue in list(app.queues):
+                if app.queue_clients.get(queue) == 'browser-one': app.unsubscribe(queue)
         else:
             app._state['sessions'] = [s for s in app._state['sessions'] if s['id'] != sid]
             app.clients.reconcile('browser-one')
