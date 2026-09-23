@@ -1,3 +1,4 @@
+import {AppReloadNotice} from './app-reload.jsx';
 import {AttentionReview,AttentionBadge} from './attention';
 import {updateOverview} from './update-overview';
 import {ActivityRegion} from './activity-region';
@@ -55,6 +56,7 @@ export function UpdateSettings({state,act}){
    {(overview.tone==='working'||overview.tone==='available')&&<div className="a-update-progress" aria-label="Update order">{[['application','App'],['included','Included components'],['other','Other components']].map(([id,label],i)=><span key={id} data-active={overview.stage===id}>{i>0&&'→ '}{label}</span>)}</div>}
    <p className="a-update-version-line">Amplifier {application.current||'version not reported'}{application.latest&&application.latest!==application.current?' · Latest '+application.latest:''}{updates.lastCheck?' · Checked '+new Date(updates.lastCheck*1000).toLocaleString():''}</p>
   </div>
+  <AppReloadNotice/>
   <div className="a-update-controls" data-part="update-controls">
   <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check for updates</button>{overview.installable&&(!overview.continuing||overview.tone==='error')&&<button className="a-primary" disabled={busy||overview.blocked} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Update Amplifier</button>}</div>
   <p className="a-caption">One request handles everything in order. Updates wait for work and calls to finish; an app update may restart the server.</p>
