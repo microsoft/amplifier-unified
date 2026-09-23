@@ -1,4 +1,24 @@
 /** No recording loop: a selected source stays local until an explicit request. */
+function displayFrame(track,video) {
+ return new Promise((resolve,reject)=>{
+  let settled=false,callback;
+  const finish=(error,frame)=>{
+   if(settled){frame?.close?.();return}
+   settled=true;clearTimeout(timer);
+   if(callback!==undefined)video.cancelVideoFrameCallback?.(callback);
+   if(error)reject(error);else resolve(frame);
+  };
+  const timer=setTimeout(()=>finish(Error('No fresh screen frame arrived.')),2000);
+  try {
+   // A stationary tab/window may never present another video frame. Request a
+   // snapshot of this track instead of requiring its pixels to change first.
+   if(globalThis.ImageCapture)new globalThis.ImageCapture(track).grabFrame().then(frame=>finish(null,frame),error=>finish(error));
+   else if(video.requestVideoFrameCallback)callback=video.requestVideoFrameCallback(()=>finish(null,video));
+   else finish(Error('Fresh frame capture is unsupported by this browser.'));
+  } catch(error){finish(error)}
+ });
+}
+
 export class VoiceVisualClient {
  constructor({request,onState=()=>{},getVoice,media=globalThis.navigator?.mediaDevices}) {
   Object.assign(this,{request,onState,getVoice,media});this.generation=0;this.stream=null;this.grant=null;this.video=null;
@@ -51,12 +71,14 @@ export class VoiceVisualClient {
   try {
    if(!grant||command.grantId!==grant.id||command.callId!==grant.callId||command.sessionId!==grant.sessionId||!this.active(grant.callId))throw Error('This screen source is no longer authorized.');
    const track=this.stream?.getVideoTracks()[0];if(!track||track.readyState!=='live'||track.muted)throw Error('The selected source is unavailable or paused.');
-   const video=this.video;
-   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('No fresh screen frame arrived.')),2000);if(!video.requestVideoFrameCallback){clearTimeout(timer);reject(Error('Fresh frame capture is unsupported by this browser.'));return}video.requestVideoFrameCallback(()=>{clearTimeout(timer);resolve()})});
-   if(generation!==this.generation||!this.active(grant.callId)||track.readyState!=='live'||track.muted)throw Error('Screen sharing ended before capture.');
-   if(!video.videoWidth||!video.videoHeight)throw Error('The source did not provide visible pixels.');
-   const canvas=document.createElement('canvas');const scale=Math.min(1,1280/Math.max(video.videoWidth,video.videoHeight));canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
-   const image=canvas.toDataURL('image/png').split(',')[1];if(image.length>666668)throw Error('This image is too large. Select a smaller window.');
+   const video=this.video,frame=await displayFrame(track,video);let image;
+   try {
+    if(generation!==this.generation||!this.active(grant.callId)||track.readyState!=='live'||track.muted)throw Error('Screen sharing ended before capture.');
+    const width=frame===video?video.videoWidth:frame.width,height=frame===video?video.videoHeight:frame.height;
+    if(!width||!height)throw Error('The source did not provide visible pixels.');
+    const canvas=document.createElement('canvas');const scale=Math.min(1,1280/Math.max(width,height));canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));canvas.getContext('2d').drawImage(frame,0,0,canvas.width,canvas.height);
+    image=canvas.toDataURL('image/png').split(',')[1];if(image.length>666668)throw Error('This image is too large. Select a smaller window.');
+   } finally {if(frame!==video)frame.close()}
    const capturedAt=Date.now()/1000;
    await this.request('/api/voice/visual/complete',{method:'POST',body:{...target,image,capturedAt}});
    this.state({status:'ready',capturedAt,error:null});
