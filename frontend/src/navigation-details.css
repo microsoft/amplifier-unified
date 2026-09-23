@@ -60,5 +60,6 @@
 
 #amp-one .a-pin-handle{flex:0 0 20px;width:20px;min-width:20px;padding:1px;align-self:center;cursor:grab;color:var(--a-muted)}
 #amp-one .a-pin-handle svg{width:14px;height:14px}
+#amp-one .a-pin-handle[aria-disabled=true]{cursor:wait;opacity:.55}
 #amp-one .a-nav-chat[data-pin-dragging=true]{opacity:.5}
 #amp-one .a-nav-chat:has(.a-pin-handle) .a-nav-chat-select{min-width:0;padding-left:2px}

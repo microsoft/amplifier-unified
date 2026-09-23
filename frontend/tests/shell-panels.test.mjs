@@ -10,7 +10,7 @@ const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,Sessio
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
-const initial=()=>({view:{navExpanded:true},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
+const initial=()=>({view:{navExpanded:true,navSimple:false},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 
 test('workspace rail scopes chats to registered workspace and honors fnmatch filters',async()=>{
  const state=initial();state.view.navFilter='First*';let root;
@@ -240,5 +240,86 @@ test('conversation pagination stays bounded and is shared with agents',async()=>
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props['aria-label'],'Saved 100');
  assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('simple sidebar separates pins, workspaces and recent without duplicate chats',async()=>{
+ const state=initial();state.view.navSimple=true;state.view.navWorkspaceList=true;state.homeNavigation={items:[{...state.sessions[0],pinned:true},{...state.sessions[1],workspace:'/managed/b',location:{kind:'managed'},pinned:false},{...state.sessions[2],workspaceId:'two',pinned:false}]};state.workspaceOverview={items:state.workspaces};
+ let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+ assert.equal(root.root.findAllByProps({'aria-label':'Pinned chats'}).length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'a'}).filter(node=>typeof node.type==='string').length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'b'}).filter(node=>typeof node.type==='string').length,1);
+ assert.equal(root.root.findAllByProps({'aria-label':'Conversation activity filters'}).length,0);
+ assert.equal(root.root.findAllByProps({'aria-label':'New workspace'}).length,1);
+ assert.equal(root.root.findAllByProps({'data-session-id':'c'}).length,0);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('simple sidebar loads later empty workspaces without leaving the simple view',async()=>{
+ const state=initial(),calls=[];state.view.navSimple=true;state.workspaceOverview={items:state.workspaces,nextOffset:100};
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'empty',name:'Empty later folder',path:'/empty',available:true}],nextOffset:null}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ const more=root.root.findAllByType('button').find(button=>button.children.join('')==='More workspaces');
+ await renderAct(async()=>more.props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'workspace.list',args:{offset:100}});
+ assert.equal(root.root.findAllByProps({label:'Empty later folder'}).length,1);
+ assert.equal(root.root.findAllByType('button').some(button=>button.children.join('')==='More workspaces'),false);
+ await renderAct(async()=>root.unmount());
+});
+
+function pinnedNavigation(simple){
+ const state=initial();state.view.navSimple=simple;state.view.navWorkspaceList=false;
+ state.pinnedSessionIds=['a','hidden','b','off-page'];
+ state.homeNavigation={items:state.sessions.slice(0,2).map(chat=>({...chat,pinned:true}))};
+ state.workspaceOverview={items:state.workspaces};return state;
+}
+for(const simple of [true,false]){
+ const label=simple?'default sidebar':'All chats sidebar';
+ test(`${label} restores keyboard pin ordering without dropping hidden pins`,async()=>{
+  const state=pinnedNavigation(simple),calls=[];let root;
+  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
+  const handle=title=>root.root.findByProps({'aria-label':'Reorder '+title});
+  const key=(key,altKey=true)=>({key,altKey,preventDefault(){}});
+  await renderAct(async()=>{handle('First plan').props.onKeyDown(key('ArrowUp'));handle('Another plan').props.onKeyDown(key('ArrowDown'));handle('Another plan').props.onKeyDown(key('ArrowUp',false))});
+  assert.equal(calls.length,0);
+  await renderAct(async()=>handle('Another plan').props.onKeyDown(key('ArrowUp')));
+  assert.deepEqual(calls.at(-1),{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}});
+  await renderAct(async()=>handle('First plan').props.onKeyDown(key('ArrowDown')));
+  assert.deepEqual(calls.at(-1),{name:'session.pinOrder',args:{ids:['hidden','b','a','off-page']}});
+  assert.ok(calls.every(call=>call.name==='session.pinOrder'));
+  await renderAct(async()=>root.unmount());
+ });
+ test(`${label} drag and drop uses the same pin-order action`,async()=>{
+  const state=pinnedNavigation(simple),calls=[];let root;
+  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
+  const row=id=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']===id)[0];
+  const dataTransfer={setData(type,value){this[type]=value}};
+  let prevented=0;const event={dataTransfer,preventDefault(){prevented++}};
+  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(calls.length,0);
+  await renderAct(async()=>root.root.findByProps({'aria-label':'Reorder Another plan'}).props.onDragStart(event));
+  assert.equal(dataTransfer['text/plain'],'b');assert.equal(dataTransfer.effectAllowed,'move');assert.equal(row('b').props['data-pin-dragging'],true);
+  await renderAct(async()=>row('a').props.onDragOver(event));assert.equal(dataTransfer.dropEffect,'move');
+  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(prevented,2);
+  assert.deepEqual(calls,[{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}}]);
+  assert.equal(row('b').props['data-pin-dragging'],undefined);
+  await renderAct(async()=>root.unmount());
+ });
+}
+test('default sidebar prevents duplicate pending reorders and allows retry after a rejected receipt',async()=>{
+ const state=pinnedNavigation(true),calls=[];let root,settle;
+ const act=async(name,args)=>{calls.push({name,args});return calls.length===1?new Promise(resolve=>{settle=resolve}):{accepted:true}};
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
+ const handle=()=>root.root.findByProps({'aria-label':'Reorder Another plan'});
+ const event={altKey:true,key:'ArrowUp',preventDefault(){}};
+ await renderAct(async()=>{handle().props.onKeyDown(event);handle().props.onKeyDown(event)});
+ assert.equal(calls.length,1);assert.equal(handle().props['aria-disabled'],true);assert.equal(handle().props.draggable,false);
+ await renderAct(async()=>settle({accepted:true,result:{accepted:false,error:'Pin order changed. Please retry.'}}));
+ assert.equal(handle().props['aria-disabled'],false);
+ assert.ok(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')));
+ assert.deepEqual(state.pinnedSessionIds,['a','hidden','b','off-page']);
+ await renderAct(async()=>handle().props.onKeyDown(event));assert.equal(calls.length,2);
+ assert.equal(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')),false);
  await renderAct(async()=>root.unmount());
 });

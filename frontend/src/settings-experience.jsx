@@ -20,11 +20,12 @@ import {ConversationExport} from './conversation-export.jsx';
 import {ConversationLibrary,ConversationSharing} from './conversation-library.jsx';
 import {OutputSettings} from './outputs.jsx';
 import {PublishingSettings} from './publishing.jsx';
+import {WorkspaceSettings} from './workspace-setup';
 import {VoiceSettings,InstallAppSettings} from './settings-personal';
 import {SettingsLayoutContext,useSettingsCompact,useSettingsHistory,useSettingsViewport} from './settings-layout';
 import {settingsTrail,settingsBaseNavigation,mergeSettingsNavigation} from './settings-mobile';
 
-const icons={overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
+const icons={workspaces:Layers,overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
 export function SettingsExperience({state,session,act,dispatch,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
  const shell=useShellContext();
  const extensions=(shell?.data?.resolvedInstances||[]).filter(item=>item.slot==='settings.section');
@@ -46,6 +47,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  if(page==='overview')content=<SettingsOverview {...props} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{appearance}</ShellSlot>;
  else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
+ else if(page==='workspaces')content=<WorkspaceSettings {...props}/>;
  else if(page==='voice')content=<VoiceSettings {...props}/>;
  else if(page==='providers')content=<ProviderSettings {...props}/>;
  else if(page==='routing')content=<RoutingSettings {...props}/>;
