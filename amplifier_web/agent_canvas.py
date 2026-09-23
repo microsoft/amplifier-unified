@@ -13,7 +13,13 @@ def scope(service, session_id, *, required=True):
     return session_id, workspace['id'] if workspace else None
 
 
-def target(service, session_id, client_id=None, *, required=False, allow_detached=False):
+def connected_clients(service, session_id):
+    """Current SSE ownership, not persisted registration or a last-seen guess."""
+    return {service.queue_clients.get(queue) for queue in service.queues
+            if service.queue_sessions.get(queue) in (None, session_id)} - {None}
+
+
+def target(service, session_id, client_id=None, *, required=False, allow_detached=False, connected_only=False):
     from .service import AppError
     sid, workspace_id = scope(service, session_id, required=False)
 
@@ -23,20 +29,36 @@ def target(service, session_id, client_id=None, *, required=False, allow_detache
 
     candidates = [identity for identity, record in service.clients.records.items()
                   if matches(record)]
+    if connected_only:
+        connected = connected_clients(service, session_id)
+        candidates = [identity for identity in candidates if identity in connected]
+
+    def unavailable():
+        if connected_only:
+            detail = ' Eligible connected clientIds: '+', '.join(candidates)+'.' if candidates else ' Open the calling chat in a connected client first.'
+            raise AppError('Choose a connected client displaying the calling conversation.'+detail, 409, code='ui_client_required')
+        raise AppError('Choose a client displaying the calling conversation.', 409)
+
     if client_id is not None:
         service.clients.validate(client_id)
         if client_id not in candidates:
             if allow_detached:
                 return None, candidates
-            raise AppError('Choose a client displaying the calling conversation.', 409)
+            unavailable()
         return client_id, candidates
     current = service.clients.current.get()
+    if connected_only and current is not None and current not in candidates:
+        unavailable()
     if current in candidates:
         return current, candidates
     if len(candidates) == 1:
         return candidates[0], candidates
     legacy = not service.clients.records and matches(service._state)
     if required and not legacy:
+        if connected_only:
+            if candidates:
+                raise AppError('Multiple connected clients display this conversation. Supply clientId: '+', '.join(candidates)+'.', 409, code='ui_client_required')
+            unavailable()
         if candidates:
             raise AppError('Multiple clients display this conversation. Supply clientId to select its Canvas.',
                            409, code='canvas_client_required')
@@ -55,13 +77,13 @@ def selection_target(service, session_id, args):
     return target(service, session_id, args.get('clientId'), required=True)[0]
 
 
-def state(service, session_id, client_id=None, *, allow_detached=False):
+def state(service, session_id, client_id=None, *, allow_detached=False, connected_only=False):
     """Project caller Canvas state; absent/ambiguous clients have no active view.
 
     Keep the full artifact catalog and its JSON Pointer indices intact. This is
     presentation scoping, not a replacement for artifact ownership validation.
     """
-    identity, candidates = target(service, session_id, client_id, allow_detached=allow_detached)
+    identity, candidates = target(service, session_id, client_id, allow_detached=allow_detached, connected_only=connected_only)
     detached = client_id is not None and identity is None
     sid, workspace_id = scope(service, session_id, required=False)
     with service.clients.bind(identity):
@@ -76,7 +98,8 @@ def state(service, session_id, client_id=None, *, allow_detached=False):
                     'view': {'draft': '', 'canvasFocused': False}, 'canvasTabs': {}, 'deviceCommands': []}
         snapshot.pop('client', None)
         snapshot.pop('canvasWorkspace', None)
-    snapshot['canvasContext'] = {'sessionId': sid, 'clientId': identity, 'clientIds': candidates,
+    connected = connected_clients(service, session_id)
+    snapshot['canvasContext'] = {'sessionId': sid, 'clientId': identity, 'clientIds': candidates, 'connectedClientIds': [identity for identity in candidates if identity in connected],
                                  'status': 'detached' if detached else 'client' if identity else 'default' if legacy else
                                  'ambiguous' if candidates else 'unattached'}
     return snapshot

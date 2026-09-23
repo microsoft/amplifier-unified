@@ -95,6 +95,9 @@ class ComputerVisuals:
         return result
 
     async def dispatch(self, action, args, command_id=None, origin="ui"):
+        if origin == "agent":
+            from .agent_canvas import target
+            target(self.service, args["sessionId"], args.get("clientId"), required=True, connected_only=True)
         visual = self.for_client(args["sessionId"], args.get("clientId"))
         return await visual.dispatch(action, args, command_id, origin)
 
