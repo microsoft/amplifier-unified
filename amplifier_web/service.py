@@ -477,28 +477,54 @@ class AppService:
         return "/* Amplifier Unified uses the app's bundled default styling. */"
 
     def _refresh_shared_preferences(self):
+        from collections import OrderedDict
         from .shared_settings import read_settings, settings_paths
         selected = next((row for row in self.state.get("workspaces", []) if row["id"] == self.state.get("selectedWorkspaceId")), {})
         workspace = selected.get("path") or self.state["settings"]["workspace"]
-        paths = settings_paths(workspace)
+        app_bundle = self.state["settings"].get("appBundle")
         def stamp(path):
             try:
                 st = path.stat()
-                return (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
+                return (str(path), st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
             except (FileNotFoundError, NotADirectoryError):
                 return (str(path), None)
-        stamp_value = (self.state["settings"].get("appBundle"), *tuple(stamp(path) for path in paths.values()))
+        def current_stamp():
+            # Managed scopes and symlink targets can change independently of
+            # the files. Preserve ordered scope identity and the output path.
+            return (str(Path(workspace).expanduser().resolve()), app_bundle,
+                    tuple((scope, stamp(path)) for scope, path in settings_paths(workspace).items()))
+        stamp_value = current_stamp()
         if getattr(self, "_shared_preferences_stamp", None) == stamp_value:
             return
-        settings = read_settings(workspace)
-        voice = settings.get("voice", {})
-        from .bundle_selection import defaults
-        bundle_defaults = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))
+        if not hasattr(self, '_shared_preferences_cache'):
+            self._shared_preferences_cache = OrderedDict()
+        cache = self._shared_preferences_cache
+        if stamp_value in cache:
+            cache.move_to_end(stamp_value)
+            preferences = copy.deepcopy(cache[stamp_value])
+        else:
+            settings = read_settings(workspace)
+            voice = settings.get("voice", {})
+            from .bundle_selection import defaults
+            preferences = {
+                'bundleDefaults': defaults(self.data_dir, workspace, app_bundle),
+                'preferredVoice': voice.get("preferred_model", "gpt-live-1"),
+                'fallbackVoice': voice.get("fallback_model", "gpt-realtime-2.1"),
+            }
+            # Retain derived preferences only, never complete configuration or
+            # credentials. A changing file must be read again on the next call.
+            if current_stamp() == stamp_value:
+                cache[stamp_value] = copy.deepcopy(preferences)
+                while len(cache) > 128:
+                    cache.popitem(last=False)
+            else:
+                stamp_value = None
+        bundle_defaults = preferences['bundleDefaults']
         self.state["bundleDefaults"] = bundle_defaults
         self.state["settings"].update(
             bundle=bundle_defaults["effective"],
-            preferredVoice=voice.get("preferred_model", "gpt-live-1"),
-            fallbackVoice=voice.get("fallback_model", "gpt-realtime-2.1"))
+            preferredVoice=preferences['preferredVoice'],
+            fallbackVoice=preferences['fallbackVoice'])
         self._shared_preferences_stamp = stamp_value
         self._browser_snapshot = None
         # A different client can select a different workspace. Its preferences
