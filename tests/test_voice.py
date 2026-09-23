@@ -127,6 +127,80 @@ def test_voice_context_omits_theme_and_uses_pinned_session():
     context=compact_context(state,'main')
     assert 'huge stylesheet' not in context and 'Pinned' in context and 'working' in context
 
+def screen_voice(**patch):
+    return {'id':'call-one','sessionId':'main','status':'connected',
+            'visual':{'available':True,'callId':'call-one','sessionId':'main',
+                      'source':{'kind':'browser','label':'Private page title'},
+                      'lastCapture':{'attachment':{'id':'private-pixels'}}},**patch}
+
+@pytest.mark.parametrize('provider',['live','realtime'])
+async def test_core_voice_requests_have_delegation_guidance_in_actual_voice_configuration(provider):
+    import json
+    service,socket=Service(),Socket()
+    manager=VoiceService(service,api_key='fixture-key',http=SimpleNamespace(ws_connect=AsyncMock(return_value=socket)))
+    manager.request=AsyncMock(return_value=({'session':{'id':'call-one'},'transport':{'sdp':'answer'}},'answer',{'Location':'/v1/realtime/calls/call-one'}))
+    call=VoiceCall(manager,'main')
+    try:
+        await call.create('synthetic-sdp',provider)
+        kwargs=manager.request.call_args.kwargs
+        config=kwargs['json']['session'] if provider=='live' else json.loads(next(value for headers,_,value in kwargs['data']._fields if headers['name']=='session'))
+        instructions=config['instructions']
+        assert 'Can you see my screen?' in instructions
+        assert 'delegate to Amplifier to check the current screen source and request one snapshot' in instructions
+        assert 'Do not claim screen access is unavailable before that check' in instructions
+        assert 'A selected source is not image evidence' in instructions
+        assert 'never grant permission or start background observation' in instructions
+        assert 'When the user asks to hang up or end this call, delegate immediately to Amplifier to invoke call.end' in instructions
+        assert 'delegate to Amplifier to use feedback.submit' in instructions
+        if provider=='realtime':
+            assert [tool['name'] for tool in config['tools']]==['amplifier_delegate']
+            assert 'shared screen' in config['tools'][0]['description']
+        else:
+            assert config['delegation']=={'type':'client'} and 'tools' not in config
+        assert service.calls==[]
+    finally:
+        call.final.set();await call.close()
+
+def test_voice_context_exposes_only_current_call_source_availability():
+    import copy,json
+    state=Service().state;state['voice']=screen_voice()
+    context=json.loads(compact_context(state,'main'))
+    assert context['screen_source']=={'available':True,'kind':'browser'}
+    assert 'Private page title' not in str(context) and 'private-pixels' not in str(context)
+    for change in [{'status':'ended'},{'sessionId':'other'},{'id':'replacement'}]:
+        changed=copy.deepcopy(state);changed['voice'].update(change)
+        assert json.loads(compact_context(changed,'main'))['screen_source']=={'available':False}
+    state['voice']['visual']['available']=False
+    assert json.loads(compact_context(state,'main'))['screen_source']=={'available':False}
+
+@pytest.mark.parametrize('provider',['live','realtime'])
+async def test_source_selection_and_revocation_update_voice_context_without_delegation(provider):
+    import copy,json
+    service,socket=Service(),Socket();queue=asyncio.Queue();sent=asyncio.Queue()
+    service.subscribe=lambda:queue;service.unsubscribe=lambda value:None
+    original=socket.send_json
+    async def record(event):await original(event);await sent.put(event)
+    socket.send_json=record
+    call=VoiceCall(VoiceService(service),'main');call.id,call.socket,call.provider='call-one',socket,provider
+    observer=asyncio.create_task(call.observe());await asyncio.sleep(0)
+    async def next_context():
+        if provider=='realtime':
+            event=await asyncio.wait_for(sent.get(),2)
+            return json.loads(event['item']['content'][0]['text'].split('): ',1)[1])
+        text=''
+        while True:
+            event=await asyncio.wait_for(sent.get(),2);text+=event['content']
+            try:return json.loads(text.split('): ',1)[1])
+            except json.JSONDecodeError:pass
+    try:
+        service.state['voice']=screen_voice();await queue.put(copy.deepcopy(service.state))
+        assert (await next_context())['screen_source']=={'available':True,'kind':'browser'}
+        service.state['voice']['visual']={'available':False};await queue.put(copy.deepcopy(service.state))
+        assert (await next_context())['screen_source']=={'available':False}
+        assert service.calls==[] and call.tasks==set()
+    finally:
+        observer.cancel();await asyncio.gather(observer,return_exceptions=True)
+
 async def test_saved_realtime_preference_skips_live_and_start_session_is_pinned(monkeypatch):
     service=Service()
     from amplifier_web.preferences import SettingsStore
