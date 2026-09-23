@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import re
+import time
 
 
 def failure_details(error, error_type=None):
@@ -53,21 +54,31 @@ def exception_details(error):
     return failure_details(error)
 
 
+def inspection_stamp(session):
+    """Match the diagnostic snapshot without comparing conversation content."""
+    return (tuple(session.get(key) for key in (
+        'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
+        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy')),
+        tuple(worker.get('status') for worker in session.get('workers', [])))
+
+
 def inspect_session(home, session):
     from .host.storage import SessionStore
     identity = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
     report = {'sessionId': session['id'], 'runtimeSessionId': identity,
               'title': session.get('title', ''), 'workspace': session.get('workspace', ''),
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
-              'selection': session.get('selection', {}), 'workReplayed': False}
+              'selection': session.get('selection', {}), 'workReplayed': False,
+              'capturedAt': time.time()}
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
     current = Path(home) / 'runtime-reports' / identity
     # Workers write here; retain compatibility with older native-side reports.
     # An explicit cleared report must win over an older native diagnostic.
     report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
-    if session.get('error'):
+    if session.get('failure') or session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
+    if session.get('error'):
         # Older versions discarded the cause at the manager boundary. Read a
         # bounded tail of this session's own native event log, only on request.
         directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)

@@ -46,6 +46,21 @@ class SessionWarmup:
             async def emit(kind, payload):
                 if not preparing:
                     return await self.service.on_runtime_event(kind, payload)
+                if kind == "runtime.status" and payload.get("status") == "ready":
+                    # Visiting a saved chat can prepare a fresh worker. Its
+                    # readiness is not a new successful turn and cannot erase
+                    # the last turn's failure or change its settled status.
+                    async with self.service.lock:
+                        current = self.service._session(identity)
+                        current["preparation"] = {"status": "ready"}
+                        if payload.get("report"):
+                            current["runtimeReport"] = payload["report"]
+                            if payload["report"].get("root_bundle"):
+                                current["bundle"] = payload["report"]["root_bundle"]
+                        if payload.get("runtimeSessionId"):
+                            current["runtimeSessionId"] = payload["runtimeSessionId"]
+                        self.service._publish_progress()
+                    return
                 # Preparation failures are local readiness information, not a
                 # failed user turn or a repeated attention notification.
                 if kind == "runtime.error" or (kind == "runtime.status" and payload.get("status") in {"starting", "stopped"}):

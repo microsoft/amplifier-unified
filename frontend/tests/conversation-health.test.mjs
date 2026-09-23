@@ -50,3 +50,66 @@ test('context-limit recovery alert shares active-work guard and cannot invoke re
  assert.deepEqual(calls,[]);
  await renderAct(async()=>root.unmount());
 });
+
+test('structured failure remains visible without inventing an empty runtime message',async()=>{
+ const failure={category:'invalid_image',errorType:'ValueError',summary:'The provider rejected an image.',guidance:'Inspect the retained evidence.'};
+ const session={id:'chat',status:'stopped',failure},act=async()=>({accepted:true,result:{status:'stopped',failure}});
+ let root;await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act}))});
+ const content=JSON.stringify(root.toJSON());
+ assert.match(content,/The provider rejected an image/);
+ assert.match(content,/ValueError/);
+ assert.doesNotMatch(content,/Runtime message/);
+ // A verified new generation clears current failure without re-fetching the
+ // prior report or presenting its error as the new input's failure.
+ await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{id:'chat',status:'working'},act})));
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/The provider rejected an image/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('copy refreshes diagnostics on demand after status changes, with no background polling',async()=>{
+ const calls=[],copied=[];let status='idle';
+ Object.defineProperty(globalThis,'navigator',{value:{clipboard:{writeText:async value=>copied.push(value)}},configurable:true});
+ const act=async name=>{calls.push(name);return {accepted:true,result:{status,capturedAt:1790182800}}};
+ const session={id:'chat',status};let root;
+ await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act}))});
+ status='stopped';
+ await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,status},act})));
+ assert.deepEqual(calls,['session.inspect']);
+ const button=root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics'));
+ await renderAct(async()=>button.props.onClick());
+ assert.deepEqual(calls,['session.inspect','session.inspect']);
+ assert.equal(JSON.parse(copied[0]).status,'stopped');
+ assert.equal(JSON.parse(copied[0]).capturedAt,1790182800);
+ await renderAct(async()=>root.unmount());
+});
+
+test('copy refuses an explicitly stale diagnostic result instead of mislabeling it current',async()=>{
+ const copied=[];let stale=false;
+ Object.defineProperty(globalThis,'navigator',{value:{clipboard:{writeText:async value=>copied.push(value)}},configurable:true});
+ const act=async()=>({accepted:true,result:{status:'idle',...(stale?{stale}: {})}});
+ let root;await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session:{id:'chat',status:'stopped'},act}))});
+ stale=true;
+ const button=root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics'));
+ await renderAct(async()=>button.props.onClick());
+ assert.deepEqual(copied,[]);
+ assert.match(JSON.stringify(root.toJSON()),/conversation changed while reading its diagnostics/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('clipboard write starts in the click gesture while its fresh diagnostic content is pending',async()=>{
+ const writes=[];let release,delay=false;
+ const prior=globalThis.ClipboardItem;
+ globalThis.ClipboardItem=class{constructor(content){this.content=content}};
+ Object.defineProperty(globalThis,'navigator',{value:{clipboard:{write:async items=>{writes.push(items);const blob=await items[0].content['text/plain'];writes.push(await blob.text())}}},configurable:true});
+ const act=async()=>delay?new Promise(resolve=>{release=resolve}):{accepted:true,result:{status:'idle'}};
+ let root,operation;
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session:{id:'chat',status:'stopped'},act}))});
+  delay=true;
+  const button=root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics'));
+  await renderAct(async()=>{operation=button.props.onClick();assert.equal(writes.length,1)});
+  await renderAct(async()=>{release({accepted:true,result:{status:'stopped',capturedAt:1790182800}});await operation});
+  assert.equal(JSON.parse(writes[1]).status,'stopped');
+  assert.match(JSON.stringify(root.toJSON()),/Diagnostics copied/);
+ }finally{await renderAct(async()=>root?.unmount());globalThis.ClipboardItem=prior}
+});
