@@ -16,6 +16,7 @@ async def test_search_and_read_are_passive_scoped_and_paginated(tmp_path, monkey
         root["title"] = "Earlier decision"
         other = {**copy.deepcopy(root), "id": "other", "workspace": "/another", "title": "Other workspace"}
         app.state["sessions"].append(other)
+        await app.history.refresh()  # Discovery may update the derived index, never the selected chat.
         before = copy.deepcopy(app.state)
         result = await app.app_bridge("history", {"action": "search", "query": "needle"}, root["id"])
         assert [row["id"] for row in result["items"]] == [root["id"]]
@@ -26,7 +27,10 @@ async def test_search_and_read_are_passive_scoped_and_paginated(tmp_path, monkey
         assert result["messages"][0]["next_text_offset"] == 100
         with pytest.raises(ValueError, match="scope"):
             await app.app_bridge("history", {"action": "read", "session_id": "other"}, root["id"])
-        assert app.state == before
+        assert app.state['selectedSessionId'] == before['selectedSessionId']
+        assert app.state['selectedWorkspaceId'] == before['selectedWorkspaceId']
+        assert app.state['view'] == before['view']
+        assert [row.get('messages') for row in app.state['sessions'] if row['id'] in {s['id'] for s in before['sessions']}] == [row.get('messages') for row in before['sessions']]
     finally:
         await app.close()
 

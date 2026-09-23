@@ -32,7 +32,7 @@ try{
  assert.deepEqual(await geometry(),before,'hover must not move, wrap or resize rows');assert.equal(before[0].height,60);
  assert.ok((await details.innerText()).includes(initial.paths.one));
  assert.deepEqual(await details.locator('code').allTextContents(),[initial.paths.one,'alpha-201'],'flyout exposes only the shared CLI session ID');
- assert.equal((await details.innerText()).includes(selected),false,'internal record key is not presented as a session ID');
+ assert.equal(selected,'alpha-201','discovered native chats use the CLI session ID as their public identity');
  await page.context().grantPermissions(['clipboard-read','clipboard-write']);
  await details.getByRole('button',{name:'Copy session id',exact:true}).click();
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'alpha-201');
