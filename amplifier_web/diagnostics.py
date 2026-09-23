@@ -287,7 +287,9 @@ class Diagnostics:
                     db.execute('INSERT OR IGNORE INTO deliveries(record_id,destination,revision,payload,status,updated) VALUES(?,?,?,?,?,?)',
                                (identity,dest['id'],route_revision(dest),json.dumps(payload),'pending',time.time()))
             cutoff=time.time()-cfg['retentionDays']*86400
-            obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq NOT IN (SELECT seq FROM records ORDER BY seq DESC LIMIT ?)',(cutoff,cfg['maxRecords']))]
+            # The first row outside the retained count bounds all older seqs,
+            # including gaps. Avoid materializing every retained ID each flush.
+            obsolete=[r[0] for r in db.execute('SELECT id FROM records WHERE at<? OR seq <= (SELECT seq FROM records WHERE ? >= 0 ORDER BY seq DESC LIMIT 1 OFFSET ?)',(cutoff,cfg['maxRecords'],cfg['maxRecords']))]
             for identity in obsolete:
                 count=db.execute("SELECT count(*) FROM deliveries WHERE record_id=? AND status IN ('pending','failed')",(identity,)).fetchone()[0]
                 if count: db.execute("INSERT INTO counters VALUES('expiredPending',?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value",(count,))
