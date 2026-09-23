@@ -2168,6 +2168,7 @@ class AppService:
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
+        previous_error_at = session.get('errorAt')
         from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError
         try:
             session.setdefault('surfaceInputs', {}).setdefault(input_id, self.surface_context.bind_input(session['id']))
@@ -2188,13 +2189,21 @@ class AppService:
             receipt = {'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']}
             async with self.lock:
                 current = self._session(session['id'])
+                # The worker may already have published a specific startup
+                # error or the location of its private stderr log. Preserve
+                # that public detail, but never reuse an earlier attempt's
+                # error or expose the exception chain / stderr itself.
+                if current.get('error') and current.get('errorAt') != previous_error_at:
+                    message += '\n\n' + current['error']
                 self._delivery(current, input_id, delivery)
                 if not retry:
                     saved = {'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
                              'error': message, 'receipt': receipt, **receipt}
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish()
-            await self.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': message})
+            await self.on_runtime_event('runtime.error', {
+                'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
+            })
             raise AppError(message, 503, code='worker_startup_failed', receipt=receipt) from exc
         except SessionInUseError as exc:
             if retry:
