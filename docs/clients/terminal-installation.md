@@ -1,5 +1,9 @@
 # Terminal installation and saved connections
 
+> [!WARNING]
+> **Not ready for general use.** The terminal client is still experimental. Do
+> not rely on it for important work until this warning is removed.
+
 This implementation provides guided terminal installation through the web and
 CLI. Signed desktop packages, browser deep links and automatic client updates
 remain future work. The [live-session contract](live-sessions.md) owns
