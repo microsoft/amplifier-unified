@@ -404,3 +404,57 @@ def test_canonical_metadata_and_missing_transcript_use_read_only_backups(tmp_pat
     row, = result['sessions']
     assert row['title'] == 'Recovered' and row['canResume'] is True
     assert before == {path: path.read_bytes() for path in directory.iterdir()}
+
+
+
+def test_unchanged_catalog_skips_file_owner_sweep_but_removal_and_recreation_refresh(tmp_path, monkeypatch):
+    import shutil
+    home = tmp_path / 'home'
+    first_workspace, second_workspace = tmp_path / 'one', tmp_path / 'two'
+    first = session(home, first_workspace, 'root', {'working_dir': str(first_workspace), 'name': 'First'})
+    second = session(home, second_workspace, 'root', {'working_dir': str(second_workspace), 'name': 'Second'})
+    history = NativeHistory(home)
+    history.scan()
+    history.scan()  # Include workspace paths learned from metadata.
+    original = Path.relative_to
+    sweeps = []
+    def observed(path, other, *args, **kwargs):
+        if other == home / 'projects':
+            sweeps.append(path)
+        return original(path, other, *args, **kwargs)
+    monkeypatch.setattr(Path, 'relative_to', observed)
+    history.scan(force=True)
+    assert sweeps == []
+    assert history._file_projects == {project_slug(first_workspace), project_slug(second_workspace)}
+    shutil.rmtree(first.parent.parent)
+    remaining = history.scan(force=True)
+    assert [row['title'] for row in remaining['sessions']] == ['Second']
+    assert sweeps and history._file_projects == {project_slug(second_workspace)}
+    assert all(path.is_relative_to(second.parent.parent) for path in history._files)
+    session(home, first_workspace, 'root', {'working_dir': str(first_workspace), 'name': 'Recreated'})
+    restored = history.scan(force=True)
+    assert {row['title'] for row in restored['sessions']} == {'Second', 'Recreated'}
+    assert history._file_projects == {project_slug(first_workspace), project_slug(second_workspace)}
+    write_json(second / 'metadata.json', {'working_dir': str(second_workspace), 'name': 'Edited externally'})
+    assert {row['title'] for row in history.scan(force=True)['sessions']} == {'Edited externally', 'Recreated'}
+
+
+def test_cached_session_moved_to_another_project_is_rediscovered(tmp_path):
+    home = tmp_path / 'amplifier'
+    old_workspace, new_workspace = tmp_path / 'old', tmp_path / 'new'
+    old_workspace.mkdir()
+    new_workspace.mkdir()
+    old = session(home, old_workspace, 'root', {'working_dir': str(old_workspace), 'name': 'Before'})
+    history = NativeHistory(home)
+    history.scan(force=True)
+    target_project = home / 'projects' / project_slug(new_workspace)
+    old.parent.parent.rename(target_project)
+    write_json(target_project / 'sessions' / 'root' / 'metadata.json',
+               {'working_dir': str(new_workspace), 'name': 'Moved'})
+
+    moved = history.scan(force=True)
+    assert len(moved['sessions']) == 1
+    assert moved['sessions'][0]['name'] == 'Moved'
+    assert moved['sessions'][0]['workspace'] == str(new_workspace)
+    assert history._file_projects == {project_slug(new_workspace)}
+    assert all(path.is_relative_to(target_project) for path in history._files)

@@ -21,6 +21,7 @@ def fixture(app_factory, count=1000):
 
 async def test_publication_shares_indexes_without_copying_full_catalog(app_factory, monkeypatch):
     app, rows = fixture(app_factory)
+    app._projections = None  # Measure a cold publication independently of fixture setup.
     builds, projected, queues = [], [], []
     original_index, original_registry, original_project = workspace_navigation._index, chat_navigation.registry, app.clients.project
     monkeypatch.setattr(workspace_navigation, '_index', lambda state: (builds.append('workspace'), original_index(state))[1])
@@ -50,6 +51,7 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
 async def test_clients_share_navigation_despite_layout_and_private_draft_differences(app_factory, monkeypatch):
     from amplifier_web import browser_state
     app, rows = fixture(app_factory)
+    app._projections = None  # Measure a cold publication independently of fixture setup.
     builds, queues = [], []
     for module, name, label in ((workspace_navigation, 'snapshot', 'workspace'),
                                 (chat_navigation, 'snapshot', 'chat'),
@@ -302,3 +304,89 @@ async def test_shared_session_index_refreshes_messages_and_busy_offpage_rows(app
         latest = app.browser_state()
         assert latest['notificationMessages'][-1]['text'] == 'Latest'
         assert target['id'] not in app.projections.sessions(app.state).active
+
+
+async def test_progress_reuses_navigation_but_refreshes_offpage_and_replaced_rows(app_factory, monkeypatch):
+    app, rows = fixture(app_factory)
+    builds = []
+    original = chat_navigation.catalog
+    def counted(*args, **kwargs):
+        builds.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(chat_navigation, 'catalog', counted)
+    with app.clients.bind('client-0'):
+        first = app.browser_state()
+        builds.clear()
+        for index in range(3):
+            rows[0]['streaming'] = f'Progress {index}'
+            app.state['diagnostics']['local']['sampleCount'] = index
+            app._publish()
+            current = app.browser_state()
+            assert current['chatNavigation'] == first['chatNavigation']
+            assert current['revision'] > first['revision']
+        assert builds == []
+        # A same-valued replacement must not make later invalidation depend on
+        # old source-object identity. The new off-page row still changes the UI.
+        replacement = dict(rows[900])
+        app.state['sessions'][900] = replacement
+        app._save()
+        app.browser_state()
+        assert builds == []
+        replacement.update(title='Changed off page', status='working')
+        app._save()  # No revision change: still must invalidate all queries.
+        app.state['view']['navFilter'] = 'Changed off page'
+        changed = app.browser_state()
+        assert [row['title'] for row in changed['chatNavigation']['items']] == ['Changed off page']
+        assert changed['chatNavigation']['activityCounts']['working'] == 1
+        assert builds
+
+
+async def test_published_snapshot_reuse_is_detached_and_client_private(app_factory):
+    from copy import deepcopy
+    app, rows = fixture(app_factory, count=20)
+    app.state['fixtureCatalog'] = {'items': [{'id': 'shared', 'nested': {'values': [1, 2]}}]}
+    queues = []
+    for index in range(2):
+        with app.clients.bind(f'client-{index}'):
+            queues.append(app.subscribe())
+    app._publish()
+    first, other = [queue.get_nowait() for queue in queues]
+    original = deepcopy(first)
+    assert first['fixtureCatalog'] is not other['fixtureCatalog']
+    rows[0]['streaming'] = 'New progress'
+    app._publish()
+    second, _ = [queue.get_nowait() for queue in queues]
+    assert second['fixtureCatalog'] is first['fixtureCatalog']
+    assert second['sessions'] is not first['sessions']
+    assert second['revision'] > first['revision']
+    assert first == original
+    # Nested in-place edits must detach the entire changed section, including
+    # when a save does not bump revision and when two clients show this data.
+    app.state['fixtureCatalog']['items'][0]['nested']['values'].append(3)
+    app.clients.records['client-0']['drafts'][rows[0]['id']] = 'Updated private draft'
+    app._save()
+    with app.clients.bind('client-0'):
+        current = app.browser_state()
+    with app.clients.bind('client-1'):
+        other_current = app.browser_state()
+    assert current['fixtureCatalog']['items'][0]['nested']['values'] == [1, 2, 3]
+    assert current['fixtureCatalog'] is not first['fixtureCatalog']
+    assert first == original
+    assert current['fixtureCatalog'] is not other_current['fixtureCatalog']
+    assert next(row for row in current['sessions'] if row['id'] == rows[0]['id'])['draft'] == 'Updated private draft'
+    assert all(row.get('draft') != 'Updated private draft' for row in other_current['sessions'])
+
+
+def test_snapshot_copy_cache_keeps_only_recent_client_baselines():
+    from amplifier_web.browser_state import SnapshotCopies
+    cache = SnapshotCopies(limit=2)
+    source = {'catalog': {'nested': [1]}}
+    first = cache.detach(source, 'first')
+    second = cache.detach(source, 'second')
+    assert first['catalog'] is not second['catalog']
+    assert cache.detach(source, 'first')['catalog'] is first['catalog']
+    cache.detach(source, 'third')
+    assert list(cache.frames) == ['first', 'third']
+    assert cache.detach(source, 'second')['catalog'] is not second['catalog']
+    source['catalog']['nested'].append(2)
+    assert first['catalog']['nested'] == second['catalog']['nested'] == [1]
