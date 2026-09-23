@@ -13,6 +13,28 @@ from amplifier_web.shared_settings import settings_paths
 from amplifier_web.updates import configured_sources
 
 
+async def test_source_inventory_reuses_scoped_inputs_only_within_one_check(service, tmp_path, monkeypatch):
+    import amplifier_foundation.settings as foundation
+    paths = settings_paths(tmp_path)
+    paths['global'].parent.mkdir(parents=True, exist_ok=True)
+    paths['global'].write_text('bundle:\n  active: git+https://example.invalid/shared@main\n')
+    service.state['sessions'] = [{'id': f'saved-{number}', 'workspace': str(tmp_path),
+        'bundle': 'git+https://example.invalid/session@main'} for number in range(30)]
+    service.state['settings'].update(workspace=str(tmp_path), bundle='git+https://example.invalid/shared@main')
+    service.state['workspaces'] = []
+    original, calls = foundation.read_settings, []
+
+    def read(inputs):
+        calls.append(tuple(inputs))
+        return original(inputs)
+
+    monkeypatch.setattr(foundation, 'read_settings', read)
+    first, incomplete = configured_sources(service)
+    assert not incomplete and len(calls) == 1
+    second, incomplete = configured_sources(service)
+    assert not incomplete and first == second and len(calls) == 2
+
+
 @pytest.mark.parametrize('historical,read_only', [(True, True), (True, False), (False, True)])
 async def test_only_explicit_read_only_native_history_skips_runtime_id_validation(service, tmp_path, historical, read_only):
     service.state['sessions'].append({
