@@ -28,7 +28,7 @@ async def main():
         app['control_token'] = 'fixture-active-client-token'
         service = app['service']
         await service.history.close()
-        service.history.index.scan = lambda **kwargs: copy.deepcopy(catalog)
+        service.history.index.scan_if_changed = lambda **kwargs: (object(), copy.deepcopy(catalog))
         await service.history.refresh()
         assert not service.state['sharedHistory'].get('error')
         sessions = [service._session(row['id']) for row in catalog['sessions'][:2]]

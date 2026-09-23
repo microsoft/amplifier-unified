@@ -25,6 +25,113 @@ def session(home, workspace, identity, metadata=None, *, transcript=True):
     return directory
 
 
+def test_unchanged_scan_retains_consumer_revision_without_copying_catalog(tmp_path, monkeypatch):
+    home = tmp_path / 'home'
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    history = NativeHistory(home)
+    history.scan()  # Learn workspace paths included in subsequent file stamps.
+    token, snapshot = history.scan_if_changed()
+    saved = snapshot['sessions'][0]['transcriptRevision'][:]
+    snapshot['sessions'][0]['transcriptRevision'][0] = -1
+
+    def no_copy(*args, **kwargs):
+        raise AssertionError('Unchanged catalog must not be copied')
+
+    with monkeypatch.context() as context:
+        context.setattr('amplifier_web.native_history.copy.deepcopy', no_copy)
+        current, unchanged = history.scan_if_changed(since=token)
+        assert current is token and unchanged is None
+
+    # Failed stamps trigger a real project rebuild; value-equivalent metadata
+    # should still avoid a full snapshot. A changed row must invalidate it.
+    with monkeypatch.context() as context:
+        context.setattr(history, '_project_stamp', lambda *args: None)
+        assert history.scan_if_changed(since=token)[1] is None
+
+    # Every full/public result remains detached, even after a conditional scan.
+    full = history.scan()
+    assert full['sessions'][0]['transcriptRevision'] == saved
+    full['sessions'][0]['transcriptRevision'][0] = -2
+    forced_token, forced = history.scan_if_changed(since=token, force=True)
+    assert forced_token is token
+    assert forced['sessions'][0]['transcriptRevision'] == saved
+    assert history.scan_if_changed(since=object())[1] == forced
+    assert NativeHistory(home).scan_if_changed(since=token)[1] is not None
+
+
+def test_conditional_scan_reports_metadata_availability_and_root_errors(tmp_path):
+    home = tmp_path / 'home'
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    root = session(home, workspace, 'root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    history = NativeHistory(home)
+    history.scan()
+    token, first = history.scan_if_changed()
+    write_json(root / 'metadata.json', {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Renamed'})
+    token2, renamed = history.scan_if_changed(since=token)
+    assert token2 is not token and renamed['sessions'][0]['title'] == 'Renamed'
+    assert first['sessions'][0]['title'] != 'Renamed'
+    workspace.rmdir()
+    token3, unavailable = history.scan_if_changed(since=token2)
+    assert unavailable['workspaces'][0]['available'] is False
+    workspace.mkdir()
+    token4, available = history.scan_if_changed(since=token3)
+    assert available['sessions'][0]['canResume'] is True
+    (home / 'projects').rename(home / 'temporarily-away')
+    token5, missing = history.scan_if_changed(since=token4)
+    assert missing['sessions'] == available['sessions']
+    assert {'kind': 'unavailable-root'} in missing['issues']
+    assert history.scan_if_changed(since=token5)[1] is None
+    (home / 'temporarily-away').rename(home / 'projects')
+    token6, recovered = history.scan_if_changed(since=token5)
+    assert token6 is not token5 and recovered['issues'] == available['issues']
+    assert recovered['sessions'] == available['sessions']
+
+
+def test_conditional_scan_detects_project_recreation_and_retains_order(tmp_path):
+    import shutil
+    home = tmp_path / 'home'
+    first_workspace = tmp_path / 'first'
+    second_workspace = tmp_path / 'second'
+    first_workspace.mkdir()
+    second_workspace.mkdir()
+    root = session(home, first_workspace, 'first', {'working_dir': str(first_workspace), 'bundle': 'anchors'})
+    session(home, second_workspace, 'second', {'working_dir': str(second_workspace), 'bundle': 'anchors'})
+    history = NativeHistory(home)
+    history.scan()
+    token, before = history.scan_if_changed()
+    shutil.rmtree(root.parent.parent)
+    token2, removed = history.scan_if_changed(since=token)
+    assert [row['nativeIdentity'] for row in removed['sessions']] == ['second']
+    session(home, first_workspace, 'new', {'working_dir': str(first_workspace), 'bundle': 'anchors'})
+    token3, recreated = history.scan_if_changed(since=token2)
+    assert token3 is not token2
+    assert {row['nativeIdentity'] for row in recreated['sessions']} == {'new', 'second'}
+    assert recreated['sessions'] == sorted(recreated['sessions'], key=lambda row: (row['updatedAt'], row['id']), reverse=True)
+    assert {row['nativeIdentity'] for row in before['sessions']} == {'first', 'second'}
+
+
+def test_conditional_scan_keeps_watch_reconciliation_and_known_path_resolution(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'home', tmp_path / 'workspace'
+    workspace.mkdir()
+    root = session(home, workspace, 'saved', {'name': 'Original', 'bundle': 'anchors'})
+    history = NativeHistory(home)
+    monkeypatch.setattr(history, '_invalidations', lambda: (True, set()))
+    token, unresolved = history.scan_if_changed()
+    assert unresolved['sessions'][0]['workspace'] is None
+    token2, resolved = history.scan_if_changed(since=token, known_workspaces=[str(workspace)])
+    assert resolved['sessions'][0]['workspace'] == str(workspace)
+    write_json(root / 'metadata.json', {'name': 'Missed watch event', 'bundle': 'anchors'})
+    # A quiet watcher skips this project's stamps until bounded reconciliation.
+    assert history.scan_if_changed(since=token2, known_workspaces=[str(workspace)])[1] is None
+    history._reconcile_at = 0
+    token3, reconciled = history.scan_if_changed(since=token2, known_workspaces=[str(workspace)])
+    assert token3 is not token2
+    assert reconciled['sessions'][0]['title'] == 'Missed watch event'
+
+
 def test_native_projects_are_workspaces_and_children_are_sessions(tmp_path, monkeypatch):
     home = tmp_path / 'amplifier'
     workspace = tmp_path / 'a project-with-hyphens'

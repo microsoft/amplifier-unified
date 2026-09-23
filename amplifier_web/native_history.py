@@ -126,6 +126,9 @@ class NativeHistory:
         self._watch_retry_at = 0
         self._project_paths = {}
         self._known_input = None
+        self._snapshot_projects = ()
+        self._snapshot_issues = []
+        self._snapshot_revision = None
 
     @staticmethod
     def _known_signature(known):
@@ -406,6 +409,16 @@ class NativeHistory:
 
     def scan(self, *, known_workspaces=None, force=False):
         """Refresh changed metadata and return all projects and saved sessions."""
+        return self.scan_if_changed(known_workspaces=known_workspaces, force=force)[1]
+
+    def scan_if_changed(self, *, known_workspaces=None, force=False, since=None):
+        """Return an opaque revision and a detached snapshot, or None if unchanged.
+
+        Discovery, file stamps, watcher recovery and availability checks still run.
+        A consumer can retain its own detached snapshot and present its revision
+        to avoid sorting/copying the entire library again. Manual refresh always
+        returns a snapshot. Revisions belong to this index, not persisted state.
+        """
         with self._lock:
             self._reads = 0
             self._working_dirs = {}
@@ -454,7 +467,11 @@ class NativeHistory:
                     start = len(issues)
                     result = self._scan_project(project, known, issues)
                     if result is not None:
-                        current[project.name] = result
+                        previous = self._projects.get(project.name)
+                        # Unreadable or unstable stamps can require a rebuild
+                        # whose visible metadata is unchanged. Retain its prior
+                        # identity only after comparing the complete result.
+                        current[project.name] = previous if result == previous else result
                         self._project_inputs[project.name] = (stamp, issues[start:])
                 self._projects = current
                 existing = set(current)
@@ -467,10 +484,24 @@ class NativeHistory:
                     self._files = {path: value for path, value in self._files.items()
                                    if path.relative_to(self.home / 'projects').parts[0] in existing}
                     self._file_projects.intersection_update(existing)
+            projects = tuple(self._projects.items())
+            if (self._snapshot_revision is None
+                    or len(projects) != len(self._snapshot_projects)
+                    or any(name != old_name or project is not old_project
+                           for (name, project), (old_name, old_project)
+                           in zip(projects, self._snapshot_projects))
+                    or issues != self._snapshot_issues):
+                # Hold the project references, not only their ids: rebuilt rows
+                # must never compare unchanged after an old object is collected.
+                self._snapshot_projects = projects
+                self._snapshot_issues = copy.deepcopy(issues)
+                self._snapshot_revision = object()
+            if not force and since is self._snapshot_revision:
+                return self._snapshot_revision, None
             workspaces = [project['workspace'] for project in self._projects.values()]
             sessions = [row for project in self._projects.values() for row in project['sessions']]
             sessions.sort(key=lambda row: (row['updatedAt'], row['id']), reverse=True)
-            return copy.deepcopy({'workspaces': workspaces, 'sessions': sessions,
+            return self._snapshot_revision, copy.deepcopy({'workspaces': workspaces, 'sessions': sessions,
                                   'sessionCount': sum(row['sessionKind'] == 'root' for row in sessions),
                                   'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in sessions),
                                   'issues': issues, 'metadataReads': self._reads})
