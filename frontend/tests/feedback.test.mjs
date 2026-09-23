@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {FeedbackPanel}=await server.ssrLoadModule('/src/feedback.jsx');
+const {FeedbackPanel,FeedbackDiagnostics}=await server.ssrLoadModule('/src/feedback.jsx');
 test.after(()=>server.close());
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const draft={title:'Canvas bug',body:'A preview stopped responding.',category:'bug',includeDiagnostics:false};
@@ -105,7 +105,7 @@ test('every editable form control publishes shared view state, including optiona
  await renderAct(async()=>checkbox.props.onChange({target:{checked:true}}));
  await renderAct(async()=>new Promise(resolve=>setTimeout(resolve,300)));
  const saved=calls.at(-1);assert.equal(saved.name,'view.update');assert.equal(saved.args.patch.feedbackDraft.title,'Edited title');assert.equal(saved.args.patch.feedbackDraft.category,'idea');assert.equal(saved.args.patch.feedbackDraft.includeDiagnostics,true);
- assert.match(JSON.stringify(root.toJSON()),/0.6.4/);assert.match(JSON.stringify(root.toJSON()),/Darwin/);
+ assert.match(JSON.stringify(root.toJSON()),/Preview reproduction diagnostics/);assert.equal(calls.some(call=>call.name==='feedback.diagnostics'),false);
  await renderAct(async()=>root.unmount());
 });
 
@@ -158,3 +158,41 @@ test('an untrusted shared preview URL is never used as an image source',()=>{
   assert.equal(calls.length,2);assert.equal(calls[1].patch.feedbackDraft.title,'Latest edit');
   await renderAct(async()=>release());await renderAct(async()=>root.unmount());
  });
+
+
+test('complete diagnostics load only on disclosure or explicit refresh and show saved snapshots on demand',async()=>{
+ let root;const calls=[];
+ const facts={schemaVersion:2,appVersion:'0.20.10',conversation:{messages:97},troubleshooting:{recordedFailure:{category:'worker_startup',inputRelation:'earlier'}}};
+ const action=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{snapshot:args.requestId?'accepted':'current',diagnostics:facts}}};
+ await renderAct(async()=>{root=create(React.createElement(FeedbackDiagnostics,{state:base(),act:action}))});
+ assert.equal(calls.length,0);
+ await renderAct(async()=>root.update(React.createElement(FeedbackDiagnostics,{state:{...base(),revision:99},act:action})));
+ assert.equal(calls.length,0,'state publications do not collect diagnostics');
+ const toggle=open=>root.root.findByType('details').props.onToggle({currentTarget:{open}});
+ await renderAct(async()=>toggle(true));
+ assert.equal(calls.length,1);assert.equal(calls[0].name,'feedback.diagnostics');assert.ok(calls[0].args.deviceDiagnostics);
+ assert.deepEqual(JSON.parse(root.root.findByType('pre').props.children),facts);
+ await renderAct(async()=>{toggle(false);toggle(true)});
+ assert.equal(calls.length,1,'reopening a loaded preview does not poll');
+ await renderAct(async()=>root.root.findByType('button').props.onClick());assert.equal(calls.length,2);
+ await renderAct(async()=>root.unmount());
+ await renderAct(async()=>{root=create(React.createElement(FeedbackDiagnostics,{state:base(),act:action,requestId:'saved-report'}))});
+ assert.equal(calls.length,2);
+ await renderAct(async()=>toggle(true));assert.deepEqual(calls[2].args,{requestId:'saved-report'});
+ assert.match(JSON.stringify(root.toJSON()),/snapshot saved when this submission was accepted/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('diagnostic opt-out and read failures stay honest without automatic retries',async()=>{
+ let root,count=0;
+ await renderAct(async()=>{root=create(React.createElement(FeedbackDiagnostics,{state:base(),requestId:'opted-out',act:async()=>({result:{snapshot:'accepted',diagnostics:null}})}))});
+ await renderAct(async()=>root.root.findByType('details').props.onToggle({currentTarget:{open:true}}));
+ assert.match(JSON.stringify(root.toJSON()),/No diagnostics were saved/);
+ await renderAct(async()=>root.unmount());
+ await renderAct(async()=>{root=create(React.createElement(FeedbackDiagnostics,{state:base(),act:async()=>{count++;throw Error('PRIVATE network error')}}))});
+ await renderAct(async()=>root.root.findByType('details').props.onToggle({currentTarget:{open:true}}));
+ assert.equal(count,1);assert.match(JSON.stringify(root.toJSON()),/could not be loaded/);assert.doesNotMatch(JSON.stringify(root.toJSON()),/PRIVATE/);
+ await renderAct(async()=>root.update(React.createElement(FeedbackDiagnostics,{state:base(),act:async()=>{count++}})));
+ assert.equal(count,1);
+ await renderAct(async()=>root.unmount());
+});

@@ -14,6 +14,12 @@ from test_app_updates import prepared_activation
 from test_service import Runtime
 
 
+@pytest.fixture(autouse=True)
+def systemd_restart_contract(monkeypatch):
+    # These command assertions describe systemd, independently of the test host.
+    monkeypatch.setattr(sys, 'platform', 'linux')
+
+
 async def restart_fixture(tmp_path):
     service=AppService(tmp_path,Runtime(),workspace=tmp_path)
     manager=UpdateManager(service)

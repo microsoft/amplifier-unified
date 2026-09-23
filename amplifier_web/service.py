@@ -938,6 +938,13 @@ class AppService:
                 # under the mutation lock without changing its queue ordering.
                 try: transfer_context = self.portability.write_context(transfer_sid)
                 except ValueError as exc: raise AppError(str(exc), 409) from exc
+        if action == 'feedback.diagnostics':
+            async with self.lock:
+                try:
+                    result = self.feedback.diagnostics(args)
+                except ValueError as exc:
+                    raise AppError(str(exc), 404) from None
+                return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')
@@ -1000,12 +1007,21 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
             if args['clientId'] != client_id:
                 raise AppError('The canvas view command targets a different client.')
+        if action in {'smartTools.viewStatus', 'smartTools.reconnectView'} and origin == 'agent' and (
+                not caller_session_id or self.state.get('selectedSessionId') != caller_session_id):
+            raise AppError('Choose a client displaying the calling conversation before recovering its tool view.', 409)
+        if action == 'smartTools.viewStatus':
+            from .mcp_view_recovery import inspect
+            if not self.smart_tools:
+                raise AppError('Smart Tools service is unavailable.')
+            async with self.lock:
+                return {'accepted': True, 'result': inspect(self, args['canvasId']), 'effects': []}
         if action.startswith("kernels."):
             from .computation import dispatch
             return await dispatch(self, action, args, origin)
@@ -1791,6 +1807,9 @@ class AppService:
                         scoped_args.setdefault('sessionId',self.state.get('selectedSessionId'))
                     if action == 'smartTools.appCall':
                         self.smart_canvas.admit_call(args)
+                    if action == 'smartTools.reconnectView':
+                        from .mcp_view_recovery import admit
+                        admit(self, args)
                     pending.append((self.smart_canvas.command,(action,scoped_args,command_id,origin)))
             elif action == 'bundle.default':
                 from .preferences import SettingsStore
@@ -2794,9 +2813,9 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
-            elif args['action'] == 'canvas.select':
+            elif args['action'] in {'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}:
                 from .agent_canvas import selection_target
-                canvas_client = selection_target(self, session_id, action_args)
+                canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
                 if canvas_client is not None:
                     action_args['clientId'] = canvas_client
                 with self.clients.bind(canvas_client):

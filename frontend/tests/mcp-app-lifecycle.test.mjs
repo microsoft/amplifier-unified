@@ -16,6 +16,8 @@ const {McpAppViewer}=await server.ssrLoadModule('/src/mcp-app-viewer.jsx');
 const {McpAppVisibilityProvider,MCP_VISIBILITY}=await server.ssrLoadModule('/src/mcp-app-lifecycle.jsx');
 test.after(()=>server.close());
 const response=value=>({ok:true,status:200,text:async()=>JSON.stringify(value)});
+const available={source:'available',status:'ready',message:'Tool view connected',canReconnect:true,bindingRevision:'saved-binding'};
+test.beforeEach(()=>{globalThis.fetch=async path=>{assert.ok(path.endsWith('/status'));return response(available)}});
 
 test('canvas, Library and document visibility update context without remounting an edited iframe',async()=>{
  const frame={contentWindow:{},draft:'unsaved'},canvas={id:'view',open:true};let component,visible=true;
@@ -37,6 +39,7 @@ test('optimistic restore pauses MCP reads until acknowledgement and retains the 
  const pending=createPendingView(),reports=[],sent=[],frame={contentWindow:{},draft:'unsaved'};
  let state={selectedSessionId:'chat',client:{hostInstanceId:'host'},canvas:{id:'acknowledged',open:true},view:{}},component;
  globalThis.fetch=async(path,options)=>{
+  if(path.endsWith('/status'))return response(available);
   if(path.endsWith('/tools'))return response({tools:[{name:'read',annotations:{readOnlyHint:true}}]});
   assert.equal(state.canvas.open,true,'A tool call must not race the server visibility acknowledgement');
   sent.push(JSON.parse(options.body));return response({status:'completed',result:{content:[]}});
@@ -71,6 +74,7 @@ test('optimistic restore pauses MCP reads until acknowledgement and retains the 
 test('only explicitly read-only calls are coalesced; mutations and unknown tools retain separate IDs',async()=>{
  let release;const slow=new Promise(resolve=>release=resolve),sent=[];
  globalThis.fetch=async(path,options)=>{
+  if(path.endsWith('/status'))return response(available);
   if(path.endsWith('/tools'))return response({tools:[{name:'read',annotations:{readOnlyHint:true}},{name:'write',annotations:{readOnlyHint:false}}]});
   const body=JSON.parse(options.body);sent.push(body);if(body.name==='read')await slow;
   return response({status:'completed',result:{content:[]}});
@@ -92,6 +96,7 @@ test('only explicitly read-only calls are coalesced; mutations and unknown tools
 test('catalog failure preserves forwarding and request identity for unclassified tools',async()=>{
  const sent=[];
  globalThis.fetch=async(path,options)=>{
+  if(path.endsWith('/status'))return response(available);
   if(path.endsWith('/tools'))throw Error('Catalog temporarily unavailable');
   sent.push(JSON.parse(options.body));return response({status:'completed',result:{content:[]}});
  };
@@ -105,6 +110,7 @@ test('catalog failure preserves forwarding and request identity for unclassified
 test('expected paused or overloaded reads do not publish host errors or attention',async()=>{
  let release;const slow=new Promise(resolve=>release=resolve),reports=[],sent=[];
  globalThis.fetch=async(path,options)=>{
+  if(path.endsWith('/status'))return response(available);
   if(path.endsWith('/tools'))return response({tools:[{name:'read',annotations:{readOnlyHint:true}}]});
   sent.push(JSON.parse(options.body));await slow;return response({status:'completed',result:{content:[]}});
  };
@@ -121,5 +127,33 @@ test('expected paused or overloaded reads do not publish host errors or attentio
   });
   assert.equal(sent.length,2);assert.equal(reports.filter(row=>row.args.status==='error').length,0);
   await act(async()=>{release();await Promise.all(pending)});
+ }finally{await act(async()=>component.unmount())}
+});
+test('missing saved source is reported before frame navigation or a misleading handshake timeout',async()=>{
+ globalThis.fetch=async()=>response({...available,source:'unavailable',status:'source_unavailable',canReconnect:false,message:'Saved source is unavailable; its reference remains.'});
+ const frame={contentWindow:{}},before=mcpTestBridges.length,reports=[];let component;
+ await act(async()=>{component=create(React.createElement(McpAppViewer,{canvas:{id:'missing',open:true},act:async(name,args)=>reports.push(args)}),{createNodeMock:node=>node.type==='iframe'?frame:null})});
+ try{
+  assert.equal(mcpTestBridges.length,before);assert.equal(frame.src,undefined);
+  assert.equal(reports.at(-1).message,'Saved source is unavailable; its reference remains.');
+  assert.equal(component.root.findByProps({'aria-label':'Reconnect tool view'}).props.disabled,true);
+ }finally{await act(async()=>component.unmount())}
+});
+test('explicit reconnect uses the reviewed binding and retains the mounted frame and input',async()=>{
+ const frame={contentWindow:{},draft:'unsaved'},sent=[];let component;
+ globalThis.fetch=async(path,options)=>{
+  if(path.endsWith('/status'))return response({...available,status:'disconnected',message:'Saved source available; reconnect.'});
+  if(path==='/api/actions'){sent.push(JSON.parse(options.body));return response({operationId:'reconnect-receipt'})}
+  assert.equal(path,'/api/smart-tools/operations/reconnect-receipt');return response({status:'completed',result:available});
+ };
+ await act(async()=>{component=create(React.createElement(McpAppViewer,{canvas:{id:'retained',open:true,mcp:{}},act:async()=>({})}),{createNodeMock:node=>node.type==='iframe'?frame:null})});
+ const bridge=mcpTestBridges.at(-1),count=mcpTestBridges.length,src=frame.src;
+ try{
+  await act(async()=>bridge.oninitialized());
+  await act(async()=>component.root.findByProps({'aria-label':'Reconnect tool view'}).props.onClick());
+  assert.equal(sent.length,1);assert.equal(sent[0].action,'smartTools.reconnectView');
+  assert.deepEqual(sent[0].args,{canvasId:'retained',expectedBindingRevision:'saved-binding'});
+  assert.equal(mcpTestBridges.length,count);assert.equal(frame.src,src);assert.equal(frame.draft,'unsaved');
+  assert.equal(component.root.findByProps({'data-phase':'ready'}).props.role,'status');
  }finally{await act(async()=>component.unmount())}
 });

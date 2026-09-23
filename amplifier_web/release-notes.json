@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.14",
+      "title": "Recover saved views and fork conversations reliably",
+      "changes": [
+        "Reopen the original saved MCP canvas document after a restart and reconnect compatible tools without replaying calls or replacing the artifact. Show clear reasons when the source, connection or tool contract is unavailable.",
+        "Fork at verified saved message boundaries even when a later submission failed or was not confirmed. Preserve attachment identities and original history without replaying work.",
+        "Keep explicitly internal jobs and child sessions out of ordinary chat lists, counts and default searches while retaining their diagnostic histories and independent user forks.",
+        "Preview useful feedback diagnostics on demand, including delivery and failure context and the actual browser event-stream state. Preserve the accepted diagnostic snapshot and keep private text, paths and credentials out.",
+        "Shorten automatic release checks by running the full Python suite locally or on demand while retaining package, frontend and worker-runtime qualification."
+      ],
+      "notices": [
+        {
+          "id": "internal-history-provenance-02014",
+          "title": "Unmarked older jobs remain visible",
+          "detail": "Internal jobs are hidden only when saved metadata identifies them reliably. Existing unmarked sessions are preserved and are not reclassified from their titles or prompts.",
+          "action": "Use the usual chat list for ordinary conversations; internal history remains available for diagnostics."
+        }
+      ]
+    },
+    {
       "version": "0.20.13",
       "title": "Ordered updates and clearer conversation recovery",
       "changes": [
@@ -124,7 +143,7 @@
           "id": "update-compaction-components",
           "title": "Update companion components for compaction recovery",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
         }
       ]
     },
@@ -152,7 +171,7 @@
           "id": "refresh-anthropic-tool-routing",
           "title": "Update companion modules for Anthropic computer tools",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+          "action": "After installing this app update, open Settings → Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
         }
       ]
     },
@@ -212,7 +231,7 @@
           "id": "retry-component-updates",
           "title": "Retry a previously failed component update",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
+          "action": "After the app restarts, open Settings → Updates, choose Check now, then Install available."
         }
       ]
     },
@@ -524,8 +543,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
         }
       ]
     },
@@ -545,7 +564,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
       ],
       "notices": []
     },
@@ -564,7 +583,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

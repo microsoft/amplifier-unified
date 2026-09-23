@@ -23,6 +23,7 @@
     "test:execution-actions-browser": "node tests/execution-actions-browser.mjs && node tests/canonical-work-browser.mjs",
     "test:babylon-browser": "node tests/babylon-browser.mjs",
     "test:smart-tools-browser": "node tests/smart-tools-browser.mjs",
+    "test:mcp-recovery-browser": "node tests/mcp-recovery-browser.mjs",
     "test:panel-browser": "node tests/panel-layout-browser.mjs",
     "prebuild": "node scripts/sync-branding.mjs",
     "predev": "node scripts/sync-branding.mjs",
