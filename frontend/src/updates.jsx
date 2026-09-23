@@ -1,4 +1,5 @@
-import {AttentionReview} from './attention';
+import {AppReloadNotice} from './app-reload.jsx';
+import {AttentionReview,AttentionBadge} from './attention';
 import {updateOverview} from './update-overview';
 import {ActivityRegion} from './activity-region';
 import {useListFilter} from './list-filter.jsx';
@@ -28,6 +29,7 @@ function ComponentSummary({updates,items,busy}){
  })}</div>;
 }
 export function UpdateSettings({state,act}){
+ const unread=(state.attention?.items||[]).filter(item=>item.page==='updates'&&!item.read),releaseUnread=unread.filter(item=>item.id.startsWith('release-notice:')),componentUnread=unread.filter(item=>!item.id.startsWith('release-notice:'));
  const updates=state.updates||{},options=state.settings?.updates||{},replacement=updates.pendingReplacement!=null,busy=replacement||['checking','staging','validating','activating'].includes(updates.phase);
  const application=updates.application||(updates.items||[]).find(item=>item.kind==='app')||{};
  const items=(updates.items||[]).filter(item=>item.kind!=='app'&&item.id!=='application');
@@ -54,6 +56,7 @@ export function UpdateSettings({state,act}){
    {(overview.tone==='working'||overview.tone==='available')&&<div className="a-update-progress" aria-label="Update order">{[['application','App'],['included','Included components'],['other','Other components']].map(([id,label],i)=><span key={id} data-active={overview.stage===id}>{i>0&&'→ '}{label}</span>)}</div>}
    <p className="a-update-version-line">Amplifier {application.current||'version not reported'}{application.latest&&application.latest!==application.current?' · Latest '+application.latest:''}{updates.lastCheck?' · Checked '+new Date(updates.lastCheck*1000).toLocaleString():''}</p>
   </div>
+  <AppReloadNotice/>
   <div className="a-update-controls" data-part="update-controls">
   <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={busy||!!pending} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw/>Check for updates</button>{overview.installable&&(!overview.continuing||overview.tone==='error')&&<button className="a-primary" disabled={busy||overview.blocked} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Update Amplifier</button>}</div>
   <p className="a-caption">One request handles everything in order. Updates wait for work and calls to finish; an app update may restart the server.</p>
@@ -63,7 +66,8 @@ export function UpdateSettings({state,act}){
    <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
   </div></details>
   </div>
-  <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Review update issue':'Component updates & details'}</summary><div className="a-update-disclosure-body">
+  <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Review update issue':'Component updates & details'}<AttentionBadge count={componentUnread.length}/></summary><div className="a-update-disclosure-body">
+   <AttentionReview state={state} act={act} page="updates" items={componentUnread} showItems/>
    <ComponentSummary updates={updates} items={items} busy={busy}/>
    <div className="a-app-update-heading"><h4>App release</h4><span className={'a-app-update-status '+appState}><AppIcon aria-hidden="true"/>{appLabels[appState]||appState}</span></div>
    {appDetail&&(appState==='failed'?<ResultNotice phase="error" message={appDetail}/>:<p className="a-caption a-wrap">{appDetail}</p>)}
@@ -74,7 +78,7 @@ export function UpdateSettings({state,act}){
    {!!unknown.length&&<div><h4>Other cached sources</h4><p className="a-caption">{unknown.length} sources: {unknownSummary}. Usage is unknown; these files may still be needed and are kept.</p>{!!unknownIssues.length&&<SourceList items={unknownIssues} state={state} act={act} id="unknown-source-issues"/>}</div>}
    {!!items.length&&<div><button className="a-link" aria-expanded={expanded} data-action="view.update" onClick={()=>act('view.update',{patch:{maintenanceDraft:{...state.view?.maintenanceDraft,updatesExpanded:!expanded}}})}>{expanded?'Hide all sources':'Show all '+items.length+' '+(items.length===1?'source':'sources')}</button>{expanded&&<SourceList items={items} state={state} act={act} id="update-sources"/>}</div>}
   </div></details>
-  <details className="a-update-disclosure"><summary>Release notices</summary><div className="a-update-disclosure-body"><AttentionReview state={state} act={act} page="updates"/><ReleaseNotices application={application} state={state} act={act}/></div></details>
+  <details className="a-update-disclosure"><summary>Release notices<AttentionBadge count={releaseUnread.length}/></summary><div className="a-update-disclosure-body"><AttentionReview state={state} act={act} page="updates" items={releaseUnread}/><ReleaseNotices application={application} state={state} act={act}/></div></details>
   {items.some(item=>item.kind==='history')&&<details className="a-update-disclosure" data-part="historical-source-settings"><summary>Older conversation settings</summary><div className="a-update-disclosure-body"><SourceList items={items.filter(item=>item.kind==='history')} state={state} act={act} id="historical-source-settings"/></div></details>}
   <ReleaseHistory application={application} state={state}/>
  </ActivityRegion>;

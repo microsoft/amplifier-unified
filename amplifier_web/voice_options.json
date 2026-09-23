@@ -1,0 +1,182 @@
+{
+  "updated": "2026-09-23",
+  "models": [
+    {
+      "id": "gpt-live-1",
+      "name": "GPT Live 1",
+      "description": "A natural conversation: listen and speak at the same time.",
+      "source": "https://developers.openai.com/api/docs/guides/live-conversations",
+      "voices": [
+        {
+          "id": "marin",
+          "name": "Marin",
+          "description": "The default GPT Live voice."
+        },
+        {
+          "id": "cedar",
+          "name": "Cedar",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "alloy",
+          "name": "Alloy",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "ash",
+          "name": "Ash",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "ballad",
+          "name": "Ballad",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "coral",
+          "name": "Coral",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "echo",
+          "name": "Echo",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "sage",
+          "name": "Sage",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "shimmer",
+          "name": "Shimmer",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "verse",
+          "name": "Verse",
+          "description": "Built-in OpenAI voice."
+        },
+        {
+          "id": "quartz",
+          "name": "Quartz",
+          "description": "English \u00b7 Australian influence \u00b7 feminine"
+        },
+        {
+          "id": "ripple",
+          "name": "Ripple",
+          "description": "English \u00b7 Australian influence \u00b7 masculine"
+        },
+        {
+          "id": "vesper",
+          "name": "Vesper",
+          "description": "English \u00b7 British influence \u00b7 masculine"
+        },
+        {
+          "id": "willow",
+          "name": "Willow",
+          "description": "English \u00b7 Irish influence \u00b7 feminine"
+        },
+        {
+          "id": "stone",
+          "name": "Stone",
+          "description": "English \u00b7 Irish influence \u00b7 masculine"
+        },
+        {
+          "id": "gleam",
+          "name": "Gleam",
+          "description": "English \u00b7 North American influence \u00b7 feminine"
+        },
+        {
+          "id": "meridian",
+          "name": "Meridian",
+          "description": "English \u00b7 North American influence \u00b7 masculine"
+        },
+        {
+          "id": "bossa",
+          "name": "Bossa",
+          "description": "Portuguese \u00b7 Brazilian influence \u00b7 feminine"
+        },
+        {
+          "id": "tempo",
+          "name": "Tempo",
+          "description": "Portuguese \u00b7 Brazilian influence \u00b7 masculine"
+        },
+        {
+          "id": "beacon",
+          "name": "Beacon",
+          "description": "English \u00b7 Filipino influence \u00b7 masculine"
+        },
+        {
+          "id": "delta",
+          "name": "Delta",
+          "description": "English \u00b7 Southern U.S. influence \u00b7 feminine"
+        },
+        {
+          "id": "cinder",
+          "name": "Cinder",
+          "description": "English \u00b7 Southern U.S. influence \u00b7 masculine"
+        }
+      ],
+      "reference": "https://developers.openai.com/api/reference/resources/live/primary-websocket"
+    },
+    {
+      "id": "gpt-realtime-2.1",
+      "name": "GPT Realtime 2.1",
+      "description": "A responsive voice conversation with turn detection.",
+      "source": "https://developers.openai.com/api/docs/guides/realtime-conversations",
+      "voices": [
+        {
+          "id": "marin",
+          "name": "Marin",
+          "description": "Recommended for best quality."
+        },
+        {
+          "id": "cedar",
+          "name": "Cedar",
+          "description": "Recommended for best quality."
+        },
+        {
+          "id": "alloy",
+          "name": "Alloy",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "ash",
+          "name": "Ash",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "ballad",
+          "name": "Ballad",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "coral",
+          "name": "Coral",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "echo",
+          "name": "Echo",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "sage",
+          "name": "Sage",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "shimmer",
+          "name": "Shimmer",
+          "description": "OpenAI Realtime voice."
+        },
+        {
+          "id": "verse",
+          "name": "Verse",
+          "description": "OpenAI Realtime voice."
+        }
+      ]
+    }
+  ]
+}

@@ -18,7 +18,8 @@ try{
  await page.getByRole('button',{name:/Anthropic API Connect with/}).click();
  await page.getByLabel('API key',{exact:true}).fill('everyday-private-fixture-key');
  await openSettingsPage(page,'appearance');await openSettingsPage(page,'ai-connections');
- assert.equal(await page.getByLabel('API key',{exact:true}).inputValue(),'everyday-private-fixture-key');
+ await expect(page.getByRole('button',{name:'Connect another service',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Connect another service',exact:true}).click();await page.getByRole('button',{name:/Anthropic API Connect with/}).click();await page.getByLabel('API key',{exact:true}).fill('everyday-private-fixture-key');
  assert.ok(!JSON.stringify(await state()).includes('everyday-private-fixture-key'));
  await page.getByRole('button',{name:'Save and check connection',exact:true}).click();
  await page.getByRole('button',{name:'Finish setup',exact:true}).waitFor();
@@ -43,10 +44,10 @@ try{
  await page.getByRole('button',{name:/tool-0 Installed · finish setup/}).click();
  await expect(page.getByText('Advanced setup required',{exact:true})).toBeVisible();
  await openSettingsPage(page,'notifications');
- const notification=page.getByText('Send notifications to another device',{exact:true});
+ const notification=page.getByText('Set up phone notifications',{exact:true});
  assert.equal(await notification.locator('..').getAttribute('open'),null);await notification.click();
- await page.getByLabel(/^Access token/).fill('notification-private-fixture');await openSettingsPage(page,'privacy');await openSettingsPage(page,'notifications');
- assert.equal(await page.getByLabel(/^Access token/).inputValue(),'notification-private-fixture');assert.ok(!JSON.stringify(await state()).includes('notification-private-fixture'));
+ await page.getByText('Server & account',{exact:true}).click();await page.getByLabel(/^Access token/).fill('notification-private-fixture');await openSettingsPage(page,'privacy');await openSettingsPage(page,'notifications');
+ await page.getByText('Set up phone notifications',{exact:true}).click();await page.getByText('Server & account',{exact:true}).click();assert.equal(await page.getByLabel(/^Access token/).inputValue(),'notification-private-fixture');assert.ok(!JSON.stringify(await state()).includes('notification-private-fixture'));
  let layouts=0;
  for(const width of [320,390,736,1280]){
   await page.setViewportSize({width,height:920});

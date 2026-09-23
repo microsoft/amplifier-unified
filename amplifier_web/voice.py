@@ -151,7 +151,7 @@ class VoiceCall:
     async def create(self, sdp: str, provider: str) -> dict:
         await self.require_admission()
         self.provider = provider
-        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + self.context(self.service.state), "audio": {"output": {"voice": "marin"}}}
+        config = {"model": MODELS[provider], "instructions": INSTRUCTIONS + "\nCurrent context: " + self.context(self.service.state), "audio": {"output": {"voice": getattr(self,"voice_name","marin")}}}
         if provider == "live":
             config.update(delegation={"type": "client"}, store=False)
             data, _, _ = await self.manager.request("POST", "/live/sessions", json={"session": config, "transport": {"type": "webrtc", "sdp": sdp}})
@@ -159,7 +159,7 @@ class VoiceCall:
             url = "wss://api.openai.com/v1/live/sessions/" + quote(self.id, safe="") + "/attach"
         else:
             config.update(type="realtime", tools=realtime_tools(), tool_choice="auto")
-            config["audio"]["input"] = {"transcription": {"model": "gpt-4o-transcribe"}, "turn_detection": {"type": "server_vad", "create_response": True, "interrupt_response": True}}
+            config["audio"]["input"] = {"transcription": {"model": "gpt-4o-transcribe"}, "turn_detection": {"type": "server_vad", "create_response": True, "interrupt_response": getattr(self,"interruptions",True)}}
             form = aiohttp.FormData()
             form.add_field("sdp", sdp)
             form.add_field("session", json.dumps(config), content_type="application/json")
@@ -535,8 +535,7 @@ class VoiceService:
             session = next(s for s in state["sessions"] if s["id"] == session_id)
             voice = read_settings(session["workspace"], session_id=session.get("runtimeSessionId") or session_id).get("voice", {})
             preference = voice.get("preferred_model", MODELS["live"])
-            fallback = voice.get("fallback_model", MODELS["realtime"])
-            if provider == "auto" and (preference not in MODELS.values() or fallback not in MODELS.values()):
+            if provider == "auto" and (preference not in MODELS.values()):
                 raise VoiceError("The configured voice model is not supported by this app's voice transport.", 409, "unsupported_model")
             selected = ("realtime" if preference == MODELS["realtime"] else "live") if provider == "auto" else provider
             # This endpoint bypasses command dispatch. Claim the active call
@@ -555,18 +554,14 @@ class VoiceService:
                     try: portability.write_context(session_id)
                     except ValueError as exc: raise VoiceError(str(exc), 409, 'task_transfer_fenced') from exc
                 call = VoiceCall(self, session_id)
+                from .voice_options import selected_voice
+                call.voice_name=selected_voice(MODELS[selected],voice.get("voice","marin"))
+                call.interruptions=voice.get("interruptions",True)
                 self.call = call
                 self.service.state["voice"].update({"status": "connecting", "sessionId": session_id, "error": None})
                 self.service._publish()
             try:
-                try:
-                    result = await call.create(sdp, selected)
-                except ProviderError as error:
-                    if provider != "auto" or selected != "live" or fallback != MODELS["realtime"] or not should_fallback(error):
-                        raise
-                    await call.require_admission()
-                    result = await call.create(sdp, "realtime")
-                    result["fallbackReason"] = "GPT-Live is unavailable to this project; connected with GPT-Realtime-2.1."
+                result = await call.create(sdp, selected)
                 await self.service.set_voice_status({"status": "connecting", **{k: v for k, v in result.items() if k != "sdp"}})
                 return result
             except Exception as exc:
@@ -595,7 +590,7 @@ def setup_routes(app: web.Application) -> VoiceService:
 
     async def config(request: web.Request) -> web.Response:
         manager.service._refresh_shared_preferences()
-        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "fallbackModel": manager.service.state.get("settings", {}).get("fallbackVoice", MODELS["realtime"]), "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
+        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "voice": manager.service.state.get("settings", {}).get("voiceName", "marin"), "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
 
     async def connect(request: web.Request) -> web.Response:
         try:

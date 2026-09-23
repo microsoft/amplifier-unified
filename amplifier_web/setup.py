@@ -6,6 +6,9 @@ import json
 import signal
 import uuid
 import time
+import shutil
+import subprocess
+from datetime import datetime, timezone
 from urllib.parse import urlsplit,urlunsplit
 import os
 from pathlib import Path
@@ -49,6 +52,32 @@ def environment_credential(module,raw=None,env_var=None):
             'alternatives':list(defaults[1:]),'envVar':chosen,'available':bool(chosen and os.environ.get(chosen)),
             'explicit':bool(reference),'hasStoredKey':bool(value and not reference),
             'supported':module!='provider-openai-chatgpt'}
+
+def github_cli_token():
+    """Read host CLI credentials only; never return them to interface state/logs."""
+    binary=shutil.which('gh')
+    if not binary:return None
+    try:
+        result=subprocess.run([binary,'auth','token','--hostname','github.com'],capture_output=True,text=True,timeout=4,check=False)
+        token=result.stdout.strip()
+        return token if result.returncode==0 and token and len(token)<16000 else None
+    except (OSError,subprocess.TimeoutExpired):return None
+
+
+def account_connected(config):
+    # Match the provider's token-file contract, without starting a login or refresh.
+    path=config.get('token_file_path')
+    if not isinstance(path,str):return False
+    try:
+        file=Path(path).expanduser()
+        if file.stat().st_size>1_000_000:return False
+        tokens=json.loads(file.read_text())
+        if not isinstance(tokens,dict) or not tokens.get('access_token'):return False
+        if tokens.get('refresh_token'):return True
+        expiry=datetime.fromisoformat(tokens.get('expires_at','').replace('Z','+00:00'))
+        return expiry.astimezone(timezone.utc)>datetime.now(timezone.utc)
+    except (OSError,ValueError,TypeError):return False
+
 
 def safe_name(value):
     if not isinstance(value,str) or not NAME.fullmatch(value) or '..' in value:
@@ -119,8 +148,10 @@ class SetupManager:
             credential=environment_credential(value['module'],raw)
             configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
             if not refs:configured=credential['available']
+            connected=account_connected(raw) if value['module']=='provider-openai-chatgpt' else False
+            if value['module']=='provider-openai-chatgpt':configured=connected
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
-                'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
+                'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
     def catalog_key(self,args,workspace):
@@ -333,14 +364,16 @@ class SetupManager:
         workspace=args.get('workspace') or str(Path.cwd());scope=args.get('scope','global')
         self.store.path(workspace,scope) # Validate scope even on reads.
         if action=='providers.credentials':
+            cli=bool(await asyncio.to_thread(github_cli_token)) if args['module']=='provider-github-copilot' else False
             self.config(workspace) # Load app-owned keys as well as the launch environment.
-            return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
+            return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'githubCliAvailable':cli,'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
         if action in {'providers.schema','providers.models','providers.test'}:
             return await (self.probe(action,args,workspace) if action=='providers.test' else self.cached_probe(action,args,workspace))
         if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
-            rows=current.providers
+            enabled={row['id'] for row in self.provider_rows(workspace) if row['enabled']}
+            rows=[row for row in current.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-')) in enabled]
             ids=[row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-') for row in rows]
             if action=='providers.reorder':
                 ordered=args['ids']
@@ -366,7 +399,14 @@ class SetupManager:
                     settings.pop('provider_order',None)
                 self.store.update(workspace,scope,reorder)
             return {'providers':self.provider_rows(workspace),'scope':scope}
-        if action=='providers.save':return self._provider_mutation(args,workspace,scope)
+        if action=='providers.save':
+            if args.get('useGitHubCli'):
+                if args.get('module')!='provider-github-copilot' or args.get('apiKey') or args.get('apiKeyEnv'):
+                    raise ValueError('Choose one credential source for GitHub Copilot.')
+                token=await asyncio.to_thread(github_cli_token)
+                if not token:raise ValueError('GitHub CLI sign-in is no longer available. Sign in on the Amplifier host or enter a token.')
+                args={**args,'apiKey':token}
+            return self._provider_mutation(args,workspace,scope)
         if action=='providers.finishSetup':
             identity=safe_name(args['id']);model=args['model'].strip()
             if not model:raise ValueError('Choose a model before finishing setup.')

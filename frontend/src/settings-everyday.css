@@ -127,3 +127,29 @@
 #amp-one .a-smart-tools[data-simple=true] .a-catalog-controls .a-collection-toolbar{margin:6px 0}
 #amp-one .a-dialog .a-appearance-color label{font-size:14px;color:var(--a-ink);font-weight:600;margin:5px 0 8px}
 #amp-one .a-dialog .a-appearance-color select{margin:0}
+#amp-one .a-credential-options,#amp-one .a-detail-level{min-width:0;border:0;padding:0;margin:24px 0}
+#amp-one .a-credential-options legend,#amp-one .a-detail-level legend{font-weight:650;color:var(--a-ink);margin-bottom:10px}
+#amp-one .a-credential-options>label,#amp-one .a-detail-choices>label{display:flex;align-items:flex-start;gap:12px;padding:18px;border:1px solid var(--a-line);border-radius:12px;margin:8px 0;cursor:pointer}
+#amp-one .a-credential-options>label:has(input:checked),#amp-one .a-detail-choices>label[data-selected="true"]{border-color:var(--a-accent);background:var(--a-soft)}
+#amp-one .a-credential-options input,#amp-one .a-detail-choices input{width:18px;height:18px;flex:0 0 18px;margin-top:3px}
+#amp-one .a-credential-options small,#amp-one .a-detail-choices small{display:block;color:var(--a-muted);font-size:var(--a-text-sm,13px);line-height:1.6;margin-top:5px}
+#amp-one .a-detail-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+#amp-one .a-voice-settings{max-width:720px}
+#amp-one .a-voice-settings>label{display:block;margin:24px 0 10px}
+#amp-one .a-voice-description{padding:16px 20px;background:var(--a-soft);border-radius:12px;color:var(--a-ink)}
+#amp-one .a-notification-settings{max-width:850px}
+#amp-one .a-notification-card{border:1px solid var(--a-line);border-radius:16px;padding:24px;margin:20px 0}
+#amp-one .a-notification-card .a-everyday-toggle{padding:0;border:0;background:transparent}
+#amp-one .a-notification-card .a-everyday-toggle small{display:block;margin-top:6px;color:var(--a-muted);font-weight:400}
+#amp-one .a-notification-steps>div,#amp-one .a-notification-steps>details{margin:20px 0}
+#amp-one .a-notification-steps h4{font-size:1em;margin:0 0 10px}
+#amp-one .a-notification-steps label{display:block;margin:16px 0 8px}
+#amp-one .a-topic-entry{display:flex;gap:10px;align-items:center}
+#amp-one .a-topic-entry input{min-width:0;flex:1}
+#amp-one .a-topic-entry button{flex:none}
+#amp-one .a-update-disclosure>summary .a-attention-badge,#amp-one .a-advanced-group>summary .a-attention-badge{margin-left:12px}
+@media(max-width:900px){#amp-one .a-detail-choices{grid-template-columns:1fr}#amp-one .a-notification-card{padding:18px}#amp-one .a-topic-entry{flex-wrap:wrap}#amp-one .a-topic-entry input{flex-basis:100%}}
+
+#amp-one .a-settings-everyday [data-part=maintenance] .a-everyday-disclosure{padding:0 18px;margin:20px 0;border-radius:12px}
+#amp-one .a-settings-everyday [data-part=maintenance] .a-everyday-disclosure>summary{padding:16px 0;font-size:1em;font-weight:500}
+#amp-one .a-settings-everyday [data-part=maintenance] .a-everyday-disclosure>div{padding:0 0 18px}
