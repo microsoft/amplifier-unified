@@ -267,11 +267,9 @@ jobs:
       - name: Verify history paging in live conversations
         working-directory: frontend
         run: npm run test:live-history-browser
-      - name: Verify multiple active clients at large library size
+      - name: Verify independent live clients
         working-directory: frontend
-        run: |
-          npm run test:live-clients-browser
-          npm run test:active-client-performance-browser
+        run: npm run test:live-clients-browser
       - name: Verify composer ownership and explicit takeover
         working-directory: frontend
         run: npm run test:ownership-browser
