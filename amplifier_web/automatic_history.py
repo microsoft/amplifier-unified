@@ -164,10 +164,10 @@ def remove_internal_copies(session, hidden):
         session.pop('nativeBoundaryId', None)
 
 
-def align_attachment_inputs(current, incoming):
-    """Use canonical input metadata, never an attachment-looking text prefix.
+def align_expanded_inputs(current, incoming):
+    """Use canonical input metadata, never an expanded-text prefix.
 
-    The native prompt includes attachment instructions, so its text differs
+    The native prompt includes attachment or mention context, so its text differs
     from the web bubble. Bind its exact native identity while retaining the
     bubble and its attachment metadata. Repair an earlier display copy only
     when its native index, ID and text all still match the canonical row.
@@ -190,8 +190,6 @@ def align_attachment_inputs(current, incoming):
             continue
         position, native = positions[0], natives[0]
         message = current[position]
-        if not message.get('attachments'):
-            continue
         if ((message.get('nativeIndex') is not None and message['nativeIndex'] != native['nativeIndex'])
                 or (message.get('nativeMessageId') and message['nativeMessageId'] != native['id'])):
             raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
@@ -226,7 +224,7 @@ def merge_web_history(session, incoming):
     Legacy UI rows without indexes use ordered text alignment; distinguishing
     an identical failed prompt from a saved prompt would require an input ledger.
     """
-    current = align_attachment_inputs(session['messages'], incoming)
+    current = align_expanded_inputs(session['messages'], incoming)
     indexed = {message['nativeIndex']: (number, message) for number, message in enumerate(incoming)}
     boundary = session.get('nativeBoundary')
     boundary_id = session.get('nativeBoundaryId')

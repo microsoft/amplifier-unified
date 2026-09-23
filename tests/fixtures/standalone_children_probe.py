@@ -164,9 +164,25 @@ async def run():
         finally:
             parent.coordinator.config.pop('spawn_mode')
         assert len(created) == count
+        # Input expansion also applies to actual finite, resumed and persistent
+        # child sessions, using their workspace rather than this process cwd.
+        parent.coordinator.register_capability('session.working_dir', tmp)
+        note = Path(tmp) / 'note.md'
+        note.write_text('CHILD-MENTION-CONTEXT')
+        mentioned = await registry.spawn('worker', 'Read @note.md', parent, sub_session_id='mention-child')
+        assert 'CHILD-MENTION-CONTEXT' in mentioned['output']
+        note.write_text('REVISED-CHILD-CONTEXT')
+        resumed_mention = await registry.resume('mention-child', 'Read @note.md', parent)
+        assert 'REVISED-CHILD-CONTEXT' in resumed_mention['output']
+        assert 'CHILD-MENTION-CONTEXT' not in resumed_mention['output']
+        mentioned_task = asyncio.create_task(wrapper.execute({'agent': 'worker', 'instruction': 'Read @note.md', 'persistent': True}))
+        mentioned_row = await wait_idle()
+        assert 'REVISED-CHILD-CONTEXT' in mentioned_row['report']
+        await registry.control(mentioned_row['sessionId'], 'finish')
+        assert (await asyncio.wait_for(mentioned_task, 2)).success
     await parent.cleanup()
     assert not any(name.startswith(('amplifier_app_cli','amplifier_loop_live_cli')) for name in sys.modules)
-    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'cli_imports':False}))
+    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'runtime_mentions':True,'cli_imports':False}))
 
 if __name__=='__main__':
     asyncio.run(run())
