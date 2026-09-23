@@ -82,7 +82,10 @@ try{
  await controls.getByRole('button',{name:'Toggle compact spacing'}).click();
  await expect(page.locator('#amp-one')).toHaveAttribute('data-density','comfortable');
  await page.screenshot({path:output+'mobile-controls.png'});
- await controls.getByRole('button',{name:'Toggle compact spacing'}).press('Escape');
+ // The SSE presentation can update before the save promise re-enables its button.
+ const spacing=controls.getByRole('button',{name:'Toggle compact spacing'});
+ await expect(spacing).toBeEnabled();await spacing.focus();await expect(spacing).toBeFocused();
+ await spacing.press('Escape');
  await expect(additional).toBeFocused();await expect(additional).toHaveAttribute('aria-expanded','false');
  await page.getByRole('button',{name:'Additional status',exact:true}).click();await expect(page.getByLabel('Conversation status',{exact:true})).toBeVisible();
  const mobileSnapshot=(await action('shell.query',{clientId,instanceId:'extra-actions'})).result;
