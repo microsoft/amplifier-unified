@@ -12,8 +12,10 @@ def manager(tmp_path,monkeypatch):
     def config(workspace):
         value={}
         for scope in ('global','project','local'):value=merge(value,manager.store.read(workspace,scope))
-        return SimpleNamespace(settings=value,providers=value.get('config',{}).get('providers',[]))
+        return SimpleNamespace(resolve_source=lambda reference:None,settings=value,providers=value.get('config',{}).get('providers',[]))
     monkeypatch.setattr(manager,'config',config)
+    async def cached_catalog(workspace):pass
+    monkeypatch.setattr(manager,'ensure_routing_catalog',cached_catalog)
     return manager
 
 @pytest.mark.asyncio
@@ -283,16 +285,17 @@ async def test_model_discovery_for_a_future_workspace_does_not_create_it(manager
     assert not future.parent.exists()
 
 @pytest.mark.asyncio
-async def test_guided_setup_creates_initial_choices_once_and_preserves_private_config(manager,tmp_path):
+async def test_guided_setup_selects_balanced_once_and_preserves_private_config(manager,tmp_path):
     workspace=str(tmp_path)
     await manager.perform('providers.save',{'workspace':workspace,'id':'first','module':'provider-openai','apiKey':'private-guided-key','config':{'opaque':{'keep':True}}})
     args={'workspace':workspace,'id':'first','model':'chosen-model','initializeRouting':True}
     result=await manager.perform('providers.finishSetup',args)
-    assert result['setupCompletion']['routingCreated'] is True
+    assert result['setupCompletion']['routingCreated'] is False
+    assert result['setupCompletion']['routingSelected']=='balanced'
     assert result['takesEffect']=='new_sessions'
     active=result['active']
-    matrix=manager.matrix(workspace,active)
-    assert matrix['roles']['general']['candidates']==[{'provider':'first','model':'chosen-model'}]
+    assert active=='balanced'
+    assert not list((manager.store.shared_home/'routing').glob('my-ai-*.yaml'))
     saved=manager.store.read(workspace)['config']['providers'][0]['config']
     assert saved['opaque']=={'keep':True}
     assert saved['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
@@ -302,7 +305,6 @@ async def test_guided_setup_creates_initial_choices_once_and_preserves_private_c
     retry=await manager.perform('providers.finishSetup',{**args,'model':'another-model'})
     assert retry['setupCompletion']['routingCreated'] is False
     assert manager.routing(workspace)['active']==active
-    assert manager.matrix(workspace,active)==matrix
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('protection',['custom-balanced','explicit-profile','multiple-providers'])

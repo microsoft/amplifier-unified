@@ -27,6 +27,8 @@ async def probe(self,action,args,workspace):
  if action=='providers.test':result['test']={'reachable':True,'modelCount':1,'providerId':args['id'],'method':'provider.list_models'}
  return result
 SetupManager.probe=probe
+async def cached_routing(self,workspace):pass
+SetupManager.ensure_routing_catalog=cached_routing
 async def discover(self,url):
  return {'candidates':[{'name':name,'path':name+'.yaml','uri':url+'#'+name+'.yaml','kind':'behavior'} for name in ['base','dev-tools','research']]}
 BundleManager.discover=discover

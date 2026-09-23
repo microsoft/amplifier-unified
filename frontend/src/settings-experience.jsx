@@ -53,7 +53,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='custom-appearance')content=React.isValidElement(appearance)?React.cloneElement(appearance,{advancedOnly:true}):appearance;
  else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
  else if(page==='workspaces')content=<WorkspaceSettings {...props}/>;
- else if(page==='voice')content=<><p>Use the voice button in your conversation to talk with Amplifier.</p><details className="a-everyday-disclosure"><summary>Advanced voice options</summary><div><VoiceSettings {...props}/></div></details></>;
+ else if(page==='voice')content=<><p className="a-everyday-intro">Talk with Amplifier while you work.</p><div className="a-ai-hint"><strong>Voice conversations</strong><p>Use the voice button in your conversation to start talking. Your browser will ask for microphone access.</p></div><details className="a-everyday-disclosure"><summary>Advanced voice options</summary><div><VoiceSettings {...props}/></div></details></>;
  else if(page==='providers')content=<ProviderSettings {...props}/>;
  else if(page==='routing')content=<RoutingSettings {...props}/>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
@@ -80,7 +80,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
   </header>
   <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0])}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
-   <header className="a-settings-page-heading"><div><span className="a-settings-scope">{section.scope}</span><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
+   <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
    {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
    {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}

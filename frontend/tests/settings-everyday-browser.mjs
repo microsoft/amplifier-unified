@@ -15,7 +15,7 @@ try{
  assert.equal(await page.locator('.a-settings-sidebar>button').count(),8);
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
- await page.getByRole('button',{name:/Anthropic Connect with/}).click();
+ await page.getByRole('button',{name:/Anthropic API Connect with/}).click();
  await page.getByLabel('API key',{exact:true}).fill('everyday-private-fixture-key');
  await openSettingsPage(page,'appearance');await openSettingsPage(page,'ai-connections');
  assert.equal(await page.getByLabel('API key',{exact:true}).inputValue(),'everyday-private-fixture-key');
@@ -32,7 +32,7 @@ try{
  await page.screenshot({path:'/tmp/settings-everyday-ai-desktop.png'});
  await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Browse',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();
- await page.getByRole('button',{name:'Review installation (2)',exact:true}).click();
+ await page.getByRole('button',{name:'Review & install',exact:true}).click();
  await expect(page.getByRole('region',{name:'Review installation',exact:true})).toBeVisible();
  assert.equal((await state()).smartTools.operations.filter(op=>op.action==='smartTools.installBatch').length,0);
  await page.getByRole('button',{name:'Install selected (2)',exact:true}).click();

@@ -32,10 +32,14 @@ def public(value):
 
 
 async def query(request):
-    if request.get('source'):
+    source=request.get('source')
+    if not source:
+        try:provider_class(request['module'])
+        except ImportError:source=request.get('fallbackSource')
+    if source:
         from amplifier_foundation import Bundle
         os.environ['AMPLIFIER_HOME']=request['registryHome']
-        bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':request['source']}]})
+        bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':source}]})
         await bundle.prepare(strict=True)
     cls=provider_class(request['module'])
     # Metadata discovery is deliberately configuration-free. This keeps schema

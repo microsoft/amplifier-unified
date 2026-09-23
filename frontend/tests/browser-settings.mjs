@@ -23,6 +23,8 @@ export async function openSettingsPage(page,destination){
  await page.locator(`[data-settings-section="${section.id}"]`).click();
  if(section.pages[0][0]!==destination){
   const link=page.locator(`.a-settings-page-content:not([hidden]) [data-settings-destination="${destination}"]`);
+  const group=link.locator('xpath=ancestor::details');
+  if(await group.count()&&!await link.isVisible())await group.locator('summary').click();
   if(await link.isVisible())await link.click();
   else await page.evaluate(destination=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsExpanded:[destination]}}),destination);
  }
