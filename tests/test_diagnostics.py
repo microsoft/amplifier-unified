@@ -209,6 +209,53 @@ async def test_queue_retention_and_disk_failure_are_visible_and_do_not_break_wor
     assert service._session()['status']=='idle'
 
 
+async def test_retention_preserves_count_age_boundaries_and_pending_loss_accounting(service,monkeypatch):
+    collector=service.diagnostics
+    now=100000.0
+    monkeypatch.setattr('amplifier_web.diagnostics.time.time',lambda:now)
+    cfg={**copy.deepcopy(DEFAULT),'retentionDays':1,'maxRecords':3}
+    cutoff=now-86400
+    # Non-contiguous insertion order and out-of-order event timestamps are
+    # normal after deletion and importing older capture events.
+    rows=[(1,'old-pending',now),(5,'old-failed',now),(10,'old-accepted',now),
+          (11,'old-two-routes',now),(30,'boundary',cutoff),
+          (31,'recent-but-expired',cutoff-1),(50,'unknown-time',None)]
+    deliveries=[('old-pending','a','pending'),('old-failed','a','failed'),
+                ('old-accepted','a','accepted'),('old-two-routes','a','pending'),
+                ('old-two-routes','b','failed'),('recent-but-expired','a','pending'),
+                ('boundary','a','accepted'),('unknown-time','a','accepted')]
+    with collector._db() as db:
+        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
+                       [(seq,identity,at,'{}') for seq,identity,at in rows])
+        db.executemany('INSERT INTO deliveries(record_id,destination,status) VALUES(?,?,?)',deliveries)
+    collector._persist([],cfg)
+    with collector._db() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM records')}=={'boundary','unknown-time'}
+        assert {r[0] for r in db.execute('SELECT record_id FROM deliveries')}=={'boundary','unknown-time'}
+        assert db.execute("SELECT value FROM counters WHERE name='expiredPending'").fetchone()[0]==5
+    # An idle flush with fewer rows than the cap must keep them and count no
+    # losses twice. A later cap decrease expires only the older insertion.
+    collector._persist([],cfg)
+    collector._persist([],{**cfg,'maxRecords':1})
+    with collector._db() as db:
+        assert [r[0] for r in db.execute('SELECT id FROM records')]==['unknown-time']
+        assert [r[0] for r in db.execute('SELECT record_id FROM deliveries')]==['unknown-time']
+        assert db.execute("SELECT value FROM counters WHERE name='expiredPending'").fetchone()[0]==5
+
+
+@pytest.mark.parametrize('limit,expected',[(0,set()),(1,{'newer'}),(2,{'older','newer'}),(10,{'older','newer'}),(-1,{'older','newer'})])
+async def test_retention_count_empty_exact_and_unlimited_boundaries(service,limit,expected):
+    collector=service.diagnostics
+    cfg={**copy.deepcopy(DEFAULT),'maxRecords':limit}
+    collector._persist([],cfg)  # An empty database has no boundary row.
+    with collector._db() as db:
+        db.executemany('INSERT INTO records(seq,id,at,data) VALUES(?,?,?,?)',
+                       [(2,'older',None,'{}'),(19,'newer',None,'{}')])
+    collector._persist([],cfg)
+    with collector._db() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM records')}==expected
+
+
 async def test_disabling_after_queue_read_cannot_send_detached_cancelled_payload(service,monkeypatch):
     await configure(service,destination())
     collector=service.diagnostics
