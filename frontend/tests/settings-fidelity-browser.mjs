@@ -75,8 +75,7 @@ try{
  await page.screenshot({path:out+'/tool-detail-dark.png'});
  await page.getByRole('button',{name:'Back to catalog',exact:true}).click();
  await openSettingsPage(page,'ai-connections');
- await page.getByRole('button',{name:'Back',exact:true}).click();
- await page.getByRole('button',{name:'Back',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Connect another service',exact:true})).toBeVisible();
  const screens=['ai-connections','smart-tools','appearance','voice','notifications','privacy','updates','advanced'];
  for(const mode of ['dark','light']){
   await page.emulateMedia({colorScheme:mode});
