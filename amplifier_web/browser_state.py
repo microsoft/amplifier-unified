@@ -4,6 +4,7 @@ The native catalog is an index, not browser state. Actions and JSON Pointer
 reads still address the complete catalog; browsing only publishes one page.
 """
 from copy import deepcopy
+from collections import OrderedDict
 from .browser_detail import project
 from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
@@ -107,7 +108,30 @@ def navigation(state, *, chats=chat_snapshot, index=None):
             'subagentNavigation': workers}
 
 
-def snapshot(state, derived, *, session_id=None, index=None):
+class SnapshotCopies:
+    """Reuse detached, read-only sections, never references into mutable state.
+
+    Keep one previous frame per recent browser, not a history of revisions. A
+    full value comparison detects in-place edits and saves without a revision
+    change. Independent browsers never share this cache entry.
+    """
+    def __init__(self, limit=8):
+        self.limit = limit
+        self.frames = OrderedDict()
+
+    def detach(self, value, identity):
+        previous = self.frames.pop(identity, {})
+        result = {key: previous[key] if key in previous and previous[key] == item
+                  else deepcopy(item) for key, item in value.items()}
+        # Callers add client-specific top-level fields after detaching. Keep a
+        # separate dictionary so those overlays cannot change this baseline.
+        self.frames[identity] = dict(result)
+        while len(self.frames) > self.limit:
+            self.frames.popitem(last=False)
+        return result
+
+
+def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None):
     index = index or SessionIndex(state)
     result = dict(state)
     result.update(derived)
@@ -151,4 +175,4 @@ def snapshot(state, derived, *, session_id=None, index=None):
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):
         result.pop(key, None)
-    return deepcopy(result)
+    return copies.detach(result, client_id) if copies is not None else deepcopy(result)

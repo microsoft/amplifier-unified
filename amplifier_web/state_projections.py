@@ -1,7 +1,8 @@
 """Read-only derived indexes shared within one saved state generation.
 
-AppService clears this cache on every save, including saves without a revision
-change. Client selection/filter keys are explicit; drafts never enter shared
+AppService invalidates live facts on every save, including saves without a
+revision change. Navigation indexes survive only when their complete semantic
+key is unchanged. Client query keys are explicit; drafts never enter shared
 projections. The full agent state path remains an uncached read of live state.
 """
 import hashlib
@@ -11,6 +12,25 @@ import json
 class StateProjections:
     def __init__(self):
         self.values = {}
+        self.previous_navigation = None
+
+    def invalidate(self):
+        # Keep only navigation results, not active sessions, notifications, or
+        # worker pages. Those must observe each saved generation independently.
+        if self.previous_navigation is None:
+            retained = {key: value for key, value in self.values.items()
+                        if key[0] in {'workspace-index', 'workspaces', 'chat-registry', 'chat-index', 'chats'}}
+            self.previous_navigation = (self.values.get(('shell-data-key',)), retained)
+        self.values = {}
+
+    def refresh_navigation(self, state):
+        if self.previous_navigation is not None:
+            previous, retained = self.previous_navigation
+            self.previous_navigation = None
+            # The key covers all roots, including off-page errors, permissions,
+            # organization, workspace metadata, and stable navigation recency.
+            if previous is not None and self.shell_key(state) == previous:
+                self.values.update(retained)
 
     def get(self, key, build):
         if key not in self.values:
@@ -46,11 +66,13 @@ class StateProjections:
                                       'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode')))
 
     def workspaces(self, state):
+        self.refresh_navigation(state)
         from .workspace_navigation import _index, snapshot
         index = self.get(('workspace-index',), lambda: _index(state))
         return self.get(('workspaces', *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
     def chats(self, state):
+        self.refresh_navigation(state)
         from .chat_navigation import catalog, registry, snapshot
         view = state.get('view', {})
         workspace = None if view.get('navChatScope') == 'all' else state.get('selectedWorkspaceId')

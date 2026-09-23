@@ -438,6 +438,8 @@ class AppService:
         from .client_views import ClientViews
         self.clients = ClientViews(self)
         self._client_snapshots = {}
+        from .browser_state import SnapshotCopies
+        self._snapshot_copies = SnapshotCopies()
         from .questions import Questions
         self.questions = Questions(self)
         from .coordination import Coordination
@@ -526,7 +528,8 @@ class AppService:
                 derived = self.projections.browser(self.state)
                 if session_id is not None:
                     self._session(session_id)
-                cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state)))
+                cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
+                    copies=self._snapshot_copies if session_id is None else None, client_id=client_id))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
@@ -537,7 +540,7 @@ class AppService:
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
             derived = self.projections.browser(self.state)
-            self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state))
+            self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state), copies=self._snapshot_copies)
             self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
         if session_id is not None:
             self._session(session_id)
@@ -577,7 +580,8 @@ class AppService:
         self._browser_snapshot = None
         self._client_snapshots.clear()
         self._client_snapshot_preferences = {}
-        self._projections = None
+        if getattr(self, '_projections', None) is not None:
+            self._projections.invalidate()
         from .state_storage import normalize_state
         normalize_state(self.state, self.db)
         from .session_projection import persist
