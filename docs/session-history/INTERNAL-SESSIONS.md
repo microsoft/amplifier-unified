@@ -15,28 +15,10 @@ Producers must persist creation provenance and retain it across resume. They mus
 
 Unknown historical sessions remain visible. Unified does not inspect prompts or titles to retroactively classify them, delete or archive them, or rewrite native history. A safe historical classification requires trustworthy producer evidence or a separately reviewed explicit decision.
 
-The consumer does not invent missing producer declarations. Memory suggestion jobs started through an unmodified CLI still lack this provenance and remain visible. End-to-end prevention requires producer and CLI persistence support as well as this consumer.
+The consumer does not invent missing producer declarations. Existing unmarked internal jobs remain visible until their origin can be established independently. This consumer reads shared-format metadata directly and never imports, installs or invokes amplifier-app-cli.
 
-## Producer bridge acceptance
+Auxiliary memory inference must call the configured provider directly without creating a persisted conversation. A CLI-based producer workaround is not part of Unified's implementation or dependencies.
 
-The memory suggestion launcher uses a copied child environment with
-`AMPLIFIER_SESSION_VISIBILITY=internal`,
-`AMPLIFIER_SESSION_PURPOSE=memory.suggestion`, and its existing origin convention
-`AMPLIFIER_SESSION_ORIGIN=agent`. The compatible CLI captures this only for a new
-root, persists it before initialization, and preserves it through incremental,
-final, failure and resume paths. Independent human forks get `chat`.
+## Validation
 
-Run `scripts/verify_internal_session_bridge.py` with candidate `amplifier-app-cli`
-and `amplifier-memory` installed in a private environment and this checkout on
-`PYTHONPATH`. It exercises the real memory launcher, CLI initializer/shared
-ownership/headless save, installed Foundation persistence and Unified discovery.
-Only subprocess dispatch and the Core session/execution boundary are simulated.
-It creates temporary synthetic histories, records actual imported source hashes,
-checks classification before execution, failure/resume, ordinary agent-launched
-CLI work, legacy resume, and unchanged canonical bytes after discovery. It never
-constructs AppService, starts a provider or reads an existing user session.
-
-Frontend navigation tests cover filtering; this offline bridge is not a rendered
-browser or real-provider acceptance test. Task/worker coordination and full
-state remain diagnostic surfaces and can retain internal rows; ordinary chat
-counts and notification-message previews exclude internal jobs.
+Synthetic native-history fixtures cover explicit internal provenance, ordinary roots, worker ancestry, independent forks, legacy unmarked sessions and unchanged canonical files. Frontend navigation tests cover filtering; this is not a claim that existing unmarked production jobs have been reclassified. Task/worker coordination and full state remain diagnostic surfaces and can retain internal rows; ordinary chat counts and notification-message previews exclude internal jobs.
