@@ -46,13 +46,14 @@ export function useSettingsViewport(root,compact){
 export function useSettingsHistory({compact,trail,view,act,close,body,navigationRef}){
  const latest=useRef(null),session=useRef(null),scrolls=useRef(new Map()),lastKey=useRef(null),scrollRestore=useRef(false);
  latest.current={trail,view,act,close};
- const route=trail.at(-1),key=route.key;
+ const route=trail.at(-1),key=route.key,visit=useRef(view.settingsRootVisit);
  // The scroll position belongs to the navigation level, not to every state update.
  useEffect(()=>{
+  const reset=visit.current!==view.settingsRootVisit;visit.current=view.settingsRootVisit;
   lastKey.current=key;scrollRestore.current=true;
-  const frame=requestAnimationFrame(()=>{if(body.current)body.current.scrollTop=scrolls.current.get(key)||0;scrollRestore.current=false;});
+  const frame=requestAnimationFrame(()=>{if(body.current)body.current.scrollTop=reset?0:scrolls.current.get(key)||0;scrollRestore.current=false;});
   return()=>cancelAnimationFrame(frame);
- },[key]);
+ },[key,view.settingsRootVisit]);
  const rememberScroll=()=>{if(body.current&&!scrollRestore.current)scrolls.current.set(lastKey.current,body.current.scrollTop);};
  useLayoutEffect(()=>{
   if(!compact||typeof window==='undefined')return;

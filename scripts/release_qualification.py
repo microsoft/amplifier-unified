@@ -108,12 +108,32 @@ print(json.dumps(sorted(rows,key=lambda row:row['name'])))'''
     return json.loads(run(str(python), '-I', '-c', probe))
 
 
+def core_wheel(python):
+    """Record the installed native binary without importing any CLI or app."""
+    probe = '''import hashlib,importlib.metadata as m,importlib.machinery as machinery,json,platform,sys
+d=m.distribution('amplifier-core')
+native=[p for p in d.files or [] if str(p).startswith('amplifier_core/_engine.') and any(str(p).endswith(s) for s in machinery.EXTENSION_SUFFIXES)]
+print(json.dumps({'version':d.version,'direct':json.loads(d.read_text('direct_url.json') or 'null'),
+ 'wheel':d.read_text('WHEEL'),'native':[{'name':str(p),'sha256':hashlib.sha256(d.locate_file(p).read_bytes()).hexdigest()} for p in native],
+ 'python':sys.version,'machine':platform.machine(),
+ 'cliInstalled':any(x.metadata['Name'].lower().replace('_','-')=='amplifier-app-cli' for x in m.distributions())}))'''
+    value = json.loads(run(str(python), '-I', '-c', probe))
+    if (value['direct'] is not None or not value['wheel'] or 'Root-Is-Purelib: false' not in value['wheel']
+            or len(value['native']) != 1 or value['cliInstalled']):
+        raise ValueError('Core must be a registry native wheel without amplifier-app-cli')
+    return value
+
+
 def runtime_snapshot(root, runtime):
     build = json.loads((runtime / 'build-identity.json').read_text())
     if build != build_identity(root, runtime):
         raise ValueError('Runtime source or toolchain changed after cache selection')
-    return {'build': digest(build), 'recipes': checkout_identity(root / '.ci/recipes'),
-            'graph': graph(runtime / '.venv/bin/python')}
+    value = {'build': digest(build), 'recipes': checkout_identity(root / '.ci/recipes'),
+             'graph': graph(runtime / '.venv/bin/python')}
+    policy = tomllib.loads((runtime / 'pyproject.toml').read_text()).get('tool', {}).get('uv', {})
+    if 'amplifier-core' in policy.get('no-build-package', []):
+        value['coreWheel'] = core_wheel(runtime / '.venv/bin/python')
+    return value
 
 
 def receipt(root, evidence, expected, lane, destination, runtime=None, dist=None):
@@ -152,7 +172,7 @@ def verify_receipts(root, evidence, expected, receipts, dist):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('candidate', 'verify-candidate', 'runtime-project', 'cache-key', 'runtime-snapshot', 'receipt', 'verify-receipts'))
+    parser.add_argument('command', choices=('candidate', 'verify-candidate', 'runtime-project', 'cache-key', 'runtime-snapshot', 'core-wheel', 'receipt', 'verify-receipts'))
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--candidate')
     parser.add_argument('--runtime', type=Path)
@@ -161,6 +181,7 @@ def main():
     parser.add_argument('--receipts', type=Path)
     parser.add_argument('--dist', type=Path, default=Path('dist'))
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--python', type=Path, default=Path(sys.executable))
     args = parser.parse_args()
     root = Path.cwd()
     output = None
@@ -176,6 +197,8 @@ def main():
         output = ('key', 'release-runtime-v1-' + digest(value))
     elif args.command == 'runtime-snapshot':
         write(args.runtime / 'qualified-runtime.json', runtime_snapshot(root, args.runtime))
+    elif args.command == 'core-wheel':
+        write(args.destination, core_wheel(args.python))
     elif args.command == 'receipt':
         receipt(root, args.evidence, args.candidate, args.lane, args.destination, args.runtime, args.dist)
     else:

@@ -100,9 +100,13 @@ def test_promotion_rejects_mixed_or_tampered_evidence(qualified, change):
         qualification.verify_receipts(root, evidence, expected, receipts, dist)
 
 
-def test_runtime_changes_after_tests_cannot_produce_a_receipt(qualified):
+@pytest.mark.parametrize('change', ['graph', 'native-binary'])
+def test_runtime_changes_after_tests_cannot_produce_a_receipt(qualified, change):
     root, evidence, expected, receipts, dist, runtime, snapshot = qualified
-    snapshot['graph'] = [{'name': 'core', 'version': 'new-untested-version'}]
+    if change == 'graph':
+        snapshot['graph'] = [{'name': 'core', 'version': 'new-untested-version'}]
+    else:
+        snapshot['coreWheel'] = {'native': [{'sha256': 'changed-binary'}]}
     with pytest.raises(ValueError, match='changed during qualification'):
         qualification.receipt(root, evidence, expected, 'runtime', receipts / 'runtime.json', runtime, dist)
 
@@ -152,6 +156,28 @@ def test_cache_identity_does_not_include_credentials(runtime_build, monkeypatch)
     with_flags = qualification.build_identity(root, runtime)
     assert with_flags != after
     assert 'never-export' not in json.dumps(with_flags)
+
+
+@pytest.mark.parametrize('change', ['none', 'source-install', 'missing-wheel', 'pure-python', 'missing-native', 'cli'])
+def test_core_wheel_receipt_rejects_source_or_cli_installations(monkeypatch, change):
+    value = {'version': '2.0.1', 'direct': None, 'wheel': 'Root-Is-Purelib: false\nTag: cp311-abi3-manylinux_2_17_x86_64',
+             'native': [{'name': 'amplifier_core/_engine.abi3.so', 'sha256': 'a' * 64}], 'cliInstalled': False}
+    if change == 'source-install':
+        value['direct'] = {'url': 'https://github.com/microsoft/amplifier-core', 'vcs_info': {'vcs': 'git'}}
+    elif change == 'missing-wheel':
+        value['wheel'] = None
+    elif change == 'pure-python':
+        value['wheel'] = 'Root-Is-Purelib: true'
+    elif change == 'missing-native':
+        value['native'] = []
+    elif change == 'cli':
+        value['cliInstalled'] = True
+    monkeypatch.setattr(qualification, 'run', lambda *args: json.dumps(value))
+    if change == 'none':
+        assert qualification.core_wheel(Path('python')) == value
+    else:
+        with pytest.raises(ValueError, match='registry native wheel'):
+            qualification.core_wheel(Path('python'))
 
 
 def test_runtime_project_constrains_the_recorded_build_backend(tmp_path, monkeypatch):
@@ -240,3 +266,21 @@ def test_runtime_cache_is_selected_after_fresh_resolution_without_fallback():
     save = next(i for i, step in enumerate(steps) if step.get('uses') == 'actions/cache/save@v4')
     assert install < save
     assert 'uv cache clean amplifier-module-loop-live' in steps[install]['run']
+
+
+def test_native_core_qualification_is_manual_and_cannot_publish():
+    workflows = ROOT / '.github/workflows'
+    entry = yaml.load((workflows / 'python-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    native = yaml.load((workflows / 'core-wheels.yml').read_text(), Loader=yaml.BaseLoader)
+    assert set(entry['on']) == {'workflow_dispatch'}
+    assert entry['on']['workflow_dispatch']['inputs']['core_wheels']['default'] == 'false'
+    assert entry['jobs']['core-wheels']['uses'] == './.github/workflows/core-wheels.yml'
+    assert set(native['on']) == {'workflow_call'}
+    assert native['permissions'] == {'contents': 'read'}
+    job = native['jobs']['runtime']
+    assert job['if'] == "github.event_name == 'workflow_dispatch'"
+    assert set(job['strategy']['matrix']['os']) == {'ubuntu-latest', 'ubuntu-24.04-arm'}
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'tests/test_runtime_module_cache.py' in commands
+    assert 'runtime-snapshot' in commands and 'cmp ' in commands
+    assert 'publish' not in commands

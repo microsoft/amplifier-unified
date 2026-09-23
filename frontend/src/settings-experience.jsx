@@ -1,6 +1,6 @@
 import {isTopLevelChat} from './chat-navigation';
 import {ShellSlot,useShellContext} from './shell/runtime';
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {SlidersHorizontal,Palette,AudioLines,Bell,Network,Layers,Plug,Download,Activity,Archive,Settings,ArrowRight,MessageSquare,ArrowLeft,X} from 'lucide-react';
 import {settingsSections,settingsLocation,settingsPatch,settingsUnread,settingsTitle,settingsParent} from './settings-navigation';
 import {AIConnections} from './ai-connections';
@@ -37,7 +37,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  useSettingsViewport(root,compact);
  const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef});
  const navigate=(page,reset=false)=>{navigation.rememberScroll();act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
- useEffect(()=>{if(!state.view?.settingsRootVisit)return;const frame=requestAnimationFrame(()=>{if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;});return()=>cancelAnimationFrame(frame)},[state.view?.settingsRootVisit]);
+ useLayoutEffect(()=>{if(!state.view?.settingsRootVisit)return;if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;},[state.view?.settingsRootVisit]);
  useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
  const props={state,session,act};
  // Keep visited editors mounted while the dialog is open. Private fields stay

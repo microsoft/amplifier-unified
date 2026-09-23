@@ -5,7 +5,7 @@ description = "Standalone Foundation and loop-live runtime for Amplifier Unified
 requires-python = ">=3.13"
 dependencies = [
   "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
-  "amplifier-core>=1.6.1",
+  "amplifier-core>=2.0.1",
   "amplifier-module-loop-live",
   "amplifier-foundation",
   "amplifier-module-loop-streaming",
@@ -29,13 +29,18 @@ dependencies = [
 ]
 
 [tool.uv]
+# Core publishes native wheels; never compile it while installing this app.
+no-build-package = ["amplifier-core"]
 # Follow the same Foundation branch while bundles resolve their modules.
 override-dependencies = [
   "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
 ]
 
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
 [tool.uv.sources]
-amplifier-core = { git = "https://github.com/microsoft/amplifier-core", rev = "main" }
 amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
