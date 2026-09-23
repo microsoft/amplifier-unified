@@ -37,3 +37,23 @@ async def test_agent_can_install_batch_and_reorder_saved_settings(tmp_path,monke
         observed=await app.app_bridge('get_state',{'path':'/smartTools/operations'},sid)
         assert 'agent-batch' in str(observed)
     finally:await app.close()
+
+async def test_guided_provider_finish_has_correlated_user_and_agent_receipts(tmp_path,monkeypatch):
+    async def probe(self,action,args,workspace):
+        return {'models':[{'id':'fixture-model'}],'modelsProviderId':args.get('id')}
+    monkeypatch.setattr(SetupManager,'probe',probe)
+    app=AppService(tmp_path,workspace=tmp_path);app.management=Management(app)
+    try:
+        await app.dispatch('session.create',{});sid=app.state['selectedSessionId']
+        saved=await app.dispatch('providers.save',{'id':'guided','module':'provider-test','config':{'opaque':'keep'},'apiKey':'private-guided-value'})
+        await settle(app)
+        assert saved['operationId']
+        assert app.state['setup']['operations']['providers.save:guided']['commandId']==saved['operationId']
+        receipt=await app.app_bridge('dispatch',{'action':'providers.finishSetup','id':'agent-guided','args':{'id':'guided','model':'fixture-model','initializeRouting':True}},sid)
+        await settle(app)
+        assert receipt['operationId']=='agent-guided'
+        assert app.state['setup']['operations']['providers.finishSetup:guided']['phase']=='ready'
+        row=next(p for p in app.state['setup']['providers'] if p['id']=='guided')
+        assert row['config']['opaque']=='keep' and row['config']['default_model']=='fixture-model'
+        assert 'private-guided-value' not in str(app.browser_state())
+    finally:await app.close()

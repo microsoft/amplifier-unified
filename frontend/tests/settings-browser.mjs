@@ -49,6 +49,7 @@ try{
  const initialUnread=(await state()).attention.unread;const updateUnread=(await state()).attention.pages.updates;assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),String((await state()).attention.settingsUnread));
  assert.equal(await page.locator('[data-settings-section=updates] .a-attention-badge').innerText(),String(updateUnread));
  await openSettingsPage(page,'updates');
+ await page.getByText('Component updates & details',{exact:true}).click();await page.getByText('Release notices',{exact:true}).click();
  await page.locator('#available-updates-list li').first().waitFor();
  assert.equal(await page.locator('#available-updates-list li').count(),1);
  assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
@@ -78,6 +79,7 @@ try{
  await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-compact','true');
  const floating=await page.locator('.a-dialog').boundingBox();assert.equal(floating.x,0);assert.equal(floating.y,0);assert.equal(floating.width,680);
 
+ await page.getByText('Update preferences',{exact:true}).click();
  const aligned=await page.locator('.a-update-options label').first().evaluate(label=>{const input=label.querySelector('input'),a=input.getBoundingClientRect(),b=label.getBoundingClientRect();return {direction:getComputedStyle(label).flexDirection,width:a.width,delta:Math.abs(a.top+a.height/2-b.top-b.height/2)}});
  assert.equal(aligned.direction,'row');assert.equal(aligned.width,18);assert.ok(aligned.delta<3);
  await page.setViewportSize({width:390,height:844});
@@ -87,7 +89,7 @@ try{
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-changelog-mobile.png'});
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-mobile.png'});
 
- await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();
+ await page.getByText('Component updates & details',{exact:true}).click();await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();
  await page.locator('#filter-update-sources').fill('*42*');
  assert.equal(await page.locator('#update-sources-list li').count(),1);
  assert.match(await page.locator('#update-sources-list li').innerText(),/fixture-source-42/);
@@ -105,7 +107,7 @@ try{
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
  await page.getByText('Changes are applied to the loaded session.',{exact:true}).waitFor();
  assert.equal((await state()).sessions[0].configuration.plan.tools[0].config.max_bytes,4096);
- await page.getByRole('button',{name:'Back to Bundles & modules',exact:true}).click();
+ await page.getByRole('button',{name:'Back to Conversation modules',exact:true}).click();
  await page.getByRole('checkbox',{name:'Enable tool-filesystem',exact:true}).uncheck();
  await page.getByRole('button',{name:'Apply to loaded session',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().sessions[0].configuration.plan.tools[0].enabled===false);
@@ -155,9 +157,10 @@ try{
  await expect(page.getByRole('combobox',{name:'Workspace',exact:true})).toHaveValue(workspace+'/project');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.newSessionDraft.bundle),'fixture-root','attaching a browsed folder preserves the selected bundle');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}));
+ await openSettingsPage(page,'custom-appearance');
  const data=await page.evaluateHandle(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['#amp-one { --a-accent: purple; }'],'dropped.amplifier.css',{type:'text/css'}));return transfer});
  await page.locator('.a-file-drop').dispatchEvent('drop',{dataTransfer:data});
- await expect(page.getByRole('button',{name:'Preview dropped',exact:true})).toBeVisible();
+ await openSettingsPage(page,'appearance');await expect(page.getByRole('button',{name:'Preview dropped',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Preview dropped',exact:true}).click();
  await expect(page.getByRole('button',{name:'Use dropped',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Cancel preview',exact:true}).click();

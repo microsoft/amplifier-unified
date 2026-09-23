@@ -1,5 +1,7 @@
 import {settingsSections} from '../src/settings-navigation.js';
 export async function openSettingsDialog(page){
+ await page.waitForFunction(()=>window.amplifier?.getState());
+ if(await page.evaluate(()=>['settings','appearance'].includes(window.amplifier.getState().view?.panel))){await page.locator('.a-settings-experience').waitFor({state:'visible'});return;}
  if(await page.locator('.a-settings-experience').isVisible())return;
  // The menu's attention badge adds its own accessible unread-item label.
  const settings=page.getByRole('button',{name:/^Settings\b/});
@@ -19,6 +21,13 @@ export async function openSettingsPage(page,destination){
   }
  }
  await page.locator(`[data-settings-section="${section.id}"]`).click();
- if(section.pages.length>1){const picker=page.locator('.a-settings-section-picker select');if(await picker.isVisible())await picker.selectOption(destination);else await page.locator(`[data-settings-destination="${destination}"]`).click();}
+ if(section.pages[0][0]!==destination){
+  const link=page.locator(`.a-settings-page-content:not([hidden]) [data-settings-destination="${destination}"]`);
+  const group=link.locator('xpath=ancestor::details');
+  if(await group.count()&&!await link.isVisible())await group.locator('summary').click();
+  if(await link.isVisible())await link.click();
+  else await page.evaluate(destination=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsExpanded:[destination]}}),destination);
+ }
+
  await page.locator(`.a-settings-experience[data-settings-page="${destination}"]`).waitFor();
 }

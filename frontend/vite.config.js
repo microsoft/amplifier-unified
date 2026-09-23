@@ -8,7 +8,7 @@ const destination=fileURLToPath(new URL('../amplifier_web/static/unified.amplifi
 const loginPath=fileURLToPath(new URL('../amplifier_web/static/login.html',import.meta.url));
 const loginPage=readFileSync(loginPath);
 function sources(path){return readdirSync(path,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name,'en')).flatMap(row=>row.isDirectory()?sources(`${path}/${row.name}`):[`${path}/${row.name}`])}
-const hash=createHash('sha256');for(const file of [...sources(fileURLToPath(new URL('./src',import.meta.url))),fileURLToPath(import.meta.url),fileURLToPath(new URL('./package-lock.json',import.meta.url))])hash.update(readFileSync(file));
+const hash=createHash('sha256');for(const file of [...sources(fileURLToPath(new URL('./src',import.meta.url))),fileURLToPath(new URL('../amplifier_web/provider_sources.json',import.meta.url)),fileURLToPath(import.meta.url),fileURLToPath(new URL('./package-lock.json',import.meta.url))])hash.update(readFileSync(file));
 const version=readFileSync(fileURLToPath(new URL('../pyproject.toml',import.meta.url)),'utf8').match(/^version = "([^"]+)"/m)[1];
 const buildIdentity={version,id:hash.digest('hex').slice(0,16)};
 export default defineConfig({

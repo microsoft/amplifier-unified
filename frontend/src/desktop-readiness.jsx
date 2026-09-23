@@ -3,7 +3,7 @@ import {settingsPatch} from './settings-navigation';
 
 const time=value=>new Date(value*1000).toLocaleString();
 function Environment({value}){
- return <p className="a-wrap">{value.host.label} · {value.platform}<br/>Python {value.python.version}<br/><code>{value.python.path}</code><br/>Computer-use package: {value.computerUsePackage.version||value.computerUsePackage.status}</p>;
+ return <details className="a-everyday-disclosure"><summary>Technical environment details</summary><p className="a-wrap">{value.host.label} · {value.platform}<br/>Python {value.python.version}<br/><code>{value.python.path}</code><br/>Computer-use package: {value.computerUsePackage.version||value.computerUsePackage.status}</p></details>;
 }
 export function DesktopReadiness({state,session,act}){
  const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id,state.updates?.installedAt]);

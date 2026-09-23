@@ -18,11 +18,17 @@ from .shared_settings import atomic_write, routing_dirs, overlay
 from .host.config import load_config, write_private
 from .bundles import SECRET_KEYS, validate_uri
 
+KNOWN_PROVIDER_SOURCES=json.loads(Path(__file__).with_name('provider_sources.json').read_text())
+
 NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}')
+
+ROUTING_BUNDLE = 'git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main'
 
 ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 PROVIDER_ENV = {
     'provider-openai': ('OPENAI_API_KEY',),
+    'provider-azure-openai': ('AZURE_OPENAI_API_KEY',),
+    'provider-chat-completions': ('CHAT_COMPLETIONS_API_KEY',),
     'provider-anthropic': ('ANTHROPIC_API_KEY',),
     'provider-gemini': ('GOOGLE_API_KEY','GEMINI_API_KEY'),
     'provider-github-copilot': ('GITHUB_TOKEN','COPILOT_AGENT_TOKEN','COPILOT_GITHUB_TOKEN','GH_TOKEN'),
@@ -169,7 +175,7 @@ class SetupManager:
         process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env=env,cwd=probe_workspace)
         try:
             try:
-                output,_=await asyncio.wait_for(process.communicate(json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),90)
+                output,_=await asyncio.wait_for(process.communicate(json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),90)
             except TimeoutError:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
@@ -255,7 +261,7 @@ class SetupManager:
                     config['token_file_path']=config.get('token_file_path') or old.get('token_file_path') or str(self.store.shared_home/('openai-chatgpt-'+identity+'-oauth.json'))
                     config['login_on_mount']=False
                 row={'id':identity,'module':module,'config':private(config)}
-                source=args.get('source') or (existing or {}).get('source')
+                source=args.get('source') or (existing or {}).get('source') or (KNOWN_PROVIDER_SOURCES.get(module) if module in {'provider-chat-completions','provider-azure-openai','provider-ollama','provider-vllm'} else None)
                 if source: row['source']=validate_uri(source)
                 if updates:self._keys(updates)
             if index is None:rows.append(row)
@@ -273,8 +279,31 @@ class SetupManager:
         # Same first-hit precedence as the mounted routing hook.
         registry=getattr(self.config(workspace),'registry_home',self.home/'foundation')
         dirs=routing_dirs(workspace,shared_home=self.store.shared_home,global_only=self.global_only)
-        dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
+        from .host.bundle_paths import local_bundle_path
+        config=self.config(workspace)
+        selected=config.resolve_source(ROUTING_BUNDLE) or ROUTING_BUNDLE
+        local=local_bundle_path(config,selected)
+        if local:
+            root=local if local.is_dir() else local.parent
+            dirs.append(root/'routing')
+        else:
+            dirs.extend(sorted((registry/'cache').glob('amplifier-bundle-routing-matrix-*/routing')))
         return dirs
+
+    async def ensure_routing_catalog(self,workspace):
+        """Resolve the app's routing dependency once; subsequent reads use its cache.
+
+        Never copy curated matrices into user configuration or manufacture roles.
+        Foundation handles source overrides and cached repository resolution.
+        """
+        if any((directory/'balanced.yaml').is_file() for directory in self._routing_dirs(workspace)
+               if directory not in routing_dirs(workspace,shared_home=self.store.shared_home,global_only=self.global_only)):
+            return
+        from .host.session import session_registry,load_configured_bundle
+        config=self.config(workspace)
+        async with asyncio.timeout(30):
+            await load_configured_bundle(session_registry(config),config,ROUTING_BUNDLE)
+
 
     def routing(self,workspace):
         active=self.config(workspace).settings.get('routing',{}).get('matrix','balanced')
@@ -289,7 +318,7 @@ class SetupManager:
                     value=yaml.safe_load(path.read_text());validate_matrix(value)
                 except (ValueError,yaml.YAMLError):continue
                 seen.add(name);roles.update(value['roles'])
-                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in directories[:3] else 'bundle','active':active==name})
+                rows.append({'name':name,'description':value.get('description',''),'source':'custom' if directory in routing_dirs(workspace,shared_home=self.store.shared_home,global_only=self.global_only) else 'bundle','active':active==name})
         return {'matrices':rows,'active':active,'roles':sorted(roles)}
 
     def matrix(self,workspace,name):
@@ -338,6 +367,25 @@ class SetupManager:
                 self.store.update(workspace,scope,reorder)
             return {'providers':self.provider_rows(workspace),'scope':scope}
         if action=='providers.save':return self._provider_mutation(args,workspace,scope)
+        if action=='providers.finishSetup':
+            identity=safe_name(args['id']);model=args['model'].strip()
+            if not model:raise ValueError('Choose a model before finishing setup.')
+            effective=self.config(workspace)
+            row=next((value for value in effective.providers if (value.get('id') or value.get('instance_id') or value['module'].removeprefix('provider-'))==identity),None)
+            if not row:raise ValueError('The connection changed. Refresh your connections and try again.')
+            # A guided edit changes only the model. Preserve opaque provider fields,
+            # credential references and custom routing, including a custom balanced file.
+            routing=self.routing(workspace)
+            initialize=bool(args.get('initializeRouting') and not effective.settings.get('routing',{}).get('matrix')
+                and len([p for p in self.provider_rows(workspace) if p.get('enabled',True)])==1
+                and not any(p['name']==routing['active'] and p['source']=='custom' for p in routing['matrices']))
+            result=self._provider_mutation({**args,'module':row['module'],'config':{**row.get('config',{}),'default_model':model}},workspace,scope)
+            if initialize:
+                # The routing bundle owns role definitions and candidate policy.
+                self.store.update(workspace,scope,lambda settings:settings.setdefault('routing',{}).update(matrix='balanced'))
+                result.update(self.routing(workspace))
+            result['setupCompletion']={'id':identity,'model':model,'routingCreated':False,'routingSelected':'balanced' if initialize else None,'takesEffect':'new_sessions'}
+            return result
         if action=='providers.remove':return self._provider_mutation(args,workspace,scope,remove=True)
         if action=='providers.loginCancel':return await self.cancel_login(args['id'])
         if action=='providers.loginStatus':return {'providerId':args['id'],'login':self.login_state(args['id'])}
@@ -348,8 +396,14 @@ class SetupManager:
             if not self.runtime_operation:raise ValueError('This provider does not expose a standalone sign-in flow.')
             result=await self.runtime_operation('configuration.providerLogin',{'provider':args['id'],'sessionId':args.get('sessionId')})
             return {'providerId':args['id'],'login':{**result,'providerId':args['id']}}
-        if action=='routing.list':return self.routing(workspace)
-        if action=='routing.show':return {'matrix':self.matrix(workspace,args['name'])}
+        if action=='routing.list':
+            error=None
+            try:await self.ensure_routing_catalog(workspace)
+            except Exception as exc:
+                error='Built-in model rules could not be loaded ('+type(exc).__name__+'). Check connectivity and refresh. Your saved profiles are still available.'
+            return {**self.routing(workspace),'routingCatalogError':error}
+        if action=='routing.show':
+            return {'matrix':self.matrix(workspace,args['name'])}
         if action in {'routing.save','routing.use'}:
             name=safe_name(args['name'])
             if action=='routing.save':
@@ -408,6 +462,10 @@ class SetupManager:
                             row['instructions']=(row['instructions']+[text])[-20:]
                             for url in re.findall(r'https://[^\s<>]+',text):
                                 if urlsplit(url).hostname in {'auth.openai.com','chatgpt.com','platform.openai.com'}:row['url']=url
+                        code_match=re.search(r'(?i)enter\s+(?:the\s+)?code:\s*([A-Z0-9]+(?:-[A-Z0-9]+)+)',str(event.get('instruction','')))
+                        if code_match:row['deviceCode']=code_match.group(1)
+                        if event['status'] in {'completed','failed'}:
+                            row.pop('deviceCode',None);row.pop('url',None);row['instructions']=[]
                         if event.get('error'):row['error']=str(event['error'])[:300]
                         await self.publish_login(identity)
                     code=await process.wait()
@@ -417,6 +475,8 @@ class SetupManager:
             except TimeoutError:row.update(status='expired',error='Device login expired. Start again.')
             except Exception as exc:row.update(status='failed',error='Unable to run provider login ('+type(exc).__name__+').')
             finally:
+                if row['status'] in {'completed','failed','expired','cancelled'}:
+                    row.pop('deviceCode',None);row.pop('url',None);row['instructions']=[]
                 if process and process.returncode is None:
                     try:os.killpg(process.pid,signal.SIGTERM)
                     except ProcessLookupError:pass
