@@ -172,7 +172,8 @@ async def test_update_manager_installs_runtime_only_and_manifest_updates(environ
 
 
 @pytest.fixture
-def installed_transitive(environment):
+def installed_transitive(environment, request):
+    child_name = getattr(request, "param", "amplifier-fixture-child")
     manager, current, row, old, new, repo = environment
     remote = manager.home.parent / 'modules'
     remote.mkdir()
@@ -182,7 +183,7 @@ def installed_transitive(environment):
     child = remote / 'child'
     child.mkdir()
     build = '\n[build-system]\nrequires=["setuptools"]\nbuild-backend="setuptools.build_meta"\n[tool.setuptools]\npackages=[]\n'
-    (child / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-child"\nversion="0.1.0"\n' + build)
+    (child / 'pyproject.toml').write_text('[project]\nname=' + json.dumps(child_name) + '\nversion="0.1.0"\n' + build)
     git(remote, 'add', '.')
     git(remote, 'commit', '-m', 'child')
     parent = manager.home.parent / 'parent'
@@ -190,7 +191,7 @@ def installed_transitive(environment):
     git(parent, 'init', '-b', 'main')
     git(parent, 'config', 'user.name', 'Fixture')
     git(parent, 'config', 'user.email', 'fixture@example.invalid')
-    (parent / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-parent"\nversion="0.1.0"\ndependencies=[' + json.dumps('amplifier-fixture-child @ git+' + remote.as_uri() + '@main#subdirectory=child') + ']\n' + build)
+    (parent / 'pyproject.toml').write_text('[project]\nname="amplifier-fixture-parent"\nversion="0.1.0"\ndependencies=[' + json.dumps(child_name + ' @ git+' + remote.as_uri() + '@main#subdirectory=child') + ']\n' + build)
     git(parent, 'add', '.')
     git(parent, 'commit', '-m', 'parent')
     uv = shutil.which('uv')
@@ -201,21 +202,22 @@ def installed_transitive(environment):
     git(remote, 'add', '.')
     git(remote, 'commit', '-m', 'new child')
     latest = git(remote, 'rev-parse', 'HEAD')
-    child_row = next(row for row in environments.inventory(manager.home) if row.get('package') == 'amplifier-fixture-child')
+    child_row = next(row for row in environments.inventory(manager.home) if row.get('package') == child_name)
     return manager, current, {**child_row, 'status': 'update', 'latest': latest}, initial, latest, remote
 
 
+@pytest.mark.parametrize("installed_transitive", ["amplifier-fixture-child", "component-child"], indirect=True)
 async def test_actual_transitive_git_distribution_survives_staging_and_frozen_replay(installed_transitive):
     manager, current, row, old, new, repo = installed_transitive
     before = (current / 'uv.lock').read_bytes()
     assert row['current'] == old and row['ref'] == 'main' and row['subdirectory'] == 'child'
     assert row['provenance'] == 'installed Git distribution' and row['eligible']
-    assert 'amplifier-fixture-child' not in environments.locked_sources(current)
+    assert row['package'] not in environments.locked_sources(current)
     generation = 'd' * 32
     receipt = environments.receipt_directory(manager.home, generation)
     receipt.mkdir(parents=True)
     project = await environments.stage(manager, generation, [row])
-    assert environments.locked_sources(project)['amplifier-fixture-child'].fragment == new
+    assert environments.locked_sources(project)[row['package']].fragment == new
     assert 'amplifier-fixture-parent' in environments.locked_sources(project)
     assert '@main#subdirectory=child' in (project / 'pyproject.toml').read_text()
     assert (current / 'uv.lock').read_bytes() == before
@@ -349,3 +351,37 @@ async def test_lazy_install_cannot_replace_a_qualified_editable_dependency(insta
     with pytest.raises(ValueError, match='preserve its source configuration'):
         environments.augmented_manifest(environments.manifest_path().read_bytes(), rows)
     assert (repo / 'child/marker.txt').read_text() == 'local edit must survive'
+
+
+@pytest.mark.parametrize('replacement', ['editable', 'registry'])
+async def test_nonprefixed_installed_override_blocks_stale_git_lock_staging(environment, replacement):
+    manager, current, update, old, new, repo = environment
+    lock = current / 'uv.lock'
+    lock.write_text(lock.read_text() + '\n[[package]]\nname="component-child"\nversion="0.1.0"\n'
+                    'source={git=' + json.dumps(repo.as_uri() + '?branch=main#' + old) + '}\n')
+    site = current / '.venv/lib/python3.13/site-packages'
+    metadata = site / 'component_child-9.9.dist-info'
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text('Name: component-child\nVersion: 9.9\n')
+    if replacement == 'editable':
+        (metadata / 'direct_url.json').write_text(json.dumps({
+            'url': 'file:///private/local-edits', 'dir_info': {'editable': True}}))
+    unrelated = site / 'ordinary_dependency-1.0.dist-info'
+    unrelated.mkdir()
+    (unrelated / 'METADATA').write_text('Name: ordinary-dependency\nVersion: 1.0\n')
+    before = {path: path.read_bytes() for path in (lock, *metadata.iterdir())}
+    rows = environments.inventory(manager.home)
+    actual = next(row for row in rows if row.get('package') == 'component-child')
+    assert actual['current'] == '9.9' and actual['override'] and not actual['eligible']
+    assert actual['provenance'] == 'installed local or registry override'
+    assert not any(row.get('package') == 'ordinary-dependency' for row in rows)
+    assert '/private/local-edits' not in json.dumps(actual)
+    generation = '6' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    with pytest.raises(environments.ProtectedRuntimeSource) as caught:
+        await environments.stage(manager, generation, [update])
+    assert caught.value.diagnostic_facts['package'] == 'component-child'
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (receipt / 'runtime.lock').exists()
+    assert not active_release(manager.home)
