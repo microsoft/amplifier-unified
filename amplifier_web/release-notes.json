@@ -5,12 +5,12 @@
       "version": "0.20.9",
       "title": "Quieter background work and reliable conversation recovery",
       "changes": [
-        "Reduce idle CPU and disk activity by reusing unchanged history, navigation and accounting projections, avoiding redundant capture writes, and making diagnostics retention cheaper.",
+        "Reduce repeated background work and disk writes by reusing unchanged history, navigation and accounting projections, avoiding redundant capture writes, and making diagnostics retention cheaper.",
         "Match resumed model observations to their original calls, avoiding duplicate call rows and usage totals while preserving recorded child-session turn assignments.",
         "Keep context-limit failures visibly failed with recovery details instead of reporting successful completion. Saved work is not automatically replayed.",
         "Create named workspaces, discover shared native conversations, page workspace folders, and retain direct ordering of pinned chats.",
         "Load bundle includes correctly when their source is a local bundle file, and inventory installed Git components as well as cached bundles when checking updates.",
-        "Remove default conversation-readiness deadlines while retaining explicit configured limits and cancellation.",
+        "Remove the default deadline from provider readiness checks used when moving tasks between hosts, while retaining explicit configured limits and cancellation.",
         "Preserve artifact-probe process ownership during cleanup and keep saved image pairs together for visual comparison.",
         "Run independent release checks in parallel and reuse exactly matched runtime builds, shortening qualification without removing validation coverage."
       ],
