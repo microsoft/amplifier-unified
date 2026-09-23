@@ -40,7 +40,11 @@ try{
  await contexts[0].setOffline(true);
  await finish();
  const restored=await act(b,'session.select',{id:first});
- assert.equal(restored.state.view.draft,'Draft belonging to B');
+ assert.equal(restored.accepted,true);assert.equal(restored.state,undefined);
+ const restoredClientId=await b.evaluate(()=>window.amplifier.getState().client.id);
+ const saved=await b.request.get(url+'/api/state',{headers:{'X-Amplifier-Client':restoredClientId}});assert.ok(saved.ok());
+ const savedState=await saved.json();assert.equal(savedState.selectedSessionId,first);
+ assert.equal(savedState.view.draft,'Draft belonging to B');
  await b.getByText('Finished: Shared input from A',{exact:true}).waitFor();
  // The action receipt can precede React's composer synchronization effect.
  await expect(composer(b)).toHaveValue('Draft belonging to B');

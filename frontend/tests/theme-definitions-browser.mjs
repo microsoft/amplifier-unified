@@ -11,6 +11,9 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({colorScheme:'dark',viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+ // Appearance paints before persistence. Exercise that boundary with a slow
+ // apply response instead of allowing reload to cancel an unsaved preference.
+ await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='shell.changes.apply')await new Promise(resolve=>setTimeout(resolve,500));await route.continue()});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const presentation=patch=>page.evaluate(async patch=>{const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:state.revision,composition:{...state.effectiveComposition,presentation:{...state.effectiveComposition.presentation,...patch}}});await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:state.revision,changeId:prepared.result.id})},patch);
  const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
@@ -28,8 +31,26 @@ try{
  await page.getByRole('button',{name:'Settings',exact:true}).click();
  await page.locator('[data-settings-section="appearance"]').click();
  const decoration=page.getByRole('checkbox',{name:'Show decorative theme background'});
- await decoration.uncheck();await expect.poll(async()=>(await css()).background).toBe('none');
- await decoration.check();await expect.poll(async()=>(await css()).background).toBe(preview.background);
+ const setDecoration=async enabled=>{
+  await expect(decoration).toBeEnabled();
+  const prepared=page.waitForResponse(response=>{
+   const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
+   return response.url().endsWith('/api/actions')&&body?.action==='shell.changes.prepare'&&body.args.composition.presentation.decorations===enabled;
+  });
+  const applied=page.waitForResponse(async response=>{
+   const request=response.request(),body=request.method()==='POST'?request.postDataJSON():null;
+   if(!response.url().endsWith('/api/actions')||body?.action!=='shell.changes.apply')return false;
+   return body.args.changeId===(await (await prepared).json()).result.id;
+  });
+  await decoration.setChecked(enabled);
+  await expect.poll(async()=>(await css()).background).toBe(enabled?preview.background:'none');
+  assert.ok((await prepared).ok());
+  const receipt=await applied;assert.ok(receipt.ok());assert.equal((await receipt.json()).accepted,true);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.effectiveComposition.presentation.decorations)).toBe(enabled);
+  await expect(decoration).toBeEnabled();
+ };
+ await setDecoration(false);
+ await setDecoration(true);
  // Keep Settings open: its focus trap must attach after shell restoration.
  // Delay shell preferences on reload: the app must not paint system-dark UI
  // while waiting for the authoritative client composition to arrive.

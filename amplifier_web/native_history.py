@@ -422,7 +422,9 @@ class NativeHistory:
             try:
                 projects = self._directories(self.home / 'projects')
             except FileNotFoundError:
-                projects = []
+                projects = None if self._projects else []
+                if self._projects:
+                    issues.append({'kind': 'unavailable-root'})
             except OSError:
                 projects = None
                 issues.append({'kind': 'unreadable-root'})
