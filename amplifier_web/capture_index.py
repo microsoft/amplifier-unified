@@ -73,5 +73,6 @@ def index_shared(db, scopes, config):
                         added.append((identity, at, category, session, workspace, event, data))
                 except (ValueError, KeyError, TypeError, AttributeError):
                     continue  # The original capture remains available for repair.
-        db.execute('INSERT OR REPLACE INTO captures VALUES(?,?,?)', (str(path), offset, stat.st_ino))
+        if previous is None or previous[0] != offset or previous[1] != stat.st_ino:
+            db.execute('INSERT OR REPLACE INTO captures VALUES(?,?,?)', (str(path), offset, stat.st_ino))
     return added
