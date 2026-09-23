@@ -363,11 +363,8 @@ class EventLogView:
 
     async def loop(self):
         while not self.service.closed:
-            from .history_demand import subscribed_sessions
-            selected = subscribed_sessions(self.service)
-            sessions = [row['id'] for row in self.service.state['sessions'] if row['id'] in selected
-                        or row.get('status') in {'working', 'running', 'starting', 'stopping'}]
-            for identity in sessions:
+            from .history_demand import event_sessions
+            for identity in event_sessions(self.service):
                 try:
                     await self.refresh(identity)
                 except (OSError, ValueError):
