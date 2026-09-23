@@ -17,6 +17,7 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import web
 from .updates import work_paused
+from .voice_diagnostics import VoiceDiagnostics, VoiceTrace
 
 API = "https://api.openai.com/v1"
 MODELS = {"live": "gpt-live-1", "realtime": "gpt-realtime-2.1"}
@@ -108,6 +109,7 @@ class VoiceCall:
         self.delegate_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
         self.close_result: dict | None = None
+        self.protocol_trace = VoiceTrace()
         session = next((row for row in self.service.state.get("sessions", []) if row.get("id") == session_id), {})
         self.seen_generations = {row.get("generation_id") for row in session.get("generations", []) if row.get("event") == "generation.finished"}
         self.delivered_generations: set[str] = set()
@@ -163,7 +165,13 @@ class VoiceCall:
     async def send(self, event: dict) -> None:
         if self.closed or not self.socket or self.socket.closed:
             raise VoiceError("The voice connection is closed.")
-        await self.socket.send_json(event)
+        self.protocol_trace.note('send', event, self.manager.api_key)
+        try:
+            await self.socket.send_json(event)
+        except Exception:
+            self.protocol_trace.note('send_failed', event, self.manager.api_key)
+            raise
+        self.protocol_trace.note('sent', event, self.manager.api_key)
 
     def background(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -217,6 +225,8 @@ class VoiceCall:
             return
         if identity:
             self.seen.add(identity)
+        if kind in {'session.thinking.appended', 'session.commentary.appended'}:
+            self.protocol_trace.note('receive', event, self.manager.api_key)
         if kind == "response.created":
             self.realtime_responding = True
             response=event.get('response',{})
@@ -261,10 +271,12 @@ class VoiceCall:
                 await self.service.record_voice_usage(self.session_id,self.id,'session',MODELS[self.provider],event.get('usage'),
                     **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
             self.final.set()
+            self.manager.protocol_diagnostics.record(self, event)
             await self.service.set_voice_status({"status": "ended", "finalized": True, "usage": event.get("usage")})
             if not self.closing:
                 self.background(self.close())
         elif kind == "error":
+            self.manager.protocol_diagnostics.record(self, event)
             await self.service.set_voice_status({"error": "Voice provider reported an error: " + str(event.get("error", {}).get("code", "unknown"))})
 
     async def delegate_live(self, did: str) -> None:
@@ -445,6 +457,7 @@ class VoiceCall:
                 await asyncio.gather(self.observer, return_exceptions=True)
             # Do not cancel delegations: their Amplifier work belongs to the session.
             self.close_result = {"closed": True, "finalized": self.final.is_set(), "workContinues": True}
+            self.manager.protocol_diagnostics.record(self, {'type': 'local.closed'})
             await self.service.set_voice_status({"status": "ended", **self.close_result})
             return self.close_result
 
@@ -468,6 +481,7 @@ class VoiceService:
         self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
         self.http = http
         self.owns_http = http is None
+        self.protocol_diagnostics = VoiceDiagnostics(getattr(service, 'data_dir', None))
         self.call: VoiceCall | None = None
         self.lock = asyncio.Lock()
 

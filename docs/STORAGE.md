@@ -1,5 +1,16 @@
 # Shared session storage
 
+Voice protocol failures and closure keep a separate, local-only journal at
+`<app data>/voice-diagnostics/events.jsonl`. It retains bounded categorical error
+fields, provider/client event IDs, the provider's terminal reason, local closure
+flags, and the last 32 send/ack type-and-ID observations. Human-readable provider
+messages are omitted because they can echo user content; context, transcripts,
+audio, images, headers and credentials are never selected. The directory is 0700
+and files are 0600, rotated before 256 KB with one previous file. These records
+are not added to conversation history, app state, or routed diagnostics. Storage
+failure cannot interrupt call cleanup. The journal supports diagnosis; an error
+code alone does not establish why a provider ended a call.
+
 Unified and app-cli use the same native project session layout:
 
 ```
