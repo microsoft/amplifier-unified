@@ -575,10 +575,23 @@ class EventLogView:
             worker['parentId'] = remap.get(worker['parentId'], worker['parentId'])
             parent = by_id.get(worker['parentId'])
             if parent:
-                worker['turnId'] = parent['turnId']
+                binding = bindings.get(model_key(worker))
+                bound_turn = binding.get('turnId') if binding and binding.get('kind') == 'worker' else None
+                bound_turn = bound_turn if bound_turn in host_turns else None
+                worker['turnId'] = bound_turn or parent['turnId']
+                # Recovery/steering observations can look like new native user
+                # turns. A recorded host admission keeps its delegated work on
+                # the original turn when this disposable view is rebuilt.
+                if bound_turn and parent.get('turnId') not in host_turns:
+                    parent['turnId'] = bound_turn
+                    if parent.get('anchorMessageId') is None:
+                        parent.pop('anchorMessageId', None)
                 members = [row for row in nodes if row.get('sessionId') == child]
                 for row in members:
-                    row['parentId'] = worker['id'];row['turnId'] = parent['turnId']
+                    row['parentId'] = worker['id']
+                    member_binding = bindings.get(model_key(row))
+                    member_turn = member_binding.get('turnId') if member_binding and member_binding.get('kind') == row.get('kind') else None
+                    row['turnId'] = member_turn if member_turn in host_turns else worker['turnId']
                 ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
                 if ends:worker.update(endedAt=max(ends), phase='completed')
                 nodes.append(worker)
