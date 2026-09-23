@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -84,3 +85,118 @@ def test_invalid_child_id_is_rejected_even_with_shared_workspace(db, tmp_path):
     write_capture(str(tmp_path), 'valid', 'valid')
     with pytest.raises(ValueError, match='Invalid session identifier'):
         index_shared(db, [(str(tmp_path), 'valid'), (str(tmp_path), '../escape')], {'streams': ['tools']})
+
+
+@pytest.mark.parametrize('row_factory', [None, sqlite3.Row])
+def test_unchanged_eof_is_still_read_without_rewriting_offsets(db, tmp_path, monkeypatch, row_factory):
+    db.row_factory = row_factory
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'first')
+    path = directory / 'events.jsonl'
+    scopes, config = [(workspace, 'root')], {'streams': ['tools']}
+    assert len(index_shared(db, scopes, config)) == 1
+    before = tuple(db.execute('SELECT offset,inode FROM captures').fetchone())
+    changes = db.total_changes
+    opens = []
+    original_open = Path.open
+
+    def record_open(self, *args, **kwargs):
+        if self == path:
+            opens.append(args)
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', record_open)
+    assert index_shared(db, scopes, config) == []
+    assert opens == [('rb',)]
+    assert tuple(db.execute('SELECT offset,inode FROM captures').fetchone()) == before
+    assert db.total_changes == changes
+    write_capture(workspace, 'root', 'next', append=True)
+    assert [r[-1]['result'] for r in index_shared(db, scopes, config)] == ['next']
+    assert db.execute('SELECT offset FROM captures').fetchone()[0] == path.stat().st_size
+    assert db.total_changes == changes + 2  # One new event and one advanced cursor.
+
+
+def test_partial_tail_keeps_cursor_until_completed_then_advances(db, tmp_path):
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'first')
+    path = directory / 'events.jsonl'
+    scopes, config = [(workspace, 'root')], {'streams': ['tools']}
+    index_shared(db, scopes, config)
+    before = db.execute('SELECT offset,inode FROM captures').fetchone()
+    partial = json.dumps({'event': 'tool:post', 'timestamp': '2026-09-23T00:00:00Z',
+                          'data': {'result': 'second'}})
+    with path.open('a') as stream:
+        stream.write(partial)
+    changes = db.total_changes
+    assert index_shared(db, scopes, config) == []
+    assert db.execute('SELECT offset,inode FROM captures').fetchone() == before
+    assert db.total_changes == changes
+    with path.open('a') as stream:
+        stream.write('\n')
+    assert [r[-1]['result'] for r in index_shared(db, scopes, config)] == ['second']
+    assert db.execute('SELECT offset FROM captures').fetchone()[0] == path.stat().st_size
+
+
+def test_replacement_at_same_final_offset_updates_inode_and_clears_stale_records(db, tmp_path):
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'first')
+    path = directory / 'events.jsonl'
+    scopes, config = [(workspace, 'root')], {'streams': ['tools']}
+    old = index_shared(db, scopes, config)[0]
+    db.execute('INSERT INTO deliveries VALUES(?)', (old[0],))
+    before = db.execute('SELECT offset,inode FROM captures').fetchone()
+    replacement = directory / 'replacement.jsonl'
+    replacement.write_text(path.read_text().replace('first', 'other'))
+    replacement.replace(path)
+    assert path.stat().st_size == before[0] and path.stat().st_ino != before[1]
+    assert [r[-1]['result'] for r in index_shared(db, scopes, config)] == ['other']
+    assert db.execute('SELECT offset,inode FROM captures').fetchone() == (before[0], path.stat().st_ino)
+    assert db.execute('SELECT count(*) FROM records').fetchone()[0] == 1
+    assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0] == 0
+    reference = json.loads(db.execute('SELECT data FROM records').fetchone()[0])
+    assert read_event(reference)['data']['result'] == 'other'
+
+
+def test_truncation_and_new_empty_capture_keep_required_cursor_writes(db, tmp_path):
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'first')
+    path = directory / 'events.jsonl'
+    scopes, config = [(workspace, 'root')], {'streams': ['tools']}
+    old = index_shared(db, scopes, config)[0]
+    db.execute('INSERT INTO deliveries VALUES(?)', (old[0],))
+    inode = path.stat().st_ino
+    path.write_bytes(b'')
+    assert index_shared(db, scopes, config) == []
+    assert db.execute('SELECT offset,inode FROM captures').fetchone() == (0, inode)
+    assert db.execute('SELECT count(*) FROM records').fetchone()[0] == 0
+    assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0] == 0
+    changes = db.total_changes
+    assert index_shared(db, scopes, config) == []
+    assert db.total_changes == changes
+    empty = write_capture(workspace, 'empty', 'discard') / 'events.jsonl'
+    empty.write_bytes(b'')
+    assert index_shared(db, scopes + [(workspace, 'empty')], config) == []
+    assert db.total_changes == changes + 1
+    assert db.execute('SELECT offset,inode FROM captures WHERE path=?', (str(empty),)).fetchone() == (0, empty.stat().st_ino)
+
+
+def test_unchanged_eof_still_propagates_read_errors_without_advancing(db, tmp_path, monkeypatch):
+    workspace = str(tmp_path)
+    directory = write_capture(workspace, 'root', 'first')
+    path = directory / 'events.jsonl'
+    scopes, config = [(workspace, 'root')], {'streams': ['tools']}
+    index_shared(db, scopes, config)
+    before = db.execute('SELECT offset,inode FROM captures').fetchone()
+    changes = db.total_changes
+    original_open = Path.open
+
+    def deny_open(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError('Capture read denied')
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', deny_open)
+    with pytest.raises(PermissionError, match='Capture read denied'):
+        index_shared(db, scopes, config)
+    assert db.execute('SELECT offset,inode FROM captures').fetchone() == before
+    assert db.total_changes == changes
