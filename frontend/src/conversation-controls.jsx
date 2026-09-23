@@ -5,6 +5,10 @@ import {readItems} from './attention';
 import {isTopLevelChat} from './chat-navigation';
 import {sessionIdentity} from './navigation-presentation';
 
+function recoveryUnsafe(session){
+ return ['working','running','starting','stopping'].includes(session.status)||session.configurationBusy||(session.workers||[]).some(worker=>['queued','starting','running','working','stopping'].includes(worker.status));
+}
+
 export function ConversationName({session,act}){
  const [name,setName]=useState(session.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const dirty=useRef(false),inFlight=useRef(false);
@@ -48,7 +52,7 @@ export function ConversationDetails({session,act}){
  async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID below.')}}
  const identity=sessionIdentity(session),failure=report?.failure||session.failure;
  const moduleFailures=report?.moduleFailures||session.moduleFailures||[];
- const working=['working','running','starting','stopping'].includes(session.status)||session.configurationBusy||(session.workers||[]).some(worker=>['queued','starting','running','working','stopping'].includes(worker.status));
+ const working=recoveryUnsafe(session);
  return <div className="a-conversation-details" aria-busy={!!busy}>
   <div><p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>{identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}<p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
    {(session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details></>)}
@@ -61,10 +65,20 @@ export function ConversationDetails({session,act}){
 }
 
 export function ConversationError({state,session,act}){
+ const [recovering,setRecovering]=useState(false);
  if(!session?.error)return session?.recovery?<p className="a-hint">Recovery copy · Readable history retained. Old tool and image payloads remain in the original conversation. No work was replayed.</p>:null;
  const item=state.attention?.items?.find(row=>row.id==='session:'+session.id);
+ const failure=session.failure;
+ const contextLimited=failure?.category==='context_limit';
+ const working=recoveryUnsafe(session);
+ async function recover(){
+  if(recovering||working)return;
+  setRecovering(true);
+  try{await act('session.recover',{id:session.id});}finally{setRecovering(false);}
+ }
  if(item?.read)return null;
- return <div className="a-alert" role="alert"><span><strong>Conversation stopped.</strong> {session.failure?.summary||'The last turn failed. Your conversation is saved; work was not automatically replayed.'}</span>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
+ if(contextLimited)return <div className="a-alert" role="alert"><span><strong>Context limit reached.</strong> {failure.summary} {failure.guidance}</span><button type="button" className="a-link" data-action="session.recover" disabled={recovering||working} onClick={recover}>{recovering?'Creating recovery copy…':'Create recovery copy'}</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
+ return <div className="a-alert" role="alert"><span><strong>Conversation stopped.</strong> {failure?.summary||'The last turn failed. Your conversation is saved; work was not automatically replayed.'}</span>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
 }
 
 export function ConversationSelect({state,session,choices,onSelect}){

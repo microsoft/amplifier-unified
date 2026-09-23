@@ -86,7 +86,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **metadata(event),
             **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
-        return "runtime.generation", {**base, "event": kind,
+        identity = event.get("sessionId") or event.get("session_id") or session_id
+        root = event.get("rootSessionId") or event.get("root_session_id") or session_id
+        return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
                 "text", "active_job_ids", "disposition", "error_type", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only") if key in event}}
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
@@ -396,6 +398,12 @@ class RuntimeManager:
                                 data['event'][key] = sid
                     if data.get("type") == "input.delivered":
                         row["inputId"] = data.get("input_id")
+                    if data.get("type", "").startswith("generation."):
+                        data = dict(data)
+                        identity = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
+                        root = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                        data["sessionId"] = sid if identity == row["runtime_id"] else identity
+                        data["rootSessionId"] = sid if root == row["runtime_id"] else root
                     normalized = normalize_event(data, sid, row["inputId"])
                     if normalized:
                         await row["emit"](*normalized)

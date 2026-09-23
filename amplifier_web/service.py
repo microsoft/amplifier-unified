@@ -2377,7 +2377,14 @@ class AppService:
                 # must not lock a finished conversation's fork/edit controls.
                 if payload.get('activityOnly') and session.get('status') not in {'working','starting'}:
                     return
-                session["status"] = payload.get("status", "idle")
+                status = payload.get("status", "idle")
+                # A worker can report its settled lifecycle after the manager has
+                # recorded a terminal error. That report is not evidence that the
+                # failed turn recovered, and must not relabel its execution as
+                # completed.
+                if status in {"idle", "stopped"} and session.get("status") == "error" and session.get("error"):
+                    return
+                session["status"] = status
                 if session["status"] == "idle":
                     self.schedules.idle(session)
                     self.recall.personalization.idle(session)
@@ -2386,6 +2393,9 @@ class AppService:
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
                     session.pop("error", None)
+                    session.pop("failure", None)
+                    session.pop("errorType", None)
+                    session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
                     if isinstance(session.get("health"), dict):
                         session["health"].pop("moduleFailures", None)
@@ -2421,10 +2431,15 @@ class AppService:
                     session['moduleFailures']=failure.failures
                     detail=str(failure)
                 error_type = payload.get('errorType') or session.get('turnErrorType')
+                from .session_health import failure_details
+                projected = failure_details(detail, error_type)
                 session['errorType'] = error_type
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
-                    if error_type == 'ContextLengthError' else detail)
+                    if projected['category'] == 'context_limit' else detail)
+                existing = session.get('failure')
+                if not isinstance(existing, dict) or existing.get('category') == 'unknown':
+                    session['failure'] = {**projected, 'recordedAt': session['errorAt']}
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
@@ -2432,13 +2447,19 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
-                if payload.get('event') == 'generation.started':
+                root_generation = (payload.get('sessionId', session['id']) == session['id']
+                    and payload.get('rootSessionId', session['id']) == session['id'])
+                if root_generation and payload.get('event') == 'generation.started':
                     session.pop('turnErrorType', None)
                     session.pop('errorType', None)
-                elif payload.get('event') == 'generation.failed':
+                    session.pop('error', None)
+                    session.pop('failure', None)
+                    session.pop('health', None)
+                    session.pop('errorAt', None)
+                elif root_generation and payload.get('event') == 'generation.failed':
                     session['turnErrorType'] = payload.get('error_type')
-                if payload.get("event") == "generation.finished":
-                    if not scheduled_generation and (not payload.get("rootSessionId") or payload.get("rootSessionId")==payload.get("sessionId")):
+                if root_generation and payload.get("event") == "generation.finished":
+                    if not scheduled_generation:
                         from .attention import completed
                         completed(session,event)
                     if self.management and not scheduled_generation:

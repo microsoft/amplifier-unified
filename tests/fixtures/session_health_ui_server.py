@@ -27,6 +27,12 @@ async def main(home):
             {'module': 'hook-fixture', 'type': 'hook', 'reason_code': 'invalid_module_metadata'}])
         await service.on_runtime_event('runtime.error', {
             'sessionId': source['id'], 'error': str(failure), 'moduleFailures': failure.failures})
+    elif os.environ.get('CONTEXT_LIMIT_FIXTURE'):
+        await service.on_runtime_event('runtime.error', {
+            'sessionId': source['id'], 'errorType': 'ContextLengthError',
+            'error': 'provider payload that must not be shown in the alert'})
+        if os.environ.get('ACTIVE_WORKER_FIXTURE'):
+            source['workers'] = [{'id': 'still-running', 'status': 'working'}]
     original=(store.directory(source['id'])/'transcript.jsonl').read_bytes()
     naming_calls = []
     original_control = service.runtime.control

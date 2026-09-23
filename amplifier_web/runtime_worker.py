@@ -60,6 +60,8 @@ class Worker:
         self.remounting = False
         self.context_bindings = {}
         self.context_inputs = []
+        self.root_generation_outcome = None
+        self.terminal_checkpointed = False
         if __package__:
             from .ownership import WorkerOwnership
         else:
@@ -95,6 +97,21 @@ class Worker:
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
+        root_session_id = self.runtime.session_id if self.runtime else None
+        event_session_id = event.get('sessionId') or event.get('session_id') or root_session_id
+        event_root_id = event.get('rootSessionId') or event.get('root_session_id') or root_session_id
+        if event.get('type', '').startswith('generation.') and event_session_id:
+            event['sessionId'] = event_session_id
+            event['rootSessionId'] = event_root_id
+        root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        if root_generation and event.get('type') == 'generation.started':
+            self.root_generation_outcome = None
+        elif root_generation and event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}:
+            self.root_generation_outcome = {
+                'generation.finished': 'completed',
+                'generation.failed': 'error',
+                'generation.detached': 'interrupted',
+            }[event['type']]
         if self.controls:
             from amplifier_web.scheduled_input import finish as finish_scheduled_input
             finish_scheduled_input(self.controls, event)
@@ -400,7 +417,7 @@ class Worker:
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
-                    await checkpoint("completed")
+                    await checkpoint(self.root_generation_outcome or "completed")
                 self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
@@ -413,6 +430,34 @@ class Worker:
             finally:
                 self.activation_gate.reset(token)
         publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
+
+    async def checkpoint_terminal_outcome(self):
+        """Persist only an observed failed/detached root turn before teardown."""
+        outcome = self.root_generation_outcome
+        if (self.terminal_checkpointed or outcome not in {"error", "interrupted"}
+                or self.ownership.yielding or self.parked
+                or self.shared_handle is None or self.session is None):
+            return
+        async with self.command_lock:
+            outcome = self.root_generation_outcome
+            if (self.terminal_checkpointed or outcome not in {"error", "interrupted"}
+                    or self.ownership.yielding or self.parked
+                    or self.shared_handle is None or self.session is None):
+                return
+            checkpoint = self.session.coordinator.get_capability("live.checkpoint")
+            if checkpoint is None:
+                return
+            try:
+                token = self.activation_gate.bind(self.activation)
+            except RuntimeError:
+                # Ownership release/cancellation may already have invalidated the
+                # write token; its dedicated release flow owns that checkpoint.
+                return
+            try:
+                await checkpoint(outcome)
+                self.terminal_checkpointed = True
+            finally:
+                self.activation_gate.reset(token)
 
     def history_stamp(self):
         """Cheap native invalidation; never parse events or consult checkpoints."""
@@ -716,21 +761,24 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
-            if self.ownership.registration:
-                await self.ownership.registration.close()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
                     task.cancel()
             await asyncio.gather(*(t for t in [read, self.start_task, self.execution, *self.tasks] if t), return_exceptions=True)
-            if self.controls:
-                await self.controls.close()
-            if self.session:
-                await self.session.cleanup()
-            if self.shared_handle is not None:
-                try:
-                    await asyncio.to_thread(self.shared_handle.release)
-                finally:
-                    self.shared_handle = None
+            try:
+                await self.checkpoint_terminal_outcome()
+            finally:
+                if self.ownership.registration:
+                    await self.ownership.registration.close()
+                if self.controls:
+                    await self.controls.close()
+                if self.session:
+                    await self.session.cleanup()
+                if self.shared_handle is not None:
+                    try:
+                        await asyncio.to_thread(self.shared_handle.release)
+                    finally:
+                        self.shared_handle = None
 
 
 if __name__ == "__main__":
