@@ -444,7 +444,8 @@ async def test_native_navigation_does_not_enroll_captures_or_poison_app_diagnost
              'status':'idle','messages':[],'workers':[]} for i in range(5000)]
     service.state['sessions'].extend(native)
     indexed=[]
-    def index_shared(db, scopes, config):
+    def index_shared(db, scopes, config, *, metadata_cache=None):
+        assert metadata_cache is service.diagnostics.capture_metadata_cache
         indexed.extend(scopes)
         return []
     monkeypatch.setattr(capture_index,'index_shared',index_shared)
@@ -507,3 +508,39 @@ async def test_background_capture_counts_do_not_publish_until_observed_but_healt
     current['local']['records'] = 20
     await collector.publish()
     assert service.state['diagnostics']['local']['records'] == 20
+
+
+async def test_capture_validation_reuses_instance_cache_and_recovers_from_invalid_metadata(service, monkeypatch):
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from amplifier_web.session_files import capture_dir
+    await service.dispatch('session.create', {})
+    session = service._session()
+    directory = capture_dir(session['workspace'], session['id'])
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata = directory / 'metadata.json'
+    valid = json.dumps({'format': 'context-intelligence', 'version': '1.0.0'})
+    metadata.write_text(valid)
+    (directory / 'events.jsonl').write_text(json.dumps({'event': 'tool:post',
+        'timestamp': datetime.now(timezone.utc).isoformat(), 'data': {'event_id': 'fixture'}}) + '\n')
+    opened = []
+    original = Path.open
+    def record_open(path, *args, **kwargs):
+        if path == metadata:
+            opened.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', record_open)
+    collector = service.diagnostics
+    collector._persist([], collector.config)
+    collector._persist([], collector.config)
+    assert opened == [metadata]
+    metadata.write_text(valid.replace('1.0.0', '9.0.0'))
+    for _ in range(2):
+        with pytest.raises(ValueError, match='Unsupported Context Intelligence'):
+            collector._persist([], collector.config)
+    assert str(metadata) not in collector.capture_metadata_cache._validated
+    metadata.write_text(valid)
+    collector._persist([], collector.config)
+    before = len(opened)
+    collector._persist([], collector.config)
+    assert len(opened) == before

@@ -128,6 +128,8 @@ class Diagnostics:
             self.configuration_error=True
             self.config={**copy.deepcopy(DEFAULT),'enabled':False}
         self.flush_lock=asyncio.Lock()
+        from .capture_index import CaptureMetadataCache
+        self.capture_metadata_cache=CaptureMetadataCache()
         self.pending=[];self.dropped=service.state.get('diagnostics',{}).get('local',{}).get('dropped',0);self.storage_error=False;self.task=None;self.stopping=False
         self.delivery_tasks={}
         self.policy_generation=0;self.configuring=False
@@ -269,7 +271,7 @@ class Diagnostics:
                     try:validate_id(capture_session)
                     except ValueError:continue
                     scopes.append((session['workspace'], capture_session))
-            for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg):
+            for identity,at,stream,session,workspace,event,data in index_shared(db,scopes,cfg,metadata_cache=self.capture_metadata_cache):
                 if not cfg['enabled'] or at<self.route_since:continue
                 # Forward a selected projection of new hook records. Reading
                 # historical CLI captures never backfills any destination.
