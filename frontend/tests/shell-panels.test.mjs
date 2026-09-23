@@ -5,41 +5,43 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ChatDetails}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
+const {ChatDetails,WorkspaceManager}=await server.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceRail:Rail,ChatRename,AgentCanvas,A2UISurface,reopenCanvas,SessionHistoryControls}=await server.ssrLoadModule('/src/shell-panels.jsx');
 function WorkspaceRail(props){return React.createElement(Rail,{...props,shell:shellFor(props.state,props.act)})}
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const initial=()=>({view:{navExpanded:true,navSimple:false},workspaceExplorer:{path:'/',parentPath:null,breadcrumbs:[{name:'/',path:'/'}],filter:'',page:1,pages:1,totalWorkspaces:2,rows:[{path:'/one',name:'one',workspaceId:'one',chatCount:2,canBrowse:false,unread:0},{path:'/two',name:'two',workspaceId:'two',chatCount:1,canBrowse:false,unread:0}]},workspaces:[{id:'one',name:'One',path:'/one',available:true},{id:'two',name:'Two',path:'/two',available:true}],selectedWorkspaceId:'one',sessions:[{id:'a',title:'First plan',workspace:'/one'},{id:'b',title:'Another plan',workspace:'/one'},{id:'c',title:'Other workspace',workspace:'/two'}]});
 
-test('workspace rail scopes chats to registered workspace and honors fnmatch filters',async()=>{
- const state=initial();state.view.navFilter='First*';let root;
- await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true}),session:state.sessions[0]}))});
- const rows=root.root.findAll(node=>node.props.className==='a-nav-chat-select');
- assert.equal(rows.length,1);assert.equal(rows[0].props['aria-label'],'First plan');
+test('workspace drill-in filters independently of Recent',async()=>{
+ const state=initial();state.view.navWorkspaceList=false;state.view.navFilter='First*';let root;
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+ const workspace=root.root.findByProps({'aria-label':'Chats in One'});
+ assert.deepEqual(workspace.findAll(node=>node.props.className==='a-nav-chat-select').map(n=>n.props['aria-label']),['First plan']);
+ assert.equal(root.root.findByProps({'data-sidebar-section':'recent'}).findAllByProps({className:'a-nav-chat-select'}).length,3);
  await renderAct(async()=>root.unmount());
 });
 
-test('all-chat switch hides the folder explorer without changing its location or new-chat target',async()=>{
- const state=initial(),calls=[];state.view.navWorkspacePath='/saved/folder';
+test('three sections collapse independently without changing drafts, selection or folder browsing',async()=>{
+ const state=initial(),calls=[];state.view.navWorkspacePath='/saved/folder';state.view.draft='Unsent message';
  const act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state.view={...state.view,...args.patch};return {accepted:true}};
- let root;const render=()=>React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]});
+ let root;const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
- const switcher=root.root.findByProps({role:'group','aria-label':'Chat view'});
- await renderAct(async()=>switcher.findAllByType('button')[1].props.onClick());
- assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatScope:'all'}}});
+ assert.equal(root.root.findAllByProps({'aria-label':'Chat view'}).length,0);
+ const section=id=>root.root.findByProps({'data-sidebar-section':id});
+ for(const id of ['pinned','workspaces','recent']){
+  await renderAct(async()=>section(id).findAllByType('button')[0].props.onClick());
+  await renderAct(async()=>root.update(render()));
+  assert.equal(section(id).findAllByType('button')[0].props['aria-expanded'],false);
+ }
+ assert.deepEqual(state.view.navSectionsCollapsed,['pinned','workspaces','recent']);
+ await renderAct(async()=>section('workspaces').findAllByType('button')[0].props.onClick());
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,0);
- assert.deepEqual(root.root.findAll(node=>node.type==='small'&&node.props.className==='a-nav-chat-workspace').map(node=>node.children.join('')),['/one','/one','/two']);
- const newChat=root.root.findByProps({'aria-label':'New chat'});
- assert.equal(newChat.props.title,'New chat');
- await renderAct(async()=>newChat.props.onClick());
+ assert.equal(section('workspaces').findAllByType('button')[0].props['aria-expanded'],true);
+ assert.equal(section('recent').findAllByType('button')[0].props['aria-expanded'],false);
+ assert.equal(state.view.navWorkspacePath,'/saved/folder');assert.equal(state.view.draft,'Unsent message');
+ assert.ok(calls.every(call=>call.name==='view.update'));
+ await renderAct(async()=>root.root.findByProps({'aria-label':'New chat'}).props.onClick());
  assert.ok(calls.some(call=>call.name==='session.draft'));
- assert.equal(state.view.navWorkspacePath,'/saved/folder');
- await renderAct(async()=>root.root.findByProps({role:'group','aria-label':'Chat view'}).findAllByType('button')[0].props.onClick());
- await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,1);
- assert.equal(state.view.navWorkspacePath,'/saved/folder');
  await renderAct(async()=>root.unmount());
 });
 
@@ -70,16 +72,15 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  await renderAct(async()=>root.unmount());
 });
 
-test('rail pin, workspace selection, chat selection and drafts all use shared actions',async()=>{
+test('rail pin, workspace drill-in and chat selection all use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
- await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act,session:state.sessions[0]}))});
+ await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Pin navigation open'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:true,navExpanded:true}}});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Open chats in /two'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'workspace.select',args:{id:'two'}});
- await renderAct(async()=>root.root.findByProps({'aria-label':'Rename workspace'}).props.onClick());
- assert.deepEqual(calls.at(-1).args.patch.workspaceDraft,{mode:'rename',id:'one',name:'One'});
- await renderAct(async()=>root.root.findAll(node=>node.props.className==='a-nav-chat-select')[1].props.onClick());
+ assert.ok(calls.some(call=>call.name==='workspace.select'&&call.args.id==='two'));
+ assert.equal(calls.at(-1).args.patch.navWorkspaceList,false);
+ await renderAct(async()=>root.root.findAllByProps({className:'a-nav-chat-select'})[1].props.onClick());
  assert.ok(calls.some(call=>call.name==='session.select'&&call.args.id==='b'));
  await renderAct(async()=>root.unmount());
 });
@@ -112,7 +113,7 @@ test('registration removal requires explicit confirm and preserves unrelated cha
 
 test('bounded workspace registrations use the full catalog count for removal availability',async()=>{
  const state=initial();state.workspaces=state.workspaces.slice(0,1);state.library={bounded:true,workspaceCount:3000};let root;
- const render=()=>React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})});
+ const render=()=>React.createElement(WorkspaceManager,{host:shellFor(state,async()=>({accepted:true})).hostFor({id:'workspaces'})});
  await renderAct(async()=>{root=create(render())});
  assert.equal(root.root.findByProps({'aria-label':'Remove workspace registration'}).props.disabled,false);
  state.library.workspaceCount=1;await renderAct(async()=>root.update(render()));
@@ -173,11 +174,11 @@ test('automatic discovery reports loading/errors and refreshes through the share
  const state=initial(),calls=[],act=async(name,args)=>calls.push({name,args});state.sharedHistory={loading:true};let root;
  const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
- assert.match(JSON.stringify(root.toJSON()),/Finding projects and chats/);
+ assert.match(JSON.stringify(root.toJSON()),/Finding existing chats/);
  assert.equal(root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.disabled,true);
  state.sharedHistory={error:'One project could not be read.'};
  await renderAct(async()=>root.update(render()));
- assert.match(root.root.findByProps({role:'alert'}).children[1].children.join(''),/could not be read/);
+ assert.match(root.root.findByProps({role:'alert'}).children.join(''),/could not be read/);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Refresh workspaces and chats'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'history.refresh',args:{}});
  await renderAct(async()=>root.unmount());
@@ -229,43 +230,43 @@ test('workspace chat actions offer Archive but neither Remove nor Delete',async(
  await renderAct(async()=>root.unmount());
 });
 
-test('conversation pagination stays bounded and is shared with agents',async()=>{
+test('Recent pagination stays bounded and is shared with agents',async()=>{
  const state=initial();state.selectedSessionId='chat-0';state.sessions=Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved '+i,workspace:'/one'}));
  const calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')Object.assign(state.view,args.patch);return {accepted:true}};let root;
  const render=()=>React.createElement(WorkspaceRail,{state,act});
  await renderAct(async()=>{root=create(render())});
- assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
+ assert.equal(root.root.findAllByProps({className:'a-nav-chat-select'}).length,40);
  await renderAct(async()=>root.root.findByProps({'aria-label':'Show more conversations'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navChatPage:{mode:'workspace',workspaceId:'one',filter:'',selectedSessionId:'chat-0',index:1}}}});
+ assert.deepEqual(calls.at(-1).args.patch.navRecentView.navChatPage,{mode:'all',workspaceId:null,filter:'',selectedSessionId:'chat-0',section:'recent',index:1});
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select')[0].props['aria-label'],'Saved 100');
- assert.equal(root.root.findAll(node=>node.props.className==='a-nav-chat-select').length,100);
+ const rows=root.root.findAllByProps({className:'a-nav-chat-select'});
+ assert.equal(rows[0].props['aria-label'],'Saved 40');assert.equal(rows.length,40);
  await renderAct(async()=>root.unmount());
 });
 
 
-test('simple sidebar separates pins, workspaces and recent without duplicate chats',async()=>{
- const state=initial();state.view.navSimple=true;state.view.navWorkspaceList=true;state.homeNavigation={items:[{...state.sessions[0],pinned:true},{...state.sessions[1],workspace:'/managed/b',location:{kind:'managed'},pinned:false},{...state.sessions[2],workspaceId:'two',pinned:false}]};state.workspaceOverview={items:state.workspaces};
+test('one sidebar has Pinned, Workspaces and Recent with no duplicate recent pins',async()=>{
+ const state=initial();state.pinnedSessionIds=['a'];state.view.navWorkspaceList=true;
  let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
- assert.equal(root.root.findAllByProps({'aria-label':'Pinned chats'}).length,1);
+ assert.deepEqual(root.root.findAll(node=>typeof node.type==='string'&&node.props['data-sidebar-section']).map(node=>node.props['data-sidebar-section']),['pinned','workspaces','recent']);
  assert.equal(root.root.findAllByProps({'data-session-id':'a'}).filter(node=>typeof node.type==='string').length,1);
  assert.equal(root.root.findAllByProps({'data-session-id':'b'}).filter(node=>typeof node.type==='string').length,1);
- assert.equal(root.root.findAllByProps({'aria-label':'Conversation activity filters'}).length,0);
+ assert.equal(root.root.findAllByProps({'data-session-id':'c'}).filter(node=>typeof node.type==='string').length,1);
+ assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,1);
  assert.equal(root.root.findAllByProps({'aria-label':'New workspace'}).length,1);
- assert.equal(root.root.findAllByProps({'data-session-id':'c'}).length,0);
  await renderAct(async()=>root.unmount());
 });
 
 
-test('simple sidebar loads later empty workspaces without leaving the simple view',async()=>{
- const state=initial(),calls=[];state.view.navSimple=true;state.workspaceOverview={items:state.workspaces,nextOffset:100};
- const act=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'empty',name:'Empty later folder',path:'/empty',available:true}],nextOffset:null}}};
- let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
- const more=root.root.findAllByType('button').find(button=>button.children.join('')==='More workspaces');
+test('single workspace explorer expands its preview including empty registered folders',async()=>{
+ const state=initial();state.workspaceExplorer.mode='recent';
+ state.workspaceExplorer.rows=Array.from({length:12},(_,i)=>({workspaceId:'w'+i,path:'/w'+i,name:'Folder '+i,chatCount:0}));
+ let root;await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+ assert.equal(root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='workspace.select').length,8);
+ const more=root.root.findAllByType('button').find(button=>button.children[0]==='More workspaces');
  await renderAct(async()=>more.props.onClick());
- assert.deepEqual(calls.at(-1),{name:'workspace.list',args:{offset:100}});
- assert.equal(root.root.findAllByProps({label:'Empty later folder'}).length,1);
- assert.equal(root.root.findAllByType('button').some(button=>button.children.join('')==='More workspaces'),false);
+ assert.equal(root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='workspace.select').length,12);
+ assert.equal(root.root.findAllByProps({'data-part':'workspace-explorer'}).length,1);
  await renderAct(async()=>root.unmount());
 });
 
@@ -282,7 +283,7 @@ for(const simple of [true,false]){
   await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
   const handle=title=>root.root.findByProps({'aria-label':'Reorder '+title});
   const key=(key,altKey=true)=>({key,altKey,preventDefault(){}});
-  await renderAct(async()=>{handle('First plan').props.onKeyDown(key('ArrowUp'));handle('Another plan').props.onKeyDown(key('ArrowDown'));handle('Another plan').props.onKeyDown(key('ArrowUp',false))});
+  await renderAct(async()=>{handle('First plan').props.onKeyDown(key('ArrowUp'));handle('Another plan').props.onKeyDown(key('ArrowDown'))});
   assert.equal(calls.length,0);
   await renderAct(async()=>handle('Another plan').props.onKeyDown(key('ArrowUp')));
   assert.deepEqual(calls.at(-1),{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}});
@@ -291,19 +292,16 @@ for(const simple of [true,false]){
   assert.ok(calls.every(call=>call.name==='session.pinOrder'));
   await renderAct(async()=>root.unmount());
  });
- test(`${label} drag and drop uses the same pin-order action`,async()=>{
-  const state=pinnedNavigation(simple),calls=[];let root;
-  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
-  const row=id=>root.root.findAll(node=>node.type==='div'&&node.props['data-session-id']===id)[0];
-  const dataTransfer={setData(type,value){this[type]=value}};
-  let prevented=0;const event={dataTransfer,preventDefault(){prevented++}};
-  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(calls.length,0);
-  await renderAct(async()=>root.root.findByProps({'aria-label':'Reorder Another plan'}).props.onDragStart(event));
-  assert.equal(dataTransfer['text/plain'],'b');assert.equal(dataTransfer.effectAllowed,'move');assert.equal(row('b').props['data-pin-dragging'],true);
-  await renderAct(async()=>row('a').props.onDragOver(event));assert.equal(dataTransfer.dropEffect,'move');
-  await renderAct(async()=>row('a').props.onDrop(event));assert.equal(prevented,2);
-  assert.deepEqual(calls,[{name:'session.pinOrder',args:{ids:['b','a','hidden','off-page']}}]);
-  assert.equal(row('b').props['data-pin-dragging'],undefined);
+ test(label+' uses the shared Settings reorder control and full chat contents',async()=>{
+  const state=pinnedNavigation(simple);let root;
+  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act:async()=>({accepted:true})}))});
+  const list=root.root.findByProps({className:'a-reorder-list a-pinned-chats'});
+  assert.equal(typeof list.props.onPointerMove,'function');
+  const handle=root.root.findByProps({'aria-label':'Reorder Another plan'});
+  assert.equal(handle.props.draggable,false);assert.equal(typeof handle.props.onPointerDown,'function');
+  const pinned=root.root.findByProps({'data-sidebar-section':'pinned'});
+  assert.equal(pinned.findAllByProps({className:'a-nav-chat-workspace'}).length,2);
+  assert.equal(pinned.findAllByProps({'data-view-source':'activity-time'}).length,2);
   await renderAct(async()=>root.unmount());
  });
 }
@@ -316,7 +314,7 @@ test('default sidebar prevents duplicate pending reorders and allows retry after
  await renderAct(async()=>{handle().props.onKeyDown(event);handle().props.onKeyDown(event)});
  assert.equal(calls.length,1);assert.equal(handle().props['aria-disabled'],true);assert.equal(handle().props.draggable,false);
  await renderAct(async()=>settle({accepted:true,result:{accepted:false,error:'Pin order changed. Please retry.'}}));
- assert.equal(handle().props['aria-disabled'],false);
+ assert.equal(!!handle().props['aria-disabled'],false);
  assert.ok(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')));
  assert.deepEqual(state.pinnedSessionIds,['a','hidden','b','off-page']);
  await renderAct(async()=>handle().props.onKeyDown(event));assert.equal(calls.length,2);

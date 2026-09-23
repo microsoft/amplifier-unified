@@ -57,7 +57,7 @@ class StateProjections:
     def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
                 cls.view_scope(state, ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter',
-                                      'navArchive', 'navCollection', 'navChatPage')))
+                                      'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage')))
 
     @classmethod
     def workspace_scope(cls, state):
@@ -71,15 +71,18 @@ class StateProjections:
         index = self.get(('workspace-index',), lambda: _index(state))
         return self.get(('workspaces', *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
-    def chats(self, state):
+    def chats(self, state, *, section=None):
         self.refresh_navigation(state)
         from .chat_navigation import catalog, registry, snapshot
         view = state.get('view', {})
         workspace = None if view.get('navChatScope') == 'all' else state.get('selectedWorkspaceId')
         filters = {key: view.get(key) for key in ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter', 'navArchive', 'navCollection')}
+        if section:
+            filters['navStatusFilter'] = 'all'
+        catalog_state = {**state, 'view': {**view, 'navStatusFilter': 'all'}} if section else state
         registrations = self.get(('chat-registry',), lambda: registry(state))
-        index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(state, indexed=registrations))
-        return self.get(('chats', *self.chat_scope(state)), lambda: snapshot(state, indexed=index))
+        index = self.get(('chat-index', workspace, json.dumps(filters, sort_keys=True)), lambda: catalog(catalog_state, indexed=registrations))
+        return self.get(('chats', section, *self.chat_scope(state)), lambda: snapshot(state, indexed=index, section=section))
 
     def browser(self, state):
         from .browser_state import navigation

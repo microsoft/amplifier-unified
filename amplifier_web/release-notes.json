@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.11",
+      "title": "A consistent sidebar and easier computer controls",
+      "changes": [
+        "Organize the sidebar into independently collapsible Pinned, Workspaces and Recent sections, with shared navigation and separate saved filters.",
+        "Reorder pinned chats and Settings lists with the same full-row drag preview, keyboard controls, cancellation and failed-save recovery.",
+        "Keep newly created empty workspaces visible, preserve native CLI and terminal chat discovery, and page larger chat lists.",
+        "Open scoped computer-use controls from Chat controls in text and voice, keeping source selection and capture permission explicit."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.10",
       "title": "Reliable voice snapshots, clearer startup failures and lighter background work",
       "changes": [

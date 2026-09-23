@@ -15,10 +15,10 @@ outputs, sources, helpers, changes, and previews belonging to the current scope.
 Viewing a detail is not an execution or authority-changing action.
 
 ```text
-New chat       Search
-Pinned         selected conversations
-Workspaces     workspace → recent conversations
-Recent         unpinned conversations without a workspace
+New chat
+Pinned         selected conversations                 (collapsible)
+Workspaces     workspace → its full conversation list (collapsible)
+Recent         unpinned conversations, all locations   (collapsible)
 
 Chat details → Outputs · Sources · Agents · Changes · Preview
 Workspace details → Files · Chats · Directions · Settings
@@ -31,9 +31,12 @@ Workspace details → Files · Chats · Directions · Settings
    Creation/attachment returns to that unsent draft with the workspace selected.
    Attachment asks for a folder, never a developer mode or a redundant preview.
 
-2. **Navigation avoids unnecessary duplication.** A conversation has one default home;
-   pins take precedence. Helpers stay with their parent chat. Empty groups and
-   irrelevant technical sections are absent from an information worker's sidebar.
+2. **Navigation uses shared controls.** Pinned, Workspaces, and Recent are the
+   three collapsible sections. One rich chat row renders each pin consistently;
+   one workspace explorer provides recent folders, folder browsing, and chat
+   drill-in. Pins are excluded from global Recent and remain available in a
+   workspace's full chat list. Helpers stay with their parent chat. Additional
+   filters sit behind a disclosure. Collapse state persists independently.
 
 3. **Details preserve conversation state.** The existing Canvas hosts inspection
    while retaining its tabs. Opening a source, output, helper, or preview leaves
@@ -80,9 +83,14 @@ Workspace details → Files · Chats · Directions · Settings
 
 ## Resolved decisions
 
-Pinned conversations appear once in the simple sidebar, in Pinned. They remain
-available in the workspace's full chat list. Recent contains conversations without
-a workspace.
+Pinned conversations appear in Pinned and remain available in a workspace's full
+chat list. Recent contains unpinned conversations across all available locations.
+Through 50 matches it shows the whole list; above 50 it uses pages of 40. Its
+filters/pages are independent of workspace drill-in and never filter pins.
+Pins and Settings share the same reorder component, showing the full row while
+dragging and preserving cancellation, keyboard ordering, and focus. Settings
+retains its explicit Save; pin ordering saves on drop. Neither changes selection,
+unsent drafts, session history, or activity timestamps.
 
 ## Changelog
 
@@ -90,5 +98,6 @@ a workspace.
 |---|---|---|
 | 2026-09-22 | Initial navigation and disclosure rules. | Live Spark PWA inspection, supplied sidebar/attachments screenshots, and the user's request for a simpler default experience. |
 | 2026-09-22 | Simplify attachment and add the New chat workspace picker. | User's critique of redundant folder confirmation and developer options. |
+| 2026-09-23 | Consolidate the two navigation views into shared collapsible sections, reuse Settings reorder, and page Recent at 50/40. | User's live sidebar screenshots and five requested adjustments. |
 
 Design direction accepted by the user on 2026-09-22. Acceptance is not a claim of implementation conformance; see [implementation status](../IMPLEMENTATION.md).

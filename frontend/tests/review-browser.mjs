@@ -29,7 +29,7 @@ try{
  await page.waitForFunction(id=>window.amplifier.getState().attention.sessions[id]===1,first);
  await page.reload();await page.waitForFunction(id=>window.amplifier?.getState().attention?.sessions?.[id]===1,first);
  await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
- await page.getByRole('button',{name:'Workspaces',exact:true}).click();
+ await page.locator('.a-workspace-explorer').waitFor();
  await page.locator('.a-workspace-row .a-navigation-status[data-kind="unread"]').waitFor();
  assert.equal(await page.locator('.a-workspace-row .a-navigation-status[data-kind="unread"]').getAttribute('aria-label'),'1 chats with unread activity');
  // The header Activity button is removed; the shared review surface remains available.

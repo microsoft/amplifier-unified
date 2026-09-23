@@ -38,10 +38,23 @@ Default UI typography uses 14 px normal text, 12–13 px supporting labels, and
 scale without zooming layouts or icons. Only exact unmodified historical default
 skins upgrade automatically; edited or renamed skins retain their saved CSS.
 
-The default sidebar keeps one list in focus. **All chats** shows pinned and recent
-conversations across available workspaces. **Workspaces** opens a recent-workspace
-index or the existing folder browser. Selecting a workspace opens its chats;
-**All workspaces** returns to the index without changing the current conversation.
+The default sidebar has three independently collapsible sections: **Pinned**,
+**Workspaces**, and **Recent**. There is one pinned-chat control and one workspace
+explorer. Pins keep the same title, workspace subtitle, activity time, and actions
+while browsing folders or filtering chats. Recent contains unpinned conversations
+across available workspaces and managed chats. It shows all matching rows through
+50; above 50 it uses pages of 40. Pins have their own bounded pages and are never
+lost when paging or filtering Recent.
+
+Workspaces uses the recent-workspace index and existing folder browser, with an
+eight-workspace preview and **More workspaces** in the recent index. Available
+registered folders appear even before their first chat; worker sessions never
+become top-level chats. Selecting a
+workspace opens its full chat list inside that section; **All workspaces** returns
+to the index. Recent remains independently available. Search is visible; archive,
+sort, location, and activity controls are under **Filters**. Collapse, filters,
+and pages persist per client. The former simple view and Workspaces/All chats
+switch are replaced by these shared sections.
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
 
@@ -53,10 +66,16 @@ retain the actual progress timestamps. Imported idle history retains its saved
 activity time. Each chat-list instance stores its own sort choice.
 
 Pins always follow the order in which they were pinned, independent of sorting.
-Drag a pin's grip to reorder it, focus the grip and press Alt+Up/Down, or use
+Drag a pin's grip to reorder it, focus the grip and press Up/Down (or Alt+Up/Down), or use
 **Move up** / **Move down** in its details. Reordering preserves pins outside the
 current search, workspace, or page. Agents use the same `session.pinOrder` action
 with the complete `pinnedSessionIds` vector returned by `shell.query`.
+Pins and Settings orders use the same `ReorderList` pointer/keyboard control:
+full row preview, placeholder, insertion marker, scroll assistance, focus return,
+and cancellation with Escape, pointer cancellation, or an outside drop. A concurrent
+order change cancels a held drag. Pins persist on drop; Settings preserves its
+draft-only preview and explicit Save/Cancel. A pending pin receipt blocks duplicate
+moves; failure restores the saved order and exposes a retryable error.
 
 Rows reserve their action and activity space. Names and parent labels truncate
 within a fixed 60 px row (52 px with the existing compact shell density). Hovering
@@ -109,6 +128,18 @@ Agents use the same `shell.view.update` and `shell.command` paths as the UI:
 - Chat instance: `navWorkspaceList` (boolean), `navStatusFilter` (`all`,
   `attention`, `working`, `unread`), `navSort` (`activity`, `created`, `name`),
   plus the existing scope, search, and page keys.
+- Sidebar sections: `navSectionsCollapsed` contains zero or more of `pinned`,
+  `workspaces`, and `recent`. `navPinnedPage` is a zero-based page index.
+  `navRecentView` stores Recent's independent `navFilter`, `navSort`, `navArchive`,
+  `navCollection`, `navLocationFilter`, `navStatusFilter`, and `navChatPage` keys.
+  UI filter changes clear Recent's saved page. Agents send the complete Recent
+  view object when changing it. Workspace chat filters retain the existing keys.
+- `shell.query.sidebarNavigation` exposes bounded `pinned`, `recent`, and
+  `workspace` pages, plus `recentView`. The complete native-history index remains
+  authoritative; no workspace-specific chat membership list is stored. Existing
+  `chatNavigation` and `homeNavigation` projections remain available to older
+  clients. Saved `navSimple` is accepted for compatibility but no longer selects
+  a different renderer.
 - Workspace instance: `navWorkspaceMode` (`recent`, `folders`), plus the existing
   folder path, wildcard search, and page keys.
 - `shell.command` for `workspace.select` or `workspace.create` on the paired
