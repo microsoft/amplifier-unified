@@ -150,13 +150,34 @@ def inventory(home, *, installed=None):
     for name, source in sorted(observed.items()):
         ref = source.get('ref', '')
         override = source.get('override', False)
-        eligible = bool(not override and ref and not pinned(ref) and source.get('current'))
+        registry_migration = core_registry_migration(name, source, baseline)
+        eligible = bool(not override and not registry_migration and ref and not pinned(ref) and source.get('current'))
         rows.append({'id': 'runtime:' + name, 'package': name, 'kind': 'runtime dependency',
                      'label': safe_label(source['url']) if source.get('url') else name,
-                     **source, 'ref': ref, 'status': 'not_checked' if eligible else 'local' if override else 'pinned',
+                     **source, 'ref': ref, 'status': 'not_checked' if eligible or registry_migration else 'local' if override else 'pinned',
+                     **({'registryMigration': True} if registry_migration else {}),
                      'eligible': eligible, 'usage': 'configured',
                      'usageEvidence': ['Conversation worker environment', source['provenance']]})
     return rows
+
+
+def core_registry_migration(name, source, baseline):
+    """Replace only the old app-owned Core default in the next generation.
+
+    An installed fork, fixed ref, editable source or dirty cache remains protected.
+    The previous base manifest is policy evidence; frozen receipts stay untouched.
+    """
+    if name != 'amplifier-core':
+        return False
+    current = tomllib.loads(manifest_path().read_text()).get('tool', {}).get('uv', {})
+    previous = tomllib.loads(baseline.decode()).get('tool', {}).get('uv', {}).get('sources', {}).get(name, {})
+    upstream = 'https://github.com/microsoft/amplifier-core'
+    return (name in current.get('no-build-package', [])
+            and name not in current.get('sources', {})
+            and previous.get('git') == upstream and (previous.get('rev') or previous.get('branch')) == 'main'
+            and not previous.get('subdirectory') and not previous.get('tag')
+            and source.get('url') == upstream and source.get('ref') == 'main'
+            and not source.get('subdirectory') and not source.get('override') and not source.get('cacheManaged'))
 
 
 class ProtectedRuntimeSource(ValueError):
@@ -255,6 +276,8 @@ def augmented_manifest(content, rows):
         name = row['package']
         if row.get('override') and (name in declared or row.get('cacheManaged') or row.get('trackedSource')):
             raise ProtectedRuntimeSource(name)
+        if row.get('registryMigration'):
+            continue
         if row.get('override') or not row.get('url') or not row.get('ref'):
             continue
         if name in declared:
@@ -325,7 +348,7 @@ async def stage(manager, generation, candidates, *, finalize=True):
     for row in selected:
         if row.get('kind') == 'runtime dependency':
             installed = baseline_sources.get(row['package'])
-            if not installed or any(installed.get(key, '') != row.get(key, '') for key in ('current', 'url', 'ref', 'subdirectory')):
+            if not installed or installed.get('registryMigration') or any(installed.get(key, '') != row.get(key, '') for key in ('current', 'url', 'ref', 'subdirectory')):
                 raise ValueError('Runtime dependencies changed since checking; check for updates again.')
     from .updates import pinned
     declared = tomllib.loads(content.decode()).get('tool', {}).get('uv', {}).get('sources', {})

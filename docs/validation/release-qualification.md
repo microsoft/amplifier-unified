@@ -129,3 +129,38 @@ qualification lanes.
 
 An exact-candidate promotion system that reuses matching PR/merge qualification,
 shared prebuilt wheels, and merge-policy changes remain separate proposals.
+
+## Published Core binaries
+
+The app host, worker project and Work acceptance project require
+`amplifier-core>=2.0.1` from PyPI. This is a minimum supported release, not a
+standing exact-version pin. Core's Git source override is removed. The uv
+`no-build-package` policy forbids compiling Core; other source dependencies can
+still build. The worker uses the same explicit public index as the host so an
+outdated local mirror cannot silently keep it on an older Core release.
+
+An existing worker's old app-owned Core Git-main default migrates only in a new
+qualified environment generation. Its previous base manifest must prove that
+default, and the installed source must match it. Forks, fixed refs and edited or
+local sources are preserved; they are never treated as that default. Existing
+locks and rollback receipts are unchanged. Installed-source augmentation must
+not reintroduce the retired app-owned Core Git override.
+
+The release's fresh source resolution, exact cache key and frozen runtime graph
+checks remain intact. Rust/Maturin identity and build constraints remain because
+other moving-source packages may require native builds. A Core policy/lock
+change changes the cache key; no old Git-Core cache can make the registry
+selection sticky. Core wheel metadata and its native extension hash now join
+the runtime receipt, and qualification fails if amplifier-app-cli is installed.
+No CLI companion is needed by Unified's runtime qualification.
+
+To independently qualify a dependency change on both Linux architectures, run
+the existing **Python checks (on demand)** workflow on the reviewed branch with
+`core_wheels=true`. Its default remains the full Python suite. The Core mode
+runs focused migration/receipt tests and all 24 real runtime checks unchanged
+on Linux x86_64 and aarch64, using fresh moving-source resolution and published
+Core wheels. It records the tested app revision, full lock, resolved source
+identities, installed graph, wheel tags and native binary hashes. It has read-only
+repository permissions, no publisher, and no production app access. The private
+loop-live key remains confined to explicitly dispatched qualification; automatic
+PR jobs do not receive it. macOS and Windows require separate platform evidence.

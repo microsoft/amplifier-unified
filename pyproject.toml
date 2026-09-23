@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 # python-pam imports six but does not declare it in its distribution metadata.
 dependencies = [
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
-    "amplifier-core>=1.6.1",
+    "amplifier-core>=2.0.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
     "aiohttp>=3.12,<4",
     "packaging>=24",
@@ -54,6 +54,10 @@ exclude = ["/.ci/**"]
 "examples/shell-navigator" = "amplifier_web/bundle_data/examples/shell-navigator"
 "examples/shell-reader" = "amplifier_web/bundle_data/examples/shell-reader"
 "examples/shell-controls" = "amplifier_web/bundle_data/examples/shell-controls"
+
+[tool.uv]
+# Core publishes native wheels; never compile it while installing this app.
+no-build-package = ["amplifier-core"]
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
