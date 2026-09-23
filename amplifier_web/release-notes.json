@@ -2,6 +2,28 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.9",
+      "title": "Quieter background work and reliable conversation recovery",
+      "changes": [
+        "Reduce repeated background work and disk writes by reusing unchanged history, navigation and accounting projections, avoiding redundant capture writes, and making diagnostics retention cheaper.",
+        "Match resumed model observations to their original calls, avoiding duplicate call rows and usage totals while preserving recorded child-session turn assignments.",
+        "Keep context-limit failures visibly failed with recovery details instead of reporting successful completion. Saved work is not automatically replayed.",
+        "Create named workspaces, discover shared native conversations, page workspace folders, and retain direct ordering of pinned chats.",
+        "Load bundle includes correctly when their source is a local bundle file, and inventory installed Git components as well as cached bundles when checking updates.",
+        "Remove the default deadline from provider readiness checks used when moving tasks between hosts, while retaining explicit configured limits and cancellation.",
+        "Preserve artifact-probe process ownership during cleanup and keep saved image pairs together for visual comparison.",
+        "Run independent release checks in parallel and reuse exactly matched runtime builds, shortening qualification without removing validation coverage."
+      ],
+      "notices": [
+        {
+          "id": "compaction-checkpoint-components-0209",
+          "title": "Update companion components for compaction improvements",
+          "detail": "Provider and context-manager fixes are separate from the app package. Updated components remove default provider response deadlines, try text-summary recovery before last-resort trimming, and preserve valid compaction checkpoints when later background results arrive.",
+          "action": "After updating the app, check and install available component updates, then verify the versions loaded by a fresh conversation worker. Updating the app alone does not replace every companion component."
+        }
+      ]
+    },
+    {
       "version": "0.20.8",
       "title": "Faster controls and quieter idle work",
       "changes": [
