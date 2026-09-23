@@ -52,7 +52,8 @@ The UI deliberately uses manual pairing and private signed file exchange. It doe
 not discover remote machines or establish SSH access. Packages are signed, **not
 encrypted**; copy them and receipts over an authenticated private connection and
 keep their filesystem permissions private. The local two-process test uses local
-file copy; actual SSH and Mac↔Spark transport require separate acceptance.
+file copy. Physical Mac→Spark transfer with manual signed-file exchange over SSH
+has also been verified; see the validation scope below.
 
 ## Operator workflow
 
@@ -232,8 +233,18 @@ processes and native/data homes, calls the real standalone provider probe agains
 a deterministic local provider, moves both directions with restarts, and checks
 history, outputs, receipts and no unknown-effect replay.
 
-That evidence proves a local two-process roundtrip on one Mac. It does not prove
-Spark/Linux deployment, SSH transport, a real external provider account, live
-in-flight task handoff, full resumed bundle/tool behavior, physical voice audio or
-unqualified filesystems. Live Mac↔Spark acceptance belongs to the release owner
-after coordinating the host consumers and destination accounts.
+That evidence proves a local two-process roundtrip on one Mac.
+
+Separate physical Mac→Spark acceptance on September 23, 2026 exercised ordinary
+shared product actions with manual exchange of signed packages and receipts over
+SSH, using normal provider settings and credentials. The destination continued
+through normal task execution with a real provider, preserved the original saved
+transcript as an exact byte prefix, and recalled information from that history.
+The source archive remained unchanged and its native execution fence stayed
+committed. All trial phases succeeded, and independent checks confirmed that no
+trial-owned processes remained on either host. Spark's existing serving process
+was unchanged.
+
+This physical acceptance covers Mac→Spark only. It does not establish reverse
+transfer, a browser-only end-to-end workflow, live in-flight task handoff, full
+resumed bundle/tool behavior, physical voice audio or unqualified filesystems.
