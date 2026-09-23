@@ -52,6 +52,8 @@ try{
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
+ const diagnosticReads=[];
+ page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'&&request.postDataJSON()?.action==='feedback.diagnostics')diagnosticReads.push(request.postDataJSON())});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  await page.getByRole('button',{name:'Send feedback',exact:true}).click();
@@ -59,6 +61,25 @@ try{
  await page.getByLabel('Details',{exact:true}).fill('This is a mocked browser test.');
  const diagnostics=page.getByRole('checkbox',{name:'Include reproduction diagnostics'});
  assert.equal(await diagnostics.isChecked(),true);
+ assert.equal(diagnosticReads.length,0,'opening feedback must not automatically collect diagnostics');
+ const preview=page.locator('[data-part="feedback-diagnostics"]');
+ await preview.locator('summary').click();
+ await preview.locator('pre').waitFor();
+ const previewFacts=JSON.parse(await preview.locator('pre').textContent());
+ assert.equal(previewFacts.schemaVersion,2);
+ assert.equal(previewFacts.device.eventStream,'open','real SSE lifecycle is included');
+ assert.ok(previewFacts.conversation&&previewFacts.library&&previewFacts.troubleshooting);
+ assert.equal(previewFacts.troubleshooting.workerLoadedComponentGeneration,'unverified');
+ assert.equal(diagnosticReads.length,1);
+ await preview.locator('summary').click();await preview.locator('summary').click();
+ await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture revised');
+ await page.getByLabel('Title',{exact:true}).fill('Canvas feedback fixture');
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{notice:'Synthetic state refresh'}}));
+ assert.equal(diagnosticReads.length,1,'typing and state updates do not collect diagnostics');
+ assert.equal((await page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()))).calls.length,0);
+ await preview.getByRole('button',{name:'Refresh diagnostics',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector('[data-part="feedback-diagnostics"] button').disabled);
+ assert.equal(diagnosticReads.length,2);
  await diagnostics.uncheck();
  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=';
  await page.getByLabel('Choose feedback files').setInputFiles({name:'picked-image.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
@@ -114,13 +135,16 @@ try{
  await page.reload();await page.getByText('Feedback sent. Thank you.',{exact:true}).waitFor();
  assert.equal(await page.getByLabel('Title',{exact:true}).inputValue(),'');
  assert.equal(await page.getByLabel('Details',{exact:true}).inputValue(),'');
+ await page.getByText('Submitted diagnostics',{exact:true}).click();
+ await page.getByText('No diagnostics were saved with this submission.',{exact:true}).waitFor();
+ assert.equal(diagnosticReads.at(-1).args.requestId,saved.requestId);
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']}}));
  await page.locator('[aria-label="Application release status"]').waitFor();
  assert.equal(await page.locator('.a-app-update-versions').textContent(),'Installed0.6.3Latest releasev0.6.4');
  await page.screenshot({path:'/tmp/amplifier-updates-narrow.png'});
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/tmp/amplifier-updates-desktop.png'});
  assert.deepEqual(errors,[]);
- console.log('Feedback browser passed: picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
+ console.log('Feedback browser passed: on-demand complete preview, actual SSE status, no automatic collection on typing/state updates, opt-out saved receipt, picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
 }finally{
  await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

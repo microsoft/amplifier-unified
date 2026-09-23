@@ -937,6 +937,13 @@ class AppService:
                 # under the mutation lock without changing its queue ordering.
                 try: transfer_context = self.portability.write_context(transfer_sid)
                 except ValueError as exc: raise AppError(str(exc), 409) from exc
+        if action == 'feedback.diagnostics':
+            async with self.lock:
+                try:
+                    result = self.feedback.diagnostics(args)
+                except ValueError as exc:
+                    raise AppError(str(exc), 404) from None
+                return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')

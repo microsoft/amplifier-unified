@@ -84,7 +84,7 @@ async def test_diagnostics_default_and_acceptance_snapshot_exclude_private_conte
         assert facts['conversation']['messages']==1
         assert facts['presentation']['appearance']=='system'
         assert facts['device']['frontendVersion']=='0.10.7'
-        assert facts['connectedViews']==1
+        assert facts['reportedOnlineViews']==1
         assert 'PRIVATE' not in body and str(tmp_path) not in body
         await app.dispatch('feedback.submit',args);await settle(app)
         github.assert_awaited_once()

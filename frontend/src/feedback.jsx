@@ -70,14 +70,13 @@ export function FeedbackPanel({state,act}){
   finally{submitting.current=false;setBusy(false)}
  }
  async function startNew(){if(busy||uploading)return;setError('');setRetryUpload(null);try{await save(empty())}catch{setError('Could not start a new draft. Reconnect and try again.')}}
- const facts=state.feedback?.diagnostics||{};
  return <section className={`a-feedback${dragging?' is-dragging':''}`} data-part="feedback" onPaste={paste} onDrop={drop} onDragOver={event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();event.stopPropagation();if(!frozen)setDragging(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget))setDragging(false)}}>
   <p>Send a bug report, idea, or question to <a href={issues} target="_blank" rel="noopener noreferrer">microsoft/amplifier-unified</a>. Uses the host’s GitHub sign-in.</p>
   {(result||error)&&<div className="a-feedback-result"><ResultNotice phase={result?.status==='submitted'?'success':['failed','unknown'].includes(result?.status)?'error':'working'} message={result?.message}/>{error&&<ResultNotice phase="error" message={error}/>} {result?.url&&<a className="a-feedback-link" href={result.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>} {result?.status==='unknown'&&<><a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues <ExternalLink size={14}/></a>{result.attachmentsUrl&&<a href={result.attachmentsUrl} target="_blank" rel="noopener noreferrer">Check attachment branch <ExternalLink size={14}/></a>}</>}</div>}
   <form onSubmit={submit} data-action="feedback.submit">
    <label htmlFor="feedback-category">Type</label><select id="feedback-category" data-action="view.update" value={shown.category||'bug'} disabled={frozen} onChange={e=>edit({category:e.target.value})}><option value="bug">Bug report</option><option value="idea">Feature idea</option><option value="question">Question</option><option value="other">Other feedback</option></select>
    <label htmlFor="feedback-title">Title</label><input id="feedback-title" data-action="view.update" maxLength={200} required disabled={frozen} value={shown.title||''} onChange={e=>edit({title:e.target.value})} placeholder="A short description"/>
-   <label htmlFor="feedback-body">Details</label><textarea id="feedback-body" data-action="view.update" maxLength={16000} rows={4} required disabled={frozen} value={shown.body||''} onChange={e=>edit({body:e.target.value})} placeholder="What happened, what you expected, or what you’d like to do…"/>
+   <label htmlFor="feedback-body">Details</label><textarea id="feedback-body" data-action="view.update" maxLength={16000} rows={4} required disabled={frozen} value={shown.body||''} onChange={e=>edit({body:e.target.value})} placeholder="What happened, what you expected, or what you’d like to do…" aria-describedby={shown.category==='bug'?'feedback-reproduction-help':undefined}/>{shown.category==='bug'&&<p id="feedback-reproduction-help" className="a-caption">What action triggered it? Was this a new chat or an existing one? Describe what you expected, what happened, and whether it repeats. Leave out private conversation text and credentials.</p>}
    <div className="a-feedback-files" aria-label="Feedback attachments">
     <input ref={fileInput} type="file" multiple hidden disabled={frozen} aria-label="Choose feedback files" onChange={event=>{const files=Array.from(event.target.files||[]);event.target.value='';stageFiles(files)}}/>
     {!pending&&<button type="button" className="a-soft a-feedback-add-files" data-action="feedback.attachment.add" disabled={uploading||!!retryUpload} onClick={()=>fileInput.current?.click()}><Paperclip size={16}/>{uploading?'Adding files…':'Add files or images'}</button>}
@@ -90,16 +89,41 @@ export function FeedbackPanel({state,act}){
     {retryUpload&&<div className="a-feedback-upload-retry"><button type="button" className="a-soft" disabled={uploading} onClick={()=>stageFiles([],retryUpload)}>Check attachment: {retryUpload.name}</button><button type="button" className="a-soft" disabled={uploading} onClick={()=>{setRetryUpload(null);setError('')}}>Stop retrying</button></div>}
    </div>
    <label className="a-feedback-checkbox"><input type="checkbox" data-action="view.update" checked={shown.includeDiagnostics!==false} disabled={frozen} onChange={e=>edit({includeDiagnostics:e.target.checked})}/>Include reproduction diagnostics</label>
-   {shown.includeDiagnostics!==false&&<details><summary>Build and device diagnostics</summary><pre className="a-state-view">{JSON.stringify({server:facts,device:pending?.deviceDiagnostics||feedbackDiagnostics(state)},null,2)}</pre><p className="a-caption">Includes build and browser versions, display preferences, connection state, and counts/statuses for the selected conversation and library. No message text, workspace paths, raw logs, or credentials.</p></details>}
+   {shown.includeDiagnostics!==false&&<FeedbackDiagnostics key={result?`receipt:${result.requestId}`:state.selectedSessionId||'current'} state={state} act={act} requestId={result?.requestId} device={pending?.deviceDiagnostics}/> }
    <p className="a-caption">Your text, selected diagnostics and the files listed above are sent when you submit. Files stay in this private repository’s history and are linked from the issue; your GitHub sign-in needs repository Contents write access. Chats, paths, provider settings, and credentials are not attached automatically.</p>
    <div className="a-dialog-actions">
     {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
     {(done||pending&&!busy)&&<button type="button" className="a-soft" data-action="view.update" onClick={startNew}><Plus/>New feedback</button>}
    </div>
   </form>
-  {!!requests.filter(item=>item.requestId!==pending?.requestId).length&&<div className="a-feedback-recent"><h3>Submissions</h3>{requests.filter(item=>item.requestId!==pending?.requestId).map(item=><div key={item.requestId} className="a-feedback-receipt"><strong>{item.title}</strong><ResultNotice phase={item.status==='submitted'?'success':['failed','unknown'].includes(item.status)?'error':'working'} message={item.message}/>{item.url&&<a href={item.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>}{item.status==='unknown'&&<a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues</a>}{(state.attention?.items||[]).filter(i=>i.requestId===item.requestId&&!i.read).map(i=><button key={i.id} className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,[i])}>Mark reviewed</button>)}</div>)}</div>}
+  {!!requests.filter(item=>item.requestId!==pending?.requestId).length&&<div className="a-feedback-recent"><h3>Submissions</h3>{requests.filter(item=>item.requestId!==pending?.requestId).map(item=><div key={item.requestId} className="a-feedback-receipt"><strong>{item.title}</strong><ResultNotice phase={item.status==='submitted'?'success':['failed','unknown'].includes(item.status)?'error':'working'} message={item.message}/>{item.url&&<a href={item.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>}<FeedbackDiagnostics state={state} act={act} requestId={item.requestId}/>{item.status==='unknown'&&<a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues</a>}{(state.attention?.items||[]).filter(i=>i.requestId===item.requestId&&!i.read).map(i=><button key={i.id} className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,[i])}>Mark reviewed</button>)}</div>)}</div>}
   <FeedbackFollowup state={state} act={act}/>
  </section>;
+}
+
+
+export function FeedbackDiagnostics({state,act,requestId,device}){
+ const [result,setResult]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const loading=useRef(false),loaded=useRef(false),alive=useRef(true);
+ useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
+ async function load(){
+  if(loading.current)return;
+  loading.current=true;setBusy(true);setError('');
+  try{
+   const response=await act('feedback.diagnostics',requestId?{requestId}:{deviceDiagnostics:device||feedbackDiagnostics(state)});
+   if(!response?.result)throw Error('Unavailable');
+   if(alive.current){setResult(response.result);loaded.current=true}
+  }catch{if(alive.current)setError('Diagnostics could not be loaded. Try Refresh.')}
+  finally{loading.current=false;if(alive.current)setBusy(false)}
+ }
+ return <details data-part="feedback-diagnostics" onToggle={event=>{if(event.currentTarget.open&&!loaded.current)void load()}}>
+  <summary>{requestId?'Submitted diagnostics':'Preview reproduction diagnostics'}</summary>
+  <p className="a-caption">{requestId?'This is the snapshot saved when this submission was accepted.':'Loads only when opened. This is a current preview; live status may change before you submit.'} Host active component generation does not prove which code a running worker loaded. Reported online views counts device reports, not live event-stream connections. No message text, workspace paths, raw logs, or credentials.</p>
+  {busy&&<p role="status">Loading diagnostics…</p>}
+  {error&&<p role="alert">{error}</p>}
+  {result&&(result.diagnostics?<pre className="a-state-view">{JSON.stringify(result.diagnostics,null,2)}</pre>:<p>No diagnostics were saved with this submission.</p>)}
+  <button type="button" className="a-soft" data-action="feedback.diagnostics" disabled={busy} onClick={()=>void load()}>Refresh diagnostics</button>
+ </details>;
 }
 
 
