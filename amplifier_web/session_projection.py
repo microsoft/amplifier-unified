@@ -91,12 +91,14 @@ def accounting_projection(tree):
             if field not in ACCOUNTING_FIELDS:
                 continue
             if field == 'usage':
-                detached = type(value) is not dict
+                detached = type(value) is not dict or any(
+                    type(name) is not str or type(amount) not in scalar_types
+                    for name, amount in value.items())
                 usage = copy.deepcopy(value) if detached else value
                 if isinstance(usage, dict):
-                    # Only exact scalar types survive this filter. Do not copy
-                    # nested provider payloads excluded from accounting.
-                    record[field] = {name if detached or type(name) is str else copy.deepcopy(name): amount for name, amount in usage.items()
+                    # Plain usage is already scalar; custom keys/values retain
+                    # deepcopy behavior before the existing exact-type filter.
+                    record[field] = {name: amount for name, amount in usage.items()
                                    if name in ACCOUNTING_USAGE_FIELDS and type(amount) in (str, int, float)}
             else:
                 record[field] = value if type(value) in scalar_types else copy.deepcopy(value)

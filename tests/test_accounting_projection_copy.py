@@ -25,6 +25,16 @@ class UsageSubclass(dict):
     pass
 
 
+class RenamedKey(str):
+    def __deepcopy__(self, memo):
+        return 'inputTokens'
+
+
+class CopiedScalar(str):
+    def __deepcopy__(self, memo):
+        return str(self)
+
+
 def test_accounting_projection_detaches_retained_nested_values_and_scalar_subclasses():
     model = MutableString('fixture')
     model.notes = ['original']
@@ -66,6 +76,9 @@ def test_usage_filter_preserves_exact_types_custom_mapping_and_field_order():
     receipt['usage'] = UsageSubclass({CopiedName('inputTokens'): 4})
     key = next(iter(accounting_projection({'retiredUsageNodes': [receipt]})[0]['usage']))
     assert key.copies == 1
+    # Legacy filtering happens after custom deepcopy hooks transform values.
+    receipt['usage'] = {RenamedKey('other'): CopiedScalar('4')}
+    assert accounting_projection({'retiredUsageNodes': [receipt]})[0]['usage'] == {'inputTokens': '4'}
 
 
 def test_fresh_projection_observes_mutated_receipts_without_borrowing_child_identity():
