@@ -3,7 +3,7 @@ from datetime import datetime
 import hashlib
 import json
 
-from .session_files import capture_dir, validate_capture
+from .session_files import capture_sessions_dir, validate_capture, validate_id
 
 
 def event_stream(event):
@@ -15,8 +15,13 @@ def event_stream(event):
 
 def index_shared(db, scopes, config):
     added = []
+    # Workers share workspace roots. Re-resolve these on each invocation so
+    # relocation settings and workspace symlink changes are observed next time.
+    roots = {}
     for workspace, session in set(scopes):
-        directory = capture_dir(workspace, session)
+        if workspace not in roots:
+            roots[workspace] = capture_sessions_dir(workspace)
+        directory = roots[workspace] / validate_id(session) / 'context-intelligence'
         path = directory / 'events.jsonl'
         if not path.is_file():
             continue

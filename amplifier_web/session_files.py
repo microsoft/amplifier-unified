@@ -34,10 +34,14 @@ def sessions_dir(workspace):
     return amplifier_home() / 'projects' / project_slug(workspace) / 'sessions'
 
 
-def capture_dir(workspace, identity):
+def capture_sessions_dir(workspace):
     # Match CI's supported relocation setting; transcript paths do not relocate.
     root = Path(os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH') or amplifier_home() / 'projects').expanduser().resolve()
-    return root / project_slug(workspace) / 'sessions' / validate_id(identity) / 'context-intelligence'
+    return root / project_slug(workspace) / 'sessions'
+
+
+def capture_dir(workspace, identity):
+    return capture_sessions_dir(workspace) / validate_id(identity) / 'context-intelligence'
 
 
 def validate_capture(directory):
