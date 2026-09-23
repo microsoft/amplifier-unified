@@ -16,3 +16,47 @@ test('native check and grant are separate explicit requests without browser capt
  await value.chooseNative();assert.equal(value.stream,null);assert.equal(value.grant.id,'native');assert.deepEqual(requests[1][1].body.source,{kind:'native-foreground',hostId:'fixture-host',hostInstanceId:'instance'});
  value.sync(voice,false,{available:true,id:'native'});assert.equal(value.grant,null);assert.match(requests.at(-1)[0],/revoke/);value.dispose();
 });
+
+function captureFixture(t,{grab,legacy=false}={}) {
+ const {value,requests}=client(),draws=[],cancelled=[];let closed=0,callbacks=0;
+ const track={readyState:'live',muted:false,stop(){this.readyState='ended'}};
+ const bitmap={width:1920,height:1080,close(){closed++}};
+ const video={videoWidth:640,videoHeight:360,pause(){},requestVideoFrameCallback(fn){callbacks++;this.callback=fn;return 7},cancelVideoFrameCallback(id){cancelled.push(id)}};
+ const previous={document:globalThis.document,ImageCapture:globalThis.ImageCapture};
+ globalThis.document={createElement(type){assert.equal(type,'canvas');return {getContext:()=>({drawImage(...args){draws.push(args)}}),toDataURL:()=> 'data:image/png;base64,cGl4ZWxz'}}};
+ globalThis.ImageCapture=legacy?undefined:class {constructor(actual){assert.equal(actual,track)}grabFrame(){return grab?grab(bitmap):Promise.resolve(bitmap)}};
+ t.after(()=>{value.dispose();for(const [key,old] of Object.entries(previous)){if(old===undefined)delete globalThis[key];else globalThis[key]=old}});
+ value.stream={getVideoTracks:()=>[track],getTracks:()=>[track]};value.video=video;
+ value.grant={id:'grant',callId:target.id,sessionId:target.sessionId};
+ const command={id:'capture',grantId:'grant',callId:target.id,sessionId:target.sessionId};
+ return {value,requests,track,bitmap,video,draws,cancelled,command,get closed(){return closed},get callbacks(){return callbacks}};
+}
+
+test('explicit snapshot reads a stationary selected track without waiting for video presentation',async t=>{
+ const f=captureFixture(t);await f.value.capture(f.command);
+ assert.equal(f.callbacks,0);assert.equal(f.draws[0][0],f.bitmap);assert.deepEqual(f.draws[0].slice(1),[0,0,1280,720]);
+ assert.equal(f.closed,1);assert.equal(f.requests[0][1].body.image,'cGl4ZWxz');
+});
+test('a revoked source discards and closes an in-flight bitmap without uploading it',async t=>{
+ let finish;const f=captureFixture(t,{grab:()=>new Promise(r=>finish=r)});
+ const capture=f.value.capture(f.command);f.value.stop();finish(f.bitmap);await capture;
+ assert.equal(f.closed,1);assert.equal(f.draws.length,0);assert.ok(f.requests.every(([,options])=>!options.body.image));
+});
+test('track capture failure does not fall back to an old video frame',async t=>{
+ const f=captureFixture(t,{grab:()=>Promise.reject(Error('Track snapshot failed'))});await f.value.capture(f.command);
+ assert.equal(f.callbacks,0);assert.equal(f.draws.length,0);assert.equal(f.requests[0][1].body.error,'Track snapshot failed');
+});
+test('timed-out track capture closes a late bitmap and never uploads it',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});let finish;
+ const f=captureFixture(t,{grab:()=>new Promise(r=>finish=r)});const capture=f.value.capture(f.command);
+ t.mock.timers.tick(2001);await capture;finish(f.bitmap);await Promise.resolve();
+ assert.equal(f.closed,1);assert.equal(f.draws.length,0);assert.match(f.requests[0][1].body.error,/No fresh screen frame/);
+});
+test('browsers without ImageCapture retain the fresh video-frame fallback',async t=>{
+ const f=captureFixture(t,{legacy:true});const capture=f.value.capture(f.command);f.video.callback();await capture;
+ assert.equal(f.draws[0][0],f.video);assert.equal(f.requests[0][1].body.image,'cGl4ZWxz');
+});
+test('the video fallback cancels its callback when a frame times out',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});const f=captureFixture(t,{legacy:true});const capture=f.value.capture(f.command);
+ t.mock.timers.tick(2001);await capture;assert.deepEqual(f.cancelled,[7]);assert.equal(f.draws.length,0);
+});
