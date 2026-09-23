@@ -40,7 +40,7 @@ def identity(root):
 
 
 HOST_FILES = ('resolution.json', 'qualified-overrides.txt', 'development.lock')
-LANES = ('python', 'frontend', 'runtime')
+LANES = ('package', 'frontend', 'runtime')
 
 
 def candidate(root, evidence):
@@ -124,7 +124,7 @@ def receipt(root, evidence, expected, lane, destination, runtime=None, dist=None
         if runtime_snapshot(root, runtime) != qualified:
             raise ValueError('Runtime graph changed during qualification')
         value['runtime'] = digest(qualified)
-    if lane == 'python':
+    if lane == 'package':
         names = sorted(p.name for p in dist.iterdir() if p.suffix == '.whl' or p.name.endswith('.tar.gz') or p.name == 'SHA256SUMS')
         if len(names) != 3:
             raise ValueError('Expected the verified wheel, source archive and checksums')
@@ -139,7 +139,7 @@ def verify_receipts(root, evidence, expected, receipts, dist):
         if (value.get('lane') != lane or value.get('candidate') != expected
                 or value.get('revision') != selected['revision']):
             raise ValueError('Qualification receipt belongs to a different candidate or lane')
-        if lane == 'python':
+        if lane == 'package':
             recorded = value.get('distributions', {})
             if not recorded or any(Path(name).name != name for name in recorded):
                 raise ValueError('Malformed distribution receipt')
