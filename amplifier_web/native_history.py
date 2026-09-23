@@ -282,13 +282,16 @@ class NativeHistory:
         paths.extend(known.get(project.name, ()))
         paths.extend(self._project_paths.get(project.name, ()))
         try:
-            directories = self._directories(project / 'sessions')
+            with os.scandir(project / 'sessions') as entries:
+                directories = sorted((entry for entry in entries
+                                      if not entry.name.startswith('.') and entry.is_dir(follow_symlinks=False)),
+                                     key=lambda entry: entry.name)
         except FileNotFoundError:
             directories = []
         for directory in directories:
-            # All children are fixed relative names. Reusing the normalized
-            # directory string avoids reparsing a full Path for every probe.
-            prefix = str(directory) + os.sep
+            # Stamps need only a string prefix. Keep the normalized scandir
+            # path instead of constructing and converting a temporary Path.
+            prefix = directory.path + os.sep
             paths.extend(prefix + name for name in _STAMP_FILES)
         result = [tuple(sorted(known.get(project.name, ())))]
         result.append(tuple((path, str(Path(path).resolve()))
