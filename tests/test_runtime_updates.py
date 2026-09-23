@@ -351,3 +351,37 @@ async def test_lazy_install_cannot_replace_a_qualified_editable_dependency(insta
     with pytest.raises(ValueError, match='preserve its source configuration'):
         environments.augmented_manifest(environments.manifest_path().read_bytes(), rows)
     assert (repo / 'child/marker.txt').read_text() == 'local edit must survive'
+
+
+@pytest.mark.parametrize('replacement', ['editable', 'registry'])
+async def test_nonprefixed_installed_override_blocks_stale_git_lock_staging(environment, replacement):
+    manager, current, update, old, new, repo = environment
+    lock = current / 'uv.lock'
+    lock.write_text(lock.read_text() + '\n[[package]]\nname="component-child"\nversion="0.1.0"\n'
+                    'source={git=' + json.dumps(repo.as_uri() + '?branch=main#' + old) + '}\n')
+    site = current / '.venv/lib/python3.13/site-packages'
+    metadata = site / 'component_child-9.9.dist-info'
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text('Name: component-child\nVersion: 9.9\n')
+    if replacement == 'editable':
+        (metadata / 'direct_url.json').write_text(json.dumps({
+            'url': 'file:///private/local-edits', 'dir_info': {'editable': True}}))
+    unrelated = site / 'ordinary_dependency-1.0.dist-info'
+    unrelated.mkdir()
+    (unrelated / 'METADATA').write_text('Name: ordinary-dependency\nVersion: 1.0\n')
+    before = {path: path.read_bytes() for path in (lock, *metadata.iterdir())}
+    rows = environments.inventory(manager.home)
+    actual = next(row for row in rows if row.get('package') == 'component-child')
+    assert actual['current'] == '9.9' and actual['override'] and not actual['eligible']
+    assert actual['provenance'] == 'installed local or registry override'
+    assert not any(row.get('package') == 'ordinary-dependency' for row in rows)
+    assert '/private/local-edits' not in json.dumps(actual)
+    generation = '6' * 32
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    with pytest.raises(environments.ProtectedRuntimeSource) as caught:
+        await environments.stage(manager, generation, [update])
+    assert caught.value.diagnostic_facts['package'] == 'component-child'
+    assert {path: path.read_bytes() for path in before} == before
+    assert not (receipt / 'runtime.lock').exists()
+    assert not active_release(manager.home)
