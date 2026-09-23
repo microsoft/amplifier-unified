@@ -6,9 +6,12 @@ import {workspaceContext,parentPath} from './navigation-presentation';
 
 // The server supplies the same bounded folder projection to users and agents.
 // Browsing changes only the view; workspace.select changes the active project.
-export function WorkspaceExplorer({state,act,onOpen,onEdit}){
+export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewLimit=Infinity}){
  const now=useActivityClock();
  const explorer=state.workspaceExplorer||{},rows=explorer.rows||[],crumbs=explorer.breadcrumbs||[];
+ const [showAll,setShowAll]=useState(false);
+ const preview=!showAll&&!explorer.filter&&explorer.mode==='recent'&&(explorer.page||1)===1;
+ const shownRows=preview?rows.slice(0,previewLimit):rows;
  const [query,setQuery]=useState(explorer.filter||''),pendingQuery=useRef(null);
  useEffect(()=>{pendingQuery.current=null;setQuery(explorer.filter||'')},[state.selectedWorkspaceId]);
  useEffect(()=>{if(pendingQuery.current===null||pendingQuery.current===explorer.filter){pendingQuery.current=null;setQuery(explorer.filter||'')}},[explorer.filter]);
@@ -29,7 +32,7 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit}){
  const crumbLabel=crumb=>crumb.name===crumb.path?(crumb.path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)||crumb.name):crumb.name;
  return <section ref={region} data-activity-region="workspace-folders" className="a-workspace-explorer" data-part="workspace-explorer" aria-label="Workspace folders">
   <div className="a-workspace-modes" role="group" aria-label="Workspace list"><button type="button" aria-pressed={explorer.mode==='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'recent',navWorkspacePage:1})}>Recent</button><button type="button" aria-pressed={explorer.mode!=='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'folders',navWorkspacePage:1})}>Browse folders</button></div>
-  <div className="a-workspace-explorer-heading"><strong>Workspaces</strong><span>{explorer.totalWorkspaces||0}</span></div>
+  {heading&&<div className="a-workspace-explorer-heading"><strong>Workspaces</strong><span>{explorer.totalWorkspaces||0}</span></div>}
   <div className="a-nav-search a-workspace-search"><Search/><input type="search" aria-label="Filter workspaces" placeholder="Find workspace · * ? patterns" value={query} data-action="view.update" onChange={e=>search(e.target.value)}/></div>
   {explorer.mode!=='recent'&&!explorer.filter&&<div className="a-workspace-location">
    <button type="button" className="a-icon" aria-label="Go to parent workspace folder" disabled={explorer.parentPath==null} data-action="view.update" onClick={()=>browse(explorer.parentPath)}><ArrowLeft/></button>
@@ -38,13 +41,13 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit}){
     {visible.map((crumb,index)=><React.Fragment key={crumb.path}>{(index>0||previous.length>0)&&<ChevronRight aria-hidden="true"/>}<button type="button" data-action="view.update" aria-current={index===visible.length-1?'location':undefined} title={crumb.path||'All workspace folders'} aria-label={'Browse '+(crumb.path||'all workspace folders')} onClick={()=>browse(crumb.path)}>{crumbLabel(crumb)}</button></React.Fragment>)}
    </nav>
   </div>}
-  <div className="a-workspace-folders">{rows.map(row=>{
+  <div className="a-workspace-folders">{shownRows.map(row=>{
    const workspace=!!row.workspaceId,selected=workspace&&row.workspaceId===state.selectedWorkspaceId;
    const browseLabel='Browse '+row.path;
    const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
    const content=<>
     <button type="button" className="a-workspace-select" data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
-     {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span>{row.customName||row.name}</span><small className="a-workspace-result-path" title={row.path}>{workspaceContext(row)}</small></span>
+     {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span>{row.customName||row.name}</span><small className="a-workspace-result-path" title={row.path}>{state.settings?.workspaces?.showPaths?row.path:workspaceContext(row)}</small></span>
      <span className="a-workspace-count" aria-label={`${workspace?row.chatCount:row.descendantWorkspaceCount} ${workspace?'chats':'workspaces'}`}>{workspace?row.chatCount:row.descendantWorkspaceCount}</span>{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
     </button>
     {workspace&&row.canBrowse&&<button type="button" className="a-workspace-drill" data-action="view.update" aria-label={browseLabel} title={`${row.descendantWorkspaceCount} nested workspaces`} onClick={()=>browse(row.path)}><ChevronRight/></button>}
@@ -56,7 +59,8 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit}){
    </>}/>} >{content}</NavigationRow>:<div className="a-workspace-row" key={row.path} data-workspace-path={row.path}>{content}</div>;
 
   })}</div>
+  {shownRows.length<rows.length&&<button type="button" className="a-link" onClick={()=>setShowAll(true)}>More workspaces<ChevronRight/></button>}
   {!rows.length&&!state.sharedHistory?.loading&&<p className="a-nav-empty">{explorer.filter?'No matching workspaces.':'Create a workspace to start a chat.'}</p>}
-  {pages>1&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}
+  {pages>1&&shownRows.length===rows.length&&<div className="a-nav-pagination a-workspace-pagination"><span>Page {page} of {pages}</span><div><button type="button" className="a-link" aria-label="Show previous workspace folders" data-action="view.update" disabled={page<=1} onClick={()=>patch({navWorkspacePage:page-1})}>Previous</button><button type="button" className="a-link" aria-label="Show more workspace folders" data-action="view.update" disabled={page>=pages} onClick={()=>patch({navWorkspacePage:page+1})}>More<ChevronRight/></button></div></div>}
  </section>;
 }

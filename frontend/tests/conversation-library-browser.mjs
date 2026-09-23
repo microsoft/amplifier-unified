@@ -19,14 +19,14 @@ try{
  await page.goto(url);
  await page.waitForFunction(()=>window.amplifier?.dispatch);
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- const created=await action('session.create',{title:'Preserved conversation'}),sid=created.state.selectedSessionId;
+ await action('session.create',{title:'Preserved conversation'});
+ await page.waitForFunction(()=>!!window.amplifier.getState().selectedSessionId);
+ const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Unsent words stay here');
  await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Unsent words stay here');
  await openSettingsPage(page,'conversation');
- await page.getByLabel('New collection name',{exact:true}).fill('Research');
- await page.getByRole('button',{name:'Create collection',exact:true}).click();
- await page.getByLabel('Collection',{exact:true}).selectOption({label:'Research'});
- await page.waitForFunction(id=>window.amplifier.getState().conversationOrganization.collections[0].sessionIds.includes(id),sid);
+ // Collections were removed from the product; archive and sharing remain.
+ assert.equal(await page.getByLabel('New collection name',{exact:true}).count(),0);
  await page.getByRole('button',{name:'Archive conversation',exact:true}).click();
  await expect(page.getByRole('button',{name:'Restore conversation',exact:true})).toBeVisible();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);
@@ -46,8 +46,6 @@ try{
  assert.equal((await reader.reload()).status(),404);
  await anonymous.close();
  await page.getByRole('button',{name:'Restore conversation',exact:true}).click();
- await page.getByRole('button',{name:'Remove collection; keep chats',exact:true}).click();
- await page.waitForFunction(()=>window.amplifier.getState().conversationOrganization.collections.length===0);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);
  await page.getByRole('heading',{name:'Conversation library',exact:true}).scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/amplifier-library-desktop.png',animations:'disabled'});
@@ -58,15 +56,16 @@ try{
  await page.setViewportSize({width:1200,height:950});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  if(await page.getByRole('button',{name:'Pin navigation open',exact:true}).isVisible())await page.getByRole('button',{name:'Pin navigation open',exact:true}).click();
- await page.getByRole('button',{name:'All chats',exact:true}).click();
+ const recent=page.locator('[data-sidebar-section=recent]');
+ await recent.locator('summary').click();
  await action('session.archive',{id:sid});
- await page.getByRole('combobox',{name:'Active or archived conversations',exact:true}).selectOption('archived');
- await expect(page.locator(`.a-nav-chat[data-session-id="${sid}"]`)).toBeVisible();
- await page.getByRole('combobox',{name:'Active or archived conversations',exact:true}).selectOption('active');
- await expect(page.locator(`.a-nav-chat[data-session-id="${sid}"]`)).toHaveCount(0);
+ await recent.getByRole('combobox',{name:'Active or archived conversations',exact:true}).selectOption('archived');
+ await expect(recent.locator(`.a-nav-chat[data-session-id="${sid}"]`)).toBeVisible();
+ await recent.getByRole('combobox',{name:'Active or archived conversations',exact:true}).selectOption('active');
+ await expect(recent.locator(`.a-nav-chat[data-session-id="${sid}"]`)).toHaveCount(0);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Unsent words stay here');
  const inspect=await page.request.get(url+'/fixture').then(response=>response.json());
  assert.equal(inspect.workerCount,0);assert.deepEqual(inspect.sent,[]);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,archiveRestore:true,collectionsWithoutDeletion:true,selectionDraftPreserved:true,immutableAnonymousSnapshot:true,revoked:true,mobileNoOverflow:true,noWorkerStarts:true}));
+ console.log(JSON.stringify({passed:true,archiveRestore:true,selectionDraftPreserved:true,immutableAnonymousSnapshot:true,revoked:true,mobileNoOverflow:true,noWorkerStarts:true}));
 }finally{await browser?.close();fixture.kill()}

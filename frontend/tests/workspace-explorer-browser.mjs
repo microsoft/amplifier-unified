@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/workspace_explorer_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe']});
@@ -43,10 +43,10 @@ try{
  const browse=path=>page.getByRole('button',{name:'Browse '+path,exact:true});
  const selected=()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const waitPath=path=>page.waitForFunction(path=>window.amplifier.getShellState()?.snapshots?.workspaces?.workspaceExplorer?.path===path,path);
- const showPath=async path=>{await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await waitPath(path)};
+ const showPath=async path=>{await agent('view.update',{patch:{navWorkspacePath:path,navWorkspaceFilter:'',navWorkspacePage:1}});await page.locator('.a-workspace-explorer').waitFor();await waitPath(path)};
 
  await page.goto(vite.resolvedUrls.local[0]);
- await page.getByRole('button',{name:'Workspaces',exact:true}).click();await page.locator('.a-workspace-explorer').waitFor();
+ await page.locator('.a-workspace-explorer').waitFor();
  const initial=await info(),paths=initial.paths,first=initial.initialSession;
  assert.equal(await selected(),first);
  assert.equal(initial.directories.new,false);
@@ -58,9 +58,9 @@ try{
  await browse(paths.dev).click();await waitPath(paths.dev);
  assert.equal(await selected(),first);
  const developmentRows=await page.locator('.a-workspace-row').evaluateAll(rows=>rows.map(row=>row.dataset.workspacePath));
- assert.deepEqual(developmentRows.sort(),[paths.mixed,paths.playgroundOne].sort());
+ assert.deepEqual(developmentRows.sort(),[paths.mixed,paths.playgroundOne,paths.workerOnly,paths.empty].sort());
  assert.equal(await page.getByRole('checkbox',{name:/only folders/i}).count(),0);
- for(const key of ['workerOnly','missing','unresolved','empty','unrelated'])assert.equal(developmentRows.includes(paths[key]),false,key+' must not enter the explorer');
+ for(const key of ['missing','unresolved','unrelated'])assert.equal(developmentRows.includes(paths[key]),false,key+' must not enter the explorer');
 
  // Project roots with deeper workspaces offer separate selection and browsing.
  assert.equal(await row(paths.mixed).count(),1);
@@ -68,10 +68,10 @@ try{
  assert.equal(await browse(paths.playgroundOne).count(),0,'a leaf root has no drill-in control');
  await row(paths.playgroundOne).getByRole('button',{name:'Open chats in '+paths.playgroundOne,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundOne);
- await showPath(paths.dev);
+ await page.getByRole('button',{name:'All workspaces',exact:true}).click();await showPath(paths.dev);
  await row(paths.mixed).getByRole('button',{name:'Open chats in '+paths.mixed,exact:true}).click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,first);
- await showPath(paths.dev);await browse(paths.mixed).click();await waitPath(paths.mixed);
+ await page.getByRole('button',{name:'All workspaces',exact:true}).click();await showPath(paths.dev);await browse(paths.mixed).click();await waitPath(paths.mixed);
  assert.equal(await selected(),first);
  await browse(paths.mixed+'/extensions').click();await waitPath(paths.mixed+'/extensions');
  assert.equal(await browse(paths.nested).count(),0);
@@ -98,14 +98,15 @@ try{
  const nestedWorkspace=(await info()).state.workspaces.find(workspace=>workspace.path===paths.nested);
  await agent('workspace.select',{id:nestedWorkspace.id});
  await page.waitForFunction(id=>window.amplifier.getState().selectedWorkspaceId===id,nestedWorkspace.id);
- await page.waitForFunction(()=>document.querySelector('.a-nav-chat')?.textContent.includes('nested-chat'));
- assert.match(await page.locator('.a-nav-chat').innerText(),/nested-chat/);
+ await api('/api/fixture/agent',{args:{action:'shell.view.update',args:{clientId:await page.evaluate(()=>window.amplifier.shellClientId),instanceId:'chats',patch:{navWorkspaceList:false}}}});
+ await page.locator('.a-workspace-chat-view .a-nav-chat').waitFor();
+ assert.match(await page.locator('.a-workspace-chat-view .a-nav-chat').innerText(),/nested-chat/);
 
  // Search matches full paths across branches, including duplicate leaf names.
- await page.getByRole('button',{name:'Workspaces',exact:true}).click();
+ await showPath(paths.root);
  const search=page.getByRole('searchbox',{name:'Filter workspaces',exact:true});
  await search.fill('*/playground');
- await page.waitForFunction(()=>document.querySelectorAll('.a-workspace-row').length===2);
+ await expect.poll(()=>page.locator('.a-workspace-row').evaluateAll(rows=>rows.map(row=>row.dataset.workspacePath).sort())).toEqual([paths.playgroundOne,paths.playgroundTwo].sort());
  assert.equal(new Set(await page.locator('.a-workspace-result-path').allTextContents()).size,2,'duplicate leaf names retain distinct parent labels');
  for(const key of ['playgroundOne','playgroundTwo']){
   await row(paths[key]).getByRole('button',{name:/Details and actions/}).click();
@@ -114,8 +115,9 @@ try{
  }
  await row(paths.playgroundTwo).getByRole('button',{name:'Open chats in '+paths.playgroundTwo,exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.workspace===path,paths.playgroundTwo);
+ await page.getByRole('button',{name:'All workspaces',exact:true}).click();
  await agent('view.update',{patch:{navWorkspaceFilter:'*/playground',navWorkspacePage:1}});
- await page.waitForFunction(()=>document.querySelectorAll('.a-workspace-row').length===2);
+ await expect.poll(()=>page.locator('.a-workspace-row').evaluateAll(rows=>rows.map(row=>row.dataset.workspacePath).sort())).toEqual([paths.playgroundOne,paths.playgroundTwo].sort());
  assert.equal(await search.inputValue(),'*/playground');
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),'narrow viewport must not scroll the document');
@@ -125,37 +127,16 @@ try{
  await page.setViewportSize({width:1280,height:900});
  assert.deepEqual((await info()).runtimeStarts,[],'browsing saved workspaces never mounts their runtimes');
 
- // The folder chooser prepares the new-chat draft without registering a chat.
- const registrations=(await info()).state.workspaces.map(row=>row.id);
+ // Attaching a folder only prepares the draft.
+ // No chat, model, or existing-file mutation occurs until the first send.
  await page.getByRole('button',{name:'New chat',exact:true}).click();
- await page.getByRole('button',{name:'Workspace',exact:true}).click();
- assert.equal(await page.getByRole('button',{name:'New workspace',exact:true}).count(),0);
- await page.getByRole('button',{name:'Browse',exact:true}).click();
- const folderPath=page.getByRole('textbox',{name:'Folder path',exact:true});
- const parent=paths.new.slice(0,paths.new.lastIndexOf('/'));
- await folderPath.fill(paths.dev);await page.getByRole('button',{name:'Go',exact:true}).click();
- await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.dev);
- await page.getByRole('button',{name:'New folder',exact:true}).click();
- await page.getByRole('textbox',{name:'New folder name',exact:true}).fill('new-parent');
- await page.getByRole('button',{name:'Create folder',exact:true}).click();
- await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,parent);
- await page.getByRole('button',{name:'New folder',exact:true}).click();
- await page.getByRole('textbox',{name:'New folder name',exact:true}).fill(paths.new.slice(paths.new.lastIndexOf('/')+1));
- await page.getByRole('button',{name:'Create folder',exact:true}).click();
- await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.new);
- await page.getByRole('button',{name:'Use this folder',exact:true}).click();
- await page.waitForFunction(path=>window.amplifier.getState().view.newSessionDraft.workspace===path,paths.new);
- let current=await info();
- assert.equal(current.directories.new,true);
- assert.deepEqual(current.state.workspaces.map(row=>row.id),registrations);
- assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.new&&chat.sessionKind!=='worker').length,0);
- assert.equal(current.state.selectedSessionId,null);
- await page.getByRole('button',{name:'Browse',exact:true}).click();
- await folderPath.fill(paths.existing);await page.getByRole('button',{name:'Go',exact:true}).click();
- await page.waitForFunction(path=>document.querySelector('.a-location-picker code')?.textContent===path,paths.existing);
- await page.getByRole('button',{name:'Use this folder',exact:true}).click();
+ const picker=page.getByRole('combobox',{name:'Workspace',exact:true});
+ await picker.selectOption(':attach:');
+ const form=page.getByRole('form',{name:'Use existing folder'});
+ await form.getByRole('textbox',{name:/Folder on/}).fill(paths.existing);
+ await form.getByRole('button',{name:'Use folder',exact:true}).click();
  await page.waitForFunction(path=>window.amplifier.getState().view.newSessionDraft.workspace===path,paths.existing);
- current=await info();
+ let current=await info();
  assert.equal(current.existingContents,'Existing workspace contents must stay intact.\n');
  assert.equal(current.state.sessions.filter(chat=>chat.workspace===paths.existing&&chat.sessionKind!=='worker').length,0);
  assert.equal(current.state.selectedSessionId,null);
@@ -166,7 +147,7 @@ try{
  assert.deepEqual(current.runtimeStarts,[]);
  assert.deepEqual(current.runtimeSends,[]);
  assert.deepEqual(errors,[]);
- console.log('Workspace explorer browser checks passed: real native discovery, only root-chat paths, split root/browse actions, leaf constraints, full-path wildcard search, narrow truncation, persisted agent/UI navigation, existing/new folder creation, no model work.');
+ console.log('Workspace explorer browser checks passed: real native discovery, registered empty folders and root-chat paths, split root/browse actions, leaf constraints, full-path wildcard search, narrow truncation, persisted agent/UI navigation, existing folder attachment, no model work.');
 }catch(error){
  await page?.screenshot({path:'/tmp/amplifier-workspace-explorer-failure.png'}).catch(()=>{});
  if(fixtureLog)console.error(fixtureLog);

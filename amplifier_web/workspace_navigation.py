@@ -1,7 +1,8 @@
 """A folder explorer projected from workspace registrations and chat summaries.
 
 This is an index, not a filesystem browser: availability is maintained by the
-workspace registry, and only folders leading to top-level chats are included.
+workspace registry. Available registrations stay visible even before their first
+chat; counts and activity include only top-level chats.
 """
 from __future__ import annotations
 
@@ -98,6 +99,13 @@ def _index(state):
     by_id = {row['id']: row for row in registrations}
     by_path = {_path(row['path']): row for row in registrations}
     chats = {}
+    for workspace in registrations:
+        path = _path(workspace['path'])
+        if path not in chats:
+            chats[path] = {'workspace': workspace, 'workspaceSelections': {}, 'chatCount': 0,
+                           'unread': 0, 'recentActivityAt': 0,
+                           'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)}
+        chats[path]['workspaceSelections'][workspace['id']] = workspace
     seen = set()
     unread_sessions = state.get('attention', {}).get('sessions', {})
     for session in state.get('sessions', []):
@@ -108,10 +116,7 @@ def _index(state):
         if workspace is None:
             continue
         path = _path(workspace['path'])
-        entry = chats.get(path)
-        if entry is None:
-            entry = chats[path] = {'workspace': workspace, 'workspaceSelections': {}, 'chatCount': 0, 'unread': 0, 'recentActivityAt': 0, 'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)}
-        entry['workspaceSelections'][workspace['id']] = workspace
+        entry = chats[path]
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
         entry['recentActivityAt'] = max(entry['recentActivityAt'], navigation_activity(session))

@@ -38,6 +38,7 @@ export function NavigationRow({className='',label,children,details,expanded=fals
  useModalFocus(panel,navigationOpen&&narrow&&open,()=>close(true));
  const show=(lock=false)=>{
   clear();
+  if(row.current?.closest('[data-reordering="true"]'))return;
   if(!lock&&document.querySelector('.a-navigation-flyout[data-locked="true"]'))return;
   document.dispatchEvent(new CustomEvent('amplifier-navigation-details',{detail:id}));
   focusRequested.current=lock;setLocked(lock);setOpen(true);

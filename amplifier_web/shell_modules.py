@@ -77,7 +77,7 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navSimple', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navSimple', 'navSectionsCollapsed', 'navRecentView', 'navPinnedPage', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -289,6 +289,7 @@ class ShellModules:
         state = self.service.state
         view = dict(client.get('baselineView', {}))
         view.update(client['views'].get(instance['id'], {}).get('view', {}))
+        view.setdefault('navWorkspaceMode', 'recent')
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
         from .managed_chats import is_managed
@@ -299,6 +300,7 @@ class ShellModules:
 
     def navigation(self, client, instance):
         from .conversation_library import projection as organization_projection
+        from .chat_navigation import SIDEBAR_FILTER_KEYS
         state = self.service.state
         projections = self.service.projections
         scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
@@ -311,6 +313,13 @@ class ShellModules:
         home_view.pop('navChatPage', None)
         pinned_scope = instance.get('scope', {}).get('mode') == 'pinned'
         home = chat_page if pinned_scope else projections.chats({**scoped, 'view': home_view})
+        # These are views over the native history index, never another chat list.
+        # Pins remain independent of either chat list's filters and pagination.
+        sidebar_home = {**home_view, 'navChatScope': 'workspace' if pinned_scope else 'all'}
+        recent_view = {**sidebar_home, **view.get('navRecentView', {})}
+        pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
+        recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
+        workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
         overview = {'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
@@ -320,6 +329,9 @@ class ShellModules:
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
                 'homeNavigation': home, 'workspaceOverview': overview,
+                'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
+                                      'recentView': {key: recent_view[key] for key in recent_view
+                                                     if key in SIDEBAR_FILTER_KEYS}},
                 'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),
                 'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},

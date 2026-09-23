@@ -53,7 +53,7 @@ def test_folder_index_shows_only_paths_to_roots_and_separates_selection_from_bro
     assert [row['path'] for row in inside['breadcrumbs']] == ['/home/me', '/home/me/dev', '/home/me/dev/app']
 
 
-def test_unavailable_unresolved_empty_and_worker_only_workspaces_are_pruned_without_mutation():
+def test_available_empty_folders_remain_visible_without_counting_workers_or_mutating_history():
     value = state([
         workspace('valid', '/dev/app'), workspace('prefix', '/dev/application'),
         workspace('gone', '/deleted/gone', available=False),
@@ -64,10 +64,13 @@ def test_unavailable_unresolved_empty_and_worker_only_workspaces_are_pruned_with
         chat('unchecked-chat', 'unchecked')], 'valid')
     original = copy.deepcopy(value)
     result = snapshot(value)
-    assert result['totalWorkspaces'] == 2
+    assert result['totalWorkspaces'] == 4
     assert [row['path'] for row in result['rows']] == ['/dev/app', '/dev/application']
     assert all(not row['canBrowse'] for row in result['rows'])
     assert value == original
+    recent = browse(value, navWorkspaceMode='recent')
+    assert {row['workspaceId']: row['chatCount'] for row in recent['rows']} == {
+        'valid': 1, 'prefix': 1, 'empty': 0, 'worker-only': 0}
 
 
 def test_legacy_paths_forks_and_unread_counts_are_scoped_to_top_level_chats_once():
@@ -220,7 +223,8 @@ def test_empty_registry_and_selected_empty_workspace_do_not_require_filesystem_a
     monkeypatch.setattr(Path, 'is_dir', forbidden)
     value = state([workspace('empty', '/projects/empty')], [], 'empty')
     result = snapshot(value)
-    assert result['rows'] == [] and result['totalWorkspaces'] == 0
+    assert result['totalWorkspaces'] == 1
+    assert [(row['workspaceId'], row['chatCount']) for row in result['rows']] == [('empty', 0)]
     assert result['page'] == result['pages'] == 1
     assert value['selectedWorkspaceId'] == 'empty'
 
