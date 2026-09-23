@@ -23,9 +23,12 @@ try {
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
  await action('session.create',{});await page.getByRole('button',{name:'Start voice call',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toHaveCount(0);
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
+ await page.getByRole('button',{name:'Chat controls',exact:true}).click();
+ await page.getByRole('button',{name:'Computer use',exact:true}).click();
  await page.getByRole('button',{name:'Choose screen source',exact:true}).waitFor();
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId),target={sessionId:sid,callId:'fixture-call'};
- await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this unsent draft');
  await page.evaluate(()=>window.denyCapture=true);await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeDisabled();
  await page.evaluate(()=>window.denyCapture=false);await page.getByRole('button',{name:'Choose screen source',exact:true}).click();
  await expect(page.getByText('Selected window: Synthetic test window',{exact:true})).toBeVisible();
@@ -39,9 +42,10 @@ try {
  await page.getByRole('button',{name:'Stop screen sharing',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
  assert.equal((await action('voice.visual.status',target)).result.available,false);
  await page.getByRole('button',{name:'Choose screen source',exact:true}).click();await expect(page.getByRole('button',{name:'Capture screen',exact:true})).toBeEnabled();
- await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);
  await expect.poll(()=>page.evaluate(()=>window.captureTrack.readyState)).toBe('ended');assert.deepEqual(errors,[]);
  await action('call.start');
+ await page.getByRole('button',{name:'Chat controls',exact:true}).click();
  await page.getByRole('button',{name:'Check desktop host',exact:true}).waitFor();
  assert.deepEqual((await inspect()).nativeCalls,[]);
  await page.getByRole('button',{name:'Check desktop host',exact:true}).click();
@@ -55,6 +59,6 @@ try {
  const native=(await inspect()).receipts[2];assert.equal(native.nativeForeground,true);assert.equal(native.observation.window.application,'Fixture application');
  assert.deepEqual((await inspect()).nativeCalls,['status','status','capture']);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent draft');assert.equal((await inspect()).sent.length,0);
- await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);assert.deepEqual(errors,[]);
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'End call',exact:true}).click();await expect.poll(async()=>(await inspect()).grant).toBe(null);assert.deepEqual(errors,[]);
  console.log('Visual voice acceptance passed: synthetic real frames, permission denial, UI and agent action, private saved pixels, preserved draft/selection, no automatic model turn, revoke/end cleanup. Explicit native host check/grant/capture via synthetic backend also passed. No native OS or provider audio claim.');
 } finally {await browser?.close();fixture.kill('SIGTERM')}

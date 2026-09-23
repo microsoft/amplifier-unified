@@ -60,3 +60,22 @@ test('the video fallback cancels its callback when a frame times out',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});const f=captureFixture(t,{legacy:true});const capture=f.value.capture(f.command);
  t.mock.timers.tick(2001);await capture;assert.deepEqual(f.cancelled,[7]);assert.equal(f.draws.length,0);
 });
+
+import {ComputerVisualClient} from '../src/voice-visual.js';
+test('text chat native consent is distinct, session scoped and cleared on switch and disconnect',async()=>{
+ let session='chat-one';const requests=[];
+ const value=new ComputerVisualClient({getSession:()=>session,request:async(path,{body})=>{requests.push([path,body]);return path.endsWith('/status')?{available:true,host:{id:'host',label:'Synthetic'},hostInstanceId:'host-instance'}:{id:'grant',sessionId:session,callId:null,expiresAt:Date.now()/1000+60,source:{kind:'native-foreground'}}}});
+ value.sync(null,true,{});await value.checkNative();assert.equal(value.grant,null);
+ await value.chooseNative();assert.equal(requests[1][0],'/api/computer/visual/grant');assert.equal(requests[1][1].callId,null);
+ assert.equal(value.grant.id,'grant');session='chat-two';value.sync(null,true,{});
+ assert.equal(value.grant,null);assert.equal(value.value.native,null);
+ session='chat-one';value.sync(null,true,{id:'grant',available:true});assert.equal(value.grant,null);
+ await value.capture({id:'old',grantId:'grant',sessionId:session,callId:null});assert.ok(requests.every(([,body])=>!body.image));value.dispose();
+});
+test('changing text chats while the picker is pending discards its late track',async()=>{
+ let session='chat-one',finish,stopped=0;const requests=[];
+ const value=new ComputerVisualClient({getSession:()=>session,media:{getDisplayMedia:()=>new Promise(r=>finish=r)},request:async(...args)=>{requests.push(args)}});
+ value.sync(null,true,{});const choosing=value.choose();session='chat-two';value.sync(null,true,{});session='chat-one';value.sync(null,true,{});
+ finish({getTracks:()=>[{stop(){stopped++}}]});await assert.rejects(choosing,/changed/);
+ assert.equal(stopped,1);assert.equal(requests.length,0);value.dispose();
+});
