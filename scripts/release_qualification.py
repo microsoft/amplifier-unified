@@ -40,7 +40,7 @@ def identity(root):
 
 
 HOST_FILES = ('resolution.json', 'qualified-overrides.txt', 'development.lock')
-LANES = ('python', 'browser', 'runtime')
+LANES = ('python', 'frontend', 'runtime')
 
 
 def candidate(root, evidence):
