@@ -191,6 +191,9 @@ ACTION_DEFINITIONS = {
 }
 
 
+from .voice_settings import definitions as voice_settings_definitions
+ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
+
 from .operations import definitions as operation_definitions
 ACTION_DEFINITIONS.update(operation_definitions())
 from .computation import definitions as computation_definitions
@@ -407,7 +410,10 @@ class AppService:
             if self.state["settings"].get("bundle") == "foundation":
                 self.state["settings"]["bundle"] = "anchors"
             self.state["defaultBundleMigration"] = True
-        self.state["settings"].setdefault("updates", {"autoCheck": True, "autoInstall": False, "intervalHours": 24})
+        update_options = self.state["settings"].setdefault("updates", {})
+        update_options.setdefault("autoCheck", True)
+        update_options.setdefault("autoInstall", update_options["autoCheck"])
+        update_options.setdefault("intervalHours", 24)
         self.state["devices"] = {}
         from .workspace_canvas import initialize
         initialize(self.state)
@@ -940,6 +946,15 @@ class AppService:
                 # under the mutation lock without changing its queue ordering.
                 try: transfer_context = self.portability.write_context(transfer_sid)
                 except ValueError as exc: raise AppError(str(exc), 409) from exc
+        if action in {'voice.configuration','voice.configure','voice.preview'}:
+            from .voice_settings import dispatch as voice_settings_dispatch
+            from .voice import VoiceError
+            try:
+                result = await voice_settings_dispatch(self, action, args)
+            except VoiceError as exc:
+                raise AppError(str(exc), exc.status) from None
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result,
+                    **({'state': self.browser_state()} if include_state else {})}
         if action == 'feedback.diagnostics':
             async with self.lock:
                 try:
@@ -1872,6 +1887,8 @@ class AppService:
                         if key in options and type(options[key]) is not bool: raise AppError("Update switches must be true or false.")
                     if "intervalHours" in options and (type(options["intervalHours"]) is not int or not 1 <= options["intervalHours"] <= 168):
                         raise AppError("Check interval must be between 1 and 168 hours.")
+                    if options.get("autoCheck") is False and "autoInstall" not in options:
+                        options = {**options, "autoInstall": False}
                     patch = {**patch, "updates": {**self.state["settings"].get("updates",{}), **options}}
                     if patch["updates"].get("autoInstall") and not patch["updates"].get("autoCheck"):
                         raise AppError("Enable automatic checking before automatic installation.")
@@ -1902,11 +1919,13 @@ class AppService:
             elif action in {"call.start", "call.mute", "call.end"}:
                 call_args = dict(args)
                 if action == "call.start":
+                    if self.state.get("voicePreviewBusy"):
+                        raise AppError("Wait for the voice preview to finish before starting a call.", 409)
                     session = self._session()
                     try: self.portability.write_context(session['id'])
                     except ValueError as exc: raise AppError(str(exc), 409) from exc
                     if self.voice_service and not self.voice_service.api_key:
-                        raise AppError("Set OPENAI_API_KEY in the terminal environment to enable calls.")
+                        raise AppError("Add an OpenAI API key in Voice settings to enable calls.")
                     session["historyManaged"] = False
                     self.state["voice"].update({"status": "connecting", "sessionId": session["id"]})
                     call_args["sessionId"] = session["id"]

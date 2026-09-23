@@ -408,7 +408,8 @@ class UpdateManager:
         reconcile_requests(state)
         state.setdefault('items', [])
         from .app_updates import version_tuple,application_state
-        application={**application_state(),**state.get('application',{}),'current':__import__('amplifier_web').__version__}
+        running_application=application_state()
+        application={**running_application,**state.get('application',{}),'current':__import__('amplifier_web').__version__,'canInstall':running_application['canInstall']}
         from .release_notes import history
         application['releaseNotes']=history(application.get('releaseNotes',[]),application.get('latest') if version_tuple(application.get('latest')) else None)
         application['runningRevision'] = self.running_identity['revision']
@@ -453,6 +454,7 @@ class UpdateManager:
 
     def busy(self):
         state = self.service.state
+        if state.get('voicePreviewBusy'): return True
         pending = getattr(getattr(self.service, 'runtime', None), 'has_pending_operations', None)
         if pending and pending():return True
         if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
@@ -926,7 +928,8 @@ class UpdateManager:
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',24)*3600:
             await self.check()
         state=self.service.state['updates']
-        if (settings.get('autoInstall',False) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
+        managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
+        if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
             await self.install()
 
     async def loop(self):

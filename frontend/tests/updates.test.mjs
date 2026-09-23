@@ -29,12 +29,11 @@ test('reviewing a high-impact notice uses its fingerprint and retains the change
  const calls=[];let root;
  const initial={...state({application:{...application,releaseNotes:[release],status:'update'}}),attention:{items:[{id:noticeId,read:false,fingerprint:'notice-v1'}]}};
  await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(name,args)=>calls.push({name,args})}))});
- const button=root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='attention.read')[0];
- await renderAct(async()=>button.props.onClick());
- assert.deepEqual(calls,[{name:'attention.read',args:{ids:[noticeId],fingerprints:{[noticeId]:'notice-v1'}}}]);
+ assert.equal(root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='attention.read').length,0);
+ assert.deepEqual(calls,[]);
  const reviewed={...initial,attention:{items:[{...initial.attention.items[0],read:true}]}};
  await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:reviewed,act:()=>{}})));
- assert.equal(root.root.findAllByProps({'aria-label':'High-impact changes'}).length,0);
+ assert.equal(root.root.findAllByProps({'aria-label':'High-impact changes'}).length,1);
  assert.match(JSON.stringify(root.toJSON()),/Check your workspace/);
  assert.match(JSON.stringify(root.toJSON()),/Reviewed/);
  assert.equal(root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='updates.install')[0].props.disabled,false);
@@ -51,7 +50,7 @@ test('installed app and published release remain visible with source inventory c
  const html=render({items:Array.from({length:87},(_,id)=>({id:String(id),label:'Hidden source '+id,status:'current'}))});
  assert.match(html,/Overall update status/);
  assert.match(html,/Amplifier 0\.6\.3/);
- assert.match(html,/Latest v0\.6\.3/);
+ assert.doesNotMatch(html,/Latest v0\.6\.3/);
  assert.match(html,/Latest release installed/);
  assert.match(html,/Component updates &amp; details/);
  assert.match(html,/Show all 87 sources/);
@@ -98,7 +97,8 @@ test('staged app, restart, interrupted install and successful restart report the
  const restarting=render({phase:'activating',pendingRestart:{version:'0.6.4'},detail:'Application installed. Restarting the local host…'});
  assert.match(restarting,/Restarting Amplifier/);
  assert.match(restarting,/Application installed. Restarting the local host/);
- assert.match(restarting,/a-check-result pending/);
+ assert.match(restarting,/a-progress-spinner/);
+ assert.match(restarting,/id="update-action-status"[^>]*>Waiting for a healthy restarted app/);
  const interrupted=render({phase:'interrupted',detail:'Application installation was interrupted.'});
  assert.match(interrupted,/a-check-result error/);
  assert.match(interrupted,/Application installation was interrupted/);
@@ -336,7 +336,7 @@ test('main update box summarizes ordered component phases without the source inv
  assert.match(banner,/Included components/);
  assert.match(banner,/3 component updates are ready/);
  assert.match(banner,/Other components/);
- assert.match(banner,/One update request handles/);
+ assert.match(banner,/install automatically when work is idle/);
  assert.doesNotMatch(banner,/a-source-list/);
  assert.match(html,/Update Amplifier/);
 });
@@ -351,4 +351,15 @@ test('component check failures and explicit source policies remain visible in th
  const html=render({sequence:{stage:'included',included:{status:'attention',issues:2},other:{status:'current',protected:1}}});
  assert.match(html,/2 need attention/);
  assert.match(html,/1 kept as configured/);
+});
+
+
+test('disabled update controls explain active component work without expanding details',()=>{
+ const html=render({phase:'checking',detail:'Checking included components…',sequence:{stage:'included',nextStage:'included',install:true}});
+ const top=html.slice(0,html.indexOf('data-part="ecosystem-update-details"'));
+ assert.match(top,/Checking included components/);
+ assert.match(top,/id="update-action-status"/);
+ assert.match(top,/aria-describedby="update-action-status"/);
+ assert.match(top,/this page will update automatically/);
+ assert.match(top,/Checking…/);
 });

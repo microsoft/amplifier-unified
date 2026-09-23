@@ -186,7 +186,7 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
             if not selected:
                 # Resume only after this exact restarted installation is healthy.
                 # A manual Install request covers the remaining component phases.
-                sequence = state.get('sequence') or {'install': manager.service.state['settings'].get('updates', {}).get('autoInstall', False)}
+                sequence = state.get('sequence') or {'install': manager.service.state['settings'].get('updates', {}).get('autoInstall', True)}
                 state['sequence'] = {**sequence, 'stage': 'included', 'nextStage': 'included',
                                      'included': {'status':'waiting','available':0,'missing':0,'issues':0},
                                      'other': {'status':'waiting','available':0,'missing':0,'issues':0}}

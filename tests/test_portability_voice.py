@@ -292,9 +292,10 @@ async def test_native_fence_during_live_rejection_prevents_realtime_fallback(hos
         return {'id': 'unexpected-fallback', 'sdp': 'synthetic-answer', 'sessionId': host.sid}
 
     monkeypatch.setattr(VoiceCall, 'create', rejected_live)
-    with pytest.raises(VoiceError) as rejected:
+    with pytest.raises(ProviderError) as rejected:
         await manager.connect('v=0', 'auto', session_id=host.sid)
-    assert rejected.value.status == 409
+    assert rejected.value.status == 404
+    assert rejected.value.code == "model_not_found"
     assert attempts == ['live']
     assert manager.call.closed
     assert SharedSessionStore(host.root, host.sid).transfer_fence()['phase'] == 'staged'

@@ -119,12 +119,14 @@ async def test_default_and_update_settings_preserve_existing_conversation(app):
     with pytest.raises(AppError):await app.dispatch('conversation.send',{'text':'new work'})
     with pytest.raises(AppError):await app.voice_delegate('new work','voice:1')
 
-async def test_background_policy_does_not_install_without_opt_in(app):
+async def test_background_policy_preserves_explicit_opt_out(app):
     manager=app.update_manager;events=[]
     async def check():
         events.append('check');app.state['updates'].update(phase='available',available=1,lastCheck=time.time())
     async def install():events.append('install')
     manager.check=check;manager.install=install
+    assert app.state['settings']['updates']['autoInstall'] is True
+    app.state['settings']['updates']['autoInstall']=False
     await manager.tick();assert events==['check']
     app.state['settings']['updates']['autoInstall']=True
     await manager.tick();assert events==['check','install']
@@ -589,3 +591,14 @@ async def test_phased_install_waits_for_idle_then_continues_to_other_sources(app
     assert not app.state['updates']['sequence']['install']
     assert git(root,'rev-parse','HEAD')==repo[1]
     assert git(second,'rev-parse','HEAD')==repo[1]
+
+
+async def test_new_automatic_default_installs_eligible_updates_but_not_managed_preview(app):
+    manager=app.update_manager;events=[]
+    async def check():
+        events.append('check');app.state['updates'].update(phase='available',available=1,lastCheck=time.time())
+    async def install():events.append('install')
+    manager.check=check;manager.install=install
+    await manager.tick();assert events==['check','install']
+    app.state['updates'].update(appAvailable=True,application={'canInstall':False})
+    await manager.tick();assert events==['check','install']

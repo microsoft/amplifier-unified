@@ -492,12 +492,24 @@ def result_text(result: Any) -> str:
 class VoiceService:
     def __init__(self, service: Any, *, api_key: str | None = None, http: Any = None):
         self.service = service
-        self.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY", "")
+        self._api_key_override = api_key
+        from .voice_settings import key_source
+        self.credential_source = key_source(service)
         self.http = http
         self.owns_http = http is None
         self.protocol_diagnostics = VoiceDiagnostics(getattr(service, 'data_dir', None))
         self.call: VoiceCall | None = None
         self.lock = asyncio.Lock()
+
+    @property
+    def api_key(self):
+        if self._api_key_override is not None: return self._api_key_override
+        from .voice_settings import PRIVATE_KEY
+        return os.environ.get(PRIVATE_KEY if self.credential_source=='private' else 'OPENAI_API_KEY','')
+
+    @api_key.setter
+    def api_key(self, value):
+        self._api_key_override = value
 
     @property
     def headers(self) -> dict:
@@ -517,13 +529,13 @@ class VoiceService:
 
     async def connect(self, sdp: str, provider: str = "auto", session_id: str | None = None) -> dict:
         if not self.api_key:
-            raise VoiceError("Set OPENAI_API_KEY in the terminal that launches Amplifier to enable calls.", 409, "missing_api_key")
+            raise VoiceError("Add an OpenAI API key in Voice settings to enable calls.", 409, "missing_api_key")
         if not isinstance(sdp, str) or not sdp.startswith("v=0") or len(sdp) > 100_000:
             raise VoiceError("A valid browser SDP offer is required.", 400, "invalid_sdp")
         if provider not in {"auto", "live", "realtime"}:
             raise VoiceError("Choose auto, live, or realtime.", 400, "invalid_provider")
         async with self.lock:
-            if self.call and not self.call.closed:
+            if self.call and not self.call.closed or self.service.state.get('voicePreviewBusy'):
                 raise VoiceError("A call is already active. End it before starting another.", 409, "call_active")
             if self.http is None:
                 self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
@@ -587,10 +599,13 @@ class VoiceService:
 def setup_routes(app: web.Application) -> VoiceService:
     manager = VoiceService(app["service"])
     app["voice_service"] = manager
+    from .voice_settings import configuration
+    manager.service.state['voiceConfiguration'] = configuration(manager)
+    manager.service.state['voicePreviewBusy'] = False
 
     async def config(request: web.Request) -> web.Response:
         manager.service._refresh_shared_preferences()
-        return web.json_response({"available": bool(manager.api_key), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "voice": manager.service.state.get("settings", {}).get("voiceName", "marin"), "reason": None if manager.api_key else "OPENAI_API_KEY is not configured on the host."})
+        return web.json_response({**configuration(manager), "preferredModel": manager.service.state.get("settings", {}).get("preferredVoice", MODELS["live"]), "voice": manager.service.state.get("settings", {}).get("voiceName", "marin"), "reason": configuration(manager)["reason"]})
 
     async def connect(request: web.Request) -> web.Response:
         try:

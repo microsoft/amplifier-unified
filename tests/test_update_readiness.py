@@ -411,6 +411,7 @@ async def test_verified_app_restart_continues_manual_component_install(tmp_path,
         'phase':'activating','pendingRestart':TARGET,
         'sequence':{'stage':'application','install':True},
     })
+    service.state['settings']['updates']['autoInstall']=False
     try:
         assert not service.state['settings']['updates']['autoInstall']
         assert 'nextStage' not in service.state['updates']['sequence']
