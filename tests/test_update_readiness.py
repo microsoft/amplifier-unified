@@ -404,3 +404,20 @@ async def test_old_legacy_failure_does_not_permanently_block_repairs(tmp_path,mo
         assert not any(row['phase'] in {'restart-ack','restart-reconcile'} for row in manager.diagnostics.state['events'])
     finally:
         await runner.cleanup();sock.close();await service.close()
+
+
+async def test_verified_app_restart_continues_manual_component_install(tmp_path, monkeypatch):
+    service,manager=make_manager(tmp_path,monkeypatch,state={
+        'phase':'activating','pendingRestart':TARGET,
+        'sequence':{'stage':'application','install':True},
+    })
+    try:
+        assert not service.state['settings']['updates']['autoInstall']
+        assert 'nextStage' not in service.state['updates']['sequence']
+        assert await manager.confirm_readiness(health(manager))
+        sequence=service.state['updates']['sequence']
+        assert sequence['nextStage']=='included' and sequence['install'] is True
+        assert sequence['included']['status']=='waiting'
+        assert sequence['other']['status']=='waiting'
+    finally:
+        await service.close()

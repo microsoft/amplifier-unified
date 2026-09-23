@@ -54,3 +54,8 @@
 .a-update-disclosure>summary:focus-visible{outline:2px solid var(--a-accent,#6556bd);outline-offset:2px}
 .a-update-disclosure-body{padding:0 12px 12px;min-width:0}
 .a-release-history>.a-update-disclosure{margin:0}
+
+.a-update-summary{display:grid;gap:8px;border-top:1px solid var(--a-line,#dce3ef);margin-top:12px;padding-top:12px;font-size:var(--a-text-base,14px)}
+.a-update-summary>div{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.a-update-summary>div>span{color:var(--a-muted,#5c6475)}
+.a-update-summary strong{font-weight:500}

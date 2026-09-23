@@ -2,6 +2,20 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.13",
+      "title": "Ordered updates and clearer conversation recovery",
+      "changes": [
+        "Check and install the app first, then included components, then other sources. Continue an installation after a verified restart and show component summaries alongside the app version.",
+        "Install missing included components and preserve active work, explicit source choices, and rollback history while moving through update stages.",
+        "Resolve file mentions and composed bundle namespaces in conversation, child, and scheduled inputs using the same Foundation mechanism as the CLI.",
+        "Preserve the original attachment message during history refresh instead of displaying its expanded runtime copy as another user message.",
+        "Keep failed-turn details through passive preparation and copy fresh diagnostics when inspecting a conversation.",
+        "Simplify onboarding and document the per-user macOS service.",
+        "Keep browser validation available on demand while shortening automatic PR and release checks."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.12",
       "title": "Screen sharing that follows the conversation",
       "changes": [

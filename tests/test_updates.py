@@ -15,7 +15,8 @@ def git(path,*args):
 
 @pytest.fixture
 async def app(tmp_path,monkeypatch,repo):
-    from amplifier_web import app_updates,updates
+    from amplifier_web import app_updates,updates,update_sequence
+    monkeypatch.setattr(update_sequence, 'included_sources', lambda: (set(), []))
     async def check():return {"id":"application","label":"Amplifier Unified","status":"current"}
     monkeypatch.setattr(app_updates,"check",check)
     original=updates.process
@@ -546,3 +547,45 @@ async def test_normal_promotion_supersedes_failed_base_runtime_rollback(app, rep
     await manager.rollback()
     assert active_release(app.data_dir)['current'] == release_a
     assert active_release(app.data_dir)['previous'] == release_c
+
+
+async def test_phased_install_waits_for_idle_then_continues_to_other_sources(app, repo, monkeypatch):
+    import shutil
+    manager, root = await prepare(app, repo)
+    second = root.parent/'optional'
+    shutil.copytree(root, second)
+    included = {**manager.inventory[0], 'updateTier':'included'}
+    other = {**manager.inventory[0], 'id':'optional','path':'cache/optional','updateTier':'other'}
+    manager.inventory = [included]
+    app.state['updates'].update(sequence={'stage':'included','install':False,'included':{'status':'available','available':1},'other':{'status':'waiting'}},items=[included])
+    validations=[]
+    async def validate(stage, release):
+        validations.append(release)
+        assert git(stage/'foundation/cache/repository','rev-parse','HEAD') == repo[2]
+        assert git(stage/'foundation/cache/optional','rev-parse','HEAD') == (repo[1] if len(validations)==1 else repo[2])
+    manager.validate=validate
+    app.state['sessions'][0]['status']='working'
+    await manager.install()
+    assert app.state['updates']['phase']=='staged'
+    assert not active_release(app.data_dir)
+    await manager.tick()
+    assert len(validations)==1 and not active_release(app.data_dir)
+    app.state['sessions'][0]['status']='idle'
+    await manager.tick()
+    assert app.state['updates']['sequence']['nextStage']=='other'
+    assert git(foundation_home(app.data_dir)/'cache/optional','rev-parse','HEAD')==repo[1]
+    async def inventory():return [other.copy()]
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    from amplifier_web import updates
+    original=updates.process
+    async def process(*args,**kwargs):
+        if args[1]=='ls-remote':return repo[2]+' refs/heads/main'
+        return await original(*args,**kwargs)
+    monkeypatch.setattr('amplifier_web.updates.process',process)
+    await manager.tick()
+    assert len(validations)==2
+    assert git(foundation_home(app.data_dir)/'cache/optional','rev-parse','HEAD')==repo[2]
+    assert app.state['updates']['sequence']['stage']=='complete'
+    assert not app.state['updates']['sequence']['install']
+    assert git(root,'rev-parse','HEAD')==repo[1]
+    assert git(second,'rev-parse','HEAD')==repo[1]
