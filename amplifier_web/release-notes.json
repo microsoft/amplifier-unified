@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.12",
+      "title": "Screen sharing that follows the conversation",
+      "changes": [
+        "Share a browser tab, window or screen in text and voice, using the same explicitly granted source throughout the conversation.",
+        "Keep a visible sharing indicator and Stop control outside Chat controls, including when a voice call starts or ends.",
+        "Use the browser that sent the current message for shared-screen availability and capture, keeping other connected browsers separate."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.11",
       "title": "A consistent sidebar and easier computer controls",
       "changes": [

@@ -29,7 +29,11 @@ try{
  await composer.press('Enter');assert.equal(calls.filter(row=>row.action==='call.end').length,0,'Empty Enter never ends voice');
  await primary.click();await matches('Start voice call','call.start','audio-lines');
  await page.evaluate(()=>{window.delayMicrophone=false;window.releaseMicrophone()});
- await primary.click();await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toBeVisible();await matches('End voice call','call.end','x');
+ await primary.click();await matches('End voice call','call.end','x');
+ await page.getByRole('button',{name:'Chat controls',exact:true}).click();
+ await page.getByRole('button',{name:'Computer use',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const activity=async(status,workers=[])=>{assert.equal((await page.request.post(url+'/fixture/activity',{data:{sessionId:sid,status,workers}})).status(),200)};
  const ends=calls.filter(row=>row.action==='call.end').length;
