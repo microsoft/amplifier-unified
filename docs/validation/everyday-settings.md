@@ -38,10 +38,11 @@ No updater orchestration was forked for this UI. See `ordered-updates.md` for th
 
 ## Validation
 
-- Frontend build and unit suite.
-- Python setup, shared actions, provider catalog/environment/publication, management, ordered sequence and idle-update tests.
+- Frontend build passed; 319 frontend unit tests passed.
+- Python setup, shared actions, provider catalog/environment/publication, management, ordered sequence and idle-update tests: 126 passed, one skipped.
 - Existing settings collections browser suite: routing roundtrip with unknown fields, insertion-line drag/cancel/save, private drafts, bundle composition, catalog pagination and partial-batch retry.
 - Mobile browser suite: Back/Forward and reload, nested editors, touch drag, scrolling, form/footer/soft-keyboard handling, all 34 destinations across five widths.
+- Existing completeness browser suite: notification, voice and appearance persistence, private drafts, source-to-MCP connection setup, and 272 destination/layout combinations across light/dark schemes. Existing settings browser suite also passed shared notice review, grouped source inventory, live module edit/toggle, registry/discovery, folder navigation and CSS import.
 - Everyday browser suite: guided provider save/model completion, private draft retention, existing routing preservation, review-before-install, partial batch retry, installed-versus-ready messaging, collapsed notifications, all 34 destinations across four widths.
 
 Browser scenarios use the real built app and shared action service with disposable synthetic provider/catalog/runtime fixtures; they make no external account calls. Spark-2 live validation and exact commit/URL/isolation evidence are kept with the task handoff, separately from these fixture results.

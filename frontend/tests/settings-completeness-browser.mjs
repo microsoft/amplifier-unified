@@ -101,7 +101,7 @@ try{
   await route.continue();
  });
  await openSettingsPage(page,'appearance');await presentation('scheme','dark');await presentation('layout','work');
- await page.reload();await openSettingsPage(page,'custom-appearance');await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
+ await page.reload();await page.locator('.a-settings-experience').waitFor();await openSettingsPage(page,'custom-appearance');await page.getByText('Advanced customization',{exact:true}).click();await page.locator('#theme-name').waitFor();
  assert.equal(await page.locator('#theme-name').inputValue(),'Acceptance skin');
  // Shell settings hydrate separately from the host's skin controls after reload.
  await openSettingsPage(page,'appearance');await expect(page.locator('#layout')).toHaveValue('work');
