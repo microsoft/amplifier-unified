@@ -211,3 +211,13 @@ The original operation records remain individually inspectable. Tool-returned
 errors, timeouts and interruptions retain their own attention entries. Reviewing
 a group acknowledges only the exact membership shown; another failure makes it
 unread again. Historical individual acknowledgments remain respected.
+
+Saved MCP views refresh their connection status when the shared server changes
+or the page returns to the foreground. This is a read-only availability check: it
+does not reload the frame, discard unfinished input, reconnect automatically, or
+replay the launch tool. Reconnect remains an explicit user/agent action.
+
+`frontend/tests/mcp-clients-browser.mjs` exercises independent desktop and mobile-
+sized clients, stale status replies, foreground return and cross-client reconnect.
+It uses a synthetic counter server and proves no replay; mobile emulation does
+not substitute for acceptance on a physical phone/browser.
