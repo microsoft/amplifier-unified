@@ -77,7 +77,7 @@ class Socket:
 
 @pytest.mark.parametrize('model,voice',[('gpt-live-1','willow'),('gpt-realtime-2.1','sage')])
 async def test_preview_protocol_uses_exact_model_voice_and_bounded_audio(model,voice):
-    live=model=='gpt-live-1';pcm=b'\x01\x00'*4800
+    live=model=='gpt-live-1';pcm=b'\x00\x10'*4800
     events=[{'type':'session.started' if live else 'session.updated'},
             {'type':'session.output_audio.delta' if live else 'response.output_audio.delta','delta':base64.b64encode(pcm).decode()},
             {'type':'session.closed' if live else 'response.done','response':{'status':'completed'}}, {'type':'session.closed'}]
@@ -91,3 +91,31 @@ async def test_preview_protocol_uses_exact_model_voice_and_bounded_audio(model,v
     with wave.open(io.BytesIO(base64.b64decode(sample))) as audio:
         assert audio.getframerate()==24000 and audio.getnchannels()==1 and audio.readframes(4800)==pcm
     assert socket.closed
+
+async def test_repeating_same_model_and_voice_reuses_short_sample(app, monkeypatch):
+    render = AsyncMock(return_value='fixture-audio')
+    monkeypatch.setattr(settings, 'render_sample', render)
+    for _ in range(2):
+        await app.dispatch('voice.preview', {'model':'gpt-live-1', 'voice':'marin'})
+    assert render.await_count == 1
+    await app.dispatch('voice.preview', {'model':'gpt-realtime-2.1', 'voice':'marin'})
+    assert render.await_count == 2
+    monkeypatch.delenv('OPENAI_API_KEY')
+    with pytest.raises(AppError, match='API key'):
+        await app.dispatch('voice.preview', {'model':'gpt-live-1', 'voice':'marin'})
+
+async def test_live_preview_trims_startup_silence_and_stops_after_speech():
+    speech=b'\x00\x10'*12000
+    delta=lambda chunk:{'type':'session.output_audio.delta','delta':base64.b64encode(chunk).decode()}
+    socket=Socket([{'type':'session.started'},delta(bytes(48000)),delta(speech),delta(bytes(28800)),{'type':'session.closed'}])
+    manager=SimpleNamespace(http=SimpleNamespace(ws_connect=lambda *a,**k:socket),headers={})
+    result=await settings.render_sample(manager,'gpt-live-1','marin')
+    with wave.open(io.BytesIO(base64.b64decode(result))) as audio:
+        assert audio.getnframes() == (4800+len(speech)+5760)//2
+    assert socket.sent[-1]['type']=='session.close'
+
+async def test_live_preview_rejects_silent_audio():
+    socket=Socket([{'type':'session.started'},{'type':'session.output_audio.delta','delta':base64.b64encode(bytes(48000)).decode()},{'type':'session.closed'},{'type':'session.closed'}])
+    manager=SimpleNamespace(http=SimpleNamespace(ws_connect=lambda *a,**k:socket),headers={})
+    with pytest.raises(ValueError,match='No speech'):
+        await settings.render_sample(manager,'gpt-live-1','marin')

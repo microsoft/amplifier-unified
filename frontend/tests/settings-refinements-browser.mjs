@@ -27,6 +27,8 @@ try{
  await root.getByRole('button',{name:'Connect another service',exact:true}).click();
  await root.getByRole('button',{name:/OpenAI API Use an API/}).click();
  await expect(root.getByText('Use the key already on this host',{exact:true})).toBeVisible();
+ await expect(root.getByLabel(/Use the key already on this host/)).toBeChecked();
+ await root.getByLabel(/Use a different key/).check();await expect(root.getByLabel('API key',{exact:true})).toBeVisible();
  await root.getByLabel(/Use the key already on this host/).check();
  await expect(root.getByLabel('API key',{exact:true})).toHaveCount(0);
  await page.screenshot({path:out+'/environment-key-dark.png'});
