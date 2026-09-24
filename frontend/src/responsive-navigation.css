@@ -29,10 +29,10 @@
  #amp-one.a-chat-shell .a-nav-slot .a-nav-main{min-height:44px}
  #amp-one.a-chat-shell .a-nav-slot .a-nav-content{min-height:0;overflow:auto;overscroll-behavior:contain}
  #amp-one.a-chat-shell .a-nav-slot .a-navigation-more{opacity:1;width:40px;min-width:40px;height:44px}
- #amp-one.a-chat-shell .a-nav-slot .a-navigation-flyout{left:8px!important;right:8px;top:auto!important;bottom:8px;width:auto;max-height:calc(100dvh - 32px);z-index:92;padding:22px 18px calc(18px + env(safe-area-inset-bottom));border-radius:18px}
+ #amp-one.a-chat-shell .a-navigation-flyout{left:8px!important;right:8px;top:auto!important;bottom:8px;width:auto;max-height:calc(100dvh - 32px);z-index:92;padding:22px 18px calc(18px + env(safe-area-inset-bottom));border-radius:18px}
  #amp-one.a-chat-shell .a-details-scrim{z-index:91}
- #amp-one.a-chat-shell .a-nav-slot .a-navigation-flyout button{min-height:44px;min-width:44px}
- #amp-one.a-chat-shell .a-nav-slot .a-navigation-flyout .a-navigation-close{width:44px;height:44px;top:4px;right:4px}
+ #amp-one.a-chat-shell .a-navigation-flyout button{min-height:44px;min-width:44px}
+ #amp-one.a-chat-shell .a-navigation-flyout .a-navigation-close{width:44px;height:44px;top:4px;right:4px}
  #amp-one.a-chat-shell .a-toolbar-scrim{display:block;position:fixed;inset:0;background:#0006;z-index:89}
  #amp-one.a-chat-shell .a-toolbar-menu{position:fixed;inset:auto 8px 8px;width:auto;max-width:none;max-height:calc(100dvh - 32px);overflow:auto;z-index:90;padding:8px 8px calc(8px + env(safe-area-inset-bottom));border-radius:18px}
  #amp-one.a-chat-shell .a-toolbar-menu>button{min-height:48px;font-size:14px}

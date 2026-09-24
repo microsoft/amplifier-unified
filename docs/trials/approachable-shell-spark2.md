@@ -37,6 +37,19 @@ This is a running application with real actions, storage and file viewers. It is
 - An empty native chat named **Shell layout check** was created for UI validation. It contains no invented conversation or model response. The **Shell trial** workspace contains a setup guide.
 - Existing Spark-2 services remained active with their original process IDs. Spark-1 was not changed.
 
+## Visual refinement after PWA comparison
+
+The follow-up pass compared the real Mac PWA on Spark-1 with this trial. The trial now uses Graphite in Light mode through its existing Appearance controls; the theme system and other choices remain available.
+
+- Restored the full-width Amplifier header, with workspace/chat context and title actions. The sidebar starts with Your work instead of repeating cramped branding.
+- Left-aligned section controls and search, corrected old fixed-height rules that made single-line shortcuts too tall, and aligned shared pinned rows and their drag preview.
+- Reduced welcome typography, softened the composer border, and bounded the workspace browser's reading width. Search inputs now fill their available space.
+- Made contextual details reusable outside the sidebar and anchored their popovers near the clicked control in the main browser.
+- Kept file controls in the document layout instead of floating over its first lines; shortened their toolbar and grouped the path with Open.
+- Corrected workspace-picker label spacing and kept the existing creation, history, ownership, model and bundle behavior.
+
+Validation for this pass: 339 frontend tests and the production build passed. Native browser inspection covered the desktop welcome/composer, workspace browser, pinned row, chat actions, contextual details, workspace picker and real Markdown viewer. The empty Shell layout check chat is pinned for inspecting the shared row. No model calls were made. Spark-1 remained read-only; only the owned Spark-2 trial was updated. Mobile and every theme still need broader visual acceptance.
+
 ## Trial limits
 
 - Connect a model provider in this instance's Settings before asking it to perform AI work. Provider credentials, production settings and conversation history were not copied. Model calls, voice and live cross-client ownership takeover were not exercised here.

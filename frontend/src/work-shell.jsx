@@ -38,6 +38,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const workspace=state.workspaces?.find(row=>row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
  const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title||'New chat';
  return <header className="a-work-header" data-part="header">
+  <div className="a-brand a-work-brand"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
   {narrow&&<button type="button" className="a-icon" aria-label="Open navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true}})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">

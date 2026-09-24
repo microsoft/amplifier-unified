@@ -1,3 +1,5 @@
+#amp-one .a-workspace-picker>label{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+#amp-one .a-workspace-picker>label svg{width:16px;height:16px;flex:none}
 #amp-one .a-workspace-picker select,#amp-one .a-workspace-setup input:not([type=checkbox]){width:100%;box-sizing:border-box;min-width:0;font:inherit;padding:11px;border-radius:10px;border:1px solid var(--a-line);background:var(--a-surface);color:var(--a-ink)}
 #amp-one .a-workspace-setup{margin:14px 0;padding:18px;border:1px solid var(--a-line);border-radius:16px;background:var(--a-surface);min-width:0}
 #amp-one .a-workspace-setup-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
