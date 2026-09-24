@@ -951,6 +951,9 @@ class AppService:
         try:
             validate(args, ACTION_DEFINITIONS[action][1])
         except ValidationError as exc:
+            if action.startswith('feedback.excerpt.'):
+                message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
+                raise AppError(message) from None
             raise AppError(exc.message) from exc
         transfer_sid = None
         if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
@@ -971,6 +974,14 @@ class AppService:
                 raise AppError(str(exc), exc.status) from None
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result,
                     **({'state': self.browser_state()} if include_state else {})}
+        if action == 'feedback.excerpt.review':
+            try:
+                result = await self.feedback.excerpts.review(args)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+            except Exception:
+                raise AppError('The excerpt destination could not be checked. Nothing was sent.', 409) from None
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'feedback.diagnostics':
             async with self.lock:
                 try:
@@ -1864,6 +1875,8 @@ class AppService:
                     else:
                         self.state['view']['newChatText'] = patch['draft']
                 self.state["view"].update(patch)
+            elif action == 'feedback.excerpt.stage':
+                diagnostic_result = self.feedback.excerpts.stage(args)
             elif action in {"feedback.attachment.add","feedback.attachment.remove"}:
                 self.feedback.attachment_command(action,args)
             elif action == "feedback.submit":
@@ -2892,7 +2905,7 @@ class AppService:
                 action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open','runtime.dependencies','session.sharePreview','session.shareList'}:
                 action_args.setdefault('sessionId',session_id)
-            if args['action'] in {'session.export', 'session.exportDeliver'}:
+            if args['action'] in {'session.export', 'session.exportDeliver', 'feedback.excerpt.review', 'feedback.excerpt.stage'}:
                 if action_args.get('id', session_id) != session_id:
                     raise AppError('Exports must target the calling conversation.', 409)
                 action_args.setdefault('id', session_id)
@@ -2921,7 +2934,7 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
-            elif args['action'] == 'session.exportDeliver':
+            elif args['action'] in {'session.exportDeliver', 'feedback.excerpt.stage'}:
                 from .agent_canvas import target
                 requested = action_args.pop('clientId', input_origin['clientId'] if input_origin is not None else None)
                 canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]

@@ -25,24 +25,26 @@ ISSUES_URL = "https://github.com/" + REPOSITORY + "/issues"
 RECEIPT_REPOSITORIES = (REPOSITORY, "bkrabach/amplifier-unified")
 CATEGORIES = {"bug": "Bug report", "idea": "Feature idea", "question": "Question", "other": "Other feedback"}
 UNKNOWN = "GitHub may have received this feedback. Check the repository issues before starting a new submission; this request will not be posted again."
-UNKNOWN_FILES = "Files may have been stored in the private repository, and an issue may have been created. Check the repository issues and attachment branch before starting a new submission; this request will not be posted again."
+UNKNOWN_FILES = "Files may have been stored in the repository, and an issue may have been created. Check the repository issues and attachment branch before starting a new submission; this request will not be posted again."
 
 
 def definitions(schema, string):
     from .feedback_followup import definitions as followup_definitions
     request_id = {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,100}$"}
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
+    from .feedback_excerpts import definitions as excerpt_definitions
     return {
+        **excerpt_definitions(schema, string),
         **followup_definitions(schema, string),
         "feedback.diagnostics": (
             "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, URLs, conversation text, paths or credentials. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true after user review. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
-                    "category": {"enum": list(CATEGORIES)}, "includeDiagnostics": {"type": "boolean"},
+                    "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
                     "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
                     "attachmentIds": {"type": "array", "items": attachment_id, "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True}},
                    ["requestId", "title", "body", "category"]),
@@ -106,6 +108,8 @@ class Feedback:
                 service.db.execute("UPDATE feedback_requests SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
         from .feedback_followup import Followups
         self.followups = Followups(self)
+        from .feedback_excerpts import Excerpts
+        self.excerpts = Excerpts(self)
         self.refresh()
 
     def refresh(self, identity=None):
@@ -161,6 +165,9 @@ class Feedback:
                 raise ValueError("An attachment is no longer in this feedback draft. Remove it or attach it again.")
             row = json.loads(stored[0])
             feedback_attachments.read_verified(self.service.data_dir, row)
+            if row.get('excerpt'):
+                if args.get('confirmExcerpts') is not True or row['sha256'] != row['excerpt']['sha256']:
+                    raise ValueError('Explicitly confirm the reviewed conversation excerpts before sending.')
             rows.append(row)
         if sum(row["size"] for row in rows) > feedback_attachments.MAX_TOTAL_BYTES:
             raise ValueError("Feedback attachments can total up to 24 MB.")
@@ -244,7 +251,7 @@ class Feedback:
         body += "\n\n<!-- amplifier-feedback:" + identity + " -->"
         try:
             if files:
-                await self.update(identity, message="Uploading selected attachments to the private repository…")
+                await self.update(identity, message="Uploading the selected, reviewed attachments…")
                 uploaded = await feedback_attachments.upload(REPOSITORY, identity, files, github_api)
                 await self.update(identity, attachments=uploaded, message="Creating the issue with your attachment links…")
                 body += feedback_attachments.markdown(uploaded)

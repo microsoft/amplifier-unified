@@ -118,7 +118,7 @@ def messages(home, session):
     voice_ui_cursor = 0
     result = []
     for row in combined:
-        if row.get('role') not in {'user', 'assistant'}:
+        if row.get('role') not in {'user', 'assistant'} or row.get('ephemeral') or row.get('thinking') or (row.get('metadata') or {}).get('ephemeral'):
             continue
         reference = _public_reference(row)
         if reference is not None:

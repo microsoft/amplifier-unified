@@ -3,7 +3,7 @@ import uuid
 from .session_files import project_slug
 
 
-ID_ACTIONS = {'session.select', 'session.warm', 'session.takeover', 'session.rename', 'session.naming',
+ID_ACTIONS = {'feedback.excerpt.review', 'feedback.excerpt.stage', 'session.select', 'session.warm', 'session.takeover', 'session.rename', 'session.naming',
               'session.pin', 'session.deletePreview', 'session.delete', 'session.export', 'session.exportDeliver', 'session.history',
               'session.inspect', 'session.recover', 'session.fork', 'session.archive', 'session.restore'}
 
