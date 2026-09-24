@@ -198,7 +198,9 @@ function App(){
    if(created)outbox.update(entry.id,{sessionId:created.id});
   }
  },[state?.sessions,outbox.entries]);
- const shell=useShell(state,dispatch,clientId);
+ // Shell snapshots are server-scoped. An optimistic browse patch can arrive
+ // before its queued action; refresh only after the server accepts that scope.
+ const shell=useShell(serverState.current,dispatch,clientId);
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
  const viewReporter=useRef(null);
