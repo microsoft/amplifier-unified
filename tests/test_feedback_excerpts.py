@@ -241,3 +241,36 @@ async def test_final_consent_matches_complete_server_excerpt_set_and_exact_retry
             app.unsubscribe(queue)
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('with_artifact', [False, True])
+async def test_excerpt_keeps_message_artifact_headings_and_ordinary_attachment_labels(tmp_path, github, with_artifact):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await preview(app)
+        app._session()['messages'][0]['text'] = 'Before heading\n\n## Artifacts\n\nEssential reproduction details\nAttachment: the service failed before opening a file.'
+        app._session()['messages'][0]['attachments'] = [{'id':'PRIVATE_ATTACHMENT_ID','name':'private-attachment.txt'}]
+        if with_artifact:
+            app.state['canvasArtifacts'] = [{'id':'PRIVATE_ARTIFACT_ID', 'sessionId':app._session()['id'],
+                                            'messageId':'one','title':'PRIVATE_ARTIFACT_TITLE'}]
+        review = await preview(app)
+        assert '## Artifacts' in review['text']
+        assert 'Essential reproduction details' in review['text']
+        assert 'Attachment: the service failed before opening a file.' in review['text']
+        assert 'Expected response' in review['text']
+        assert 'PRIVATE_ARTIFACT' not in review['text']
+        assert 'PRIVATE_ATTACHMENT' not in review['text'] and 'private-attachment.txt' not in review['text']
+        assert review['summary']['attachmentCount'] == 1
+        assert review['summary']['artifactCount'] == int(with_artifact)
+    finally:
+        await app.close()
+
+
+async def test_redaction_expansion_respects_final_excerpt_size_limit(tmp_path, github):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        with pytest.raises(AppError,match='after redaction'):
+            await preview(app,text='/x ' * 20000)
+        assert github[1] == [] and github[2].await_count == 0
+    finally:
+        await app.close()

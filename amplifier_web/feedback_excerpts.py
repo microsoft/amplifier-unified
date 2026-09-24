@@ -78,9 +78,16 @@ class Excerpts:
         # Avoid publishing a title or attachment/reference identifiers by default.
         if 'text' not in args:
             text = '# Conversation excerpt\n' + text.split('\n', 1)[-1]
-            text = re.sub(r'^Attachment: .*$', '[Attachment reference omitted; no file content included.]', text, flags=re.M)
-            text = text.split('\n\n## Artifacts\n', 1)[0]
+            if exported['summary'].get('attachmentCount'):
+                text = re.sub(r'^Attachment: .* \(ID: `[^\n]*`\)$', '[Attachment reference omitted; no file content included.]', text, flags=re.M)
+            if exported['summary'].get('artifactCount'):
+                # Only the generated trailing footer is metadata. An ordinary
+                # message can contain an Artifacts heading without losing text.
+                footer = '\n\n## Artifacts\n\nReferences identify saved artifacts in this host; their contents are not embedded.'
+                text = text.rsplit(footer, 1)[0]
         text, redactions, warnings = redact(text, paths)
+        if len(text.encode('utf-8')) > MAX_BYTES:
+            raise ValueError('Choose a smaller excerpt, up to 64 KB after redaction. Nothing was truncated or sent.')
         target = await feedback.github_api('repos/' + feedback.REPOSITORY, None)
         if type(target.get('private')) is not bool or target.get('full_name', '').casefold() != feedback.REPOSITORY.casefold():
             raise ValueError('The feedback destination visibility could not be verified. Nothing was sent.')
