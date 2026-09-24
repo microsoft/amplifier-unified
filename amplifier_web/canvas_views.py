@@ -91,7 +91,7 @@ class CanvasViews:
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
               or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
-              or action in {'canvas.show', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
+              or action in {'canvas.show', 'canvas.openFile', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 
     def artifact(self, identity):
