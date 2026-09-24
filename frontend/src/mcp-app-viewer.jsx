@@ -55,10 +55,10 @@ function useHostTheme(scheme){
  return scheme==='dark'||scheme==='light'?scheme:systemTheme;
 }
 
-export function McpAppViewer({canvas,act}){
+export function McpAppViewer({canvas,act,connectionKey}){
  const frame=useRef(null),current=useRef(canvas),bridgeRef=useRef(null),hostContext=useRef(null),themeRef=useRef(),[status,setStatus]=useState({phase:'loading',text:'Connecting tool view…'});
  const connection=useRef(null),booted=useRef(false),[recovery,setRecovery]=useState(null),[recovering,setRecovering]=useState(false);
- const renderReport=useRef(null),resetCatalog=useRef(null);
+ const renderReport=useRef(null),resetCatalog=useRef(null),refreshConnection=useRef(null),lastConnection=useRef(null);
  const rememberConnection=value=>{connection.current=value;setRecovery(value)};
  const theme=useHostTheme(useMcpAppTheme());
  const visible=useMcpAppVisibility(canvas.open!==false&&!canvas.visibilityPending),visibleRef=useRef(visible);
@@ -73,17 +73,29 @@ export function McpAppViewer({canvas,act}){
   bridge.setHostContext(next);
  },[theme,visible]);
  useEffect(()=>{
-  const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='';
+  const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='',availabilityRevision=0;
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
   const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
   const listTools=()=>canvas.readOnlyVersion?Promise.resolve({tools:[]}):catalog||(catalog=request(viewUrl(canvas,'tools'),{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   renderReport.current=report;
+  const inspectConnection=async()=>{
+   const check=++availabilityRevision;
+   try{
+    const availability=await request(viewUrl(canvas,'status'),{signal:controller.signal});
+    if(live&&check===availabilityRevision){
+     rememberConnection(availability);
+     if(initialized)report(['ready','saved_version'].includes(availability.status)?'ready':'error',availability.message);
+     clearCatalog();
+    }
+    return availability;
+   }catch(error){if(live&&check===availabilityRevision)report('error',error.message);throw error}
+  };
+  refreshConnection.current=inspectConnection;
   const start=async()=>{
-   const availability=await request(viewUrl(canvas,'status'),{signal:controller.signal});
+   const availability=await inspectConnection();
    if(!live)return;
-   rememberConnection(availability);
    if(availability.source!=='available'){report('error',availability.message);return}
    hostContext.current={theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};
    bridge=new AppBridge(null,{name:'Amplifier Unified',version:'0.6.0'},
@@ -140,8 +152,16 @@ export function McpAppViewer({canvas,act}){
   booted.current=false;rememberConnection(null);
   report('loading','Checking saved tool view…');start().catch(error=>report('error',error.message));
   const timeout=setTimeout(()=>{if(live&&!initialized)report('error',connection.current?.source==='available'?'The saved tool document did not initialize. Reload it to retry. Its scripts must work within the self-contained MCP App sandbox.':connection.current?.message||'The saved tool document could not be checked. Retry when the host is available.')},15000);
-  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(renderReport.current===report)renderReport.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
+  return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(renderReport.current===report)renderReport.current=null;if(refreshConnection.current===inspectConnection)refreshConnection.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
  },[canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
+ // A second client or a backgrounded phone can keep its iframe mounted while
+ // the shared connection changes. Refresh status only; never reconnect/replay.
+ useEffect(()=>{
+  const identity=JSON.stringify([canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
+  const previous=lastConnection.current;
+  lastConnection.current={identity,connectionKey,visible};
+  if(visible&&previous?.identity===identity&&(previous.connectionKey!==connectionKey||!previous.visible))refreshConnection.current?.().catch(()=>{});
+ },[connectionKey,visible,canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
  const reconnect=async reviewedContract=>{
   setRecovering(true);
   try{
