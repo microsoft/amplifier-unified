@@ -66,7 +66,7 @@ test('draft bundle trigger reflects saved choice and can restore workspace inher
 });
 
 test('compact draft selector shows resolved default and applies a choice without a session',async()=>{
- let state={settings:{workspace:'/new'},view:{},registeredBundles:[{value:'work',label:'Work'},{value:'anchors',label:'Anchors'}],draftDefaults:{'["/new",""]':{bundle:'work'}}},root;
+ let state={settings:{workspace:'/new'},workspaces:[{id:'new',path:'/new'}],selectedWorkspaceId:'new',view:{},registeredBundles:[{value:'work',label:'Work'},{value:'anchors',label:'Anchors'}],draftDefaults:{'["/new",""]':{bundle:'work'}}},root;
  const calls=[],act=async(name,args)=>{calls.push({name,args});if(name==='view.update')state={...state,view:{...state.view,...args.patch}}};
  const render=()=>React.createElement(BundleControl,{compact:true,state,act,working:false});
  await renderAct(async()=>{root=create(render())});

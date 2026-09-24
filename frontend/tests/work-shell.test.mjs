@@ -1,0 +1,114 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React,{act} from 'react';
+import {create} from 'react-test-renderer';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {createServer} from 'vite';
+const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
+const {WorkSurface,LiveChatActivity}=await vite.ssrLoadModule('/src/work-shell.jsx');
+const {ConversationList}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
+const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
+const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
+const {newChatSetup}=await vite.ssrLoadModule('/src/new-chat.jsx');
+const {fitPanels}=await vite.ssrLoadModule('/src/panel-layout.jsx');
+const {WorkspacePicker}=await vite.ssrLoadModule('/src/workspace-setup.jsx');
+const {WorkHeader}=await vite.ssrLoadModule('/src/work-shell.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;
+test.after(()=>vite.close());
+const workspace={id:'b',path:'/research',name:'Research',available:true};
+const row={workspaceId:'b',path:'/research',name:'Research',chatCount:1};
+const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'recent'};
+const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
+const snapshot={view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,recentView:{}},sharedHistory:{}};
+const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
+const navigation={browse(){},create(){},newChat(){}};
+const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
+test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
+ const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
+ assert.match(html,/Search chats/);assert.match(html,/All workspaces/);assert.match(html,/All chats/);
+ assert.doesNotMatch(html,/Filter conversations|Filter workspaces|Browse folders/);
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
+ const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
+ assert.match(main,/Research ideas/);assert.match(main,/Filter conversations/);
+});
+test('workspace shortcut browses without changing execution scope',async()=>{
+ const calls=[],selects=[];let root;
+ await act(async()=>{root=create(React.createElement(WorkspaceExplorer,{state:snapshot,compact:true,act:async(...args)=>calls.push(args),onSelect:row=>selects.push(row.workspaceId)}))});
+ await act(async()=>root.root.findByProps({'aria-label':'Open chats in /research'}).props.onClick());
+ assert.deepEqual(selects,['b']);assert.deepEqual(calls,[]);
+ assert.deepEqual(browsePatch('workspace','b'),{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'chats'});
+ await act(async()=>root.unmount());
+});
+test('browsing suppresses the retained canvas host',()=>{
+ const state={view:{},selectedSessionId:'a',canvas:{open:true},sessions:[{id:'a',messages:[]}]};
+ const html=renderToStaticMarkup(React.createElement(AgentCanvas,{state,act:host.dispatch,suppressed:true}));
+ assert.match(html,/id="workspace-canvas"[^>]*hidden=""/);assert.match(html,/Chat overview/);assert.match(html,/Sources/);
+});
+test('workspace choices retain draft model and bundle',()=>{
+ const setup={workspace:'/research',location:{kind:'workspace'},bundle:'custom',selection:{instance:'provider',model:'actual',effort:'high'}};
+ assert.deepEqual(newChatSetup({view:{newSessionDraft:setup}}),{title:'',...setup});
+});
+test('new chat has no hidden global-folder fallback and respects visible workspace context',()=>{
+ const state={settings:{workspace:'/hidden'},workspaces:[workspace],selectedWorkspaceId:'b',view:{}};
+ assert.equal(newChatSetup(state).workspace,'/research');
+ assert.equal(newChatSetup({...state,selectedWorkspaceId:null}).location.kind,'managed');
+ assert.equal(newChatSetup({...state,view:{workSurface:'chats'}}).workspace,'');
+ assert.equal(newChatSetup({...state,selectedWorkspaceId:null,view:{workSurface:'workspace',workWorkspaceId:'b'}}).workspace,'/research');
+ assert.equal(newChatSetup({...state,view:{newSessionDraft:{workspace:'/explicit'}}}).location.kind,'workspace');
+});
+test('collapsed navigation gives all space back, including between chat and canvas',()=>{
+ const collapsed=fitPanels({available:1000,canvasOpen:true,canvasWidth:900});
+ assert.equal(collapsed.nav,0);assert.equal(collapsed.canvas,628);
+ assert.equal(collapsed.nav+collapsed.canvas+360+12,1000);
+ assert.equal(fitPanels({available:675,canvasOpen:true}).overlay,false);
+ assert.equal(fitPanels({available:671,canvasOpen:true}).overlay,true);
+ const expanded=fitPanels({available:1000,navPinned:true,canvasOpen:true});
+ assert.ok(expanded.nav+expanded.canvas+360+24<=1000);
+});
+test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
+ const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
+ assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
+ const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
+ assert.doesNotMatch(expanded,/Open navigation/);
+ const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));
+ assert.doesNotMatch(draft,/Research/);
+});
+test('workspace picker searches the host catalog, pages results, and keeps actions separate',async()=>{
+ let root;const calls=[],choices=[];
+ const dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'w'+args.offset,name:'Reports',path:'/deep/team/'+(args.query||'q1')+'/reports'}],nextOffset:args.offset===0?40:null,total:41}}};
+ await act(async()=>{root=create(React.createElement(WorkspacePicker,{state:{},setup:{workspace:'',location:{kind:'managed'}},act:dispatch,onChange:value=>choices.push(value)}))});
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,20)));
+ assert.equal(root.root.findAllByType('select').length,0);
+ assert.deepEqual(calls[0],{name:'workspace.list',args:{query:'',offset:0,limit:40}});
+ const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
+ await act(async()=>button('Next').props.onClick());
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,20)));
+ assert.equal(calls.at(-1).args.offset,40);
+ await act(async()=>root.root.findByProps({'aria-label':'Find a workspace'}).props.onChange({target:{value:'q4'}}));
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,180)));
+ assert.deepEqual(calls.at(-1).args,{query:'q4',offset:0,limit:40});
+ await act(async()=>root.root.findByProps({'aria-label':'Reports · /deep/team/q4/reports'}).props.onClick());
+ assert.deepEqual(choices,[{workspace:'/deep/team/q4/reports',location:{kind:'workspace'}}]);
+ assert.ok(button('New workspace'));assert.ok(button('Use existing folder'));
+ await act(async()=>root.unmount());
+});
+
+test('browsing retains live call controls and an explicitly scoped stop action',async()=>{
+ const calls=[];let root;
+ await act(async()=>{root=create(React.createElement(LiveChatActivity,{browsing:true,working:true,session:{id:'running',title:'Report'},callActive:true,voice:{status:'connected',muted:false},act:async(...args)=>calls.push(args)},React.createElement('div',{'aria-label':'Screen sharing active'},'Stop sharing')))});
+ await act(async()=>root.root.findByProps({'data-action':'conversation.stop'}).props.onClick());
+ await act(async()=>root.root.findByProps({'data-action':'call.end'}).props.onClick());
+ await act(async()=>root.root.findByProps({'data-action':'call.mute'}).props.onClick());
+ assert.deepEqual(calls,[['conversation.stop',{sessionId:'running'}],['call.end'],['call.mute',{muted:true}]]);
+ assert.ok(root.root.findByProps({'aria-label':'Screen sharing active'}));
+ await act(async()=>root.update(React.createElement(LiveChatActivity,{browsing:false,working:true,session:{id:'running'}})));
+ assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
+ await act(async()=>root.unmount());
+});
+test('quiet navigation keeps discovery status, failures and refresh access',()=>{
+ const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
+ const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));
+ assert.match(html,/Finding existing chats/);assert.match(html,/Some saved folders or chats need attention/);
+ assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
+});

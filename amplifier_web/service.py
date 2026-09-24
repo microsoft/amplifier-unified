@@ -55,7 +55,7 @@ ACTION_DEFINITIONS = {
     "diagnostics.records": ("Read retained diagnostics by session and stream glob, newest first. Continue using nextBefore. Metadata is the default; conversation text is captured only if explicitly enabled.",schema({"sessionId":string(200),"stream":string(100),"before":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
     "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
     "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200),"fromDraft":{"type":"boolean"}},["path"])),
-    "workspace.list": ("List available workspace folders, including empty workspaces, with bounded search. Saved chats come from native history.", schema({"query":string(500),"offset":{"type":"integer","minimum":0}},[])),
+    "workspace.list": ("List available workspace folders, including empty workspaces, with bounded search. Saved chats come from native history.", schema({"query":string(500),"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
     "workspace.prepare": ("Resolve a name under the configured workspace root without creating a folder or chat. Inspect disposition: create, open, attach, or blocked.", schema({"name":string(200),"root":string(4000)},["name"])),
     "workspace.create": ("Create the reviewed workspace plan with a stable command ID. fromDraft preserves the unsent chat and selects the result. Legacy explicit path remains supported.", schema({"planId":string(100),"path":{**string(4000),"minLength":1},"name":string(200),"fromDraft":{"type":"boolean"}},[])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
@@ -112,7 +112,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use workspace.select to select a workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat returns to the conversation. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
@@ -267,6 +267,8 @@ from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 from .canvas_versions import definitions as canvas_version_definitions
 ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
+from .canvas_reference import definitions as canvas_reference_definitions
+ACTION_DEFINITIONS.update(canvas_reference_definitions(schema, string))
 from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
@@ -1043,7 +1045,7 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1369,6 +1371,9 @@ class AppService:
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
                     diagnostic_result = open_file(self, args, origin)
+                elif action == 'canvas.reference':
+                    from .canvas_reference import command
+                    diagnostic_result = command(self, args)
                 elif action.startswith('canvas.versions.'):
                     from .canvas_versions import command
                     diagnostic_result = command(self, action, args, origin)
@@ -1382,7 +1387,7 @@ class AppService:
                     from .canvas_library import command
                     command(self.state,self.db,action,args)
                     if action=='canvas.select':
-                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
+                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
                 elif action=='canvas.openExternal':
                     canvas=self.state['canvas']
                     if canvas.get('id')!=args['id'] or canvas.get('kind')!='browser':raise AppError('Select a browser artifact first.')
@@ -1418,12 +1423,13 @@ class AppService:
                     diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
                         self.state['canvas']=scoped['canvas']
-                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
+                        self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == 'session.draft':
                 from .new_chat import open_draft
                 open_draft(self, args)
+                self.state['view']['workSurface'] = 'chat'
             elif action == "session.create":
                 if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')
@@ -1445,6 +1451,7 @@ class AppService:
                     from .workspace_canvas import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
+                    self.state['view']['workSurface'] = 'chat'
                     self.state["view"]["draft"] = ""
                     if client_id is not None and (previous_scope[0] is None or args.get('fromDraft')):
                         drafts = self.clients.record().setdefault("drafts", {})
@@ -1460,6 +1467,7 @@ class AppService:
                 if client_id is None and previous is not None and (self.state['view'].get('draft') or 'draft' in previous):
                     previous['draft'] = self.state['view'].get('draft', '')
                 self.state["selectedSessionId"] = session["id"]
+                self.state["view"]["workSurface"] = "chat"
                 self.state["view"]["draft"] = session.get('draft', '')
                 if session.get('nativeProject'):
                     pending.append((self.history.refresh_session, (session['id'],)))
@@ -1792,7 +1800,7 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection', 'navSort'})
+                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab'})
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -1808,6 +1816,8 @@ class AppService:
                 from .chat_navigation import view_patch as chat_view_patch
                 try:
                     patch = view_patch(self.state, chat_view_patch(patch))
+                    if patch.get("workWorkspaceId") and not any(row["id"] == patch["workWorkspaceId"] for row in self.state["workspaces"]):
+                        raise ValueError("This workspace is no longer registered.")
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 from .runtime_navigation import update as runtime_view_patch
@@ -2851,7 +2861,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
+            if args['action'] == 'canvas.reference' or args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2870,6 +2880,9 @@ class AppService:
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
                 action_args.setdefault('nativeProject', native_project(self._session(session_id)))
+            if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
+                if action_args.get('args', {}).get('sessionId') != session_id:
+                    raise AppError('References must target the calling conversation.', 409)
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
             if args['action'].startswith('observation.'):
@@ -2889,7 +2902,7 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
-            elif args['action'] == 'canvas.openFile':
+            elif args['action'] in {'canvas.openFile', 'canvas.reference'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
                 with self.clients.bind(canvas_client):

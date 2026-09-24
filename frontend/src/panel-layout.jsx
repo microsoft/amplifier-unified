@@ -2,11 +2,11 @@ import {useNarrowScreen} from './responsive-navigation';
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
 
 export const CHAT_MIN=360,CANVAS_MIN=300,NAV_MIN=216;
-export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasOpen=false,navWidth=320,canvasWidth=440,priority='canvas'}={}){
- const overlay=canvasOpen&&available<CHAT_MIN+CANVAS_MIN+rail+gap*2;
+export function fitPanels({available=1200,gap=12,rail=0,navPinned=false,canvasOpen=false,navWidth=320,canvasWidth=440,priority='canvas'}={}){
+ const overlay=canvasOpen&&available<CHAT_MIN+CANVAS_MIN+rail+gap*(rail?2:1);
  const reserveCanvas=canvasOpen&&!overlay;
  const docked=navPinned&&available>=CHAT_MIN+NAV_MIN+(reserveCanvas?CANVAS_MIN+gap*2:gap);
- const space=available-(reserveCanvas?gap*2:gap)-CHAT_MIN;
+ const space=available-gap*((docked||rail?1:0)+(reserveCanvas?1:0))-CHAT_MIN;
  const navMax=Math.min(16384,Math.max(NAV_MIN,space-(reserveCanvas?CANVAS_MIN:0)));
  const canvasMax=Math.min(16384,Math.max(CANVAS_MIN,space-(docked?NAV_MIN:rail)));
  let nav=docked?Math.min(Math.max(NAV_MIN,navWidth),navMax):rail;
@@ -20,10 +20,10 @@ export function fitPanels({available=1200,gap=12,rail=52,navPinned=false,canvasO
 const Layout=createContext(null);
 export function WorkspaceLayout({state,act,children,presentation={}}){
  const narrow=useNarrowScreen();
- const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:52}),[draft,setDraft]=useState(null);
+ const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:0}),[draft,setDraft]=useState(null);
  useEffect(()=>{
   const el=host.current;if(!el)return;
-  const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:innerWidth<=700?44:52});
+  const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:0});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[]);
  const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});

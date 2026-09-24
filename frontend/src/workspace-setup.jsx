@@ -1,5 +1,5 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
-import {FolderOpen,X} from 'lucide-react';
+import {FolderOpen,Folder,Search,Plus,Check,MessageCircle,ArrowLeft,X} from 'lucide-react';
 import {PathField} from './settings-ui';
 import './workspace-setup.css';
 
@@ -42,25 +42,35 @@ export function WorkspaceForm({state,act,mode='create',fromDraft=false,onDone,on
 }
 
 export function WorkspacePicker({state,act,setup,onChange}){
- const [mode,setMode]=useState(null),[rows,setRows]=useState([]),[query,setQuery]=useState(''),[error,setError]=useState(''),[more,setMore]=useState(false),[page,setPage]=useState(0),[loading,setLoading]=useState(false);
- const select=useRef(null);
- useEffect(()=>{let current=true;setLoading(true);const timer=setTimeout(()=>{
-  Promise.resolve(act('workspace.list',{query,offset:page*100})).then(value=>{const result=receipt(value);if(!result?.accepted)throw Error(result?.error||'Could not load workspaces.');if(current){setRows(result.result.items);setMore(result.result.nextOffset!=null);setError('')}}).catch(err=>{if(current)setError(err.message)}).finally(()=>{if(current)setLoading(false)});
- },query?150:0);return()=>{current=false;clearTimeout(timer)}},[query,page,state.workspaces?.length,mode]);
- const cancel=()=>{setMode(null);requestAnimationFrame(()=>select.current?.focus())};
- const done=result=>{onChange({workspace:result.path,location:{kind:'workspace'}});cancel()};
- const managed=setup.location?.kind==='managed',known=rows.some(row=>row.path===setup.workspace);
- return <div className="a-workspace-picker">
-  <label htmlFor="chat-workspace"><FolderOpen/>Workspace</label>
-  <select ref={select} id="chat-workspace" aria-label="Workspace" value={managed?'':setup.workspace||''} onChange={e=>{const path=e.target.value;if(path===':create:'||path===':attach:')setMode(path===':create:'?'create':'attach');else onChange({workspace:path,location:{kind:path?'workspace':'managed'}})}}>
-   <option value="">No workspace</option>{!managed&&setup.workspace&&!known&&<option value={setup.workspace}>{setup.workspace.split(/[\\/]/).filter(Boolean).at(-1)}</option>}
-   {rows.map(row=><option key={row.id} value={row.path}>{row.label||row.name}</option>)}
-   <option value=":create:">＋ Create new workspace…</option><option value=":attach:">Use an existing folder…</option>
-  </select>
-  {managed&&<p className="a-caption">Files created in this chat are saved by Amplifier.</p>}
-  <details><summary>Find a workspace</summary><input type="search" aria-label="Find a workspace" placeholder="Search names or folders" value={query} onChange={e=>{setPage(0);setQuery(e.target.value)}}/>{loading&&<p role="status">Finding workspaces…</p>}{(page>0||more)&&<div className="a-workspace-setup-actions"><button type="button" disabled={!page||loading} onClick={()=>setPage(page-1)}>Previous</button><button type="button" disabled={!more||loading} onClick={()=>setPage(page+1)}>More</button></div>}</details>
-  {error&&<p role="alert">{error}</p>}
-  {mode&&<WorkspaceForm state={state} act={act} mode={mode} fromDraft onCancel={cancel} onDone={done}/>}
+ const [mode,setMode]=useState(null),[rows,setRows]=useState([]),[query,setQuery]=useState(''),[error,setError]=useState(''),[more,setMore]=useState(false),[page,setPage]=useState(0),[loading,setLoading]=useState(true),[total,setTotal]=useState(0),[retry,setRetry]=useState(0),[saving,setSaving]=useState(false);
+ const search=useRef(null),submitting=useRef(false),list=useRef(null),id=useId(),pageSize=40;
+ useEffect(()=>{if(!mode)search.current?.focus()},[mode]);
+ useEffect(()=>{
+  if(mode)return;
+  let current=true;setLoading(true);setError('');setRows([]);
+  const timer=setTimeout(()=>{
+   Promise.resolve(act('workspace.list',{query,offset:page*pageSize,limit:pageSize})).then(value=>{
+    const result=receipt(value);if(!result?.accepted)throw Error(result?.error||'Could not load workspaces.');
+    if(current){setRows(result.result.items);setMore(result.result.nextOffset!=null);setTotal(result.result.total||0);if(list.current)list.current.scrollTop=0}
+   }).catch(err=>{if(current)setError(err.message)}).finally(()=>{if(current)setLoading(false)});
+  },query?150:0);
+  return()=>{current=false;clearTimeout(timer)};
+ },[query,page,state.workspaces?.length,mode,retry]);
+ const choose=async path=>{
+  if(submitting.current)return;submitting.current=true;setSaving(true);setError('');
+  try{await onChange({workspace:path,location:{kind:path?'workspace':'managed'}})}catch(err){setError(err.message)}finally{submitting.current=false;setSaving(false)}
+ };
+ const selected=setup.location?.kind==='managed'?'':setup.workspace||'';
+ const parent=path=>{const parts=path.split('/').filter(Boolean);parts.pop();return parts.length>3?'…/'+parts.slice(-3).join('/'):'/'+parts.join('/')};
+ if(mode)return <div className="a-workspace-picker"><button type="button" className="a-link a-picker-back" onClick={()=>setMode(null)}><ArrowLeft/>Back to workspaces</button><h3>{mode==='create'?'New workspace':'Use an existing folder'}</h3><WorkspaceForm state={state} act={act} mode={mode} fromDraft onCancel={()=>setMode(null)} onDone={result=>choose(result.path)}/>{error&&<p role="alert">{error}</p>}</div>;
+ return <div className="a-workspace-picker" aria-busy={saving}>
+  <button type="button" className="a-picker-choice" aria-pressed={!selected} disabled={saving} onClick={()=>choose('')}><MessageCircle/><span><strong>No workspace</strong><small>Keep this conversation on its own.</small></span>{!selected&&<Check/>}</button>
+  <label className="a-picker-search" htmlFor={id+'-search'}><Search/><input ref={search} id={id+'-search'} type="search" maxLength={500} aria-label="Find a workspace" placeholder="Search workspaces by name or folder" value={query} onChange={e=>{setPage(0);setQuery(e.target.value)}}/></label>
+  <div ref={list} className="a-picker-results" aria-label="Workspaces" aria-busy={loading}>
+   {loading?<p role="status">Finding workspaces…</p>:error?<p role="alert">{error} <button type="button" className="a-link" onClick={()=>setRetry(retry+1)}>Try again</button></p>:rows.length?<ul>{rows.map(row=><li key={row.id}><button type="button" className="a-picker-choice" aria-label={row.name+' · '+row.path} aria-pressed={selected===row.path} disabled={saving} title={row.path} onClick={()=>choose(row.path)}><Folder/><span><strong>{row.name}</strong><small>{parent(row.path)}</small></span>{selected===row.path&&<Check/>}</button></li>)}</ul>:<p role="status">{query?'No matching workspaces. Try a name or part of its folder path.':'No workspaces yet. Create one or use an existing folder below.'}</p>}
+  </div>
+  {!loading&&!error&&(page>0||more)&&<div className="a-picker-pages"><span>{page*pageSize+1}–{page*pageSize+rows.length} of {total}</span><button type="button" className="a-link" disabled={!page} onClick={()=>setPage(page-1)}>Previous</button><button type="button" className="a-link" disabled={!more} onClick={()=>setPage(page+1)}>Next</button></div>}
+  <div className="a-picker-actions"><button type="button" disabled={saving} onClick={()=>setMode('create')}><Plus/>New workspace</button><button type="button" disabled={saving} onClick={()=>setMode('attach')}><FolderOpen/>Use existing folder</button></div>
  </div>;
 }
 

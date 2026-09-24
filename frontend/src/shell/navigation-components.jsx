@@ -1,4 +1,5 @@
-import React,{useEffect,useRef,useState} from 'react';
+import {WorkNavigationContext} from '../work-navigation';
+import React,{useEffect,useRef,useState,useContext} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
 import {chatPage,visibleWorkspaces,movePin} from '../chat-navigation';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
@@ -30,7 +31,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  };
  return <form aria-busy={saving} className="a-nav-chat a-nav-chat-rename" data-session-id={chat.id} onSubmit={submit}><input id={inputId} maxLength={200} aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>{error&&<small role="alert" className="a-danger">{error}</small>}</form>;
 }
-function useNavigationController(host,kind){
+export function useNavigationController(host,kind){
  const state=useNavigation(React,host),act=host.dispatch,prefix=host.instanceId==='workspaces'?'nav-workspace':'nav-'+host.instanceId;
  const view=state.view||{},savedDraft=view.workspaceDraft||{},draft=(kind==='chats'?savedDraft.mode?.startsWith('chat-'):!savedDraft.mode?.startsWith('chat-'))?savedDraft:{};
  const form=useRef(null),draftRef=useRef(draft),draftVersion=useRef(0),submitting=useRef(false);
@@ -60,7 +61,7 @@ function useNavigationController(host,kind){
  useEffect(()=>{if(!draft.mode)return;form.current?.scrollIntoView?.({block:'nearest'});form.current?.querySelector?.('input')?.focus()},[draft.mode,draft.id]);
  return {state,act,prefix,view,draft,form,saving,formError,history,refreshing,workspace,workspaceCount,allChats,setDraft,updateDraft,choose,submit};
 }
-function NavigationEditor({model}){
+export function NavigationEditor({model}){
  const {state,act,prefix,draft,form,saving,formError,setDraft,updateDraft,submit}=model;
  if(draft.mode==='add')return <WorkspaceForm state={state} act={act} onDone={()=>setDraft({})} onCancel={()=>setDraft({})}/>;
  return <>{draft.mode==='chat-delete'&&<div className="a-nav-form"><strong>Delete chat?</strong><ChatDelete key={draft.id} id={draft.id} act={act} cancel={()=>setDraft({})}/></div>}    {draft.mode&&draft.mode!=='chat-rename'&&draft.mode!=='chat-delete'&&<form ref={form} className="a-nav-form" aria-busy={saving} onSubmit={submit}>
@@ -95,7 +96,7 @@ export function ChatDetails({chat,model,now,close}){
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
   <CopyDetail label={managed?"Chat files":"Full workspace path"} value={chat.workspace||'Unavailable'}/>
   <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
-  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Shared with Amplifier CLI in this workspace.'}</p>
+  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Saved in this folder’s native Amplifier history.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
@@ -125,7 +126,7 @@ function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
  return <div className="a-nav-pagination"><span>{page.start+1}–{page.end} of {page.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label={'Show previous '+label} disabled={page.index===0} onClick={()=>onChange(page.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label={'Show more '+label} disabled={page.index===page.pages-1} onClick={()=>onChange(page.index+1)}>More<ChevronRight/></button></div></div>;
 }
-function PinnedChats({page,model,now}){
+export function PinnedChats({page,model,now}){
  const [error,setError]=useState('');
  const items=page.items.map(chat=>({...chat,label:chat.title||'Untitled conversation'})),visible=items.map(chat=>chat.id);
  const reorder=async(next,{id,to})=>{
@@ -142,7 +143,7 @@ function PinnedChats({page,model,now}){
   <ChatPagination page={page} label="pinned chats" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;
 }
-function ChatList({page,model,view,viewAct,now,showLocation}){
+export function ChatList({page,model,view,viewAct,now,showLocation}){
  const counts=page.activityCounts||{};
  return <>
   <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder={showLocation?'Find chats or paths · * ?':'Find chats · * ? patterns'} data-action="view.update" onChange={e=>patch(viewAct,{navFilter:e.target.value})}/></div>
@@ -163,7 +164,7 @@ function ChatList({page,model,view,viewAct,now,showLocation}){
  </>;
 }
 const HOME_FILTERS={navArchive:'active',navCollection:null,navFilter:'',navStatusFilter:'all',navLocationFilter:'all',navSort:'activity'};
-export function ConversationList({host,workspaceHost}){
+function LegacyConversationList({host,workspaceHost}){
  const model=useNavigationController(host,'chats'),{state,act,view,workspace,history,refreshing}=model;
  const workspaceState=useNavigation(React,workspaceHost||host),now=useActivityClock(),workspaceAct=workspaceHost?.dispatch||act;
  const [creating,setCreating]=useState(false),createButton=useRef(null);
@@ -202,4 +203,31 @@ export function ConversationList({host,workspaceHost}){
   {history.loading&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
   {!!history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention.</p>}
  </div>;
+}
+
+function QuietSidebar({host,workspaceHost,navigation}){
+ const model=useNavigationController(host,'chats'),now=useActivityClock();
+ const workspaceState=useNavigation(React,workspaceHost||host);
+ const pins=model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
+ const recent=model.state.recentShortcuts||[];
+ return <div className="a-sidebar-navigation a-quiet-sidebar">
+  <NavigationEditor model={model}/>
+  <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
+  <SidebarSection id="pinned" title="Pinned" model={model}><PinnedChats page={pins} model={model} now={now}/></SidebarSection>
+  <SidebarSection id="workspaces" title="Workspaces" model={model} actions={<button type="button" className="a-icon" aria-label="New workspace" onClick={()=>navigation.create()}><Plus/></button>}>
+   <WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>
+   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
+  </SidebarSection>
+  <SidebarSection id="recent" title="Recent" model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>}>
+   {recent.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
+   {!recent.length&&<p className="a-nav-empty">Your recent chats appear here.</p>}
+   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>
+  </SidebarSection>
+  {model.history.loading&&<p className="a-caption" role="status">Finding existing chats…</p>}{!!model.history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention. <button className="a-link" onClick={()=>navigation.browse('chats')}>Review chats</button></p>}
+  {model.history.error&&<p role="alert">{model.history.error}</p>}
+ </div>;
+}
+export function ConversationList(props){
+ const navigation=useContext(WorkNavigationContext);
+ return navigation?<QuietSidebar {...props} navigation={navigation}/>:<LegacyConversationList {...props}/>;
 }

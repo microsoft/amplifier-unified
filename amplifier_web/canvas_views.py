@@ -257,7 +257,7 @@ class CanvasViews:
         from .service import ACTION_DEFINITIONS
         from jsonschema import validate, ValidationError
         action, args = target['action'], copy.deepcopy(target['args'])
-        allowed = {'canvas.view', 'canvas.report', 'canvas.snapshot', 'canvas.interact', 'canvas.event', 'canvas.copy', 'canvas.copyPath', 'canvas.download', 'canvas.openExternal'}
+        allowed = {'canvas.view', 'canvas.report', 'canvas.snapshot', 'canvas.interact', 'canvas.event', 'canvas.copy', 'canvas.copyPath', 'canvas.download', 'canvas.openExternal', 'canvas.reference'}
         if action not in allowed:
             fail('This operation is not a renderer capability.', 403)
         renderer = preference['renderer']
@@ -288,6 +288,12 @@ class CanvasViews:
         except ValidationError as exc:
             fail(exc.message)
         effects = []
+        if action == 'canvas.reference':
+            from .canvas_reference import command
+            version = row.get('selectedVersion') or row.get('revision', 1)
+            if args['version'] != version:
+                fail('The selected document version changed. Select the text again.', 409)
+            return command(self.service, args), []
         if action == 'canvas.copyPath':
             from .canvas_paths import copy_path
             return copy_path({**self.service.state, 'canvas': canvas}, args)
