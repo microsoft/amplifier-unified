@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.27",
+      "title": "Reliable workspace switching and simpler update schedules",
+      "changes": [
+        "Keep the workspace heading, sidebar selection, chat list and file browser in sync when switching workspaces, including rapid switches while another chat is working.",
+        "Preserve unsent messages and attachments while browsing workspaces, and create new chats in the workspace currently being viewed.",
+        "Check for updates every four hours by default, with one-hour, four-hour, eight-hour and daily options. Existing saved schedules remain unchanged until you choose a new interval."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.26",
       "title": "Preserve saved history when a worker cannot resume",
       "changes": [
