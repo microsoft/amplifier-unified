@@ -5,6 +5,7 @@ import {ResultNotice} from './settings-ui';
 import './feedback.css';
 import {readItems} from './attention';
 import {FeedbackFollowup} from './feedback-followup';
+import {FeedbackReconcile} from './feedback-lifecycle';
 
 const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:true,attachments:[]});
 const sizeLabel=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
@@ -97,6 +98,7 @@ export function FeedbackPanel({state,act}){
    </div>
   </form>
   {!!requests.filter(item=>item.requestId!==pending?.requestId).length&&<div className="a-feedback-recent"><h3>Submissions</h3>{requests.filter(item=>item.requestId!==pending?.requestId).map(item=><div key={item.requestId} className="a-feedback-receipt"><strong>{item.title}</strong><ResultNotice phase={item.status==='submitted'?'success':['failed','unknown'].includes(item.status)?'error':'working'} message={item.message}/>{item.url&&<a href={item.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>}<FeedbackDiagnostics state={state} act={act} requestId={item.requestId}/>{item.status==='unknown'&&<a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues</a>}{(state.attention?.items||[]).filter(i=>i.requestId===item.requestId&&!i.read).map(i=><button key={i.id} className="a-link" type="button" data-action="attention.read" onClick={()=>readItems(act,[i])}>Mark reviewed</button>)}</div>)}</div>}
+  <FeedbackReconcile state={state} act={act}/>
   <FeedbackFollowup state={state} act={act}/>
  </section>;
 }

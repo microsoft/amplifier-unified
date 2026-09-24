@@ -4,6 +4,7 @@ import './conversation-controls.css';
 import {readItems} from './attention';
 import {isTopLevelChat} from './chat-navigation';
 import {sessionIdentity} from './navigation-presentation';
+import {ConversationUsage} from './conversation-usage.jsx';
 
 function recoveryUnsafe(session){
  return ['working','running','starting','stopping'].includes(session.status)||session.configurationBusy||(session.workers||[]).some(worker=>['queued','starting','running','working','stopping'].includes(worker.status));
@@ -74,6 +75,7 @@ export function ConversationDetails({session,act}){
    {working&&<p>Wait for the current work to stop before creating a copy.</p>}
   </div>
   {copied&&<p role="status">{copied}</p>}{error&&<p role="alert" className="a-danger">{error}</p>}
+  <ConversationUsage key={session.id} sessionId={session.id} act={act}/>
  </div>;
 }
 
