@@ -391,3 +391,30 @@ async def test_removed_connections_are_excluded_from_preference_order(manager,tm
     await manager.perform('providers.remove',{'workspace':str(tmp_path),'id':'b'})
     result=await manager.perform('providers.reorder',{'workspace':str(tmp_path),'ids':['c','a'],'expectedIds':['a','c']})
     assert not next(row for row in result['providers'] if row['id']=='b')['enabled']
+
+
+async def test_explicit_test_retries_failed_probe_without_waiting_for_catalog_ttl(manager, tmp_path):
+    import sys
+    await manager.perform('providers.save', {'id': 'retry', 'module': 'provider-openai', 'config': {}, 'workspace': str(tmp_path)})
+    child = tmp_path / 'probe-retry.py'
+    child.write_text("import json; print(json.dumps({'error':'First attempt failed'}))")
+    manager.probe_command = [sys.executable, str(child)]
+    args = {'id': 'retry', 'workspace': str(tmp_path)}
+    with pytest.raises(ValueError, match='First attempt'):
+        await manager.perform('providers.test', args)
+    child.write_text("import json; print(json.dumps({'info':{},'configSchema':{},'test':{'reachable':True,'modelCount':2}}))")
+    assert (await manager.perform('providers.test', args))['test']['reachable']
+
+
+async def test_probe_drains_large_stderr_and_reports_safe_build_evidence(manager, tmp_path):
+    import sys
+    child = tmp_path / 'probe-build.py'
+    child.write_text("import sys; sys.stderr.write('secret-do-not-copy' * 100000); sys.stderr.write('rustc 1.91.1 is not supported; private-dependency requires rustc 1.92.0'); sys.exit(1)")
+    manager.probe_command = [sys.executable, str(child)]
+    with pytest.raises(ValueError) as failure:
+        await manager.perform('providers.schema', {'module': 'provider-openai', 'workspace': str(tmp_path)})
+    message = str(failure.value)
+    assert 'Rust 1.91.1 is unsupported' in message
+    assert 'requires Rust 1.92.0' in message
+    assert 'secret-do-not-copy' not in message and 'private-dependency' not in message
+    assert len(message) < 500

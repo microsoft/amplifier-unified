@@ -208,7 +208,7 @@ class ClientViews:
         record = self.records[identity]
         canvas = record.get('canvas') or {}
         binding = [record.get('selectedSessionId'), record.get('selectedWorkspaceId'),
-                   canvas.get('id'), bool(canvas.get('open')), record.get('canvasViews', {}).get('secondary')]
+                   canvas.get('id'), bool(canvas.get('open'))]
         if record.get('_selectionBinding') != binding:
             record['_selectionBinding'] = copy.deepcopy(binding)
             record['selectionRevision'] = record.get('selectionRevision', 0) + 1

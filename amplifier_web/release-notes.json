@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.21",
+      "title": "Simpler Canvas and clearer provider checks",
+      "changes": [
+        "Use one Canvas viewer per browser, removing the split-view controls while keeping saved artifacts and tabs.",
+        "Copy an opened file\u2019s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
+        "Explain common provider-check runtime failures, including dependency builds, imports, network trust, DNS, permissions and disk space, without exposing private subprocess logs."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.20",
       "title": "Quiet checks for recorded results",
       "changes": [

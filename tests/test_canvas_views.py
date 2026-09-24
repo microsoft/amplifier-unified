@@ -72,23 +72,26 @@ def validate_fixture(app, digest):
     app.shell.put('package', digest, record)
 
 
-async def test_two_views_keep_separate_preferences_without_selecting_another_chat(app):
+async def test_single_view_retains_artifacts_and_ignores_legacy_split_state(app):
     first = await show(app)
-    selected = app.clients.records['one']['selectedSessionId']
-    await command(app, 'canvas.views.open', {'resourceId': first['resourceId'], 'sessionId': selected})
-    second = view(app, 'secondary')
-    await update(app, first, {'query': 'alpha'})
-    await update(app, second, {'query': 'beta'})
-    assert view(app)['view']['query'] == 'alpha'
-    assert view(app, 'secondary')['view']['query'] == 'beta'
-    assert app.clients.records['one']['selectedSessionId'] == selected
+    with app.clients.bind('one'):
+        record = app.canvas_views.record()
+        record['secondary'] = first['resourceId']
+        record['preferences']['secondary:' + first['resourceId']] = {'dirty': True, 'view': {'query': 'saved'}}
+    second = await show(app, 'text', 'Another artifact')
+    with app.clients.bind('one'):
+        assert [v['resourceId'] for v in app.canvas_views.project()['views']] == [second['resourceId']]
+    await command(app, 'canvas.close')
+    assert len(app.state['canvasArtifacts']) == 2
+    await command(app, 'canvas.select', {'id': first['resourceId']})
+    assert view(app)['resourceId'] == first['resourceId']
+    for action in ('canvas.views.open', 'canvas.views.close'):
+        with pytest.raises(AppError):
+            await command(app, action, {'resourceId': first['resourceId']})
+    with pytest.raises(AppError):
+        await update(app, {**view(app), 'viewId': 'secondary'}, {'query': 'not a live view'})
     assert app.clients.records['two']['canvas'].get('kind') is None
-    replacement = await show(app, 'markdown', '# Another artifact')
-    assert replacement['resourceId'] != first['resourceId']
-    assert view(app, 'secondary')['resourceId'] == first['resourceId']
-    assert view(app, 'secondary')['view']['query'] == 'beta'
-    with pytest.raises(AppError, match='changed'):
-        await update(app, first, {'query': 'stale'})
+
 
 
 async def test_renderer_must_be_validated_compatible_and_in_its_own_slot(app):
@@ -144,43 +147,38 @@ async def test_missing_package_preserves_choice_resource_and_allows_default_reco
 
 
 async def test_closed_reopened_view_rejects_old_actions_and_does_not_delete_content(app):
-    primary = await show(app)
-    sid = primary['resource']['sessionId']
-    await command(app, 'canvas.views.open', {'resourceId': primary['resourceId'], 'sessionId': sid})
-    old = view(app, 'secondary')
+    old = await show(app)
     await update(app, old, {'query': 'saved filter'})
-    await command(app, 'canvas.views.close', target(old))
-    await command(app, 'canvas.views.open', {'resourceId': primary['resourceId'], 'sessionId': sid})
-    assert view(app, 'secondary')['view']['query'] == 'saved filter'
+    await command(app, 'canvas.close')
+    await command(app, 'canvas.reopen')
+    assert view(app)['view']['query'] == 'saved filter'
     with pytest.raises(AppError, match='changed'):
         await update(app, old, {'query': 'delayed'})
     assert len(app.state['canvasArtifacts']) == 1
 
 
+
 async def test_resource_revision_rejects_stale_actions(app):
     primary = await show(app)
-    await command(app, 'canvas.views.open', {'resourceId': primary['resourceId'], 'sessionId': primary['resource']['sessionId']})
-    old = view(app, 'secondary')
+    old = view(app)
     from amplifier_web.resource_files import put
-    await show(app, 'text', 'A different primary artifact')
     row = app.canvas_views.artifact(primary['resourceId'])
     row['body'] = put(app.db, {'content': '[{"name":"new revision"}]'})
-    assert view(app, 'secondary')['resourceRevision'] != old['resourceRevision']
+    assert view(app)['resourceRevision'] != old['resourceRevision']
     with pytest.raises(AppError, match='changed'):
         await update(app, old, {'query': 'old content'})
 
 
 async def test_view_preferences_survive_restart_and_cloned_client_does_not_share_them(app):
     current = await show(app)
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
-    await update(app, view(app, 'secondary'), {'query': 'kept'})
+    await update(app, view(app), {'query': 'kept'})
     await app.close()
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
-        assert view(restored, 'secondary')['view']['query'] == 'kept'
+        assert view(restored)['view']['query'] == 'kept'
         restored.clients.attach('clone', 'one')
-        await update(restored, view(restored, 'secondary', 'clone'), {'query': 'clone only'}, client='clone')
-        assert view(restored, 'secondary')['view']['query'] == 'kept'
+        await update(restored, view(restored, client='clone'), {'query': 'clone only'}, client='clone')
+        assert view(restored)['view']['query'] == 'kept'
     finally:
         await restored.close()
 
@@ -221,30 +219,29 @@ async def test_failed_renderer_replacement_clears_activation_and_limits_total_st
     assert 'second' not in view(app)['view']
 
 
-async def test_missing_secondary_can_close_or_be_replaced_without_losing_other_artifacts(app):
-    first = await show(app)
-    await command(app, 'canvas.views.open', {'resourceId': first['resourceId'], 'sessionId': first['resource']['sessionId']})
-    second = await show(app, 'text', 'Still available')
-    app.state['canvasArtifacts'] = [row for row in app.state['canvasArtifacts'] if row['id'] != first['resourceId']]
+async def test_missing_legacy_secondary_does_not_block_current_view(app):
+    current = await show(app)
     with app.clients.bind('one'):
-        missing = app.canvas_views.project()['views'][1]
-    assert missing['error']
-    await command(app, 'canvas.views.close', target(missing))
-    await command(app, 'canvas.views.open', {'resourceId': second['resourceId'], 'sessionId': second['resource']['sessionId']})
-    assert view(app, 'secondary')['resourceId'] == second['resourceId']
+        app.canvas_views.record()['secondary'] = 'missing-artifact'
+        assert len(app.canvas_views.project()['views']) == 1
+    await command(app, 'canvas.close')
+    assert app.state['canvasArtifacts'][0]['id'] == current['resourceId']
 
 
-async def test_two_html_views_control_only_the_addressed_document(app):
+
+async def test_html_view_controls_only_the_addressed_client(app):
     first = await show(app, 'html', '<input value="initial">')
-    await command(app, 'canvas.views.open', {'resourceId': first['resourceId'], 'sessionId': first['resource']['sessionId']})
-    second = view(app, 'secondary')
+    await command(app, 'canvas.select', {'id': first['resourceId']}, client='two')
+    second = view(app, client='two')
     document = {'text': '', 'controls': [{'id': 'field', 'tag': 'input', 'type': 'text', 'label': 'Note', 'value': 'initial', 'disabled': False}]}
-    for current in (first, second):
-        await command(app, 'canvas.views.command', {**target(current), 'action': 'canvas.snapshot', 'args': {'document': document}})
-    await command(app, 'canvas.views.command', {**target(second), 'action': 'canvas.interact', 'args': {'controlId': 'field', 'event': 'input', 'value': 'Secondary only'}})
+    for current, client in ((first, 'one'), (second, 'two')):
+        await command(app, 'canvas.views.command', {**target(current), 'action': 'canvas.snapshot', 'args': {'document': document}}, client=client)
+    await command(app, 'canvas.views.command', {**target(second), 'action': 'canvas.interact', 'args': {'controlId': 'field', 'event': 'input', 'value': 'Second client only'}}, client='two')
+    with app.clients.bind('two'):
+        assert app.canvas_views.canvas('primary')['interaction']['value'] == 'Second client only'
     with app.clients.bind('one'):
-        assert app.canvas_views.canvas('secondary')['interaction']['value'] == 'Secondary only'
         assert 'interaction' not in app.canvas_views.canvas('primary')
+
 
 
 async def test_large_resource_is_loaded_only_on_explicit_source_read(app):
@@ -252,13 +249,12 @@ async def test_large_resource_is_loaded_only_on_explicit_source_read(app):
     path.write_text('<p>' + 'large ' * 180000 + '</p>')
     await command(app, 'canvas.show', {'kind': 'html', 'path': str(path)})
     current = view(app)
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
     from amplifier_web.canvas_documents import raw_source
     with app.clients.bind('one'):
-        canvas = app.canvas_views.canvas('secondary')
+        canvas = app.canvas_views.canvas('primary')
         assert 'content' not in canvas
         assert len(raw_source(canvas, app.db)) > 1_000_000
-        result, effects = app.canvas_views.command('canvas.views.command', {**target(view(app, 'secondary')), 'action': 'canvas.copy', 'args': {}}, 'browser')
+        result, effects = app.canvas_views.command('canvas.views.command', {**target(view(app)), 'action': 'canvas.copy', 'args': {}}, 'browser')
         assert effects[0]['type'] == 'clipboard.url'
 
 
@@ -279,10 +275,9 @@ async def test_view_mutation_retry_does_not_replace_twice(app):
     assert view(app)['generation'] == generation
 
 
-async def test_reopened_canvas_invalidates_both_previous_mounts(app):
+async def test_reopened_canvas_invalidates_previous_mount(app):
     current = await show(app)
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
-    previous = [view(app, identity) for identity in ('primary', 'secondary')]
+    previous = [view(app, identity) for identity in ('primary',)]
     await command(app, 'canvas.close')
     await command(app, 'canvas.reopen')
     for old in previous:
@@ -321,13 +316,10 @@ async def test_bounded_choice_menu_keeps_an_older_selected_renderer(app):
 
 async def test_agent_download_reaches_only_its_bound_browser_and_diagnostics_follow_artifact(app, monkeypatch):
     current = await show(app, 'text', 'Source content')
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
-    await command(app, 'session.create')
-    selected = app.clients.records['one']['selectedSessionId']
-    assert selected != current['resource']['sessionId']
+    selected = current['resource']['sessionId']
     recorded = []
     monkeypatch.setattr(app.diagnostics, 'record', lambda stream, data, **scope: recorded.append((stream, data, scope)))
-    await app.app_bridge('dispatch', {'action': 'canvas.views.command', 'args': {'clientId': 'one', **target(view(app, 'secondary')), 'action': 'canvas.download', 'args': {}}}, selected)
+    await app.app_bridge('dispatch', {'action': 'canvas.views.command', 'args': {'clientId': 'one', **target(view(app)), 'action': 'canvas.download', 'args': {}}}, selected)
     effect = app.clients.records['one']['deviceCommands'][-1]
     assert effect['type'] == 'download' and effect['content'] == 'Source content'
     assert not app.clients.records['two']['deviceCommands']
@@ -336,9 +328,8 @@ async def test_agent_download_reaches_only_its_bound_browser_and_diagnostics_fol
     assert app.clients.records['one']['selectedSessionId'] == selected
 
 
-async def test_pinned_legacy_body_is_materialized_after_restart(app):
-    current = await show(app, 'markdown', '# A saved secondary document')
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
+async def test_legacy_body_is_materialized_after_restart(app):
+    current = await show(app, 'markdown', '# A saved document')
     with app.clients.bind('one'):
         row = app.canvas_views.artifact(current['resourceId'])
         row['contentResource'] = row['body']
@@ -347,8 +338,8 @@ async def test_pinned_legacy_body_is_materialized_after_restart(app):
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         with restored.clients.bind('one'):
-            canvas = restored.canvas_views.canvas('secondary')
-            assert canvas['content'] == '# A saved secondary document'
+            canvas = restored.canvas_views.canvas('primary')
+            assert canvas['content'] == '# A saved document'
             assert 'contentResource' not in canvas
             assert canvas['id'] == current['resourceId']
             assert canvas['resourceRevision'] == current['resourceRevision']
@@ -397,25 +388,17 @@ async def test_dirty_primary_blocks_parent_transitions_before_any_side_effect(ap
     assert view(app)['resourceId'] == other['resourceId']
 
 
-async def test_dirty_secondary_blocks_panel_close_but_survives_primary_and_chat_navigation(app):
+async def test_dirty_primary_blocks_shared_chat_deletion(app):
+    await command(app, 'session.create', {'location': {'kind': 'managed'}})
     current = await show(app)
-    await command(app, 'canvas.views.open', {'resourceId': current['resourceId'], 'sessionId': current['resource']['sessionId']})
-    secondary = view(app, 'secondary')
-    await command(app, 'canvas.views.dirty', {**target(secondary), 'dirty': True})
-    with pytest.raises(AppError, match='secondary viewer edit'):
-        await command(app, 'canvas.close')
-    await show(app, 'text', 'New primary')
-    await command(app, 'session.create', {'location': {'kind':'managed'}})
-    assert target(view(app, 'secondary')) == target(secondary)
-    assert view(app, 'secondary')['dirty']
-    # Deleting this selected chat from another client would close the parent.
-    sid = app.clients.records['one']['selectedSessionId']
-    reviewed=(await command(app, 'session.deletePreview', {'id':sid}, client='two'))['result']
-    with pytest.raises(AppError, match='secondary viewer edit'):
-        await command(app, 'session.delete', {'id': sid, 'confirmationToken':reviewed['confirmationToken']}, client='two')
-    await command(app, 'canvas.views.recover', target(secondary))
-    assert not view(app, 'secondary')['dirty']
+    await command(app, 'canvas.views.dirty', {**target(current), 'dirty': True})
+    sid = current['resource']['sessionId']
+    reviewed = (await command(app, 'session.deletePreview', {'id': sid}, client='two'))['result']
+    with pytest.raises(AppError, match='primary viewer edit'):
+        await command(app, 'session.delete', {'id': sid, 'confirmationToken': reviewed['confirmationToken']}, client='two')
+    await command(app, 'canvas.views.recover', target(current))
     await command(app, 'canvas.close')
+
 
 
 async def test_dirty_primary_allows_background_publication_and_unrelated_client_navigation(app):

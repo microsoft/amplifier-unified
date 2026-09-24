@@ -334,6 +334,7 @@ def canvas_command(state, action, args, origin):
         except UnicodeDecodeError:
             _error("This file is not UTF-8 text. Choose an image preview for images.")
         canvas["path"] = str(path)
+        canvas["workspacePath"] = str(root)
         canvas["title"] = args.get("title") or path.name
     elif kind == "image":
         content = args.get("content", "")
