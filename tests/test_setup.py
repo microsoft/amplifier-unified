@@ -34,7 +34,8 @@ async def test_keys_are_private_and_redacted_across_scopes(manager,tmp_path,monk
     assert manager.store.read(tmp_path,'project')['config']['providers'][0]['config']['api_key']=='${AMPLIFIER_FIRST_API_KEY}'
 
 @pytest.mark.asyncio
-async def test_nested_image_configuration_roundtrips_without_replacing_chat_instance(manager,tmp_path):
+async def test_nested_image_configuration_roundtrips_without_replacing_chat_instance(manager,tmp_path,monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config={'default_model':'kept-chat-model','reasoning_effort':'high','image_generation':{'enabled':True,'id':'images','model':'chosen-image-model'}}
     result=await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai','id':'kept-instance','config':config,'scope':'project'})
     row=next(row for row in result['providers'] if row['id']=='kept-instance')

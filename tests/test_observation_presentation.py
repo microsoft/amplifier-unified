@@ -166,8 +166,8 @@ async def test_connection_uuid_and_deep_selection_snapshot_prevent_reviving_gran
         app.queues.add(queue); app.queue_clients[queue]='original'; app.queue_sessions[queue]=sid; app.queue_tokens[queue]=uuid.uuid4().hex
         assert app.queue_tokens[queue]!=original
         with pytest.raises(ValueError,match='connection or selection'): check_grant(app.observations,watch)
-        app.clients.records['original']['canvasViews']={'secondary':{'id':'first'}}
+        app.clients.records['original']['canvas']={'id':'document','selectedVersion':1,'open':True}
         first=app.clients.selection_revision('original')
-        app.clients.records['original']['canvasViews']['secondary']['id']='second'
+        app.clients.records['original']['canvas']['selectedVersion']=2
         assert app.clients.selection_revision('original')==first+1
     finally: await app.close()

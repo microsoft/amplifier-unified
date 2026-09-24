@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {ResultNotice} from './settings-ui';
+import {FeedbackCorrection,FeedbackStateControl} from './feedback-lifecycle';
 
 export function FeedbackFollowup({state,act}){
  const reports=(state.feedback?.requests||[]).filter(row=>row.status==='submitted');
@@ -48,6 +49,8 @@ export function FeedbackFollowup({state,act}){
   <button type="button" className="a-soft" data-action="feedback.get" disabled={!draft.feedbackId||busy||['queued','sending'].includes(reading?.status)} onClick={()=>read()}>Refresh report</button>
   {reading&&<ResultNotice phase={reading.status==='failed'?'error':reading.status==='completed'?'success':'working'} message={reading.message}/>}
   {report&&<div className="a-feedback-report"><h4>{report.title} · {report.state}</h4><a href={report.url} target="_blank" rel="noopener noreferrer">Open issue on GitHub</a><pre>{report.body}</pre>{report.comments.map(comment=><div key={comment.id}><strong>{comment.author.login}</strong><small> {comment.createdAt}</small><pre>{comment.body}</pre></div>)}<div>{report.page>1&&<button type="button" className="a-link" data-action="feedback.get" onClick={()=>read(report.page-1)}>Previous comments</button>}{report.hasMore&&<button type="button" className="a-link" data-action="feedback.get" onClick={()=>read(report.page+1)}>More comments</button>}</div></div>}
+  {report&&<FeedbackCorrection key={report.feedbackId} state={state} report={report} act={act}/>}
+  {report&&<FeedbackStateControl state={state} report={report} act={act}/>}
   <form onSubmit={send} data-action="feedback.comment">
    <label htmlFor="feedback-comment">Add a comment</label><textarea id="feedback-comment" data-action="view.update" maxLength={16000} required disabled={!!pending||busy} value={pending?.body??draft.body} onChange={event=>edit({body:event.target.value})} onBlur={()=>save(current.current).catch(()=>setError('The draft could not be saved.'))}/>
    <p className="a-caption">Only this text is added to the selected report, using the host’s GitHub sign-in. The report must belong to that account.</p>
