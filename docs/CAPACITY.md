@@ -29,3 +29,7 @@ The finite admission scope is the main and observed child provider `complete`/`s
 A mounted provider may offer an optional read-only `get_usage_limits()` method, sync or async, returning `{"windows":[{"name":...,"unit":...,"limit":...,"used":...,"remaining":...,"resetsAt":...}]}`. Numeric fields must be finite and nonnegative; `resetsAt` is Unix UTC seconds. The host allowlists these fields, records observation time and source, and does not expose arbitrary account metadata. Missing values remain null. No windows means unknown; missing capability means unsupported; a failed/timed-out read means unavailable. An unsupported provider is never shown as having zero remaining quota.
 
 This capability belongs to the provider adapter. No provider's credentials, undocumented billing endpoint, or account reset behavior is guessed. This slice does not introduce a provider quota adapter where none exists. Quota/reset reads are distinct from task consumption and never purchase or redeem credits.
+
+## Conversation totals
+
+Chat details has a Conversation usage section backed by `capacity.read`. It reads once when opened and refreshes explicitly; it does not create a background poll or a separate accounting ledger. Totals and provider/model breakdown cover all recorded calls, independent of the receipt page limit. Copy usage exports this aggregate snapshot. Partial, pending, estimated and unavailable values remain distinguished. Cumulative tokens are not context-window occupancy.

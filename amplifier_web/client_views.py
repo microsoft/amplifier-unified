@@ -104,6 +104,7 @@ class ClientViews:
                     shell.update(preview=None, reported=None)
                     self.service.shell.put("client", identity, shell)
         self.reconcile(identity)
+        self.selection_revision(identity)
         return self.records[identity]
 
     def reconcile(self, identity):
