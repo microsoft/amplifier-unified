@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.20",
+      "title": "Quiet checks for recorded results",
+      "changes": [
+        "Check explicitly requested results through approved, already connected read-only tools without waking a model while waiting.",
+        "Deliver a single saved background explanation when a result is ready, a check fails or the watch expires, without replaying uncertain work.",
+        "Optionally open an authorized browser result in the original Canvas after rechecking the result, connection and current selection.",
+        "Observation sources require operator approval. This release provides the host capability; individual integrations are enabled separately."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.19",
       "title": "Working voice previews and clearer Smart Tool setup",
       "changes": [
