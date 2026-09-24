@@ -148,7 +148,7 @@ def apply_revision(service, session, result, *, interrupted=False):
     session.update(historyManaged=False, historyLoaded=True, historyLoading=False, streaming='', workers=[], approvals=[])
     for key in ('historyActivity', 'nativeBoundary', 'nativeBoundaryId', 'messageWindow', 'executionWindow', 'error', 'failure', 'health'):
         session.pop(key, None)
-    message = service._message(session, 'user', edit['text'], edit['via'], inputId=edit['operationId'], inputOrigin=edit.get('inputOrigin'), attachments=edit['attachments'])
+    message = service._message(session, 'user', edit['text'], edit['via'], inputId=edit['operationId'], inputOrigin=edit.get('inputOrigin'), attachments=edit['attachments'], **({'replyTo': copy.deepcopy(edit['replyTo'])} if edit.get('replyTo') else {}))
     if interrupted:
         message['delivery'] = {'status': 'unknown'}
     from .execution import ensure_turn

@@ -445,7 +445,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
         visible = _full_fork_view(messages, visible, target_id, datetime.fromisoformat(now).timestamp())
     from .session_files import project_slug
     stamp = (store.directory(target_id) / 'transcript.jsonl').stat()
-    return {"messages":visible,"parentId":source["id"],"forkContext":False,
+    result = {"messages":visible,"parentId":source["id"],"forkContext":False,
             **({"recovery": {"sourceSessionId": source["id"], "mode": "readable_history", "workReplayed": False}, "deferRuntimeUntilInteraction": True} if recovery else {}),
             'runtimeSessionId': target_id, 'nativeIdentity': target_id, 'nativeProject': project_slug(target_workspace),
             **({'workspace': target_workspace, 'location': {'kind': 'managed'}, 'workspaceId': None} if managed else {}),
@@ -455,3 +455,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
                                       and not (row.get('metadata') or {}).get('ephemeral') for row in messages),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") and not reset_model else {})}
+
+    from .message_interactions import fork_annotations
+    fork_annotations(source, result, target_id=target_id)
+    return result

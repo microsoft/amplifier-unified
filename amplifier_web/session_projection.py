@@ -131,6 +131,7 @@ def persist(home, state, cache):
             customized = (session['id'] in retained or session['id'] != native_id
                 or session.get('titleSource') not in {None, 'native'}
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
+                or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))
                 or session.get('recentActivityAt', 0) > baseline)
             if customized:
                 result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True})
