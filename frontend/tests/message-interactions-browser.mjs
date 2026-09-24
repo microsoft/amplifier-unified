@@ -37,7 +37,12 @@ try{
  await page.reload();await page.locator('.a-reply-quote').waitFor();await sent.locator('.a-quoted-source').click();
  await page.waitForFunction(()=>document.activeElement?.dataset?.messageId&&document.activeElement.textContent.includes('Saved message 20:'));
  // Quote an assistant message at phone width and verify touch picker and draft removal.
- await page.setViewportSize({width:390,height:844});const assistant=page.locator('.a-assistant').last();
+ await page.setViewportSize({width:390,height:844});
+ await sent.getByRole('button',{name:'React to message',exact:true}).click();
+ const picker=sent.getByRole('group',{name:'Choose reaction'});await picker.waitFor();
+ const bounds=await picker.boundingBox();assert.ok(bounds.x>=0&&bounds.x+bounds.width<=390);
+ await picker.getByRole('button',{name:'Heart',exact:true}).press('Escape');await picker.waitFor({state:'hidden'});
+ const assistant=page.locator('.a-assistant').last();
  await assistant.getByRole('button',{name:'Reply to message',exact:true}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor();
  if(proof)await page.locator('.a-composer').screenshot({path:join(proof,'mobile-reply-preview.png')});
  await page.getByRole('button',{name:'Remove quoted reply',exact:true}).click();

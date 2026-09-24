@@ -14,3 +14,6 @@
 #amp-one .a-message-interaction-error{flex-basis:100%;font-size:.85em}
 #amp-one .a-message:focus{outline:2px solid var(--a-accent,#18708b);outline-offset:5px;border-radius:.5rem}
 @media(pointer:coarse){#amp-one .a-message-actions .a-icon{width:40px;height:40px;min-height:40px}}
+
+#amp-one .a-user .a-reaction-picker{left:auto;right:0}
+#amp-one .a-reaction-picker[data-below=true]{bottom:auto;top:100%}

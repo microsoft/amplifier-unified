@@ -19,7 +19,7 @@ export function ReplyPreview({quote,sessionId,dispatch}){
 }
 
 export function MessageInteractions({message,sessionId,dispatch}){
- const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [open,setOpen]=useState(false),[below,setBelow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const chosen=message.reactions||[];
  async function action(name,args){
   if(busy)return;setBusy(true);setError('');
@@ -27,8 +27,8 @@ export function MessageInteractions({message,sessionId,dispatch}){
   catch(e){setError(e.message)}finally{setBusy(false)}
  }
  return <><button type="button" className="a-icon" aria-label="Reply to message" title="Reply to message" data-action="message.reply" disabled={busy} onClick={()=>action('message.reply',{})}><Reply/></button><div className="a-reaction-control" onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setOpen(false)}} onKeyDown={e=>{if(e.key==='Escape'){setOpen(false);e.currentTarget.querySelector('button')?.focus()}}}>
-  <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={()=>setOpen(!open)}><Smile/></button>
-  {open&&<div className="a-reaction-picker" role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} disabled={busy} data-action="message.reaction" onClick={async()=>{await action('message.reaction',{emoji,present:!chosen.includes(emoji)});setOpen(false)}}>{emoji}</button>)}</div>}
+  <button type="button" className="a-icon" aria-label="React to message" title="React to message" aria-expanded={open} onClick={e=>{const pane=e.currentTarget.closest('.a-messages')?.getBoundingClientRect();setBelow(e.currentTarget.getBoundingClientRect().top-(pane?.top||0)<110);setOpen(!open)}}><Smile/></button>
+  {open&&<div className="a-reaction-picker" data-below={below} role="group" aria-label="Choose reaction">{reactions.map(([emoji,label])=><button key={emoji} type="button" aria-label={label} aria-pressed={chosen.includes(emoji)} disabled={busy} data-action="message.reaction" onClick={async()=>{await action('message.reaction',{emoji,present:!chosen.includes(emoji)});setOpen(false)}}>{emoji}</button>)}</div>}
  </div>{chosen.map(emoji=><button key={emoji} type="button" className="a-reaction-chip" aria-label={`Remove ${reactions.find(r=>r[0]===emoji)?.[1]||emoji} reaction`} aria-pressed="true" disabled={busy} data-action="message.reaction" onClick={()=>action('message.reaction',{emoji,present:false})}>{emoji}</button>)}{error&&<span className="a-message-interaction-error" role="alert">{error}</span>}</>;
 }
 
