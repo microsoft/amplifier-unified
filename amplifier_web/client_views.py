@@ -208,7 +208,7 @@ class ClientViews:
         record = self.records[identity]
         canvas = record.get('canvas') or {}
         binding = [record.get('selectedSessionId'), record.get('selectedWorkspaceId'),
-                   canvas.get('id'), bool(canvas.get('open'))]
+                   canvas.get('id'), canvas.get('selectedVersion'), bool(canvas.get('open'))]
         if record.get('_selectionBinding') != binding:
             record['_selectionBinding'] = copy.deepcopy(binding)
             record['selectionRevision'] = record.get('selectionRevision', 0) + 1
@@ -225,7 +225,8 @@ class ClientViews:
             canvas = value.get("canvas", {})
             artifact = next((a for a in self.service._state.get("canvasArtifacts", []) if a["id"] == canvas.get("id")), None)
             if artifact and artifact.get("body"):
-                canvas["contentResource"] = artifact["body"]
+                from .canvas_versions import definition
+                canvas["contentResource"] = definition(artifact, canvas.get('selectedVersion'))["body"]
                 canvas.pop("content", None)
                 canvas.pop("surface", None)
             encoded = json.dumps(value)

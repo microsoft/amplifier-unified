@@ -102,6 +102,6 @@ function HtmlPreview({canvas,act}){
 
 function StoredSource({canvas}){
  const [result,setResult]=useState({});
- useEffect(()=>{const controller=new AbortController();setResult({});fetch(clientUrl(`/api/canvas/${canvas.id}/source`),{signal:controller.signal}).then(async response=>{if(!response.ok)throw Error('The saved source could not be loaded.');return response.text()}).then(text=>setResult({text})).catch(error=>{if(error.name!=='AbortError')setResult({error:error.message})});return()=>controller.abort()},[canvas.id]);
+ useEffect(()=>{const controller=new AbortController();setResult({});fetch(clientUrl(`/api/canvas/${canvas.id}/source?version=${canvas.selectedVersion??canvas.revision??1}`),{signal:controller.signal}).then(async response=>{if(!response.ok)throw Error('The saved source could not be loaded.');return response.text()}).then(text=>setResult({text})).catch(error=>{if(error.name!=='AbortError')setResult({error:error.message})});return()=>controller.abort()},[canvas.id,canvas.selectedVersion,canvas.revision]);
  return result.error?<p role="alert">{result.error}</p>:result.text===undefined?<p role="status">Loading saved source…</p>:<CodePreview text={result.text}/>;
 }

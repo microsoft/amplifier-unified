@@ -15,3 +15,7 @@
 #amp-one .a-canvas-file-path>div{padding:8px 0}
 #amp-one .a-canvas-file-path .a-soft{margin:4px 8px 0 0}
 #amp-one .a-canvas-file-path code{display:block;overflow-wrap:anywhere;margin-bottom:8px}
+
+#amp-one .a-resource-view-controls.a-canvas-toolbar label{flex:1 1 230px;min-width:180px;white-space:nowrap}
+#amp-one .a-resource-view-controls.a-canvas-toolbar select{flex:1;max-width:100%;min-width:0}
+#amp-one .a-resource-view-controls [role="status"]{flex-basis:100%;font-size:var(--a-text-base,14px);color:var(--muted)}

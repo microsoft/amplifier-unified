@@ -33,7 +33,6 @@ def visibility(app, open=True):
     ('canvas.reopen', {}),
     ('canvas.select', {'id': 'old-artifact'}),
     ('canvas.tabClose', {'id': 'old-artifact'}),
-    ('canvas.views.open', {'resourceId': 'old-artifact', 'sessionId': 'old-chat'}),
 ])
 async def test_draft_open_actions_refuse_without_creating_session_or_artifact(app, action, args, origin):
     args = visibility(app) if args is None else args

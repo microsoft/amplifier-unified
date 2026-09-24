@@ -85,7 +85,7 @@ class CanvasViews:
         elif (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
                          'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
-              or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
+              or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
               or action in {'canvas.show', 'canvas.openFile', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
@@ -99,7 +99,7 @@ class CanvasViews:
     @staticmethod
     def revision(row):
         # View preferences, reports and transient tool context are not content.
-        return hashlib.sha256(encoded({**{key: row.get(key) for key in ('id', 'kind', 'body', 'url')}, **({'appRevision': row['app']['revision']} if row.get('app') else {})}).encode()).hexdigest()
+        return hashlib.sha256(encoded({**{key: row.get(key) for key in ('id', 'kind', 'body', 'url', 'revision', 'selectedVersion')}, **({'appRevision': row['app']['revision']} if row.get('app') else {})}).encode()).hexdigest()
 
     def preference(self, view_id, row):
         preferences = self.record()['preferences']
@@ -120,6 +120,8 @@ class CanvasViews:
         else:
             fail('Unknown canvas view.')
         row = self.artifact(identity)
+        from .canvas_versions import definition
+        row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
         previous_binding = record.get(view_id + 'Binding')
         visible_binding = previous_binding[2] if record.get('retained') and previous_binding else bool(current.get('open'))
@@ -181,6 +183,10 @@ class CanvasViews:
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
                 'filePaths': paths(self.service.state, row),
+                'selectedVersion': row.get('selectedVersion'),
+                'latestStateRevision': self.artifact(row['id']).get('app', {}).get('stateRevision'),
+                'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),
+                'versions': [{k: item.get(k) for k in ('version', 'title', 'createdAt')} for item in row.get('app', {}).get('versions', row.get('versions', []))],
                 'activation': preference.get('activation'),
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
@@ -290,7 +296,7 @@ class CanvasViews:
             content = canvas.get('url') if canvas['kind'] == 'browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
             if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] == 'babylon'):
                 effects.append({'type': 'clipboard.url' if action == 'canvas.copy' else 'download.url',
-                                'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download'),
+                                'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download') + '?version=' + str(row.get('selectedVersion') or row.get('app', {}).get('revision', row.get('revision', 1))),
                                 'canvasId': row['id'], 'filename': filename(canvas)})
             else:
                 effects.append({'type': 'clipboard.write' if action == 'canvas.copy' else 'download',

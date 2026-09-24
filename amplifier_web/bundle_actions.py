@@ -76,7 +76,7 @@ async def perform(management, action, args):
                 remember(app.state, app.db)
                 target.update(configuration=configuration, status='ready')
                 app.state['sessions'].insert(0, target)
-                fork_artifacts(app.state, sid, target)
+                fork_artifacts(app.state, sid, target, app.db)
                 # A slow fork must not retarget a different chat opened meanwhile.
                 if app.state.get('selectedSessionId') == sid:
                     if app.clients.record() is None:

@@ -61,7 +61,7 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
-    "canvas.show": ("Save a durable artifact in this chat and open a new canvas tab (browser kind takes an http/https url): sandboxed interactive HTML (embedded video/audio via data: or blob: URLs; no remote media), Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, Babylon.js 3D HTML (kind babylon, global BABYLON preloaded), or A2UI snapshot. Local HTML/Babylon files support up to 20 MB; large snapshots are loaded separately from contentResource. Browser previews may be blocked by mixed content or site embedding policies; inspect renderReports and offer canvas.openExternal. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser","babylon"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
+    "canvas.show": ("Save a durable artifact in this chat; direct content opens a new tab, while reopening the same canonical file reuses its tab and versions changes (browser kind takes an http/https url): sandboxed interactive HTML (embedded video/audio via data: or blob: URLs; no remote media), Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, Babylon.js 3D HTML (kind babylon, global BABYLON preloaded), or A2UI snapshot. Local HTML/Babylon files support up to 20 MB; large snapshots are loaded separately from contentResource. Browser previews may be blocked by mixed content or site embedding policies; inspect renderReports and offer canvas.openExternal. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser","babylon"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
     "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"help":{"type":"boolean"},"reload":{"type":"number","minimum":0},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","unverified","error"]},"message":string(2000)},["id","part","status"])),
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
@@ -71,7 +71,7 @@ ACTION_DEFINITIONS = {
     "canvas.openFile": ("Open a local file in Canvas for the currently displayed chat and its unchanged workspace. Missing or out-of-workspace files return unavailable; never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200)}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
-    "canvas.select": ("Reopen a saved artifact in the calling chat. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100)}, ["id"])),
+    "canvas.select": ("Reopen Latest or an exact immutable saved version in the calling chat. Omit version for Latest; version views are read-only. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100),"sessionId":string(200),"version":{"type":"integer","minimum":1}}, ["id"])),
     "canvas.visibility": ("Show or hide this client's retained Canvas viewer without discarding edits. Bind sessionId and canvasId from the current state; optionally address an attached clientId.", schema({"open":{"type":"boolean"},"sessionId":{"type":["string","null"]},"canvasId":{"type":["string","null"]},"clientId":string(200)},["open","sessionId","canvasId"])),
     "canvas.reopen": ("Show this chat's canvas and saved artifacts", schema()),
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
@@ -265,6 +265,8 @@ from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
 from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
+from .canvas_versions import definitions as canvas_version_definitions
+ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
 from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
@@ -634,6 +636,8 @@ class AppService:
         self.portability.sync()
         from .canvas_apps import sync
         sync(self)
+        from .canvas_versions import sync as sync_versions
+        sync_versions(self)
         self._browser_snapshot = None
         self._client_snapshots.clear()
         self._client_snapshot_preferences = {}
@@ -1039,7 +1043,7 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1255,6 +1259,8 @@ class AppService:
                 from .client_observation import update
                 return update(self, action, args, command_id, fingerprint, include_state=include_state)
             opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose'} or (action == 'canvas.show' and not args.get('sessionId'))
+            if action == 'canvas.select' and args.get('sessionId', self.state.get('selectedSessionId')) != self.state.get('selectedSessionId'):
+                raise AppError('The chat changed. Open this saved artifact from its original chat.', 409)
             if action == 'canvas.select' and origin == 'agent' and caller_session_id and self.state.get('selectedSessionId') != caller_session_id:
                 raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
             if opens_selected_canvas and self.state.get('selectedSessionId') is None:
@@ -1363,6 +1369,9 @@ class AppService:
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
                     diagnostic_result = open_file(self, args, origin)
+                elif action.startswith('canvas.versions.'):
+                    from .canvas_versions import command
+                    diagnostic_result = command(self, action, args, origin)
                 elif action.startswith('canvas.apps.'):
                     from .canvas_apps import command
                     diagnostic_result = command(self, action, args, origin)
@@ -1389,10 +1398,11 @@ class AppService:
                     content = canvas.get('url') if canvas.get('kind')=='browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
                     from .canvas_downloads import filename
                     download_name = filename(canvas)
+                    version_query = '?version=' + str(canvas.get('selectedVersion') or canvas.get('app', {}).get('revision', canvas.get('revision', 1)))
                     if action=='canvas.copy' and canvas.get('contentResource'):
-                        effects.append({'type':'clipboard.url','url':'/api/canvas/'+canvas['id']+'/source','canvasId':canvas['id']})
+                        effects.append({'type':'clipboard.url','url':'/api/canvas/'+canvas['id']+'/source'+version_query,'canvasId':canvas['id']})
                     elif action=='canvas.download' and (canvas.get('kind')=='babylon' or canvas.get('contentResource')):
-                        effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download','filename':download_name})
+                        effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download'+version_query,'filename':download_name})
                     else:
                         effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
                         'content':content,'filename':download_name,'mime':'text/plain','canvasId':args['id']})
@@ -1402,7 +1412,10 @@ class AppService:
                     workspace_id=scope(self,sid)[1] if sid else self.state['selectedWorkspaceId']
                     scoped={**self.state,'selectedSessionId':sid,'selectedWorkspaceId':workspace_id}
                     canvas_command(scoped,action,args,origin)
+                    from .canvas_versions import assert_clean, reference
+                    assert_clean(self, scoped['canvas']['id'])
                     remember(scoped,self.db)
+                    diagnostic_result = {'id': scoped['canvas']['id'], 'revision': scoped['canvas'].get('revision', 1), 'reference': reference(scoped['canvas'])}
                     if sid==self.state.get('selectedSessionId') and scoped['selectedWorkspaceId']==self.state['selectedWorkspaceId']:
                         self.state['canvas']=scoped['canvas']
                         self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
@@ -1961,7 +1974,7 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
-                fork_artifacts(self.state,source['id'],session)
+                fork_artifacts(self.state,source['id'],session,self.db)
                 self.outputs.fork(source['id'],session)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
@@ -1984,7 +1997,7 @@ class AppService:
                 artifact_id = self.state.get('canvas', {}).get('id')
                 if action.startswith('canvas.views.'):
                     artifact_id = args.get('resourceId')
-                elif action.startswith('canvas.apps.'):
+                elif action.startswith(('canvas.apps.', 'canvas.versions.')):
                     artifact_id = args.get('id', (diagnostic_result or {}).get('id'))
                 owner_id = args.get('sessionId',self.state.get('selectedSessionId'))
                 if action.startswith('canvas.views.'):
@@ -2838,7 +2851,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith('canvas.apps.'):
+            if args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2903,7 +2916,7 @@ class AppService:
                            '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}
                 if result.get('operationId'):
                     result['read'] = {'action': 'smartTools.readResult', 'args': {'operationId': result['operationId']}}
-            elif args['action'].startswith('canvas.apps.'):
+            elif args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 from .agent_state import surface_context
                 context = surface_context(self.state_context(), session_id, self.clients.records)
             else:

@@ -1,0 +1,54 @@
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--canvas-versions'],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const url=await new Promise((resolve,reject)=>{
+  let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),15000);
+  fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
+  fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}}});
+ });
+ browser=await chromium.launch({headless:true});
+ const page=await browser.newPage({viewport:{width:1500,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ const send=async text=>{await action('conversation.send',{text});await expect.poll(async()=>{const value=await state();return value.sessions.find(s=>s.id===value.selectedSessionId)?.status}).not.toBe('working')};
+ await action('session.create');
+ await send('Create the first version');
+ await action('view.update',{patch:{canvasControlsPinned:true,draft:'Keep this unsent draft'}});
+ const first=(await action('canvas.show',{kind:'markdown',title:'Versioned plan',content:'# Original plan\n\nKeep the first facts.'})).result;
+ await send(`[Open original plan](${first.reference})`);
+ await action('canvas.versions.revise',{id:first.id,expectedRevision:1,content:'# Revised plan\n\nKeep the second facts.'});
+ await action('view.update',{patch:{draft:'Keep this unsent draft'}});
+ await expect(page.getByRole('tab',{name:'Versioned plan',exact:true})).toHaveCount(1);
+ await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Open original plan',exact:true}).click();
+ await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('1');
+ await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
+ assert.equal((await state()).view.draft,'Keep this unsent draft');
+ await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('1');
+ await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
+ await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Versioned plan · Version 1',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Original plan',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Restore as new version',exact:true}).click();
+ await expect(page.getByRole('combobox',{name:'Artifact version',exact:true})).toHaveValue('latest');
+ await expect(page.getByRole('option',{name:'Latest · Version 3',exact:true})).toHaveCount(1);
+ const history=(await action('canvas.versions.inspect',{id:first.id,version:2,includeSource:true})).result;
+ assert.equal(history.source.content,'# Revised plan\n\nKeep the second facts.');
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
+ await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
+ assert.equal((await state()).view.draft,'Keep this unsent draft');
+ assert.equal((await state()).canvasArtifacts.length,1);
+ assert.deepEqual(errors,[]);
+ await page.screenshot({path:'/tmp/canvas-versions-browser.png',fullPage:true});
+ console.log('Canvas saved versions: exact Markdown/turn links, single tab, Latest, reload, restore and unsent draft passed');
+}finally{await browser?.close();fixture.kill()}

@@ -81,3 +81,28 @@ async def test_http_download_name_and_body_survive_source_deletion(authenticated
     assert response.status == 200
     assert response.headers['Content-Disposition'] == "attachment; filename*=UTF-8''" + quote(path.name, safe='')
     assert await response.read() == body.encode()
+
+
+async def test_exact_download_and_source_urls_do_not_follow_later_revisions(authenticated_client, tmp_path):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    host = await create_app(tmp_path/'app', preload_providers=False, workspace=tmp_path,
+                            runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(host)
+    service = host['service']
+    await service.dispatch('session.create', {})
+    content = '<h1>Original</h1><!--' + 'x' * 1_100_000 + '-->'
+    path = tmp_path/'large.html'
+    path.write_text(content)
+    result = await service.dispatch('canvas.show', {'kind':'auto','path':str(path)})
+    identity = result['result']['id']
+    effects = [(await service.dispatch(action, {'id':identity}))['effects'][0] for action in ('canvas.copy','canvas.download')]
+    await service.dispatch('canvas.versions.revise', {'id':identity,'expectedRevision':1,'content':'<h1>Newer</h1>'})
+    for effect in effects:
+        assert effect['url'].endswith('?version=1')
+        response = await client.get(effect['url'])
+        assert response.status == 200
+        assert await response.text() == content
+    for version in ('999','invalid','0'):
+        response = await client.get(f'/api/canvas/{identity}/source?version={version}')
+        assert response.status in {400,404}
