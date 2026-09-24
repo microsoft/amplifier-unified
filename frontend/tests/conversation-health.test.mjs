@@ -11,13 +11,13 @@ test('details and recovery use shared actions with immediate pending feedback an
  const session={id:'chat',runtimeSessionId:'native',status:'error',workspace:'/workspace',bundle:'work',error:'Manager turn failed'};
  let root,operation;await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act}))});
  // Read-only inspection starts when the details component opens.
- assert.deepEqual(calls,[{name:'session.inspect',args:{id:'chat'}}]);
+ assert.deepEqual(calls,[{name:'capacity.read',args:{sessionId:'chat',limit:1}},{name:'session.inspect',args:{id:'chat'}}]);
  assert.equal(root.root.findByProps({'data-action':'session.recover'}).props.disabled,true);
  await renderAct(async()=>{release({accepted:true,result:{failure:{summary:'Invalid image',errorType:'InvalidRequestError'}}});await Promise.resolve()});
  assert.match(JSON.stringify(root.toJSON()),/Invalid image/);
  await renderAct(async()=>{operation=root.root.findByProps({'data-action':'session.recover'}).props.onClick()});
  await renderAct(async()=>root.root.findByProps({'data-action':'session.recover'}).props.onClick());
- assert.equal(calls.length,2);assert.deepEqual(calls[1],{name:'session.recover',args:{id:'chat'}});
+ assert.equal(calls.length,3);assert.deepEqual(calls[2],{name:'session.recover',args:{id:'chat'}});
  await renderAct(async()=>{release({accepted:false});await operation});
  assert.match(JSON.stringify(root.toJSON()),/Could not create/);await renderAct(async()=>root.unmount());
 });
@@ -74,10 +74,10 @@ test('copy refreshes diagnostics on demand after status changes, with no backgro
  await renderAct(async()=>{root=create(React.createElement(ConversationDetails,{session,act}))});
  status='stopped';
  await renderAct(async()=>root.update(React.createElement(ConversationDetails,{session:{...session,status},act})));
- assert.deepEqual(calls,['session.inspect']);
+ assert.deepEqual(calls,['capacity.read','session.inspect']);
  const button=root.root.findAllByType('button').find(button=>button.children.includes('Copy diagnostics'));
  await renderAct(async()=>button.props.onClick());
- assert.deepEqual(calls,['session.inspect','session.inspect']);
+ assert.deepEqual(calls,['capacity.read','session.inspect','session.inspect']);
  assert.equal(JSON.parse(copied[0]).status,'stopped');
  assert.equal(JSON.parse(copied[0]).capturedAt,1790182800);
  await renderAct(async()=>root.unmount());

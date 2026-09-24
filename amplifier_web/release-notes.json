@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.23",
+      "title": "Clearer workspaces, Canvas quotes and feedback follow-ups",
+      "changes": [
+        "Navigate Home, Recent chats and workspace pages, with a workspace-aware composer and clearer chat activity.",
+        "Select Markdown or plain text in Canvas and add an exact saved-version quote to the current draft. Passive selection stays private and nothing is sent automatically.",
+        "Open Chat details for cumulative recorded tokens, costs and provider/model breakdowns; copy the aggregate usage snapshot with missing or estimated values labeled.",
+        "Check unconfirmed feedback delivery without resending it, save correction drafts, publish correction comments, and close or reopen your own reports through shared user and agent actions.",
+        "Keep original feedback and maintainer edits intact, retain durable change receipts and deduplicate repeated requests."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.22",
       "title": "Durable Canvas documents and saved versions",
       "changes": [

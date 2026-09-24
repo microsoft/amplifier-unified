@@ -58,13 +58,13 @@ def definitions(schema, string):
     }
 
 
-async def github_api(endpoint, payload):
+async def github_api(endpoint, payload, *, method=None):
     """Structured stdin keeps user text out of shell evaluation and process args."""
     executable = shutil.which("gh")
     if not executable:
         raise FileNotFoundError("GitHub CLI is not installed")
     child = await asyncio.create_subprocess_exec(
-        executable, "api", "--hostname", "github.com", "--method", "POST" if payload is not None else "GET",
+        executable, "api", "--hostname", "github.com", "--method", method or ("POST" if payload is not None else "GET"),
         endpoint, *(["--input", "-"] if payload is not None else []),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         env={**os.environ, "GH_PROMPT_DISABLED": "1", "GH_PAGER": "cat"},
