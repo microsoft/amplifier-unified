@@ -8,6 +8,15 @@ const state={revision:1,shellDataKey:'navigation-1',shellChangeToken:'host:0',se
 test('unrelated publications do not query shell again',()=>{
  assert.equal(shellRefreshKey(state),shellRefreshKey({...state,revision:2,diagnostics:{sampleCount:42}}));
  assert.equal(shellRefreshKey(state),shellRefreshKey({...state,sessions:[{...state.sessions[0],streaming:'Delta'}]}));
+ assert.equal(shellRefreshKey(state),shellRefreshKey({...state,view:{draft:'Typing',workWorkspaceTab:'files'}}));
+});
+
+test('browsing another workspace refreshes shell without changing the active chat',()=>{
+ const first={...state,view:{workSurface:'workspace',workWorkspaceId:'work'}};
+ const second={...first,view:{...first.view,workWorkspaceId:'other'}};
+ assert.notEqual(shellRefreshKey(first),shellRefreshKey(second));
+ assert.notEqual(shellRefreshKey(second),shellRefreshKey({...second,view:{...second.view,workSurface:'chats'}}));
+ assert.notEqual(shellRefreshKey(first),shellRefreshKey({...first,view:{...first.view,workSurface:'chat'}}));
 });
 
 test('navigation, module changes, client selection and visible summaries invalidate shell',()=>{
