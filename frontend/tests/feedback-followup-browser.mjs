@@ -60,6 +60,8 @@ try{
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'){const command=request.postDataJSON();if(command?.action==='feedback.comment')pending=command.args}});
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await page.getByRole('button',{name:'App options',exact:true}).click();
  await page.getByRole('button',{name:'Send feedback',exact:true}).click();
  await page.getByRole('button',{name:'Check delivery',exact:true}).click();
  await page.getByText('No matching feedback was found in this search. Delivery remains unknown; nothing was resent.',{exact:true}).waitFor();
@@ -72,6 +74,8 @@ try{
  const other=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  other.on('pageerror',error=>errors.push(error.message));
  await other.goto(vite.resolvedUrls.local[0]);await other.waitForSelector('#amp-one');
+ await other.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await other.getByRole('button',{name:'App options',exact:true}).click();
  await other.getByRole('button',{name:'Send feedback',exact:true}).click();
  await other.getByLabel('Submitted report',{exact:true}).selectOption('original-feedback');
  await other.getByLabel('Add a comment',{exact:true}).fill('Unsent draft on the other browser.');
