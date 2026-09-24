@@ -84,7 +84,7 @@
 #amp-one.a-approachable-shell .a-file-actions-menu{position:relative;float:right;font-size:12px;margin:2px 0}
 #amp-one.a-approachable-shell .a-file-actions-menu>summary,#amp-one.a-approachable-shell .a-viewer-options>summary{cursor:pointer;color:var(--a-muted);padding:6px}
 #amp-one.a-approachable-shell .a-file-actions-menu>.a-canvas-actions{position:absolute;right:0;top:100%;width:170px;display:flex;flex-direction:column;align-items:stretch;padding:9px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:12px;z-index:8;box-shadow:0 12px 24px #0003}
-#amp-one.a-approachable-shell .a-canvas-file-path{clear:both;font-size:11px;margin:4px 0;color:var(--a-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one.a-approachable-shell .a-canvas-location>.a-canvas-file-path{clear:both;font-size:11px;margin:4px 0;color:var(--a-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one.a-approachable-shell .a-viewer-options{font-size:11px}
 #amp-one.a-approachable-shell .a-chat-overview{padding:10px 24px 24px;font-size:14px;line-height:1.6}
 #amp-one.a-approachable-shell .a-chat-overview>section{padding:20px 0;border-bottom:1px solid var(--a-line)}
@@ -149,7 +149,6 @@
 #amp-one.a-approachable-shell .a-canvas-view-tools .a-canvas-toolbar{padding:5px 0;gap:4px;flex-wrap:wrap}
 #amp-one.a-approachable-shell .a-canvas-view-tools .a-soft{font-size:12px;min-height:28px;padding:4px 7px}
 #amp-one.a-approachable-shell .a-canvas-view-tools .a-icon{width:28px;height:28px}
-#amp-one.a-approachable-shell .a-canvas-view-tools .a-canvas-result.success{display:none}
 #amp-one.a-approachable-shell .a-viewer-options>summary{padding:4px 0}
 
 #amp-one.a-approachable-shell .a-file-actions-menu[open]>.a-canvas-actions{position:static;box-shadow:none;margin-top:6px}
