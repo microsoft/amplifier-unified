@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.19",
+      "title": "Working voice previews and clearer Smart Tool setup",
+      "changes": [
+        "Play voice samples within the browser media policy, trim startup silence and reuse recent samples for faster repeat previews.",
+        "Use detected host credentials by default when adding AI connections, with a separate private key still available.",
+        "Keep Smart Tool setup instructions with the selected installation and give advanced setup a full-width view."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.18",
       "title": "Open files from chat and preserve Canvas filenames",
       "changes": [
