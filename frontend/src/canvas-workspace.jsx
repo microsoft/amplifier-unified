@@ -1,6 +1,5 @@
 import {CanvasControl,CanvasViewControls} from './canvas-controls';
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {PanelsTopLeft,X} from 'lucide-react';
 import {request} from './api';
 import {CanvasAppViewer} from './canvas-app-viewer';
 import {CanvasViewer} from './canvas-viewer';
@@ -70,40 +69,30 @@ function Renderer({view,canvas,dispatch,recovery}){
 }
 
 function ResourceView({view,state,dispatch,recovery}){
- const [loaded,setLoaded]=useState(null),[error,setError]=useState('');
- const targetKey=JSON.stringify(targetOf(view));
- const isPrimary=view.viewId==='primary';
- useEffect(()=>{
-  if(isPrimary||view.error)return;
-  const controller=new AbortController();setLoaded(null);setError('');
-  request(`/api/canvas/views/${view.viewId}/resource?`+new URLSearchParams(targetOf(view)),{signal:controller.signal}).then(setLoaded).catch(error=>{if(error.name!=='AbortError')setError(error.message)});
-  return()=>controller.abort();
- },[targetKey,isPrimary,view.error]);
- const canvas=useMemo(()=>{
-  const source=isPrimary?state.canvas:loaded;
-  return source?{...source,open:!!state.canvas?.open,...(view.app?{app:view.app}:{}),...targetOf(view),viewId:view.viewId,view:view.view||source.view,renderReports:view.renderReports,...(!isPrimary?{document:view.document,interaction:view.interaction,events:view.events}:{})}:null;
- },[isPrimary,state.canvas,loaded,view]);
+ const [error,setError]=useState('');
+ const canvas=useMemo(()=>state.canvas?{...state.canvas,...(view.app?{app:view.app}:{}),...targetOf(view),view:view.view||state.canvas.view,renderReports:view.renderReports}:null,[state.canvas,view]);
  const run=async(action,args)=>{try{const result=await dispatch(action,args);setError(result?.result?.status==='deferred'?result.result.reason:'')}catch(error){setError(error.message)}};
- if(view.error)return <section className="a-resource-view" role="alert">{view.error}<button type="button" onClick={()=>run('canvas.views.close',targetOf(view))}>Close unavailable view</button></section>;
- return <CanvasViewControls label={isPrimary?'Primary artifact controls':'Secondary artifact controls'}><section className="a-resource-view" data-canvas-view={view.viewId} aria-label={isPrimary?'Primary artifact view':'Secondary artifact view'}>
-  <CanvasControl><details className="a-viewer-options"><summary>Viewer options</summary><div className="a-resource-view-controls a-canvas-toolbar">
-   {!isPrimary&&<strong title={view.resource.title}>{view.resource.title}</strong>}
-   <label>{isPrimary?'Open with':'Secondary viewer'}<select aria-label={isPrimary?'Open with':'Open secondary with'} value={view.renderer} onFocus={()=>dispatch('canvas.views.inspect',{}).catch(()=>{})} onChange={event=>run('canvas.views.renderer',{...targetOf(view),renderer:event.target.value})}>
+ return <CanvasViewControls label="Artifact controls"><section className="a-resource-view" data-canvas-view={view.viewId} aria-label="Artifact view">
+  <CanvasControl><div className="a-resource-view-controls a-canvas-toolbar">
+   {!!view.versions?.length&&<><label>Version<select aria-label="Artifact version" value={view.selectedVersion??'latest'} onChange={event=>run('canvas.select',{id:view.resourceId,...(event.target.value==='latest'?{}:{version:Number(event.target.value)})})}>
+    <option value="latest">Latest · Version {view.latestVersion}</option>
+    {view.versions.slice().reverse().map(version=><option key={version.version} value={version.version}>Version {version.version}{version.createdAt?' · '+new Date(version.createdAt*1000).toLocaleString():''}</option>)}
+   </select></label>{view.selectedVersion!=null&&<><span role="status">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}</span><button type="button" className="a-link" onClick={()=>run('canvas.select',{id:view.resourceId})}>Go to Latest</button>{canvas?.app&&<button type="button" className="a-soft" onClick={()=>run('canvas.apps.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion,expectedStateRevision:view.latestStateRevision})}>Restore as new version</button>}{!canvas?.app&&!['mcp-app','browser'].includes(canvas?.kind)&&<button type="button" className="a-soft" onClick={()=>run('canvas.versions.restore',{id:view.resourceId,sessionId:canvas.sessionId,version:view.selectedVersion,expectedRevision:view.latestVersion})}>Restore as new version</button>}</>}</>}
+   <label>Open with<select aria-label="Open with" value={view.renderer} onFocus={()=>dispatch('canvas.views.inspect',{}).catch(()=>{})} onChange={event=>run('canvas.views.renderer',{...targetOf(view),renderer:event.target.value})}>
     {!view.available&&<option value={view.renderer}>Unavailable renderer</option>}
     {view.choices.map(choice=><option key={choice.id} value={choice.id}>{choice.label}</option>)}
    </select></label>
-   {isPrimary&&view.resource.kind!=='mcp-app'&&<button type="button" className="a-icon" aria-label="Open a second view" onClick={()=>run('canvas.views.open',{resourceId:view.resourceId,sessionId:view.resource.sessionId??null})}><PanelsTopLeft/></button>}
-   {!isPrimary&&<button type="button" className="a-icon" aria-label="Close secondary view" onClick={()=>run('canvas.views.close',targetOf(view))}><X/></button>}
-  </div></details></CanvasControl>
+   {view.filePaths?.absolute&&<details className="a-canvas-file-path"><summary>File path</summary><div><p>On the app server</p><code>{view.filePaths.absolute}</code><button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'absolute'}})}>Copy absolute path</button>{view.filePaths.relative&&<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'relative'}})}>Copy relative path</button>}</div></details>}
+  </div></CanvasControl>
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}
-  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery}/>:<p role="status">Loading saved artifact…</p>}</div>
+  <div className="a-resource-renderer">{canvas?.app?<CanvasAppViewer key={view.resourceId+':'+(view.selectedVersion??'latest')} canvas={canvas} dispatch={dispatch}/>:canvas?<Renderer key={view.resourceId+':'+view.resourceRevision+':'+view.generation} view={view} canvas={canvas} dispatch={dispatch} recovery={recovery}/>:<p role="status">Loading saved artifact…</p>}</div>
  </section></CanvasViewControls>;
 }
 
 export function CanvasWorkspace({state,dispatch,hidden=false}){
- const retained=useRef(new Map()),allViews=state.canvasWorkspace?.views||[];
- // Keep only the current two viewer slots. Do not initialize a newly selected
- // hidden artifact, but retain a mounted secondary editor across chat changes.
+ const retained=useRef(new Map()),allViews=(state.canvasWorkspace?.views||[]).filter(view=>view.viewId==='primary');
+ // Do not initialize a newly selected hidden artifact. Retain the mounted
+ // viewer while Library is open so local edits survive passive navigation.
  for(const id of retained.current.keys())if(!allViews.some(view=>view.viewId===id))retained.current.delete(id);
  const views=allViews.filter(view=>{
   if(state.canvas?.open)retained.current.set(view.viewId,view.resourceId);
@@ -111,5 +100,5 @@ export function CanvasWorkspace({state,dispatch,hidden=false}){
  });
  const recovery=typeof location!=='undefined'&&new URLSearchParams(location.search).get('shell')==='recovery';
  // Passive Library navigation must not destroy renderer-local edits or frames.
- return <div className="a-canvas-workspace" hidden={hidden} inert={hidden} data-split={views.length>1}>{views.map(view=><ResourceView key={view.viewId} view={view} state={state} dispatch={dispatch} recovery={recovery}/>)}</div>;
+ return <div className="a-canvas-workspace" hidden={hidden} inert={hidden}>{views.map(view=><ResourceView key={view.viewId} view={view} state={state} dispatch={dispatch} recovery={recovery}/>)}</div>;
 }

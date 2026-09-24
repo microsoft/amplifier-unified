@@ -2,7 +2,20 @@
 
 Compared on 2026-09-23. Main was freshly fetched at `cf535c3d7afd701392e0d28646baca70a3aecf2b` (0.20.21). The isolated Spark-2 trial starts from `51dfcd5a92e450efcde90fbbe5f497348de8dab2` (0.20.20). This is a source and journey audit, not a claim that every integration has been exercised in the trial.
 
-## Changes made in this revision
+## Integration for release
+
+The release candidate integrates main `f2286ab9` (0.20.22). The inventory below preserves the original audit; this section supersedes its outstanding integration notes.
+
+- Chat actions now have one **Chat details** destination, containing naming, export, diagnostics/recovery and worker actions. The workspace search has one composite focus indicator.
+- Main's single-viewer Canvas, file path copying, immutable versions and provider diagnostics are integrated without replacing their behavior.
+- Call and screen-sharing controls now live outside the hidden conversation surface. Browsing during active work also exposes a scoped Stop action and Back to chat.
+- Quiet navigation retains discovery/loading/error notices and refresh; a conditional issue notice links to All chats. App options and collapsed navigation expose aggregate unread attention, with Ready for you reachable from App options.
+- The explicit Show paths preference applies to compact workspace shortcuts. Menu keyboard focus enters the options, Escape returns to the trigger, and leaving the menu dismisses it.
+- Replacement navigation components remain in their registered slots. The built-in main-area browser explains its dependency and offers the existing standard-navigation recovery route if Chats is replaced. This is a compatibility boundary, not a promise to render third-party components as workspace pages.
+
+The header conversation dropdown remains intentionally replaced by sidebar navigation and the full chat browser. Mockup-only features listed below remain out of scope. No new session-membership database or implicit shared-folder writer coordination is introduced.
+
+## Changes made in the earlier revision
 
 - Removed the header's duplicate Chat controls. Model, effort, bundle and Chat controls remain in the composer.
 - Collapsing navigation removes it from layout, focus and the accessibility tree. The open-navigation button moves to the header. No hover rail remains.

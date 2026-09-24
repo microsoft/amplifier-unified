@@ -334,6 +334,7 @@ def canvas_command(state, action, args, origin):
         except UnicodeDecodeError:
             _error("This file is not UTF-8 text. Choose an image preview for images.")
         canvas["path"] = str(path)
+        canvas["workspacePath"] = str(root)
         canvas["title"] = args.get("title") or path.name
     elif kind == "image":
         content = args.get("content", "")
@@ -351,4 +352,7 @@ def canvas_command(state, action, args, origin):
         canvas["content"] = content
     if kind in {'mermaid', 'dot'} and len(canvas.get('content', '')) > 50_000:
         _error('Diagrams must be 50,000 characters or smaller.')
+    from .canvas_versions import match_file
+    match_file(state, canvas)
+    canvas['_versionWrite'] = True
     state["canvas"] = canvas

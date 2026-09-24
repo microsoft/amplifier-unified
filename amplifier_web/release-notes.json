@@ -2,6 +2,35 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.22",
+      "title": "Durable Canvas documents and saved versions",
+      "changes": [
+        "Keep repeated opens of the same file in one Canvas tab, with a saved version whenever its contents change.",
+        "Choose Latest or an earlier version, open the exact version shared in chat, and restore an older document as a new version without changing history.",
+        "Let agents inspect and revise a saved document by its identity, with protection against stale edits and unsaved viewer input.",
+        "Retain Smart Tool presentation snapshots across refreshes and reconnects; reopening the same completed operation reuses its tab. Tools can identify related presentations across separate calls.",
+        "Update the OpenAI provider component for multi-image attachment compatibility with completed computer-tool history. The provider fix preserves images and recorded actions without executing them again."
+      ],
+      "notices": [
+        {
+          "id": "openai-component-update",
+          "title": "Image fix requires the provider update",
+          "detail": "The OpenAI image-attachment fix is delivered by the provider component. Updating only the application does not update every conversation worker. Some older compacted computer-use histories still need separate recovery.",
+          "action": "Let Updates finish the included-components stage before trying attachments again."
+        }
+      ]
+    },
+    {
+      "version": "0.20.21",
+      "title": "Simpler Canvas and clearer provider checks",
+      "changes": [
+        "Use one Canvas viewer per browser, removing the split-view controls while keeping saved artifacts and tabs.",
+        "Copy an opened file\u2019s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
+        "Explain common provider-check runtime failures, including dependency builds, imports, network trust, DNS, permissions and disk space, without exposing private subprocess logs."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.20",
       "title": "Quiet checks for recorded results",
       "changes": [

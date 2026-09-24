@@ -171,13 +171,15 @@ def sync(service):
     for record in [service._state, *service.clients.records.values()]:
         canvas = record.get('canvas', {})
         row = rows.get(canvas.get('id'))
-        if row and (canvas.get('app', {}).get('revision'), canvas.get('app', {}).get('stateRevision'), canvas.get('contentResource')) != (row['app']['revision'], row['app']['stateRevision'], row['contentResource']):
+        if row and canvas.get('selectedVersion') is None and (canvas.get('app', {}).get('revision'), canvas.get('app', {}).get('stateRevision'), canvas.get('contentResource')) != (row['app']['revision'], row['app']['stateRevision'], row['contentResource']):
             canvas.update({k: copy.deepcopy(row[k]) for k in ('title', 'app', 'contentResource')})
             canvas.pop('content', None)
 
 
 def snapshot(row, db, include_source=False):
     result = {k: copy.deepcopy(row[k]) for k in ('id', 'title', 'sessionId', 'workspaceId', 'app')}
+    from .canvas_versions import reference
+    result['reference'] = reference(row)
     result['source'] = copy.deepcopy(row['body'])
     if include_source:
         result['content'] = resource(db, row['body']['$resource'])['content']
@@ -202,7 +204,9 @@ def command(service, action, args, origin):
                'messageId': next((m['id'] for m in reversed(owner.get('messages', [])) if m.get('role') == 'user'), None),
                'body': body, 'contentResource': body, 'tabOpen': True,
                'app': {'revision': 1, 'stateRevision': 0, 'manifest': spec, 'state': value,
-                       'versions': [{'version': 1, 'body': body, 'title': args['title']}], 'events': [], 'requests': []}}
+                       'versions': [{'version': 1, 'body': body, 'title': args['title'], 'stateResource': put(db, {'state': value, 'stateRevision': 0}), 'createdAt': time.time()}], 'events': [], 'requests': []}}
+        from .canvas_versions import publication
+        publication(row, state, 1)
         state.setdefault('canvasArtifacts', []).append(row)
         if sid == state.get('selectedSessionId') and row['workspaceId'] == state.get('selectedWorkspaceId'):
             from .canvas_library import load
@@ -218,7 +222,7 @@ def command(service, action, args, origin):
                             'dirty': bool(preference.get('dirty')), 'renderStatus': preference.get('activation')}
                            for identity, client in service.clients.records.items()
                            for key, preference in client.get('canvasViews', {}).get('preferences', {}).items()
-                           if key.endswith(':' + row['id'])]
+                           if key == 'primary:' + row['id']]
 
         if args.get('requestId'):
             request = next((r for r in row['app']['requests'] if r['id'] == args['requestId']), None)
@@ -226,13 +230,15 @@ def command(service, action, args, origin):
                 fail('This host request is unavailable.', 404)
             result['requestInput'] = resource(db, request['input']['$resource'])
         return result
+    if state.get('canvas', {}).get('id') == row['id'] and state['canvas'].get('selectedVersion') is not None and name not in {'revise', 'restore'}:
+        fail('This saved version is read-only. Select Latest before changing the surface.', 409)
     app = copy.deepcopy(row['app'])
     if args['expectedRevision'] != app['revision'] or args['expectedStateRevision'] != app['stateRevision']:
         fail('The surface changed. Inspect it and retry with current revisions.', 409)
     if name in {'revise', 'restore'}:
         for client in service.clients.records.values():
             for key, preference in client.get('canvasViews', {}).get('preferences', {}).items():
-                if key.endswith(':' + row['id']) and preference.get('dirty'):
+                if key == 'primary:' + row['id'] and preference.get('dirty'):
                     fail('Finish or cancel the surface edit before refining it. Inspect this surface for dirty view client IDs; save its unfinished input before retrying.', 409)
         if name == 'restore':
             version = next((v for v in app['versions'] if v['version'] == args['version']), None)
@@ -247,7 +253,9 @@ def command(service, action, args, origin):
         validate(value, spec['stateSchema'])
         body = put(db, {'content': content, 'manifest': spec})
         app.update(revision=app['revision'] + 1, manifest=spec, state=value)
-        app['versions'] = (app['versions'] + [{'version': app['revision'], 'body': body, 'title': title}])[-20:]
+        app['versions'] = app['versions'] + [{'version': app['revision'], 'body': body, 'title': title, 'stateResource': put(db, {'state': value, 'stateRevision': app['stateRevision'] + 1}), 'createdAt': time.time()}]
+        from .canvas_versions import publication
+        publication(row, state, app['revision'])
         for request in app['requests']:
             if request['status'] == 'pending':
                 request['status'] = 'superseded'
@@ -302,4 +310,7 @@ def command(service, action, args, origin):
     app['stateRevision'] += 1
     row['app'] = app
     sync(service)
+    if name == 'restore' and state.get('canvas', {}).get('id') == row['id']:
+        from .canvas_library import load
+        load(state, db, row['id'], open_panel=state['canvas'].get('open', False))
     return snapshot(row, db)

@@ -1,8 +1,6 @@
-"""Client-local renderer choices and two explicitly addressed artifact views.
+"""Client-local renderer choices for the selected artifact.
 
-Artifacts and tool bindings stay in the existing canvas library. The primary
-view follows its selection; the secondary view pins one ordinary artifact.
-MCP Apps retain their existing single active binding per client.
+Saved artifacts remain in the library; each client has one Canvas viewer.
 """
 from __future__ import annotations
 
@@ -24,12 +22,10 @@ BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': 
 
 
 def definitions(schema, string):
-    target = {'viewId': {'enum': ['primary', 'secondary']}, 'resourceId': IDENTITY,
+    target = {'viewId': {'enum': ['primary']}, 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
-        'canvas.views.inspect': ('Inspect both explicitly scoped artifact views and available renderers.', schema()),
-        'canvas.views.open': ('Pin an existing ordinary artifact beside the primary view without selecting its chat.', schema({'resourceId': IDENTITY, 'sessionId': {'type': ['string', 'null'], 'maxLength': 200}})),
-        'canvas.views.close': ('Close the secondary view; retain its artifact and saved preferences.', schema(target)),
+        'canvas.views.inspect': ('Inspect the selected artifact view and available renderers.', schema()),
         'canvas.views.renderer': ('Select a validated renderer for this exact artifact/view generation.', schema({**target, 'renderer': string(100)})),
         'canvas.views.recover': ('Restore this view to its built-in renderer; retain the saved artifact.', schema(target)),
         'canvas.views.command': ('Invoke an explicitly targeted renderer control without retargeting the selected conversation.', schema({**target, 'action': string(100), 'args': {'type': 'object'}}, [*target, 'action', 'args'])),
@@ -54,7 +50,7 @@ class CanvasViews:
         client = self.service.clients.record()
         if client is None:
             fail('Attach a client before addressing canvas views.', 409)
-        return client.setdefault('canvasViews', {'secondary': None, 'preferences': {}})
+        return client.setdefault('canvasViews', {'preferences': {}})
 
     def guard_transition(self, action, args):
         """Reject parent actions before they can discard a mounted dirty view.
@@ -70,7 +66,7 @@ class CanvasViews:
                 return
             views = client.get('canvasViews', {})
             for view_id in view_ids:
-                identity = client['canvas'].get('id') if view_id == 'primary' else views.get('secondary')
+                identity = client['canvas'].get('id')
                 if identity and views.get('preferences', {}).get(view_id + ':' + identity, {}).get('dirty'):
                     raise AppError('Finish or cancel the ' + view_id + ' viewer edit before leaving it. '
                                    'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
@@ -79,17 +75,17 @@ class CanvasViews:
         if action == 'session.delete':
             for client in self.service.clients.records.values():
                 if client.get('selectedSessionId') == args['id']:
-                    check(client, ('primary', 'secondary'))
+                    check(client, ('primary',))
             return
         client = self.service.clients.record()
         if client is None:
             return
         if action == 'canvas.close':
-            check(client, ('primary', 'secondary'))
+            check(client, ('primary',))
         elif (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
                          'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
-              or action == 'canvas.select' and args['id'] != client.get('canvas', {}).get('id')
+              or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
               or action in {'canvas.show', 'canvas.openFile', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
@@ -103,7 +99,7 @@ class CanvasViews:
     @staticmethod
     def revision(row):
         # View preferences, reports and transient tool context are not content.
-        return hashlib.sha256(encoded({**{key: row.get(key) for key in ('id', 'kind', 'body', 'url')}, **({'appRevision': row['app']['revision']} if row.get('app') else {})}).encode()).hexdigest()
+        return hashlib.sha256(encoded({**{key: row.get(key) for key in ('id', 'kind', 'body', 'url', 'revision', 'selectedVersion')}, **({'appRevision': row['app']['revision']} if row.get('app') else {})}).encode()).hexdigest()
 
     def preference(self, view_id, row):
         preferences = self.record()['preferences']
@@ -121,13 +117,11 @@ class CanvasViews:
                 record['primaryBinding'] = None
                 fail('The primary view has no selected artifact.', 404)
             identity = current['id']
-        elif view_id == 'secondary':
-            identity = self.record()['secondary']
-            if not identity:
-                fail('The secondary view is closed.', 404)
         else:
             fail('Unknown canvas view.')
         row = self.artifact(identity)
+        from .canvas_versions import definition
+        row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
         previous_binding = record.get(view_id + 'Binding')
         visible_binding = previous_binding[2] if record.get('retained') and previous_binding else bool(current.get('open'))
@@ -169,6 +163,7 @@ class CanvasViews:
         return result
 
     def summary(self, view_id):
+        from .canvas_paths import paths
         row, preference = self.resolve(view_id)
         choices = self.choices(row['kind'])
         renderer = next((r for r in choices if r['id'] == preference['renderer']), None)
@@ -187,6 +182,11 @@ class CanvasViews:
                 'generation': preference['generation'], 'renderer': preference['renderer'], 'dirty': preference['dirty'],
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
+                'filePaths': paths(self.service.state, row),
+                'selectedVersion': row.get('selectedVersion'),
+                'latestStateRevision': self.artifact(row['id']).get('app', {}).get('stateRevision'),
+                'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),
+                'versions': [{k: item.get(k) for k in ('version', 'title', 'createdAt')} for item in row.get('app', {}).get('versions', row.get('versions', []))],
                 'activation': preference.get('activation'),
                 **({'app': copy.deepcopy(row['app'])} if row.get('app') else {}),
                 'view': copy.deepcopy(self.service.state['canvas'].get('view', {})) if view_id == 'primary' else copy.deepcopy(preference['view']),
@@ -195,15 +195,10 @@ class CanvasViews:
 
     def project(self):
         from .service import AppError
-        result = {'views': []}
-        for view_id in ('primary', 'secondary'):
-            try:
-                result['views'].append(self.summary(view_id))
-            except AppError as exc:
-                if view_id == 'secondary' and self.record()['secondary']:
-                    result['views'].append({'viewId': view_id, 'resourceId': self.record()['secondary'],
-                                           'resourceRevision': 'unavailable', 'generation': 0, 'error': str(exc)})
-        return result
+        try:
+            return {'views': [self.summary('primary')]}
+        except AppError:
+            return {'views': []}
 
     def canvas(self, view_id):
         from .state_storage import resource
@@ -230,33 +225,10 @@ class CanvasViews:
             return self.service.surface_context.observe(args), []
         if action == 'canvas.views.inspect':
             return self.project(), []
-        if action == 'canvas.views.open':
-            row = self.artifact(args['resourceId'])
-            if row.get('sessionId') != args['sessionId']:
-                fail('The artifact belongs to a different conversation.', 409)
-            if row['kind'] == 'mcp-app':
-                fail('Interactive tool apps currently use the primary view. Their work remains active.', 409)
-            record = self.record()
-            if record['secondary']:
-                old = next((r for r in self.service.state.get('canvasArtifacts', []) if r['id'] == record['secondary']), None)
-                if old and self.preference('secondary', old)['dirty']:
-                    return {'status': 'deferred', 'reason': 'Finish or cancel the secondary view edit first.'}, []
-            record['secondary'] = row['id']
-            self.preference('secondary', row)['generation'] += 1
-            self.service.state['canvas']['open'] = True
-            return {'status': 'opened'}, []
-        if action == 'canvas.views.close' and args['viewId'] == 'secondary' and self.record()['secondary'] == args['resourceId']:
-            if not any(row['id'] == args['resourceId'] for row in self.service.state.get('canvasArtifacts', [])):
-                self.record()['secondary'] = None
-                return {'status': 'closed'}, []
         row, preference = self.target(args)
-        if action in {'canvas.views.renderer', 'canvas.views.close'} and preference['dirty']:
+        if action == 'canvas.views.renderer' and preference['dirty']:
             return {'status': 'deferred', 'reason': 'Finish or cancel this renderer edit first.'}, []
-        if action == 'canvas.views.close':
-            if args['viewId'] != 'secondary':
-                fail('Use the canvas close control for the primary view.')
-            self.record()['secondary'] = None
-        elif action in {'canvas.views.renderer', 'canvas.views.recover'}:
+        if action in {'canvas.views.renderer', 'canvas.views.recover'}:
             renderer = args.get('renderer', 'builtin.canvas.' + row['kind'])
             manifest = self.manifest(renderer)
             if row['kind'] not in manifest['resourceKinds']:
@@ -285,7 +257,7 @@ class CanvasViews:
         from .service import ACTION_DEFINITIONS
         from jsonschema import validate, ValidationError
         action, args = target['action'], copy.deepcopy(target['args'])
-        allowed = {'canvas.view', 'canvas.report', 'canvas.snapshot', 'canvas.interact', 'canvas.event', 'canvas.copy', 'canvas.download', 'canvas.openExternal'}
+        allowed = {'canvas.view', 'canvas.report', 'canvas.snapshot', 'canvas.interact', 'canvas.event', 'canvas.copy', 'canvas.copyPath', 'canvas.download', 'canvas.openExternal'}
         if action not in allowed:
             fail('This operation is not a renderer capability.', 403)
         renderer = preference['renderer']
@@ -298,7 +270,7 @@ class CanvasViews:
             renderer = 'builtin.canvas.' + row['kind']
             manifest = BUILTINS[renderer]
         if renderer not in BUILTINS:
-            required = {'canvas.view': 'canvas.view.update', 'canvas.report': 'canvas.view.report'}.get(action)
+            required = {'canvas.view': 'canvas.view.update', 'canvas.report': 'canvas.view.report', 'canvas.copyPath': 'canvas.resource.read'}.get(action)
             if not required or required not in manifest['capabilities']:
                 fail('The renderer has not declared this capability.', 403)
         if action != 'canvas.event':
@@ -316,12 +288,15 @@ class CanvasViews:
         except ValidationError as exc:
             fail(exc.message)
         effects = []
+        if action == 'canvas.copyPath':
+            from .canvas_paths import copy_path
+            return copy_path({**self.service.state, 'canvas': canvas}, args)
         if action in {'canvas.copy', 'canvas.download'}:
             from .canvas_downloads import filename
             content = canvas.get('url') if canvas['kind'] == 'browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
             if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] == 'babylon'):
                 effects.append({'type': 'clipboard.url' if action == 'canvas.copy' else 'download.url',
-                                'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download'),
+                                'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download') + '?version=' + str(row.get('selectedVersion') or row.get('app', {}).get('revision', row.get('revision', 1))),
                                 'canvasId': row['id'], 'filename': filename(canvas)})
             else:
                 effects.append({'type': 'clipboard.write' if action == 'canvas.copy' else 'download',

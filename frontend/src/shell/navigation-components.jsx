@@ -218,11 +218,12 @@ function QuietSidebar({host,workspaceHost,navigation}){
    <WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
-  <SidebarSection id="recent" title="Recent" model={model}>
+  <SidebarSection id="recent" title="Recent" model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>}>
    {recent.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
    {!recent.length&&<p className="a-nav-empty">Your recent chats appear here.</p>}
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>
   </SidebarSection>
+  {model.history.loading&&<p className="a-caption" role="status">Finding existing chats…</p>}{!!model.history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention. <button className="a-link" onClick={()=>navigation.browse('chats')}>Review chats</button></p>}
   {model.history.error&&<p role="alert">{model.history.error}</p>}
  </div>;
 }

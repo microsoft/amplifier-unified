@@ -114,7 +114,8 @@ def persist(home, state, cache):
     artifact = next((a for a in state.get('canvasArtifacts', []) if a['id'] == canvas.get('id')), None)
     if artifact and artifact.get('body'):
         result['canvas'] = {key: value for key, value in canvas.items() if key not in {'content', 'surface'}}
-        result['canvas']['$body'] = artifact['body']
+        from .canvas_versions import definition
+        result['canvas']['$body'] = definition(artifact, canvas.get('selectedVersion'))['body']
     result['sessions'] = []
     retained = set(state.get('pinnedSessionIds', [])) | {state.get('selectedSessionId')}
     library = state.get('conversationOrganization', {})

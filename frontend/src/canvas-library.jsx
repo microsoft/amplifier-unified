@@ -5,8 +5,8 @@ import {filterList} from './list-filter';
 const inChat=(state,row)=>row.sessionId===state.selectedSessionId&&row.workspaceId===state.selectedWorkspaceId;
 export function chatArtifacts(state){return (state.canvasArtifacts||[]).filter(r=>inChat(state,r))}
 export function ArtifactLinks({state,message,act}){
- const rows=chatArtifacts(state).filter(r=>r.messageId===message.id);
- return rows.length?<div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">{rows.map(row=><button type="button" key={row.id} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:row.id})}>{row.kind==='browser'?<Globe/>:<FileText/>}<span>{row.title}</span><ArrowRight/></button>)}</div>:null;
+ const rows=chatArtifacts(state).flatMap(row=>(row.publications||[{messageId:row.messageId,version:row.app?.revision||row.revision||1}]).filter(link=>link.messageId===message.id).map(link=>({row,version:link.version})));
+ return rows.length?<div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">{rows.map(({row,version})=><button type="button" key={row.id+':'+version} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:row.id,version})}>{row.kind==='browser'?<Globe/>:<FileText/>}<span>{(row.app?.versions||row.versions||[]).find(v=>v.version===version)?.title||row.title} · Version {version}</span><ArrowRight/></button>)}</div>:null;
 }
 export function CanvasTabs({state,act}){
  const rows=chatArtifacts(state).filter(r=>r.tabOpen);

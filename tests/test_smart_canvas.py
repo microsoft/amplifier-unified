@@ -141,3 +141,56 @@ async def test_accepted_app_call_closed_before_execution_is_terminal(service):
     await settled(service)
     operation=service.smart_tools.operation(receipt['operationId'])
     assert operation['status']=='failed' and 'no longer active' in operation['error']
+
+
+async def test_explicit_presentation_identity_reuses_tab_and_retains_exact_results(service):
+    from amplifier_web.mcp_view_recovery import source, inspect
+    from amplifier_web.resource_files import collect
+    from amplifier_web.state_storage import resource
+    sid = service._session()['id']
+    service._message(service._session(), 'user', 'Open dashboard')
+    await service.smart_tools.command('smartTools.call', {'id':'one','name':'read','sessionId':sid}, 'call-one', 'agent')
+    operation = service.smart_tools.operation('call-one')
+    operation['result']['_meta'] = {'amplifier/presentationId':'run-123'}
+    first = await service.smart_canvas.open({'id':'one','tool':'read','operationId':'call-one'})
+    await service.smart_canvas.open({'id':'one','tool':'read','operationId':'call-one'})
+    assert len(service.state['canvasArtifacts']) == 1
+    assert service.state['canvas']['revision'] == 1
+    initial_view_revision = service.canvas_views.revision(service.state['canvasArtifacts'][0])
+    service._message(service._session(), 'user', 'Updated dashboard')
+    await service.smart_tools.command('smartTools.call', {'id':'one','name':'read','sessionId':sid}, 'call-two', 'agent')
+    operation = service.smart_tools.operation('call-two')
+    operation['result']['_meta'] = {'amplifier/presentationId':'run-123'}
+    operation['result']['structuredContent'] = {'count':2}
+    second = await service.smart_canvas.open({'id':'one','tool':'read','operationId':'call-two'})
+    assert first['canvasId'] == second['canvasId']
+    assert second['revision'] == 2
+    assert service.canvas_views.revision(service.state['canvasArtifacts'][0]) != initial_view_revision
+    with pytest.raises(AppError, match='changed'):
+        await service.dispatch('smartTools.appCall', {'canvasId': first['canvasId'], 'name': 'read', 'expectedRevision': 1})
+    with pytest.raises(AppError, match='changed'):
+        await service.dispatch('smartTools.context', {'canvasId': first['canvasId'], 'context': {}, 'expectedRevision': 1})
+    # Dropping the rolling operation summary cannot erase the saved result.
+    service.state['smartTools']['operations'] = []
+    assert not collect(service.db, service._state)
+    await service.dispatch('canvas.select', {'id':first['canvasId'],'version':1})
+    assert 'Independent' in source(service,first['canvasId'])
+    assert inspect(service,first['canvasId'])['status'] == 'saved_version'
+    assert resource(service.db,service.state['canvas']['mcp']['savedResult']['$resource'])['structuredContent'] == {'count':1}
+    with pytest.raises(AppError,match='read-only'):
+        service.smart_canvas.binding(first['canvasId'])
+    await service.dispatch('canvas.select', {'id':first['canvasId']})
+    assert resource(service.db,service.state['canvas']['mcp']['savedResult']['$resource'])['structuredContent'] == {'count':2}
+
+
+async def test_independent_calls_without_explicit_identity_and_distinct_runs_stay_separate(service):
+    sid = service._session()['id']
+    for identity in ('a','b'):
+        await service.smart_tools.command('smartTools.call', {'id':'one','name':'read','sessionId':sid}, identity, 'agent')
+        await service.smart_canvas.open({'id':'one','tool':'read','operationId':identity})
+    assert len(service.state['canvasArtifacts']) == 2
+    for identity in ('run-a','run-b'):
+        await service.smart_tools.command('smartTools.call', {'id':'one','name':'read','sessionId':sid}, identity, 'agent')
+        service.smart_tools.operation(identity)['result']['_meta'] = {'amplifier/presentationId':identity}
+        await service.smart_canvas.open({'id':'one','tool':'read','operationId':identity})
+    assert len(service.state['canvasArtifacts']) == 4

@@ -30,7 +30,7 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
  const previous=crumbs.length>3?crumbs.slice(0,-2):[],visible=previous.length?crumbs.slice(-2):crumbs;
  const page=explorer.page||1,pages=explorer.pages||1;
  const crumbLabel=crumb=>crumb.name===crumb.path?(crumb.path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)||crumb.name):crumb.name;
- return <section ref={region} data-activity-region="workspace-folders" className="a-workspace-explorer" data-part="workspace-explorer" data-compact={compact} aria-label="Workspace folders">
+ return <section ref={region} data-activity-region="workspace-folders" className="a-workspace-explorer" data-part="workspace-explorer" data-compact={compact} data-show-paths={!!state.settings?.workspaces?.showPaths} aria-label="Workspace folders">
   {!compact&&<div className="a-workspace-modes" role="group" aria-label="Workspace list"><button type="button" aria-pressed={explorer.mode==='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'recent',navWorkspacePage:1})}>Recent</button><button type="button" aria-pressed={!compact&&explorer.mode!=='recent'} data-action="view.update" onClick={()=>patch({navWorkspaceMode:'folders',navWorkspacePage:1})}>Browse folders</button></div>}
   {heading&&!compact&&<div className="a-workspace-explorer-heading"><strong>Workspaces</strong><span>{explorer.totalWorkspaces||0}</span></div>}
   {!compact&&<div className="a-nav-search a-workspace-search"><Search/><input type="search" aria-label="Filter workspaces" placeholder="Find workspace · * ? patterns" value={query} data-action="view.update" onChange={e=>search(e.target.value)}/></div>}

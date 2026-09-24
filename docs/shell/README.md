@@ -283,7 +283,7 @@ It does not supply chat history, drafts, credentials or tool capabilities.
 | `readSource()` | Explicitly fetch the bound immutable text, including large stored documents; stale bindings reject |
 | `dispatch('view.update', {patch})` | Merge presentation state, requiring `canvas.view.update`; accumulated state is limited to 16 KB |
 | `dispatch('view.report', {part, status, message})` | Report rendered content with `canvas.view.report` |
-| `setDirty(boolean)` | Defer renderer replacement and secondary close/replacement while edits are pending |
+| `setDirty(boolean)` | Defer renderer replacement and navigation while edits are pending |
 
 Matching state schemas preserve stored view state across renderer changes.
 Arbitrary React local state is not migrated. Modules should prefix their custom
@@ -305,8 +305,7 @@ can carry `X-Amplifier-Client`; agents without an attached transport can pass th
 observed `clientId` in any `canvas.views.*` action. A conflicting attached client
 is rejected, and an unknown ID never creates a presentation implicitly.
 `canvas.views.inspect {clientId}` returns current views and compatible,
-validated renderer choices. Every view mutation except opening a pinned view
-requires all four values from that observation:
+validated renderer choices. Every view mutation requires all four values from that observation:
 
 ```json
 {
@@ -319,11 +318,9 @@ requires all four values from that observation:
 
 | Action | Additional arguments and outcome |
 | --- | --- |
-| `canvas.views.open` | `{resourceId, sessionId}` pins an ordinary saved artifact without selecting its chat |
 | `canvas.views.renderer` | Target plus `{renderer}`; choose a built-in ID or validated package digest |
 | `canvas.views.command` | Target plus `{action, args}`; explicitly address supported view/report, HTML interaction, A2UI or export controls |
 | `canvas.views.dirty` | Target plus `{dirty}`; declare unfinished local edits |
-| `canvas.views.close` | Secondary target; close its container, retaining the artifact and preferences |
 | `canvas.views.recover` | Target; restore its standard viewer, retaining the artifact |
 | `canvas.views.status` | Target plus `{status, message}`; browser evidence of loading, ready or error, separate from package validation |
 
@@ -336,14 +333,13 @@ within its view. `?shell=recovery` bypasses optional renderer imports as well as
 optional navigation modules; explicit recovery can discard module-local edits.
 
 Opening Library hides the workspace with `hidden` and `inert` while retaining
-both mounted viewers and their local state. The action host refuses parent
-panel-close operations if either viewer has declared dirty edits. It also
+the mounted viewer and its local state. The action host refuses parent
+panel-close operations if the viewer has declared dirty edits. It also
 refuses primary artifact/tab, chat, workspace, fork/edit and tool-app transitions
 that would replace a dirty primary viewer, before changing the selection,
 composer target, binding or generation. These parent operations return HTTP 409
 with code `canvas_view_dirty`; existing view-specific replacements return their
-deferred result. A dirty pinned secondary can remain mounted through primary
-artifact and chat navigation. Shared chat deletion checks affected clients too,
+deferred result. Shared chat deletion checks affected clients too,
 and MCP App loading rechecks after asynchronous resource I/O. The browser
 navigation queue waits for preceding dirty declarations so an immediate chat
 switch cannot overtake the edit report. Finish or cancel
@@ -418,3 +414,10 @@ the intended chat, and confirms a canceled timer cannot restore a sent draft.
 
 Use [the surface contract](conversation-surfaces.md) for dynamic interfaces
 that users and agents can operate together and refine in one tab.
+
+Canvas has one viewer per client. Use `canvas.select` to change the selected saved
+artifact and `canvas.close` to close it. Legacy secondary preferences are retained
+as historical client data but are no longer mounted or advertised as actions.
+For a file artifact, `canvas.copyPath {id, format: "absolute" | "relative"}`
+copies its path on the app server. The same action is available through the
+view command with an exact target; it never opens a local desktop application.

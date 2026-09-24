@@ -77,7 +77,7 @@ class SurfaceContext:
         client = service.clients.records.get(client_id, {})
         targets = []
         if client.get('selectedSessionId') == session_id and client.get('canvas', {}).get('open'):
-            for view in ('primary', 'secondary'):
+            for view in ('primary',):
                 try:
                     row, pref = service.canvas_views.resolve(view)
                 except Exception:
@@ -149,7 +149,7 @@ class SurfaceContext:
             row = rows[target['surfaceId']]
             client = self.service.clients.records.get(key[0], {})
             pref = client.get('canvasViews', {}).get('preferences', {}).get(f'{key[1]}:{key[2]}', {})
-            active_id = client.get('canvas', {}).get('id') if key[1] == 'primary' else client.get('canvasViews', {}).get('secondary')
+            active_id = client.get('canvas', {}).get('id') if key[1] == 'primary' else None
             visible = bool(client.get('canvas', {}).get('open') and active_id == key[2] and pref.get('generation') == target.get('generation') and self.service.canvas_views.revision(row) == target.get('resourceRevision'))
             observation = self.observations.get(key, {}) if visible else {}
             valid = observation.get('revision') == revision(row) and observation.get('generation') == pref.get('generation') and observation.get('instance') == self.service.instance_id and time.time() - observation.get('capturedAt', 0) < 120

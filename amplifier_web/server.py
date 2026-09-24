@@ -307,6 +307,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get('/api/canvas/views/{view_id}/resource', canvas_view_resource)
     app.router.add_get('/api/canvas/views/{view_id}/source', canvas_view_source)
 
+    def requested_canvas_version(request, row):
+        from .canvas_versions import definition
+        try:
+            version = int(request.query['version']) if 'version' in request.query else None
+        except ValueError:
+            raise AppError('Choose a valid saved version.') from None
+        return definition(row, version, service.db)
+
     async def canvas_download(request):
         from .state_storage import resource
         from urllib.parse import quote
@@ -314,6 +322,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         row = next((row for row in service.state.get("canvasArtifacts", []) if row["id"] == identity), None)
         if not row:
             raise AppError("Canvas artifact unavailable", 404)
+        row = requested_canvas_version(request, row)
         canvas = {**row, **resource(service.db, row["body"]["$resource"])}
         from .canvas_downloads import filename
         return web.Response(text=canvas_source(canvas,service.db), content_type="text/html",
@@ -324,6 +333,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         row=next((r for r in service.state.get('canvasArtifacts',[]) if r['id']==request.match_info['identity']),None)
         if not row or row.get('kind') not in {'html','babylon','canvas-app'}:
             raise AppError('Canvas source unavailable',404)
+        row = requested_canvas_version(request, row)
         canvas={**row, **({} if row.get('contentResource') else resource(service.db,row['body']['$resource']))}
         return web.Response(text=raw_source(canvas,service.db),content_type='text/plain',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
@@ -352,21 +362,42 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()"})
 
+    def check_tool_view(request):
+        if request.query.get('viewId'):
+            canvas = canvas_view_target(request, request.query['viewId'])
+            if canvas.get('id') != request.match_info['identity']:
+                raise AppError('This saved tool view changed.', 409)
+
     async def smart_canvas_status(request):
+        check_tool_view(request)
         from .mcp_view_recovery import inspect
         return web.json_response(inspect(service, request.match_info['identity']), headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/canvas/{identity}/status', smart_canvas_status)
 
+    async def smart_canvas_saved_result(request):
+        check_tool_view(request)
+        from .mcp_view_recovery import saved
+        from .state_storage import resource
+        canvas, _ = saved(service, request.match_info['identity'])
+        reference = canvas['mcp'].get('savedResult')
+        return web.json_response({'result': resource(service.db, reference['$resource']) if reference else None}, headers={'Cache-Control': 'no-store'})
+
+    app.router.add_get('/api/canvas/{identity}/result', smart_canvas_saved_result)
+
+
     async def smart_canvas_tools(request):
+        check_tool_view(request)
         _, binding = service.smart_canvas.binding(request.match_info['identity'])
         server = next(s for s in service.state['smartTools']['servers'] if s['id'] == binding['serverId'])
         tools = [t for t in await service.smart_tools.list_tools(server['id'], origin='app') if t['name'] in binding['allowedTools']]
+        check_tool_view(request)
         return web.json_response({'tools':tools})
 
     app.router.add_get('/api/canvas/{identity}/tools', smart_canvas_tools)
 
     async def smart_canvas_call(request):
+        check_tool_view(request)
         # The same admitted action, visibility checks and durable receipt as
         # app_control, returned immediately on completion instead of browser polling.
         payload = await request.json()
@@ -381,6 +412,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             accepted = await service.dispatch('smartTools.appCall', {
                 'canvasId': request.match_info['identity'],
                 'name': payload.get('name'), 'arguments': payload.get('arguments', {}),
+                **({'expectedRevision': payload['expectedRevision']} if 'expectedRevision' in payload else {}),
             }, command_id=identity, origin='ui', include_state=False)
             operation = await service.wait_smart_tool(accepted['operationId'])
             return web.json_response(operation, headers={'Cache-Control': 'no-store'})
@@ -390,12 +422,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_post('/api/canvas/{identity}/tools/call', smart_canvas_call)
 
     async def smart_canvas_resource(request):
+        check_tool_view(request)
         try:
             result = await service.smart_canvas.resource(
                 request.match_info['identity'], request.query.get('kind', 'read'),
                 uri=request.query.get('uri'), cursor=request.query.get('cursor'))
         except ValueError as exc:
             raise AppError(str(exc), 400) from None
+        check_tool_view(request)
         return web.json_response(result, headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/canvas/{identity}/resources', smart_canvas_resource)

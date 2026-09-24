@@ -6,7 +6,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
-const {WorkSurface}=await vite.ssrLoadModule('/src/work-shell.jsx');
+const {WorkSurface,LiveChatActivity}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {ConversationList}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
@@ -92,4 +92,23 @@ test('workspace picker searches the host catalog, pages results, and keeps actio
  assert.deepEqual(choices,[{workspace:'/deep/team/q4/reports',location:{kind:'workspace'}}]);
  assert.ok(button('New workspace'));assert.ok(button('Use existing folder'));
  await act(async()=>root.unmount());
+});
+
+test('browsing retains live call controls and an explicitly scoped stop action',async()=>{
+ const calls=[];let root;
+ await act(async()=>{root=create(React.createElement(LiveChatActivity,{browsing:true,working:true,session:{id:'running',title:'Report'},callActive:true,voice:{status:'connected',muted:false},act:async(...args)=>calls.push(args)},React.createElement('div',{'aria-label':'Screen sharing active'},'Stop sharing')))});
+ await act(async()=>root.root.findByProps({'data-action':'conversation.stop'}).props.onClick());
+ await act(async()=>root.root.findByProps({'data-action':'call.end'}).props.onClick());
+ await act(async()=>root.root.findByProps({'data-action':'call.mute'}).props.onClick());
+ assert.deepEqual(calls,[['conversation.stop',{sessionId:'running'}],['call.end'],['call.mute',{muted:true}]]);
+ assert.ok(root.root.findByProps({'aria-label':'Screen sharing active'}));
+ await act(async()=>root.update(React.createElement(LiveChatActivity,{browsing:false,working:true,session:{id:'running'}})));
+ assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
+ await act(async()=>root.unmount());
+});
+test('quiet navigation keeps discovery status, failures and refresh access',()=>{
+ const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
+ const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));
+ assert.match(html,/Finding existing chats/);assert.match(html,/Some saved folders or chats need attention/);
+ assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
 });

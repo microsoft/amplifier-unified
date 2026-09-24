@@ -20,6 +20,8 @@ def open_file(service, args, origin):
         canvas_command(scoped, 'canvas.show', {'kind': 'auto', 'path': args['path']}, origin)
     except (AppError, OSError, ValueError):
         return {'status': 'unavailable', 'message': 'This file is unavailable or cannot be previewed in this workspace.'}
+    from .canvas_versions import assert_clean
+    assert_clean(service, scoped['canvas']['id'])
     remember(scoped, service.db)
     service.state['canvas'] = scoped['canvas']
     service.state['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False)

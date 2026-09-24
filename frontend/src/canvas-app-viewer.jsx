@@ -64,9 +64,11 @@ export function CanvasAppViewer({canvas,dispatch}){
     dispatch('canvas.views.status',{...targetOf(shown.current),status,message}).catch(()=>{});
     setRenderError(status==='error'?message:'');return;
    }
+   if(data.op==='editing'&&latest.current.readOnlyVersion)return;
    if(data.op==='editing'){if(Number.isSafeInteger(data.editVersion)&&data.editVersion>editVersion.current){editVersion.current=data.editVersion;declare(true).catch(()=>{})}return}
    if(!['state','event','request','dirty'].includes(data.op)||typeof data.requestId!=='string'||data.requestId.length>80)return;
    const reply=extra=>frame.current?.contentWindow?.postMessage({type:'canvas-app-host',id:latest.current.id,channel:channel.current,requestId:data.requestId,...extra},'*');
+   if(latest.current.readOnlyVersion){reply({error:'This saved version is read-only. Select Latest to interact.'});return}
    if(JSON.stringify(data).length>320000){reply({error:'This change exceeds the surface message size limit.'});return}
    if(data.revision!==shown.current.app.revision){reply({error:'This design changed. Inspect the current surface before retrying.'});return}
    if(seen.current.has(data.requestId)){const previous=seen.current.get(data.requestId);if(previous)reply(previous);return}
@@ -104,7 +106,7 @@ export function CanvasAppViewer({canvas,dispatch}){
  return <section className="a-canvas-app" aria-label="Interactive conversation surface">
   <div className="a-canvas-app-bar"><span>Revision {app.revision}{dirty?' · Unsaved input':''}</span>
    <details><summary>History & shared state</summary><p>Restoring a design keeps compatible current inputs and never repeats actions.</p>
-    {app.versions.map(v=><button type="button" key={v.version} disabled={v.version===app.revision||dirty} onClick={()=>run('canvas.apps.restore',{version:v.version})}>Restore revision {v.version}</button>)}
+    {app.versions.map(v=><button type="button" key={v.version} disabled={v.version===app.revision||dirty||canvas.readOnlyVersion} onClick={()=>run('canvas.apps.restore',{version:v.version})}>Restore revision {v.version}</button>)}
     <pre aria-label="Shared surface state">{JSON.stringify(app.state,null,2)}</pre>
    </details>
   </div>
@@ -112,6 +114,7 @@ export function CanvasAppViewer({canvas,dispatch}){
   {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false});dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
   {app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}
   {review&&app.requests.some(r=>r.id===review.request.id&&r.status==='pending')&&<section className="a-canvas-app-review" aria-label="Review requested theme change"><strong>{review.request.summary}</strong><p>{review.request.action==='theme.apply'?'Applying changes the shell for all connected clients.':'This action uses this device’s theme controls.'}</p><pre>{review.input.css||'End the preview, or undo the last applied theme if it is still current.'}</pre><button type="button" onClick={async()=>{if(await run('canvas.apps.resolve',{requestId:review.request.id,approve:true}))setReview(null)}}>Approve theme change</button><button type="button" onClick={()=>setReview(null)}>Back</button></section>}
+  {canvas.readOnlyVersion&&<p role="status">Saved design, read only.{canvas.historicalStateUnavailable?' Inputs were not recorded for this older design.':' Inputs show the state saved when this version was created.'}</p>}
   <iframe key={mounted.app.revision} title={canvas.title} ref={frame} src={url} sandbox="allow-scripts allow-same-origin" onLoad={()=>send(true)}/>
  </section>;
 }

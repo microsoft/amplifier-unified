@@ -20,7 +20,7 @@
 #amp-one.a-approachable-shell .a-sidebar-all{font-size:13px;margin:7px 9px;padding:4px 0;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-nav-empty{font-size:13px;line-height:1.6;margin:8px}
 #amp-one.a-approachable-shell .a-shell-recovery{margin:16px 7px 0;font-size:12px}
-#amp-one.a-approachable-shell:not([data-interface-detail=full]) .a-shell-recovery{display:none}
+#amp-one.a-approachable-shell:not([data-interface-detail=full]):not([data-interface-detail=detailed]) .a-shell-recovery{display:none}
 #amp-one.a-approachable-shell .a-work-footer{margin-top:auto;border-top:1px solid var(--a-line);display:flex;align-items:center;gap:9px;min-height:48px;flex-shrink:0;padding:0 5px;font-size:12px;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-work-footer>.a-work-menu{margin-left:auto}
 #amp-one.a-approachable-shell .a-conversation{position:relative;justify-content:flex-start;box-shadow:none}
@@ -170,3 +170,10 @@
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"]{position:absolute;inset:0 auto 0 0;width:0;min-width:0;flex:none}
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"] .a-nav-rail{width:var(--nav-width)}
 }
+
+/* Composite search fields own one focus ring, including in custom themes. */
+#amp-one.a-approachable-shell .a-picker-search input:focus-visible{outline:none;box-shadow:none}
+#amp-one.a-approachable-shell .a-work-live-controls{flex:none;min-width:0}
+#amp-one.a-approachable-shell .a-work-live-controls .a-call-strip{flex-wrap:wrap}
+#amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true][data-show-paths=true] .a-workspace-result-path{display:block;font-size:11px}
+#amp-one.a-approachable-shell .a-nav-slot .a-workspace-explorer[data-show-paths=true] .a-workspace-row{height:54px;min-height:54px;max-height:54px}

@@ -52,7 +52,9 @@ def saved(service, identity, *, require_binding=True):
 
 def source(service, identity):
     from .service import AppError
-    _, row = saved(service, identity, require_binding=False)
+    canvas, row = saved(service, identity, require_binding=False)
+    from .canvas_versions import definition
+    row = definition(row, canvas.get('selectedVersion'))
     try:
         content = resource(service.db, row['body']['$resource'])['content']
         if not isinstance(content, str):
@@ -75,6 +77,8 @@ def inspect(service, identity):
     except AppError as error:
         result['source'] = 'unavailable'
         return state('source_unavailable', str(error))
+    if canvas.get('readOnlyVersion'):
+        return state('saved_version', 'Saved version, read only. Select Latest for live features; previous calls will not be replayed.')
     if not binding:
         return state('binding_unavailable', 'The saved tool connection details are unavailable. Its document is retained; open a new tool view to review a connection.')
     server = next((row for row in service.state['smartTools']['servers'] if row['id'] == binding['serverId']), None)
