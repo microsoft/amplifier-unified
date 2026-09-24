@@ -85,6 +85,7 @@
     "test:sidebar-activity-browser": "node tests/sidebar-activity-browser.mjs",
     "test:appearance-library-browser": "node tests/appearance-library-browser.mjs",
     "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs",
+    "test:workspace-switching-browser": "node tests/workspace-switching-browser.mjs",
     "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs"
   },
   "dependencies": {
