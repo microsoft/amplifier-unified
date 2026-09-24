@@ -141,7 +141,7 @@ async def test_large_html_snapshot_stays_out_of_state_and_survives_file_deletion
     assert copy_result['effects'][0]['type']=='clipboard.url'
     assert len(json.dumps(copy_result))<baseline+20_000
     download=await app.dispatch('canvas.download',{'id':identity})
-    assert download['effects'][0]['url']==f'/api/canvas/{identity}/download'
+    assert download['effects'][0]['url']==f'/api/canvas/{identity}/download?version=1'
     detail=await app.app_bridge('get_state',{'path':'/canvas/contentResource/content','offset':0,'limit':100},app._session()['id'])
     assert detail['value']==body[:100] and detail['total']==len(body)
     path.write_bytes(b'x'*(MAX_HTML+1))

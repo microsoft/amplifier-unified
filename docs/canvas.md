@@ -190,21 +190,51 @@ Use `canvas.apps.create` for interactive UX that agents will refine during a
 conversation. It gives one stable tab, shared typed state, agent/user event
 parity, retained design revisions and reviewed host actions. See
 [the contract](shell/conversation-surfaces.md). `canvas.show` retains its
-existing immutable snapshot semantics.
+immutable saved definitions; document revisions share one artifact tab.
 
 ## Artifact library and tabs
 
-`canvas.show` saves a snapshot with a stable ID, title, format, owning chat,
-workspace, and creating user message. It opens a new tab without overwriting
-older artifacts. A file path is optional; direct content and A2UI surfaces are
-persisted equally. Each publication is a separate snapshot. File changes are
-not watched; publish the path again to save a newer snapshot.
+`canvas.show` saves a definition with a stable ID, title, format, owning chat,
+workspace and creating user message. Direct content opens a new artifact; a
+canonical file path within the same chat/workspace reuses its existing tab.
+Unchanged file content does not add a revision; changed content saves a new
+immutable version. File changes are not watched. Different files with the same
+title stay separate. Existing artifact IDs and saved content remain valid;
+older duplicate IDs are retained rather than guessed together.
+
+Agents refine a document through `canvas.versions.inspect {id}` and
+`canvas.versions.revise {id, expectedRevision, content, title?}`. This changes the
+saved Canvas definition, **not the source file**. A2UI revisions supply `surface` instead of `content`. Stale revisions and dirty
+viewer edits are rejected. `canvas.versions.restore {id, version,
+expectedRevision}` copies a saved definition into a new latest version; it never
+rewrites earlier definitions or replays work. Interactive surfaces use the
+existing `canvas.apps.revise/restore` contract and its shared-state revision.
+
+The header offers **Latest** and numbered saved versions. `canvas.select {id}`
+follows Latest; `canvas.select {id, version}` selects an exact read-only version
+for that client, even as another client edits Latest. Historical chat artifact
+buttons record the version published during their turn. Saved surface versions
+include the inputs captured when that definition was created; older versions
+without recorded inputs are labelled explicitly. Live interaction is available
+only on Latest. Retained definitions are not evicted after twenty revisions.
+
+For MCP Apps, reopening the same completed operation reuses its tab. A tool may
+supply `_meta["amplifier/presentationId"]` in its result to identify one durable
+presentation across later calls. The ID must include the tool's run/input
+identity; unrelated runs must use different IDs. Unified namespaces it by server
+configuration, verified account identity, launcher and resource URI. Without
+that explicit result metadata, different operations remain separate, even when
+their titles or results match. Source HTML and the launch result are retained
+locally per version; old views do not depend on the rolling operation list.
+Historical versions cannot call tools, read server resources or reconnect.
+External services and non-self-contained scripts are still not made durable by
+this identity contract; a live dashboard may need its original server.
 
 `canvasArtifacts` contains metadata and `$resource` body references. Only the
 active `canvas` body is included in ordinary browser state, except HTML over 1 MB,
 which carries a `contentResource` reference instead; the agent overview
 contains a bounded current-chat index. `get_state` can page a saved body, for
-example `/canvasArtifacts/0/body/content`. `canvas.select {id}` reopens a saved
+example `/canvasArtifacts/0/body/content`. `canvas.select {id}` reopens the latest saved
 item, `canvas.tabClose {id}` closes only its tab, and `canvas.reopen` opens the
 panel. The current shell uses `canvas.visibility {open, sessionId, canvasId}`
 on an attached client to hide/show retained viewers immediately. This keeps edits
@@ -232,7 +262,7 @@ If the client navigates after selection commits, the accepted receipt remains
 successful and its readback reports a detached placeholder instead of failing
 the completed action. Explicit reads still reject a client displaying another chat.
 
-Chat receipts reopen artifacts from their creating turn. Forks inherit snapshots
+Chat receipts reopen exact definitions from their publishing turn. Forks inherit snapshots
 only through the retained user messages. Editing forks before the original user
 message, so artifacts from that message and later turns remain in the original
 conversation. Fork/edit boundaries also support mixed voice and typed chat. Spoken exchanges that never required a manager delegation are retained as explicitly labelled historical context; they do not replay work. Native transcript timestamps keep later speech and tool results out of earlier branches. Legacy transcripts without a reliable boundary can still be forked in full. Tab changes do not preserve running JavaScript memory inside an
@@ -298,3 +328,18 @@ Use labeled HTML controls for agent interaction through `canvas.interact`.
 The agent can inspect document text, controls and runtime errors, but does not
 automatically perceive the rendered 3D pixels or scene graph. GPU/WebGL support
 is required. Unity build tooling and specialized Unity hosting are not included.
+
+### Exact saved links in assistant messages
+
+Publication and inspection receipts return `reference`, for example:
+`amplifier-canvas://artifact/ARTIFACT_ID?session=SESSION_ID&version=2`.
+Use it in an ordinary Markdown link: `[Review version 2](REFERENCE)`.
+The chat renderer recognizes only this exact format. Clicking reveals that
+saved definition in the clicking client, preserves the composer, and never
+submits a message, changes chats, fetches an external URL, or runs a tool.
+The shared `canvas.select` action validates session ownership and revision;
+missing versions and a changed conversation produce an explanation. Section
+anchors and editing selected text are outside this saved-reference contract.
+Do not replace a reference with a localhost/server URL unless the user wants
+an external browser. Publication, accepted selection and browser mount remain
+separate pieces of evidence.

@@ -30,7 +30,7 @@ class Runtime:
             if context['surfaces']:
                 self.sent[-1]['surfaceContext'] = context
         await emit("assistant.message", {"sessionId": session["id"],
-                   "inputId": input_id, "text": "Synthetic first response"})
+                   "inputId": input_id, "text": text if "--canvas-versions" in sys.argv else "Synthetic first response"})
         await emit("runtime.status", {"sessionId": session["id"], "status": "idle"})
 
     async def control(self, *args):

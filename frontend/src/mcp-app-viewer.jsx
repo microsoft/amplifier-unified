@@ -25,9 +25,12 @@ async function command(action,args,signal){
  throw new Error('No completion received. Inspect Smart Tools activity before retrying.');
 }
 
-async function callTool(canvasId,params,signal){
+const viewTarget=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].filter(key=>canvas[key]!=null).map(key=>[key,canvas[key]]));
+const viewUrl=(canvas,path,params={})=>{const query=new URLSearchParams({...viewTarget(canvas),...params}).toString();return `/api/canvas/${encodeURIComponent(canvas.id)}/${path}${query?'?'+query:''}`};
+
+async function callTool(canvas,params,signal){
  const id=crypto.randomUUID(),deadline=Date.now()+310000;
- let op=await request(`/api/canvas/${encodeURIComponent(canvasId)}/tools/call`,{method:'POST',body:{id,name:params.name,arguments:params.arguments||{}},signal});
+ let op=await request(viewUrl(canvas,'tools/call'),{method:'POST',body:{id,expectedRevision:canvas.revision||1,name:params.name,arguments:params.arguments||{}},signal});
  // A long-running call may outlive the HTTP wait. Inspect the same receipt;
  // never retry the mutation if the connection itself was lost.
  while(['pending','running','queued'].includes(op.status)){
@@ -74,11 +77,11 @@ export function McpAppViewer({canvas,act}){
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
   const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
-  const listTools=()=>catalog||(catalog=request(`/api/canvas/${canvas.id}/tools`,{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
+  const listTools=()=>canvas.readOnlyVersion?Promise.resolve({tools:[]}):catalog||(catalog=request(viewUrl(canvas,'tools'),{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   renderReport.current=report;
   const start=async()=>{
-   const availability=await request(`/api/canvas/${canvas.id}/status`,{signal:controller.signal});
+   const availability=await request(viewUrl(canvas,'status'),{signal:controller.signal});
    if(!live)return;
    rememberConnection(availability);
    if(availability.source!=='available'){report('error',availability.message);return}
@@ -88,11 +91,12 @@ export function McpAppViewer({canvas,act}){
     {hostContext:hostContext.current});
    bridge.oncalltool=async params=>{
     try{
+     if(current.current.readOnlyVersion)throw Error('This saved version is read-only. Select Latest for live features.');
      // Metadata is an optimization hint, not a new admission dependency. The
      // server still checks grants and schemas when an unknown call is sent.
      const tools=await listTools().catch(error=>{if(controller.signal.aborted)throw error;return {tools:[]}});
      const definition=tools.tools?.find(tool=>tool.name===params.name);
-     const run=()=>callTool(canvas.id,params,controller.signal);
+     const run=()=>callTool(canvas,params,controller.signal);
      const readOnly=definition?.annotations?.readOnlyHint===true&&definition?.annotations?.destructiveHint!==true;
      const result=await (readOnly?reads.run(params,run):run());
      // The tool owns its progress UI. Routine calls (including typing) must
@@ -103,22 +107,23 @@ export function McpAppViewer({canvas,act}){
     }catch(error){if(!error.backgroundReadPaused)report('error',error.message);throw error}
    };
    bridge.onlisttools=listTools;
-   const resource=(kind,params={})=>request(`/api/canvas/${canvas.id}/resources?${new URLSearchParams({kind,...params})}`,{signal:controller.signal});
+   const resource=(kind,params={})=>request(viewUrl(canvas,'resources',{kind,...params}),{signal:controller.signal});
    bridge.onreadresource=params=>resource('read',{uri:params.uri});
    bridge.onlistresources=params=>resource('list',params?.cursor?{cursor:params.cursor}:{});
    bridge.onlistresourcetemplates=params=>resource('templates',params?.cursor?{cursor:params.cursor}:{});
    bridge.onupdatemodelcontext=async context=>{
-    await command('smartTools.context',{canvasId:canvas.id,context},controller.signal);return {};
+    if(canvas.readOnlyVersion)return {};
+    await command('smartTools.context',{canvasId:canvas.id,expectedRevision:canvas.revision||1,context},controller.signal);return {};
    };
    bridge.oninitialized=async()=>{
     initialized=true;booted.current=true;
     try{
      await bridge.sendToolInput({arguments:current.current.mcp?.toolArguments||{}});
      const operationId=current.current.mcp?.operationId;
-     const result=operationId?(await request(`/api/smart-tools/operations/${encodeURIComponent(operationId)}`,{signal:controller.signal})).result:current.current.mcp?.result;
+     const result=current.current.mcp?.savedResult?(await request(viewUrl(canvas,'result'),{signal:controller.signal})).result:operationId?(await request(`/api/smart-tools/operations/${encodeURIComponent(operationId)}`,{signal:controller.signal})).result:current.current.mcp?.result;
      if(result)await bridge.sendToolResult(result);
      const availability=connection.current;
-     report(availability?.status==='ready'?'ready':'error',availability?.message||'Tool view connected');
+     report(['ready','saved_version'].includes(availability?.status)?'ready':'error',availability?.message||'Tool view connected');
     }catch(error){report('error',error.message)}
    };
    bridge.onerror=error=>report('error',error.message);
@@ -129,25 +134,25 @@ export function McpAppViewer({canvas,act}){
     const next={...hostContext.current,theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current};
     hostContext.current=next;
     bridge.setHostContext(next);
-    frame.current.src=clientUrl(`/api/canvas/${canvas.id}/document`);
+    frame.current.src=clientUrl(viewUrl(canvas,'document'));
    }
   };
   booted.current=false;rememberConnection(null);
   report('loading','Checking saved tool view…');start().catch(error=>report('error',error.message));
   const timeout=setTimeout(()=>{if(live&&!initialized)report('error',connection.current?.source==='available'?'The saved tool document did not initialize. Reload it to retry. Its scripts must work within the self-contained MCP App sandbox.':connection.current?.message||'The saved tool document could not be checked. Retry when the host is available.')},15000);
   return()=>{live=false;clearTimeout(timeout);reads.close();controller.abort();if(renderReport.current===report)renderReport.current=null;if(resetCatalog.current===clearCatalog)resetCatalog.current=null;if(bridgeRef.current===bridge)bridgeRef.current=null;hostContext.current=null;bridge?.close().catch(()=>{})};
- },[canvas.id,canvas.view?.reload]);
+ },[canvas.id,canvas.resourceRevision,canvas.generation,canvas.view?.reload]);
  const reconnect=async reviewedContract=>{
   setRecovering(true);
   try{
-   const available=await request(`/api/canvas/${canvas.id}/status`);rememberConnection(available);
+   const available=await request(viewUrl(canvas,'status'));rememberConnection(available);
    if(!available.canReconnect)throw new Error(available.message);
    const result=await command('smartTools.reconnectView',{canvasId:canvas.id,expectedBindingRevision:available.bindingRevision,...(reviewedContract?{reviewedContract}:{})});
    rememberConnection(result);
    if(result.status==='ready')resetCatalog.current?.();
    renderReport.current?.(result.status==='ready'&&booted.current?'ready':'error',result.status==='ready'&&!booted.current?'Tool reconnected. Reload the saved view to retry initialization.':result.message);
   }catch(error){
-   try{rememberConnection(await request(`/api/canvas/${canvas.id}/status`))}catch{}
+   try{rememberConnection(await request(viewUrl(canvas,'status')))}catch{}
    renderReport.current?.('error',error.message);
   }
   finally{setRecovering(false)}
