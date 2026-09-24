@@ -196,3 +196,40 @@ test('diagnostic opt-out and read failures stay honest without automatic retries
  assert.equal(count,1);
  await renderAct(async()=>root.unmount());
 });
+
+
+test('excerpt staging locks send, preserves newer feedback text, and ignores late results after a chat switch',async()=>{
+ for(const switchChat of [false,true]){
+  let state={...base(),selectedSessionId:'source',sessions:[{id:'source',messages:[]},{id:'other',messages:[]}]},root,release;
+  const calls=[],file={id:'a'.repeat(32),name:'excerpt.md',size:7,mime:'text/markdown',excerpt:{sha256:'b'.repeat(64),visibility:'public'}};
+  async function action(name,args){
+   calls.push({name,args:structuredClone(args)});
+   if(name==='feedback.excerpt.stage')return new Promise(resolve=>{release=()=>resolve({accepted:true,result:file,state:{view:{feedbackDraft:{...draft,attachments:[file]}}}})});
+   if(name==='view.update'){state={...state,view:{...state.view,...args.patch}};root.update(React.createElement(FeedbackPanel,{state,act:action}))}
+   return {accepted:true,state};
+  }
+  await renderAct(async()=>{root=create(React.createElement(FeedbackPanel,{state,act:action}))});
+  let staging;
+  await renderAct(async()=>{staging=root.root.find(node=>node.type?.name==='FeedbackExcerpt').props.onStage({id:'source',reviewId:'review'})});
+  assert.equal(root.root.findByProps({id:'feedback-title'}).props.disabled,true);
+  await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+  assert.equal(calls.some(call=>call.name==='feedback.submit'),false);
+  // A newer shared agent edit can arrive even though local typing is locked.
+  state={...state,selectedSessionId:switchChat?'other':'source',view:{feedbackDraft:{...draft,title:'Newer title',body:'Newer details',attachments:[]}}};
+  await renderAct(async()=>root.update(React.createElement(FeedbackPanel,{state,act:action})));
+  await renderAct(async()=>{release();await staging});
+  assert.equal(root.root.findByProps({id:'feedback-title'}).props.value,'Newer title');
+  assert.equal(root.root.findByProps({id:'feedback-body'}).props.value,'Newer details');
+  assert.equal(root.root.findAllByProps({'aria-label':'Preview excerpt.md'}).length,switchChat?0:1);
+  assert.equal(root.root.findByProps({id:'feedback-title'}).props.disabled,false);
+  if(!switchChat){
+   const approval=root.root.findAll(node=>node.type==='input'&&node.props.type==='checkbox')[0];
+   assert.equal(approval.props.checked,false);
+   await renderAct(async()=>approval.props.onChange({target:{checked:true}}));
+   await renderAct(async()=>root.root.findByType('form').props.onSubmit({preventDefault(){}}));
+   const sent=calls.find(call=>call.name==='feedback.submit').args;
+   assert.deepEqual(sent.confirmedExcerpts,[{id:file.id,sha256:file.excerpt.sha256}]);
+  }
+  await renderAct(async()=>root.unmount());
+ }
+});

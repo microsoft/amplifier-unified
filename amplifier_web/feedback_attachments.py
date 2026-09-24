@@ -61,8 +61,16 @@ async def upload(repository, identity, files, github_api):
     prefix = "repos/" + repository
     # Refuse to upload attachments if this intended private destination changes.
     target = await github_api(prefix, None)
-    if target.get("private") is not True:
-        raise BeforeUploadError("The attachment destination is no longer private. Nothing was sent.")
+    visibility = 'private' if target.get('private') is True else 'public' if target.get('private') is False else 'unknown'
+    for row, _ in files:
+        excerpt = row.get('excerpt')
+        if excerpt:
+            if (excerpt['repository'] != repository or excerpt['visibility'] != visibility
+                    or target.get('full_name', '').casefold() != repository.casefold()
+                    or row['sha256'] != excerpt['sha256']):
+                raise BeforeUploadError('The excerpt destination or visibility changed. Review it again. Nothing was sent.')
+        elif visibility != 'private':
+            raise BeforeUploadError('The attachment destination is no longer private. Nothing was sent.')
     tree = []
     for row, data in files:
         blob = object_sha(await github_api(prefix + "/git/blobs", {
@@ -77,7 +85,7 @@ async def upload(repository, identity, files, github_api):
     if object_sha(reference.get("object", {})) != commit:
         raise ValueError("GitHub did not confirm attachment storage")
     return [{**{key: row[key] for key in ("id", "name", "mime", "size")},
-             "url": "https://github.com/" + repository + "/blob/" + commit + "/" + quote(item["path"], safe="/")}
+             "visibility": visibility, "url": "https://github.com/" + repository + "/blob/" + commit + "/" + quote(item["path"], safe="/")}
             for (row, _), item in zip(files, tree)]
 
 
@@ -89,4 +97,4 @@ def markdown(rows):
     return "\n\n### Attachments\n\n" + "\n".join(
         "- [" + label(row["name"]) + "](" + row["url"] + ") — " + str(row["size"]) + " bytes"
         for row in rows
-    ) + "\n\nFiles are retained in this private repository; repository access is required."
+    ) + ("\n\nFiles are publicly visible and retained in repository history." if any(row.get('visibility') == 'public' for row in rows) else "\n\nFiles are retained in this private repository; repository access is required.")

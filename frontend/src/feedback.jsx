@@ -5,13 +5,16 @@ import {ResultNotice} from './settings-ui';
 import './feedback.css';
 import {readItems} from './attention';
 import {FeedbackFollowup} from './feedback-followup';
+import {FeedbackExcerpt} from './feedback-excerpt';
 import {FeedbackReconcile} from './feedback-lifecycle';
 
-const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:true,attachments:[]});
+const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:true,attachments:[],confirmExcerpts:false,confirmedExcerpts:[]});
 const sizeLabel=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
 const encodeFile=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Could not read this file.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file)});
 export function FeedbackPanel({state,act}){
  const shared=state.view?.feedbackDraft;
+ const selectedSession=useRef(state.selectedSessionId);selectedSession.current=state.selectedSessionId;
+ const alive=useRef(true);useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  const [draft,setDraft]=useState(()=>shared||empty()),[busy,setBusy]=useState(false),[error,setError]=useState(''),[uploading,setUploading]=useState(false),[dragging,setDragging]=useState(false),[retryUpload,setRetryUpload]=useState(null);
  const current=useRef(draft),submitting=useRef(false),fileInput=useRef(null),staging=useRef(false),dirty=useRef(false),timer=useRef(null),saving=useRef(null);
  useEffect(()=>()=>{clearTimeout(timer.current);if(dirty.current)void flush().catch(()=>{})},[]);
@@ -41,7 +44,18 @@ export function FeedbackPanel({state,act}){
  function save(next){current.current=next;dirty.current=true;setDraft(next);return flush()}
  function edit(patch){setError('');current.current={...current.current,...patch};dirty.current=true;setDraft(current.current);clearTimeout(timer.current);timer.current=setTimeout(()=>flush().catch(()=>setError('The draft could not be saved. Reconnect and try again.')),250)}
  function setPreview(id){edit({previewId:id})}
- function acceptDraft(response){const next=response?.state?.view?.feedbackDraft;if(next){current.current=next;setDraft(next)}}
+ async function stageExcerpt(args){
+  if(staging.current||current.current.pending)throw Error('Wait for the current attachment or submission to finish.');
+  staging.current=true;setUploading(true);
+  try{
+   await flush();
+   if(selectedSession.current!==args.id)throw Error('The selected conversation changed. Review its excerpt again.');
+   const response=await act('feedback.excerpt.stage',args);
+   if(!response?.result)throw Error('The excerpt was not attached. Check the same review again.');
+   if(alive.current&&selectedSession.current===args.id)acceptDraft(response);
+  }finally{staging.current=false;setUploading(false)}
+ }
+ function acceptDraft(response){const next=response?.state?.view?.feedbackDraft;if(next){const changed=JSON.stringify(next.attachments)!==JSON.stringify(current.current.attachments);current.current={...current.current,attachments:next.attachments,...(changed?{confirmExcerpts:false,confirmedExcerpts:[]}: {})};setDraft(current.current);if(changed){dirty.current=true;void flush().catch(()=>setError('The updated attachment list could not be saved.'))}}}
  async function stageFiles(files,retry){
   if(staging.current||current.current.pending)return;
   staging.current=true;setUploading(true);setError('');setDragging(false);
@@ -65,7 +79,7 @@ export function FeedbackPanel({state,act}){
   submitting.current=true;setBusy(true);setError('');
   // Freeze both text and identity before the first await. A lost response must
   // never generate a second GitHub issue or submit newly edited text as a retry.
-  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:source.includeDiagnostics!==false,...(source.includeDiagnostics!==false?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),attachmentIds:(source.attachments||[]).map(row=>row.id)};
+  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:source.includeDiagnostics!==false,...(source.includeDiagnostics!==false?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),confirmExcerpts:source.confirmExcerpts===true,confirmedExcerpts:source.confirmedExcerpts||[],attachmentIds:(source.attachments||[]).map(row=>row.id)};
   try{await save({...source,pending:payload});await act('feedback.submit',payload)}
   catch{setError('The submission was not acknowledged. Check its status using the same request below; this will not post it twice.')}
   finally{submitting.current=false;setBusy(false)}
@@ -83,17 +97,19 @@ export function FeedbackPanel({state,act}){
     {!pending&&<button type="button" className="a-soft a-feedback-add-files" data-action="feedback.attachment.add" disabled={uploading||!!retryUpload} onClick={()=>fileInput.current?.click()}><Paperclip size={16}/>{uploading?'Adding files…':'Add files or images'}</button>}
     {!pending&&<p className="a-caption">Or drop files here, or paste an image. Up to 8 files, 8 MB each, 24 MB total.</p>}
     {!!selected.length&&<ul>{selected.map(row=><li key={row.id}>
-     <button type="button" className="a-feedback-file-preview" data-action="view.update" disabled={uploading} aria-label={`Preview ${row.name}`} onClick={()=>setPreview(preview===row.id?null:row.id)}>{row.mime?.startsWith('image/')&&/^[a-f0-9]{32}$/.test(row.id)?<img src={`/api/attachments/${row.id}`} alt=""/>:<File size={22}/>}<span><strong>{row.name}</strong><small>{sizeLabel(row.size)} · {pending?'Included':'Ready to include'}</small></span></button>
+     <button type="button" className="a-feedback-file-preview" data-action="view.update" disabled={uploading} aria-label={`Preview ${row.name}`} onClick={()=>setPreview(preview===row.id?null:row.id)}>{row.mime?.startsWith('image/')&&/^[a-f0-9]{32}$/.test(row.id)?<img src={`/api/attachments/${row.id}`} alt=""/>:<File size={22}/>}<span><strong>{row.name}</strong><small>{sizeLabel(row.size)} · {pending?'Included':row.excerpt?`Reviewed excerpt · ${row.excerpt.visibility}`:'Ready to include'}</small></span></button>
      {!pending&&<button type="button" className="a-icon" data-action="feedback.attachment.remove" aria-label={`Remove ${row.name}`} disabled={uploading} onClick={()=>removeFile(row.id)}><X size={16}/></button>}
     </li>)}</ul>}
     {selected.filter(row=>row.id===preview&&/^[a-f0-9]{32}$/.test(row.id)).map(row=><div className="a-feedback-preview" key={row.id}>{row.mime?.startsWith('image/')?<img src={`/api/attachments/${row.id}`} alt={`Preview of ${row.name}`}/>:<File size={32}/>}<a href={`/api/attachments/${row.id}`} download={row.name}>{row.mime?.startsWith('image/')?<ImageIcon size={14}/>:<File size={14}/>}Open {row.name}</a></div>)}
     {retryUpload&&<div className="a-feedback-upload-retry"><button type="button" className="a-soft" disabled={uploading} onClick={()=>stageFiles([],retryUpload)}>Check attachment: {retryUpload.name}</button><button type="button" className="a-soft" disabled={uploading} onClick={()=>{setRetryUpload(null);setError('')}}>Stop retrying</button></div>}
    </div>
+   {!pending&&<FeedbackExcerpt state={state} act={act} frozen={frozen} onStage={stageExcerpt}/>}
+   {selected.some(row=>row.excerpt)&&<label className="a-feedback-checkbox"><input type="checkbox" checked={shown.confirmExcerpts===true} disabled={frozen} onChange={e=>edit({confirmExcerpts:e.target.checked,confirmedExcerpts:e.target.checked?selected.filter(row=>row.excerpt).map(row=>({id:row.id,sha256:row.excerpt.sha256})):[]})}/>Include the reviewed conversation excerpts listed above when I send this feedback.</label>}
    <label className="a-feedback-checkbox"><input type="checkbox" data-action="view.update" checked={shown.includeDiagnostics!==false} disabled={frozen} onChange={e=>edit({includeDiagnostics:e.target.checked})}/>Include reproduction diagnostics</label>
    {shown.includeDiagnostics!==false&&<FeedbackDiagnostics key={result?`receipt:${result.requestId}`:state.selectedSessionId||'current'} state={state} act={act} requestId={result?.requestId} device={pending?.deviceDiagnostics}/> }
-   <p className="a-caption">Your text, selected diagnostics and the files listed above are sent when you submit. Files stay in this private repository’s history and are linked from the issue; your GitHub sign-in needs repository Contents write access. Chats, paths, provider settings, and credentials are not attached automatically.</p>
+   <p className="a-caption">Your text, selected diagnostics and the files listed above are sent when you submit. Files stay in repository history and are linked from the issue. Reviewed excerpts use the visibility shown during review; other file uploads require a private repository; your GitHub sign-in needs repository Contents write access. Chats, paths, provider settings, and credentials are not attached automatically.</p>
    <div className="a-dialog-actions">
-    {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
+    {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||selected.some(row=>row.excerpt)&&!shown.confirmExcerpts||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
     {(done||pending&&!busy)&&<button type="button" className="a-soft" data-action="view.update" onClick={startNew}><Plus/>New feedback</button>}
    </div>
   </form>
