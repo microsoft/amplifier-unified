@@ -4,7 +4,7 @@ export function ownershipState(session) {
   switch(state?.status){
     case 'blocked': return state.reason==='takeover-failed'
       ?{blocked:true,canTakeover:true,retry:true,label:'Could not continue here',detail:state.detail||'The takeover did not complete. Your draft is kept. Try again to unlock the message box.'}
-      :{blocked:true,canTakeover:true,label:`In use by ${source}`,detail:state.detail||(state.supportsTakeover===false?'This running interface does not support takeover requests. Close it, then choose Continue here. Update the CLI before reopening it to enable future takeovers.':'Continue here to take over and unlock the message box. Your draft is kept.')};
+      :{blocked:true,canTakeover:true,label:`In use by ${source}`,detail:state.detail||(state.supportsTakeover===false?'This running interface does not support takeover requests. Close it, then choose Continue here.':'Continue here to take over and unlock the message box. Your draft is kept.')};
     case 'yielded': return {blocked:true,canTakeover:true,label:`Continued in ${source}`,detail:'This view stays connected. Choose Continue here when you want to resume.'};
     case 'yielding': return {blocked:true,canTakeover:false,label:`Moving to ${source}`,detail:'Finishing current work and saving the session…'};
     case 'taking-over': return {blocked:true,canTakeover:false,label:'Taking over…',detail:'Waiting for the current owner to finish, then loading your session.'};

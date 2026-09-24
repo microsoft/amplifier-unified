@@ -180,4 +180,6 @@ def listing(service, args):
         row['label'] = row['name'] + (' · ' + row['path'] if names[row['name']] > 1 else '')
     rows.sort(key=lambda row: (row['name'].casefold(), row['path']))
     offset = args.get('offset', 0)
-    return {'items': rows[offset:offset + 100], 'nextOffset': offset + 100 if len(rows) > offset + 100 else None}
+    limit = args.get('limit', 100)
+    return {'items': rows[offset:offset + limit], 'nextOffset': offset + limit if len(rows) > offset + limit else None,
+            'total': len(rows)}

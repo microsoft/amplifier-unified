@@ -45,7 +45,8 @@ export function ModelControl({state,session,act,working}){
  const pinned=isDraft?!!setup.selection?.model:(catalog?.pinned??!!(session?.runtimeReport?.selection||session?.selection));
  const effective=isDraft?(pinned?setup.selection:resolvedDefaults.effective||{}):(catalog?.effective||session?.runtimeReport?.effective_selection||session?.selection||{});
  const lastCall=[...(session?.execution?.nodes||[])].reverse().find(n=>n.kind==='llm'&&(n.sessionId===sessionId||(!n.sessionId&&!n.parentId)));
- const model=effective.model||(!isDraft?lastCall?.model:'')||(defaults.phase==='error'?'Model unavailable':'Loading model…');
+ const noProviders=(isDraft?defaults.phase==='ready':Array.isArray(catalog?.providers))&&!providers.length;
+ const model=effective.model||(!isDraft?lastCall?.model:'')||(noProviders?'Set up a model':defaults.phase==='error'?'Model unavailable':!isDraft?'Choose a model':'Loading model…');
  const provider=effective.instance||effective.id||(!isDraft?lastCall?.provider:'')||'';
  const effectiveProvider=providers.find(row=>row.id===provider),effectiveEffort=effective.effort||configuredEffort(effectiveProvider,model);
  const configuredProvider=(state.setup?.providers||[]).find(row=>row.id===provider);
@@ -114,12 +115,13 @@ export function ModelControl({state,session,act,working}){
   {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
    <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
    <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={group?.id||draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
-    {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':'Loading providers…'}</option>}{draft.instance&&!providers.some(p=>p.id===draft.instance)&&<option value={draft.instance}>{draft.instance}</option>}{groups.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
+    {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':noProviders?'No providers configured':'Loading providers…'}</option>}{draft.instance&&!providers.some(p=>p.id===draft.instance)&&<option value={draft.instance}>{draft.instance}</option>}{groups.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
    </select>
    <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={working||!draft.instance} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>{const value=e.target.value,row=group?.rows.find(p=>p.id===draft.instance&&p.info?.defaults?.model===value)||group?.rows.find(p=>p.info?.defaults?.model===value);apply({instance:row?.id||draft.instance,model:value,effort:''})}}>
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
    {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={working||!draft.model} data-action={isDraft?'view.update':'runtime.control'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>Reasoning effort is not configurable for this model.</small>}
+   {noProviders&&<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections']}})}>Connect a model in Settings</button>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
   </section>}

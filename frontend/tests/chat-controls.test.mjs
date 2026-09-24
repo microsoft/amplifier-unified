@@ -60,7 +60,7 @@ test('draft model controls discover without creating a session and save choices 
 });
 
 test('inherited choices are displayed without pinning and the popup opens before requests finish',async()=>{
- const calls=[];let state={settings:{workspace:'/new'},view:{},setup:{providersRequestedWorkspace:'/new'},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model',effort:'high'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
+ const calls=[];let state={settings:{workspace:'/new'},workspaces:[{id:'new',path:'/new'}],selectedWorkspaceId:'new',view:{},setup:{providersRequestedWorkspace:'/new'},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model',effort:'high'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
  const act=(name,args)=>{calls.push({name,args});return new Promise(()=>{})};let root;
  await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act,working:false}))});
  assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('one · actual-model (high)'));
@@ -115,5 +115,15 @@ test('runtime report supplies readable provider before opening the selector',asy
  const session={id:'chat',runtimeReport:{provider_choices:[{id:'routing-alias',provider:'copilot-sdk',display_name:'GitHub Copilot SDK',model:'same-model',effort:'high'}],effective_selection:{instance:'routing-alias',model:'same-model',effort:'high'}}};
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state:{view:{}},session,act:async()=>({accepted:true}),working:false}))});
  assert.deepEqual(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children,['GitHub Copilot SDK · same-model (high)']);
+ await renderAct(async()=>root.unmount());
+});
+test('an empty resolved provider catalog offers setup instead of loading forever',async()=>{
+ const calls=[],state={view:{newSessionDraft:{workspace:'/trial'},composerModel:{open:true,sessionId:null}},draftDefaults:{'["/trial",""]':{phase:'ready',providers:[],effective:{}}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act:async(...args)=>calls.push(args)}))});
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('Set up a model'));
+ const setup=root.root.findAllByType('button').find(row=>row.children.includes('Connect a model in Settings'));
+ await renderAct(async()=>setup.props.onClick());
+ assert.equal(calls.at(-1)[1].patch.panel,'settings');
+ assert.deepEqual(calls.at(-1)[1].patch.settingsExpanded,['ai-connections']);
  await renderAct(async()=>root.unmount());
 });

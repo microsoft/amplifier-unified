@@ -72,11 +72,11 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  await renderAct(async()=>root.unmount());
 });
 
-test('rail pin, workspace drill-in and chat selection all use shared actions',async()=>{
+test('sidebar collapse, workspace drill-in and chat selection use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
- await renderAct(async()=>root.root.findByProps({'aria-label':'Pin navigation open'}).props.onClick());
- assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:true,navExpanded:true}}});
+ await renderAct(async()=>root.root.findByProps({'aria-label':'Close navigation'}).props.onClick());
+ assert.deepEqual(calls.at(-1),{name:'view.update',args:{patch:{navPinned:false,navExpanded:false}}});
  await renderAct(async()=>root.root.findByProps({'aria-label':'Open chats in /two'}).props.onClick());
  assert.ok(calls.some(call=>call.name==='workspace.select'&&call.args.id==='two'));
  assert.equal(calls.at(-1).args.patch.navWorkspaceList,false);

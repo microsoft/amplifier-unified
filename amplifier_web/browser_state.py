@@ -156,7 +156,8 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     # into every browser progress snapshot. The worker's latest report remains.
     result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
                            for worker in row.get('workers', [])]} for row in result['sessions']]
-    workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {state.get('selectedWorkspaceId')}
+    workspace_ids = {row.get('workspaceId') for row in result['sessions']} | {
+        state.get('selectedWorkspaceId'), state.get('view', {}).get('workWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
     result['workspaces'] = [row for row in state.get('workspaces', []) if row['id'] in workspace_ids]
