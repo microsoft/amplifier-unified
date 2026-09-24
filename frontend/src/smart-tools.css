@@ -60,3 +60,7 @@
 #amp-one .a-smart-tools .a-collection-detail label{margin-top:18px}
 #amp-one .a-settings-experience .a-smart-tools [data-activity-region=smart-tool-catalog] .a-collection-back{display:inline-flex;margin-bottom:18px}
 #amp-one .a-settings-experience .a-smart-tools>.a-collection .a-collection-back{display:none}
+
+#amp-one .a-smart-setup-requirements{display:grid;gap:16px;padding-left:20px}
+#amp-one .a-smart-setup-requirements p{margin:6px 0}
+#amp-one .a-smart-setup-requirements small{color:var(--a-muted)}
