@@ -6,6 +6,7 @@ import copy
 import importlib
 import importlib.metadata
 import inspect
+import json
 import re
 
 from .host.config import expand_environment
@@ -37,6 +38,8 @@ def construct_provider(cls, config):
     """Use the established provider-probe constructor contract."""
     parameters = inspect.signature(cls).parameters
     kwargs = {key: config.get(key) for key in ("api_key", "github_token") if key in parameters}
+    if "base_url" in parameters and "base_url" in config:
+        kwargs["base_url"] = config["base_url"]
     if "config" in parameters:
         kwargs["config"] = config
     return cls(**kwargs)
@@ -66,9 +69,31 @@ async def config_schema(provider, *, info=None):
     return _value(schema)
 
 
-async def provider_config_schema(module_id):
-    """Construct a schema-only provider with ``config={}``, then close it."""
-    provider = construct_provider(provider_class(module_id), {})
+def construct_schema_provider(cls, config, *, environment=None):
+    """Read metadata with empty config and only an explicitly saved endpoint.
+
+    Some providers require their endpoint as a separate constructor argument,
+    even for offline metadata. Never invent one or pass saved credentials here.
+    Missing references stay subject to the schema-aware materializer below.
+    """
+    kwargs = {}
+    if "base_url" in inspect.signature(cls).parameters and isinstance(config, dict):
+        try:
+            endpoint = expand_environment(config.get("base_url"), environment=environment)
+        except ValueError:
+            endpoint = None
+        if endpoint:
+            kwargs["base_url"] = endpoint
+    parameters = inspect.signature(cls).parameters
+    kwargs.update({key: None for key in ("api_key", "github_token") if key in parameters})
+    if "config" in parameters:
+        kwargs["config"] = {}
+    return cls(**kwargs)
+
+
+async def provider_config_schema(module_id, *, config=None, environment=None):
+    """Construct a metadata-only provider, then close it without model calls."""
+    provider = construct_schema_provider(provider_class(module_id), config, environment=environment)
     try:
         return await config_schema(provider)
     finally:
@@ -96,14 +121,45 @@ def materialize_provider_config(config, schema, *, environment=None):
     return result
 
 
-async def materialize_bundle_providers(bundle, prepared, *, environment=None, schema_loader=provider_config_schema):
-    """Synchronize materialized root and agent provider plans before any mount."""
-    root = {"providers": bundle.providers, "agents": bundle.agents}
+async def materialize_bundle_providers(bundle, prepared, *, environment=None, schema_loader=None):
+    """Preflight every instance atomically; never prune failed provider choices."""
+    from .module_failures import ConfiguredModuleError
+
+    root = copy.deepcopy({"providers": bundle.providers, "agents": bundle.agents})
     rows = [row for row in iter_provider_rows(root) if row.get("enabled", True)]
-    modules = dict.fromkeys(row["module"] for row in rows)
-    schemas = dict(zip(modules, await asyncio.gather(*(schema_loader(module) for module in modules))))
+    def schema_key(row):
+        config = row.get("config", {})
+        endpoint = config.get("base_url") if isinstance(config, dict) else None
+        # Only the explicit endpoint may affect metadata construction. Never
+        # reuse a different account's endpoint or include other saved config.
+        return row["module"], json.dumps(endpoint) if schema_loader is None else None
+
+    async def load(key):
+        module, endpoint = key
+        if schema_loader is not None:
+            schema = await schema_loader(module)
+        else:
+            schema = await provider_config_schema(module, config={"base_url": json.loads(endpoint)}, environment=environment)
+        _schema_fields(schema)
+        return schema
+
+    keys = dict.fromkeys(schema_key(row) for row in rows)
+    schemas = dict(zip(keys, await asyncio.gather(*(load(key) for key in keys), return_exceptions=True)))
+    failures = []
     for row in rows:
-        row["config"] = materialize_provider_config(row.get("config", {}), schemas[row["module"]], environment=environment)
+        schema = schemas[schema_key(row)]
+        reason = "provider_schema_failed"
+        try:
+            if isinstance(schema, BaseException):
+                raise schema
+            reason = "provider_configuration_failed"
+            row["config"] = materialize_provider_config(row.get("config", {}), schema, environment=environment)
+        except Exception:
+            failures.append({"module": row["module"], "type": "provider", "reason_code": reason,
+                             "instance_id": row.get("instance_id") or row.get("id")})
+    if failures:
+        raise ConfiguredModuleError(failures) from None
+    bundle.providers, bundle.agents = root["providers"], root["agents"]
     prepared.mount_plan["providers"] = copy.deepcopy(bundle.providers)
     prepared.mount_plan["agents"] = copy.deepcopy(bundle.agents)
     return prepared
