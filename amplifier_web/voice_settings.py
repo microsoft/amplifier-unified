@@ -3,11 +3,13 @@
 Samples use the selected conversation model, with no microphone, user messages,
 tools or delegation backend. Audio is returned to the requesting client only.
 """
+import array
 import asyncio
 import base64
 import io
 import os
 import time
+import sys
 import wave
 
 import aiohttp
@@ -16,7 +18,7 @@ from .preferences import SettingsStore
 from .updates import work_paused
 from .voice_options import voices_for
 
-SAMPLE = 'Hello! This is how I sound. I am ready to help you with your work.'
+SAMPLE = "Hello! I'm ready to help."
 PRIVATE_KEY = 'AMPLIFIER_VOICE_API_KEY'
 
 
@@ -108,7 +110,8 @@ async def render_sample(manager, model, voice):
         clock = None
         audio = bytearray()
         started = False
-        sample_start = None
+        speech_seen = False
+        trailing_silence = 0
         async def silence():
             chunk = base64.b64encode(bytes(4800)).decode()  # 100 ms, paced in real time.
             while True:
@@ -116,7 +119,7 @@ async def render_sample(manager, model, voice):
                 await asyncio.sleep(.1)
         try:
             async with asyncio.timeout(24):
-                while len(audio) < 12*48000:
+                while len(audio) < 6*48000:
                     event = await socket.receive_json(timeout=15)
                     kind = event.get('type')
                     if kind == 'error':
@@ -130,9 +133,24 @@ async def render_sample(manager, model, voice):
                             await socket.send_json({'type':'response.create','response':{'instructions':instruction,'max_output_tokens':200}})
                     if kind == ('session.output_audio.delta' if live else 'response.output_audio.delta'):
                         chunk = base64.b64decode(event.get('delta',''), validate=True)
-                        if sample_start is None: sample_start = time.monotonic()
+                        if live:
+                            samples = array.array('h', chunk[:len(chunk)//2*2])
+                            if sys.byteorder != 'little': samples.byteswap()
+                            speaking = any(abs(value) > 500 for value in samples)
+                            if speaking:
+                                speech_seen = True
+                                trailing_silence = 0
+                            elif speech_seen:
+                                trailing_silence += len(chunk)
+                            else:
+                                # Retain 100 ms of lead-in, not the startup silence.
+                                audio[:] = (audio + chunk)[-4800:]
+                                continue
                         audio.extend(chunk)
-                        if live and time.monotonic()-sample_start >= 10:
+                        if live and len(audio) >= 48000 and trailing_silence >= 28800:
+                            # End after 600 ms of silence instead of a fixed
+                            # ten-second wait for continuous Live audio.
+                            audio[:] = audio[:len(audio)-trailing_silence+5760]
                             break
                     if kind == 'response.done' and not live:
                         if event.get('response',{}).get('status') not in {None,'completed'}:
@@ -151,7 +169,9 @@ async def render_sample(manager, model, voice):
                         while (await socket.receive_json()).get('type') != 'session.closed': pass
                 except (TimeoutError, aiohttp.ClientError, TypeError):
                     pass
-        return wav_audio(audio[:12*48000])
+        if live and not speech_seen:
+            raise ValueError('No speech was returned for this preview.')
+        return wav_audio(audio[:6*48000])
 
 
 async def preview(manager, model, voice):
@@ -170,7 +190,17 @@ async def preview(manager, model, voice):
             manager.service._publish()
     try:
         try:
-            audio = await render_sample(manager, model, voice)
+            cache = getattr(manager, '_preview_samples', {})
+            cache_key = (model, voice)
+            cached = cache.get(cache_key)
+            if cached and time.monotonic()-cached[0] < 600:
+                audio = cached[1]
+            else:
+                audio = await render_sample(manager, model, voice)
+                cache = {key:value for key,value in cache.items() if time.monotonic()-value[0] < 600}
+                if len(cache) >= 32: cache.pop(next(iter(cache)))
+                cache[cache_key] = (time.monotonic(), audio)
+                manager._preview_samples = cache
         except (aiohttp.ClientError, TimeoutError, ValueError, TypeError) as exc:
             # Provider payloads and auth headers never enter state or errors.
             raise VoiceError('Could not preview this voice. Check the OpenAI key, model access and connection, then try again.', 502) from None

@@ -52,7 +52,7 @@ export function AIConnections({state,session,act,navigate}){
  const catalog=setup.providerCatalogs?.[d.id],models=modelOptions(catalog?.models||setup.modelCatalogs?.[d.id]||[]);
  const modelBusy=setupPending(setup.operations?.['providers.models:'+d.id])||catalog?.phase==='working';
  const credential=setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
- const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':'private'):(d.credentialMode||'private');
+ const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
  const scanCredentials=module=>{if(aiService(module).auth!=='signin')run('providers.credentials',{module});};
  const choose=s=>{if(sending.current)return;setKey('');setError('');setNotice('');edit({step:'connect',module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope:'global',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:d.scope||'global',...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');

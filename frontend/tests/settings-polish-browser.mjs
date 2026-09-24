@@ -29,8 +29,15 @@ try{
  await page.getByRole('button',{name:'Retry unfinished installations',exact:true}).waitFor();await snap('tools-results');
  await page.getByRole('button',{name:'Retry unfinished installations',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getState().smartTools.operations.filter(op=>op.action==='smartTools.installBatch').at(-1)?.status==='completed');
  await page.getByRole('button',{name:'View installed tools',exact:true}).click();await snap('tools-installed');
+ await page.getByRole('button',{name:/tool-0 Installed/}).click();await page.getByRole('button',{name:'Open setup instructions',exact:true}).click();
+ await expect(page.locator('[data-settings-page=smart-tools]')).toBeVisible();await expect(page.getByRole('region',{name:'Setup instructions'})).toContainText('Set up tool-0');await snap('tool-setup-instructions');
+ await page.getByRole('button',{name:'Configure MCP connection',exact:true}).click();await expect(page.getByLabel('Display name',{exact:true})).toHaveValue('tool-0');await snap('tool-setup-connection');
+ await openSettingsPage(page,'tool-connections');await expect(page.getByText('0 ready · 0 configured',{exact:true})).toHaveCount(0);await snap('advanced-tool-list');
+ await page.getByRole('button',{name:/tool-0 Installed/}).click();await page.getByRole('button',{name:'Open setup instructions',exact:true}).click();await snap('advanced-tool-setup');
+ await page.getByRole('button',{name:'Configure MCP connection',exact:true}).click();await page.getByLabel('Connection type',{exact:true}).selectOption('streamable-http');await snap('advanced-tool-remote');
+ for(const width of [390,1280]){await page.setViewportSize({width,height:940});for(const type of ['streamable-http','stdio']){await page.getByLabel('Connection type',{exact:true}).selectOption(type);assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));await snap(`advanced-tool-${type}-${width}`);await page.locator('.a-settings-content').evaluate(el=>el.scrollTop=el.scrollHeight);await snap(`advanced-tool-${type}-${width}-lower`)}}
  await openSettingsPage(page,'voice');await page.getByRole('button',{name:'Choose a voice',exact:true}).click();await snap('voice-picker');
- await page.getByRole('button',{name:'Preview Marin',exact:true}).click();await page.locator('audio').waitFor();await snap('voice-sample');
+ await page.getByRole('button',{name:'Preview Marin',exact:true}).click();await page.locator('audio').waitFor();await page.waitForFunction(()=>{const a=document.querySelector('audio');return a&&a.readyState>=2&&a.currentTime>0&&!a.error});assert.ok((await page.locator('audio').getAttribute('src')).startsWith('blob:'));await snap('voice-sample');
  await page.getByRole('radio',{name:/Willow English/}).click();await expect(page.locator('.a-voice-current')).toContainText('Willow');
  // Closed release disclosures do not acknowledge a notice; actual visible content does.
  await openSettingsPage(page,'updates');
