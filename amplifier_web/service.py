@@ -1366,14 +1366,15 @@ class AppService:
                     if args['id'] != canvas.get('id'):
                         raise AppError('This canvas has been replaced.')
                     content = canvas.get('url') if canvas.get('kind')=='browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
-                    extension = {'markdown':'md','html':'html','mermaid':'mmd','dot':'dot','json':'json','jsonl':'jsonl','a2ui':'json'}.get(canvas.get('kind'), 'txt')
+                    from .canvas_downloads import filename
+                    download_name = filename(canvas)
                     if action=='canvas.copy' and canvas.get('contentResource'):
                         effects.append({'type':'clipboard.url','url':'/api/canvas/'+canvas['id']+'/source','canvasId':canvas['id']})
                     elif action=='canvas.download' and (canvas.get('kind')=='babylon' or canvas.get('contentResource')):
-                        effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download','filename':'canvas-3d.html' if canvas.get('kind')=='babylon' else 'canvas.html'})
+                        effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download','filename':download_name})
                     else:
                         effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',
-                        'content':content,'filename':'canvas.'+extension,'mime':'text/plain','canvasId':args['id']})
+                        'content':content,'filename':download_name,'mime':'text/plain','canvasId':args['id']})
                 elif action=='canvas.show':
                     sid=args.get('sessionId',self.state.get('selectedSessionId'))
                     from .agent_canvas import scope

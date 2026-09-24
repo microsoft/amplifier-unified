@@ -1,0 +1,83 @@
+import copy
+from urllib.parse import quote
+
+import pytest
+
+from amplifier_web.canvas_downloads import filename
+from amplifier_web.service import AppService
+from test_canvas_views import app, command, target, view
+
+
+@pytest.mark.parametrize(('canvas', 'expected'), [
+    ({'kind': 'markdown', 'path': '/private/project/Plan été.md'}, 'Plan été.md'),
+    ({'kind': 'code', 'path': r'C:\project\run.py'}, 'run.py'),
+    ({'kind': 'text', 'path': '/project/.gitignore'}, '.gitignore'),
+    ({'kind': 'markdown', 'path': '/project/bad\r\n"name.md'}, 'bad___name.md'),
+    ({'kind': 'markdown', 'path': '/project/..'}, 'canvas.md'),
+    ({'kind': 'markdown', 'title': 'Not a filename'}, 'canvas.md'),
+    ({'kind': 'babylon'}, 'canvas-3d.html'),
+    ({'kind': 'image', 'path': '/project/photo.png'}, 'canvas.txt'),
+])
+def test_safe_source_filename(canvas, expected):
+    assert filename(canvas) == expected
+
+
+async def test_both_download_actions_keep_original_name_and_snapshot(app, tmp_path):
+    path = tmp_path / 'Plan été.md'
+    original = '# Saved\r\n\nOriginal content.'
+    path.write_bytes(original.encode())
+    await command(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    current = view(app)
+    identity = current['resourceId']
+    path.unlink()
+    with app.clients.bind('one'):
+        before = copy.deepcopy(app.state['sessions'])
+    for action, args in [
+        ('canvas.download', {'id': identity}),
+        ('canvas.views.command', {**target(current), 'action': 'canvas.download', 'args': {}}),
+    ]:
+        result = await command(app, action, args)
+        effect = result['effects'][0]
+        assert effect['filename'] == path.name
+        assert effect['content'] == original
+    with app.clients.bind('one'):
+        assert app.state['sessions'] == before
+
+
+async def test_name_survives_restart(tmp_path):
+    path = tmp_path / 'saved.md'
+    path.write_text('# Saved')
+    first = AppService(tmp_path / 'app', workspace=tmp_path)
+    await first.dispatch('session.create', {})
+    await first.dispatch('canvas.show', {'kind': 'auto', 'path': str(path)})
+    identity = first.state['canvas']['id']
+    await first.close()
+    path.unlink()
+    restored = AppService(tmp_path / 'app', workspace=tmp_path)
+    try:
+        await restored.dispatch('canvas.select', {'id': identity})
+        result = await restored.dispatch('canvas.download', {'id': identity})
+        assert result['effects'][0]['filename'] == 'saved.md'
+        assert result['effects'][0]['content'] == '# Saved'
+    finally:
+        await restored.close()
+
+
+async def test_http_download_name_and_body_survive_source_deletion(authenticated_client, tmp_path):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    host = await create_app(tmp_path / 'app', preload_providers=False, workspace=tmp_path,
+                            runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(host)
+    service = host['service']
+    await service.dispatch('session.create', {})
+    path = tmp_path / 'résumé.html'
+    body = '<h1>Original</h1>\r\n'
+    path.write_bytes(body.encode())
+    await service.dispatch('canvas.show', {'kind': 'auto', 'path': str(path)})
+    identity = service.state['canvas']['id']
+    path.unlink()
+    response = await client.get(f'/api/canvas/{identity}/download')
+    assert response.status == 200
+    assert response.headers['Content-Disposition'] == "attachment; filename*=UTF-8''" + quote(path.name, safe='')
+    assert await response.read() == body.encode()

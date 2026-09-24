@@ -78,6 +78,23 @@ async def test_schema_does_not_need_configured_credentials(manager,tmp_path):
     result=await manager.perform('providers.schema',{'module':'provider-openai','workspace':str(tmp_path)})
     assert result['providerMetadata']['configSchema']['fields'][0]['choices']==['low','high']
 
+
+@pytest.mark.asyncio
+async def test_schema_uses_only_requested_instances_endpoint_and_no_saved_secrets(manager,tmp_path):
+    import sys
+    for identity in ('one', 'two'):
+        await manager.perform('providers.save', {'id': identity, 'module': 'provider-vllm',
+            'config': {'base_url': f'https://{identity}.test/v1/', 'custom_secret': 'private-value'},
+            'apiKeyEnv': 'UNSET_SCHEMA_KEY', 'workspace': str(tmp_path)})
+    child=tmp_path/'probe.py'
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']=={'base_url':'https://two.test/v1/'}; print(json.dumps({'info':{},'configSchema':{'fields':[]}}))")
+    manager.probe_command=[sys.executable,str(child)]
+    result=await manager.perform('providers.schema', {'module': 'provider-vllm', 'id': 'two', 'workspace': str(tmp_path)})
+    assert result['providerMetadata']['configSchema']=={'fields':[]}
+    # Requesting another module cannot borrow the saved account's endpoint.
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['config']=={}; print(json.dumps({'info':{},'configSchema':{'fields':[]}}))")
+    await manager.perform('providers.schema', {'module': 'provider-openai', 'id': 'two', 'workspace': str(tmp_path)})
+
 @pytest.mark.asyncio
 async def test_provider_probe_errors_are_visible(manager,tmp_path):
     import sys

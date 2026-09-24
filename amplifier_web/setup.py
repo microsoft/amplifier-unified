@@ -190,9 +190,10 @@ class SetupManager:
         if not module:raise ValueError('Save this provider before discovering models or testing it.')
         safe_name(module)
         raw=(row or {}).get('config',{}) if row and row['module']==module else {}
-        # The isolated probe discovers metadata with config={}; its shared
-        # materializer then expands this in-memory copy before provider mount.
-        config={} if action=='providers.schema' else copy.deepcopy(raw)
+        # Metadata may need this exact instance's endpoint, never its secrets.
+        # The isolated probe passes it only to a declared constructor argument.
+        config=({key:copy.deepcopy(raw[key]) for key in ('base_url',) if key in raw}
+                if action=='providers.schema' else copy.deepcopy(raw))
         if action!='providers.schema':
             credential=environment_credential(module,raw)
             field=credential['field']

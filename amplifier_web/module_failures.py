@@ -11,6 +11,8 @@ REMEDIATION = {
     'invalid_entry_point': 'Check the module entry point and async mount function.',
     'invalid_module_metadata': 'Check the declared module type and metadata.',
     'validation_failed': 'Check the module contract and its required dependencies.',
+    'provider_schema_failed': 'Check this provider’s saved endpoint and installed module. Its configuration fields could not be read.',
+    'provider_configuration_failed': 'Check this provider’s saved configuration and required credentials.',
     'unknown': 'The module could not be loaded. Check its configuration and dependencies.',
 }
 
@@ -25,15 +27,19 @@ def safe_failures(values):
         if kind not in ('tool','hook','provider','orchestrator','context','resolver'):kind='unknown'
         reason=row.get('reason_code')
         if not isinstance(reason,str) or reason not in REMEDIATION:reason='unknown'
-        result.append({'module':module,'type':kind,'reason_code':reason,'guidance':REMEDIATION[reason]})
+        safe={'module':module,'type':kind,'reason_code':reason,'guidance':REMEDIATION[reason]}
+        instance=row.get('instance_id')
+        if isinstance(instance,str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',instance):
+            safe['instance_id']=instance
+        result.append(safe)
     return result
 
 
 class ConfiguredModuleError(RuntimeError):
     def __init__(self,failures):
         self.failures=safe_failures(failures)
-        super().__init__('Configured modules failed to mount: '+ '; '.join(
-            row['module']+': '+row['guidance'] for row in self.failures))
+        super().__init__('Configured modules could not be prepared: '+ '; '.join(
+            row['module']+(' ('+row['instance_id']+')' if row.get('instance_id') else '')+': '+row['guidance'] for row in self.failures))
 
 
 def persist_failures(directory,failures):

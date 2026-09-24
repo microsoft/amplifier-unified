@@ -50,7 +50,8 @@ ACTIVITY_PHASES = {'idle', 'starting', 'preparing', 'model', 'tools', 'retrying'
     'compacting', 'stopping', 'stopped', 'error', 'completed', 'waiting', 'approval'}
 MODULE_TYPES = {'tool', 'hook', 'provider', 'orchestrator', 'context', 'resolver'}
 MODULE_REASONS = {'invalid_package_layout', 'missing_source', 'invalid_entry_point',
-    'invalid_module_metadata', 'validation_failed', 'unknown'}
+    'invalid_module_metadata', 'validation_failed', 'provider_schema_failed',
+    'provider_configuration_failed', 'unknown'}
 
 
 def _object(value):

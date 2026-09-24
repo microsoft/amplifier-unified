@@ -54,3 +54,35 @@ async def test_failed_catalog_still_closes_provider(monkeypatch):
     monkeypatch.setattr(provider_probe,'provider_class',lambda module:Provider)
     with pytest.raises(ValueError):await provider_probe.query({'module':'test','action':'providers.models'})
     assert closed==[True,True]
+
+
+@pytest.mark.parametrize('action', ['providers.schema', 'providers.models', 'providers.test'])
+async def test_endpoint_provider_uses_explicit_unmodified_endpoint_and_metadata_has_no_secrets(monkeypatch, action):
+    endpoint = 'https://configured.test/v1/?route=%2F'
+    calls, closed = [], []
+    class Provider:
+        def __init__(self, base_url=None, *, api_key=None, config=None):
+            assert base_url == endpoint
+            assert api_key == ('private' if config else None)
+            self.config = config
+            calls.append(('construct', bool(config)))
+        def get_info(self):
+            return {'config_fields': [
+                {'id': 'base_url', 'field_type': 'text', 'required': True},
+                {'id': 'api_key', 'field_type': 'secret', 'required': True},
+            ]}
+        async def list_models(self):
+            assert self.config and action != 'providers.schema'
+            calls.append(('models', True))
+            return [{'id': 'configured-model'}]
+        async def close(self):
+            closed.append(True)
+    monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
+    monkeypatch.setenv('EXACT_PROVIDER_ENDPOINT', endpoint)
+    monkeypatch.setenv('EXACT_PROVIDER_KEY', 'private')
+    result = await provider_probe.query({'module': 'provider-endpoint', 'action': action,
+        'config': {'base_url': '${EXACT_PROVIDER_ENDPOINT}', 'api_key': '${EXACT_PROVIDER_KEY}'}})
+    assert 'private' not in str(result)
+    assert calls == ([('construct', False)] if action == 'providers.schema' else
+                     [('construct', False), ('construct', True), ('models', True)])
+    assert len(closed) == (1 if action == 'providers.schema' else 2)

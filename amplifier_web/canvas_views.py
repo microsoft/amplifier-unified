@@ -317,14 +317,15 @@ class CanvasViews:
             fail(exc.message)
         effects = []
         if action in {'canvas.copy', 'canvas.download'}:
+            from .canvas_downloads import filename
             content = canvas.get('url') if canvas['kind'] == 'browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
             if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] == 'babylon'):
                 effects.append({'type': 'clipboard.url' if action == 'canvas.copy' else 'download.url',
                                 'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download'),
-                                'canvasId': row['id'], 'filename': 'canvas-3d.html' if canvas['kind'] == 'babylon' else 'canvas.html'})
+                                'canvasId': row['id'], 'filename': filename(canvas)})
             else:
                 effects.append({'type': 'clipboard.write' if action == 'canvas.copy' else 'download',
-                                'content': content, 'filename': 'canvas.' + {'markdown': 'md', 'html': 'html', 'mermaid': 'mmd', 'dot': 'dot', 'json': 'json', 'jsonl': 'jsonl', 'a2ui': 'json'}.get(canvas['kind'], 'txt'),
+                                'content': content, 'filename': filename(canvas),
                                 'mime': 'text/plain', 'canvasId': row['id']})
         elif action == 'canvas.openExternal':
             if canvas['kind'] != 'browser':
