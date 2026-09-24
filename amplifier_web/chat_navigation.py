@@ -87,6 +87,14 @@ def initialize(state):
 
 
 def view_patch(patch):
+    # Browsing is client presentation, never a change to the active chat/folder.
+    if 'workSurface' in patch and patch['workSurface'] not in ('chat', 'workspace', 'workspaces', 'chats'):
+        raise ValueError('Choose chat, workspace, workspaces or chats.')
+    if 'workWorkspaceTab' in patch and patch['workWorkspaceTab'] not in ('chats', 'files', 'details'):
+        raise ValueError('Choose chats, files or details.')
+    if 'workWorkspaceId' in patch and patch['workWorkspaceId'] is not None and (not isinstance(patch['workWorkspaceId'], str) or not 1 <= len(patch['workWorkspaceId']) <= 100):
+        raise ValueError('Choose a registered workspace.')
+
     if 'navSectionsCollapsed' in patch:
         value = patch['navSectionsCollapsed']
         if not isinstance(value, list) or len(value) > 3 or any(

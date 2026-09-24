@@ -1,5 +1,4 @@
 import React from 'react';
-import {ChatLocation} from './chat-location';
 import './new-chat.css';
 
 export function newChatSetup(state){
@@ -19,11 +18,6 @@ export function draftDefaults(state){
  return state.draftDefaults?.[draftDefaultsKey(setup)]||{};
 }
 
-export function NewChatSetup({state,act}){
- const setup=newChatSetup(state);
- const edit=patch=>act('view.update',{patch:{newSessionDraft:{...setup,...patch}}});
- return <section className="a-new-chat-setup" aria-label="New chat settings">
-  <h2>New chat</h2><p>Choose a workspace, or just start a conversation.</p>
-  <ChatLocation state={state} act={act} setup={setup} onChange={edit}/>
- </section>;
+export function NewChatSetup(){
+ return <section className="a-new-chat-setup" aria-label="New chat"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></section>;
 }

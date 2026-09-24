@@ -117,3 +117,13 @@ test('runtime report supplies readable provider before opening the selector',asy
  assert.deepEqual(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children,['GitHub Copilot SDK · same-model (high)']);
  await renderAct(async()=>root.unmount());
 });
+test('an empty resolved provider catalog offers setup instead of loading forever',async()=>{
+ const calls=[],state={view:{newSessionDraft:{workspace:'/trial'},composerModel:{open:true,sessionId:null}},draftDefaults:{'["/trial",""]':{phase:'ready',providers:[],effective:{}}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act:async(...args)=>calls.push(args)}))});
+ assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('Set up a model'));
+ const setup=root.root.findAllByType('button').find(row=>row.children.includes('Connect a model in Settings'));
+ await renderAct(async()=>setup.props.onClick());
+ assert.equal(calls.at(-1)[1].patch.panel,'settings');
+ assert.deepEqual(calls.at(-1)[1].patch.settingsExpanded,['ai-connections']);
+ await renderAct(async()=>root.unmount());
+});
