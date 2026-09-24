@@ -187,20 +187,12 @@ class SmartCanvas:
                 canvas['mcp'].update(contractFingerprint=captured['fingerprint'], accountIdentity=account(latest))
             if operation:
                 from .resource_files import put
-                from .mcp_view_recovery import digest
+                from . import canvas_presentation
                 result = operation.get('result', {})
-                metadata = result.get('_meta') if isinstance(result, dict) else None
-                explicit = metadata.get('amplifier/presentationId') if isinstance(metadata, dict) else None
-                if not isinstance(explicit, str) or not 0 < len(explicit) <= 200:
-                    explicit = None
-                # The tool must include its run/input identity in this explicit
-                # result key. A missing key only permits reopening the same call.
-                canvas['presentationKey'] = digest([key, account(latest), args['tool'], uri,
-                    ['presentation', explicit] if explicit else ['operation', args['operationId']]])
+                explicit = canvas_presentation.identity(result)
+                canvas['presentationKey'] = canvas_presentation.key(canvas['mcp'], explicit, args['operationId'])
                 canvas['mcp']['savedResult'] = put(self.service.db, result)
-                previous = next((r for r in state.get('canvasArtifacts', [])
-                    if r.get('sessionId') == sid and r.get('workspaceId') == workspace['id']
-                    and r.get('presentationKey') == canvas['presentationKey']), None)
+                previous = canvas_presentation.previous(self.service, canvas, explicit)
                 if previous:
                     from .canvas_versions import assert_clean
                     assert_clean(self.service, previous['id'])

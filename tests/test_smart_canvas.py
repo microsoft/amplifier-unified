@@ -11,6 +11,7 @@ class Tools:
         self.service = service
         service.state['smartTools'] = {'servers':[{'id':'one','name':'Counter','command':'counter', 'args':[], 'env':{},
             'tools':[{'name':'read','inputSchema':{'type':'object'},'_meta':{'ui':{'resourceUri':'ui://counter'}}}]}], 'operations':[]}
+        self.schemas = {'one':copy.deepcopy(service.state['smartTools']['servers'][0]['tools'])}
     async def read_app(self, identity, uri):
         return {'html':'<!doctype html><h1>Independent</h1>','tools':['read'],'csp':{},'permissions':{}}
     async def command(self, action, args, identity, origin, *, defer_publish=False):
@@ -194,3 +195,106 @@ async def test_independent_calls_without_explicit_identity_and_distinct_runs_sta
         service.smart_tools.operation(identity)['result']['_meta'] = {'amplifier/presentationId':identity}
         await service.smart_canvas.open({'id':'one','tool':'read','operationId':identity})
     assert len(service.state['canvasArtifacts']) == 4
+
+
+async def presentation_setup(service):
+    server = service.state['smartTools']['servers'][0]
+    other = copy.deepcopy(server['tools'][0])
+    other['name'] = 'details'
+    server['tools'].append(other)
+    service.smart_tools.schemas['one'] = copy.deepcopy(server['tools'])
+    app = {'html':'<!doctype html><h1>Shared dashboard</h1>', 'tools':['read','details'], 'csp':{}, 'permissions':{}}
+    async def read_app(identity, uri):
+        return copy.deepcopy(app)
+    service.smart_tools.read_app = read_app
+    return server, app
+
+
+async def present(service, operation_id, tool='read', presentation_id='entity-1'):
+    sid = service._session()['id']
+    await service.smart_tools.command('smartTools.call', {'id':'one','name':tool,'sessionId':sid}, operation_id, 'agent')
+    operation = service.smart_tools.operation(operation_id)
+    operation['result']['_meta'] = {'amplifier/presentationId':presentation_id}
+    operation['arguments'] = {'entity':presentation_id,'operation':operation_id}
+    return await service.smart_canvas.open({'id':'one','tool':tool,'operationId':operation_id})
+
+
+async def test_cross_method_presentation_keeps_legacy_id_and_exact_saved_links(service):
+    from amplifier_web.mcp_view_recovery import digest, source
+    from amplifier_web.state_storage import resource
+    await presentation_setup(service)
+    first = await present(service, 'first')
+    binding = copy.deepcopy(service.state['canvas']['mcp'])
+    # Reproduce the old launcher-specific identity, without rewriting history.
+    legacy = digest([binding['configuration'],binding['accountIdentity'],'read',binding['resourceUri'],['presentation','entity-1']])
+    service.state['canvas']['presentationKey'] = legacy
+    service.state['canvasArtifacts'][0]['presentationKey'] = legacy
+    original = copy.deepcopy(service.state['canvasArtifacts'][0])
+    second = await present(service, 'second', 'details')
+    assert second['canvasId'] == first['canvasId']
+    assert len(service.state['canvasArtifacts']) == 1
+    assert second['revision'] == 2
+    assert service.state['canvas']['mcp']['tool'] == 'details'
+    assert service.state['canvasArtifacts'][0]['versions'][0] == original['versions'][0]
+    await service.dispatch('canvas.select', {'id':first['canvasId'],'version':1})
+    assert service.state['canvas']['mcp']['tool'] == 'read'
+    assert service.state['canvas']['mcp']['toolArguments']['operation'] == 'first'
+    assert 'Shared dashboard' in source(service, first['canvasId'])
+    assert resource(service.db, service.state['canvas']['mcp']['savedResult']['$resource'])['_meta']['amplifier/presentationId'] == 'entity-1'
+    await service.dispatch('canvas.select', {'id':first['canvasId']})
+    assert service.state['canvas']['mcp']['tool'] == 'details'
+    assert len(service.state['smartTools']['operations']) == 2  # No re-execution.
+    # Reopening the same call remains idempotent, including across methods.
+    reopened = await service.smart_canvas.open({'id':'one','tool':'details','operationId':'second'})
+    assert reopened['revision'] == 2
+
+
+@pytest.mark.parametrize('change', ['account','grant','schema','permissions','csp','resource','configuration','missing_contract','entity','session','unconfirmed_account'])
+async def test_explicit_identity_never_reuses_different_authority_or_entity(service, change):
+    from amplifier_web.resource_files import put
+    from amplifier_web.state_storage import resource
+    server, app = await presentation_setup(service)
+    first = await present(service, 'first')
+    if change == 'account':
+        server['accountBinding'] = {'issuer':'https://identity.example','subject':'different'}
+    elif change == 'grant':
+        app['tools'] = ['details']
+    elif change == 'schema':
+        service.smart_tools.schemas['one'][0]['inputSchema'] = {'type':'object','required':['new_required']}
+    elif change == 'permissions':
+        app['permissions'] = {'clipboardWrite':{}}
+    elif change == 'csp':
+        app['csp'] = {'connectDomains':['https://other.example']}
+    elif change == 'resource':
+        server['tools'][1]['_meta']['ui']['resourceUri'] = 'ui://other-dashboard'
+        service.smart_tools.schemas['one'][1]['_meta']['ui']['resourceUri'] = 'ui://other-dashboard'
+    elif change == 'configuration':
+        server['command'] = 'different-program'
+    elif change == 'missing_contract':
+        binding = resource(service.db, service.state['canvasArtifacts'][0]['mcpState']['$resource'])
+        binding.pop('contractFingerprint')
+        service.state['canvas']['mcp'] = binding
+        service.state['canvasArtifacts'][0]['mcpState'] = put(service.db, binding)
+    elif change == 'session':
+        await service.dispatch('session.create', {'title':'Separate conversation'})
+    elif change == 'unconfirmed_account':
+        server['account'] = {'status':'unconfirmed'}
+    original = copy.deepcopy(service.state['canvasArtifacts'][0])
+    second = await present(service, 'second', 'details', 'other-entity' if change == 'entity' else 'entity-1')
+    assert second['canvasId'] != first['canvasId']
+    assert len(service.state['canvasArtifacts']) == 2
+    assert service.state['canvasArtifacts'][0] == original
+
+
+@pytest.mark.parametrize('damaged', [None, [], 'not a binding'])
+async def test_explicit_identity_keeps_malformed_saved_binding(service, damaged):
+    from amplifier_web.resource_files import put
+    await presentation_setup(service)
+    first = await present(service, 'first')
+    service.state['canvasArtifacts'][0]['mcpState'] = put(service.db, damaged)
+    from amplifier_web.canvas_library import empty
+    empty(service.state)  # No live binding to legitimately repair the saved row.
+    original = copy.deepcopy(service.state['canvasArtifacts'][0])
+    second = await present(service, 'second', 'details')
+    assert second['canvasId'] != first['canvasId']
+    assert service.state['canvasArtifacts'][0] == original

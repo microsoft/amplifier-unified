@@ -222,7 +222,10 @@ For MCP Apps, reopening the same completed operation reuses its tab. A tool may
 supply `_meta["amplifier/presentationId"]` in its result to identify one durable
 presentation across later calls. The ID must include the tool's run/input
 identity; unrelated runs must use different IDs. Unified namespaces it by server
-configuration, verified account identity, launcher and resource URI. Without
+configuration, verified account identity and resource URI. Different launcher
+methods can reuse that explicitly identified dashboard only while their saved
+app grants, schemas and requested permissions remain identical. Existing saved
+artifact IDs and version links are preserved when adopting this identity. Without
 that explicit result metadata, different operations remain separate, even when
 their titles or results match. Source HTML and the launch result are retained
 locally per version; old views do not depend on the rolling operation list.
