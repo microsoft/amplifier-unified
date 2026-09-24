@@ -154,11 +154,41 @@ def _label(value):
     return re.sub(r'[\r\n]+', ' ', str(value)).replace('`', '\\`')
 
 
-def markdown(home, session, artifacts):
+def snapshot(home, session, artifacts, options=None):
+    options = options or {}
     rows = messages(home, session)
+    scope = options.get('scope', 'all')
+    if scope not in {'all', 'from', 'range'}:
+        raise ValueError('Choose a full conversation, a starting point, or a message range.')
+    first, last = options.get('fromMessageId'), options.get('throughMessageId')
+    if scope == 'all' and (first or last) or scope == 'from' and last:
+        raise ValueError('The message boundaries do not match the chosen export scope.')
+    if scope != 'all':
+        def boundary(identity):
+            matches = [index for index, row in enumerate(rows) if identity and row.get('id') == identity]
+            if len(matches) != 1:
+                raise ValueError('An export boundary is missing or ambiguous. Refresh and select the messages again.')
+            return matches[0]
+        start = boundary(first)
+        end = boundary(last) if scope == 'range' else len(rows) - 1
+        if end < start:
+            raise ValueError('The end of the export must follow its starting message.')
+        rows = rows[start:end + 1]
+    minimal = options.get('minimal', False)
+    selected_ids = {row.get('id') for row in rows if row.get('id')}
+    owned = [row for row in artifacts if row.get('sessionId') == session['id']]
+    omitted_artifacts = 0
+    if scope != 'all':
+        included = [row for row in owned if row.get('messageId') in selected_ids]
+        omitted_artifacts = len(owned) - len(included)
+        owned = included
     blocks = ['# ' + _label(session.get('title') or 'Conversation'),
               'Conversation: `' + _label(session['id']) + '`',
               'Snapshot of user-visible conversation text. Tool payloads and hidden instructions are omitted.']
+    if minimal:
+        blocks = [blocks[0], blocks[2]]
+    if scope != 'all':
+        blocks.append('Selected conversation excerpt; earlier and later messages outside this range are omitted.')
     if session.get('status') in {'working', 'starting', 'running', 'stopping'}:
         blocks.append('Work was in progress when this snapshot was captured; the final response may follow later.')
     if any(row.get('_recoveredReference') for row in rows):
@@ -178,7 +208,6 @@ def markdown(home, session, artifacts):
         for item in row.get('attachments', []):
             if isinstance(item, dict):
                 blocks.append('Attachment: ' + _label(item.get('name', 'File')) + ' (ID: `' + _label(item.get('id', 'unavailable')) + '`)')
-    owned = [row for row in artifacts if row.get('sessionId') == session['id']]
     if owned:
         blocks.append('## Artifacts\n\nReferences identify saved artifacts in this host; their contents are not embedded.')
         for row in owned:
@@ -187,4 +216,20 @@ def markdown(home, session, artifacts):
                           + ('; message: `' + _label(row['messageId']) + '`' if row.get('messageId') else ''))
     if not rows:
         blocks.append('No messages yet.')
-    return '\n\n'.join(blocks) + '\n'
+    content = '\n\n'.join(blocks) + '\n'
+    summary = {'scope': scope, 'minimal': bool(minimal), 'messageCount': len(rows),
+               'bytes': len(content.encode('utf-8')), 'attachmentCount': sum(
+                   sum(isinstance(item, dict) for item in row.get('attachments', [])) for row in rows),
+               'artifactCount': len(owned), 'omittedArtifactCount': omitted_artifacts,
+               'fileBytesIncluded': False,
+               'fromMessageId': rows[0].get('id') if rows else None,
+               'throughMessageId': rows[-1].get('id') if rows else None,
+               'omissions': ['Hidden instructions, private reasoning and tool payloads are excluded.',
+                             'Attachment and artifact contents are not embedded.']}
+    if omitted_artifacts:
+        summary['omissions'].append('Artifacts without a message link inside the selected range are excluded.')
+    return content, summary
+
+
+def markdown(home, session, artifacts):
+    return snapshot(home, session, artifacts)[0]

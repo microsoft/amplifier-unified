@@ -213,12 +213,12 @@ async def test_slow_history_read_does_not_block_navigation(app_factory, monkeypa
     from amplifier_web import conversation_export
     app = app_factory(); await app.dispatch('session.create', {})
     entered, release = threading.Event(), threading.Event()
-    original = conversation_export.markdown
+    original = conversation_export.snapshot
     def paused(*args):
         entered.set()
         assert release.wait(3), 'Test did not release export reader'
         return original(*args)
-    monkeypatch.setattr(conversation_export, 'markdown', paused)
+    monkeypatch.setattr(conversation_export, 'snapshot', paused)
     exporting = asyncio.create_task(app.dispatch('session.export', {'id': app._session()['id'], 'format': 'markdown', 'destination': 'none'}))
     try:
         assert await asyncio.to_thread(entered.wait, 1)
@@ -227,3 +227,82 @@ async def test_slow_history_read_does_not_block_navigation(app_factory, monkeypa
     finally:
         release.set()
         await exporting
+
+
+async def test_reviewed_range_delivery_keeps_exact_bytes_after_history_changes(tmp_path, app_factory):
+    app = app_factory(); await app.dispatch('session.create', {'title': 'Range α / example'})
+    source = app._session()
+    source['messages'] = [{'id': f'm{i}', 'role': 'user' if i % 2 == 0 else 'assistant', 'text': f'Unique {i}'} for i in range(4)]
+    app.state['canvasArtifacts'] += [
+        {'id': 'inside', 'title': 'In range', 'sessionId': source['id'], 'messageId': 'm1'},
+        {'id': 'outside', 'title': 'Out of range', 'sessionId': source['id'], 'messageId': 'm0'},
+        {'id': 'unbound', 'title': 'No message', 'sessionId': source['id']}]
+    args = {'id': source['id'], 'format': 'markdown', 'scope': 'range', 'fromMessageId': 'm1', 'throughMessageId': 'm2', 'minimal': True, 'destination': 'none'}
+    preview = await app.dispatch('session.export', args, command_id='preview-range')
+    content = exported(app, preview); summary = preview['result']['summary']
+    assert summary['messageCount'] == 2 and summary['artifactCount'] == 1 and summary['omittedArtifactCount'] == 2
+    assert summary['bytes'] == len(content.encode()) and not summary['fileBytesIncluded']
+    assert 'Unique 1' in content and 'Unique 2' in content and 'Unique 0' not in content and 'Unique 3' not in content
+    assert 'inside' in content and 'ID: `outside`' not in content and 'ID: `unbound`' not in content
+    assert source['id'] not in content
+    assert '/' not in preview['result']['filename']
+    source['messages'][1]['text'] = 'Changed later'
+    source['messages'].append({'id': 'm4', 'role': 'user', 'text': 'New later'})
+    app.clients.attach('export-client')
+    with app.clients.bind('export-client'):
+        queue = app.subscribe(source['id'])
+    delivery = await app.app_bridge('dispatch', {'action': 'session.exportDeliver', 'args': {'snapshotId': preview['result']['snapshotId'], 'destination': 'clipboard'}, 'id': 'deliver-range'}, source['id'])
+    assert delivery['result'] == preview['result'] and exported(app, delivery) == content
+    assert delivery['effects'][0]['type'] == 'conversation.export'
+    assert app.clients.records['export-client']['deviceCommands'][-1]['url'] == preview['result']['url']
+    assert app.clients.records['export-client']['deviceCommands'][-1]['clientId'] == 'export-client'
+    repeated = await app.app_bridge('dispatch', {'action': 'session.exportDeliver', 'args': {'snapshotId': preview['result']['snapshotId'], 'destination': 'clipboard'}, 'id': 'deliver-range'}, source['id'])
+    assert repeated['duplicate'] and exported(app, repeated) == content
+    app.unsubscribe(queue)
+    await app.dispatch('session.create', {})
+    with pytest.raises(AppError, match='unavailable'):
+        await app.dispatch('session.exportDeliver', {'id': app._session()['id'], 'snapshotId': preview['result']['snapshotId'], 'destination': 'download'})
+
+
+@pytest.mark.parametrize('options', [
+    {'scope': 'range', 'fromMessageId': 'm1', 'throughMessageId': 'm0'},
+    {'scope': 'range', 'fromMessageId': 'missing', 'throughMessageId': 'm1'},
+    {'scope': 'range', 'fromMessageId': 'm0'},
+    {'scope': 'all', 'fromMessageId': 'm0'},
+    {'scope': 'from', 'fromMessageId': 'm0', 'throughMessageId': 'm1'},
+])
+async def test_export_invalid_boundaries_never_fall_back_to_full_history(app_factory, options):
+    app = app_factory(); await app.dispatch('session.create', {})
+    source = app._session(); source['messages'] = [{'id': 'm0', 'role': 'user', 'text': 'First'}, {'id': 'm1', 'role': 'assistant', 'text': 'Second'}]
+    with pytest.raises(AppError):
+        await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'destination': 'none', **options})
+    assert not app.state.get('conversationExports')
+
+
+async def test_range_across_paged_native_history_and_voice_is_complete(app_factory, tmp_path):
+    rows = [{'role': 'user', 'content': f'Native {i}'} for i in range(140)]
+    native_session(tmp_path / 'cli', 'range-native', rows)
+    app = app_factory(); await app.history.refresh()
+    source = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'range-native')
+    await app.history.load(source['id'])
+    source['messages'].append({'id': 'voice-range', 'role': 'assistant', 'text': 'Spoken ending', 'via': 'call', 'voiceId': 'call'})
+    first = display_message(rows[1], 1, source)['id']
+    result = await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'scope': 'from', 'fromMessageId': first, 'destination': 'none'})
+    content = exported(app, result)
+    assert result['result']['summary']['messageCount'] == 140
+    assert 'Native 0\n' not in content and 'Native 1\n' in content and 'Native 139\n' in content and 'Spoken ending' in content
+    with pytest.raises(AppError, match='Choose Markdown'):
+        await app.dispatch('session.export', {'id': source['id'], 'scope': 'from', 'fromMessageId': first})
+
+
+async def test_ambiguous_boundary_and_identical_minimal_exports_stay_session_bound(app_factory):
+    app = app_factory(); records = []
+    for _ in range(2):
+        await app.dispatch('session.create', {'title': 'Same'})
+        source = app._session(); source['messages'] = [{'id': 'same', 'role': 'user', 'text': 'Same text'}]
+        records.append(await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'minimal': True, 'destination': 'none'}))
+    assert exported(app, records[0]) == exported(app, records[1])
+    assert records[0]['result']['snapshotId'] != records[1]['result']['snapshotId']
+    source['messages'].append(copy.deepcopy(source['messages'][0]))
+    with pytest.raises(AppError, match='ambiguous'):
+        await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'scope': 'from', 'fromMessageId': 'same'})

@@ -26,6 +26,11 @@ async def main(home):
     service.state['canvasArtifacts'].append({'id': 'saved-diagram', 'title': 'Export diagram', 'sessionId': source['id'], 'kind': 'markdown', 'messageId': 'voice'})
     service.state['view'].update(panel='settings', settingsSection='setup', settingsExpanded=['conversation'])
     service._publish()
+    async def append_after_preview(request):
+        source['messages'].append({'id': 'after-preview', 'role': 'assistant', 'text': 'Appended after review'})
+        service._publish()
+        return web.json_response({'ok': True})
+    app.router.add_post('/api/fixture/exportAppend', append_after_preview)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)
