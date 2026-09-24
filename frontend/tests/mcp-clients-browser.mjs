@@ -120,13 +120,54 @@ try{
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  await expect(phoneFrame.getByRole('textbox',{name:'Unfinished tool input'})).toHaveValue('Keep phone input');
  assert.equal(await mutations(),1);
- await frame.getByRole('button',{name:'Add one'}).click();
- await expect(frame.locator('#count')).toHaveText('8');
+ // A completed tool call can arrive after another client's disconnect.
+ let releaseCall,callArrived;
+ const completedCall=new Promise(resolve=>{callArrived=resolve}),callGate=new Promise(resolve=>{releaseCall=resolve});
+ await mobile.route('**/api/canvas/*/tools/call?*',async route=>{
+  const response=await route.fetch();callArrived();await callGate;await route.fulfill({response});
+ });
+ await phoneFrame.getByRole('button',{name:'Add one'}).click();await completedCall;
+ await operation('smartTools.disconnect',{id:'recovery'});
+ await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','error');
+ releaseCall();await expect(phoneFrame.locator('#count')).toHaveText('8');
+ await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','error');
+ await expect(mobile.locator('.a-mcp-status')).toContainText('Reconnect this tool');
+ await mobile.unroute('**/api/canvas/*/tools/call?*');
+ await mobile.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
+ await expect(mobile.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  assert.equal(await mutations(),2);
- await phoneFrame.getByRole('button',{name:'Add one'}).click();
- await expect(phoneFrame.locator('#count')).toHaveText('9');
+ await frame.getByRole('button',{name:'Add one'}).click();
+ await expect(frame.locator('#count')).toHaveText('9');
  assert.equal(await mutations(),3);
+ await phoneFrame.getByRole('button',{name:'Add one'}).click();
+ await expect(phoneFrame.locator('#count')).toHaveText('10');
+ assert.equal(await mutations(),4);
+ // Initial source admission must use the newest check, too. A late
+ // obsolete source-unavailable response must not block the saved iframe.
+ const thirdContext=await browser.newContext({viewport:{width:900,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const third=await thirdContext.newPage();third.on('pageerror',error=>errors.push(error.message));
+ let releaseInitial,initialArrived,currentArrived,initial=true;
+ const oldInitial=new Promise(resolve=>{initialArrived=resolve}),initialGate=new Promise(resolve=>{releaseInitial=resolve});
+ const freshInitial=new Promise(resolve=>{currentArrived=resolve});
+ await third.route('**/api/canvas/*/status?*',async route=>{
+  const response=await route.fetch();
+  if(!initial){await route.fulfill({response});currentArrived();return}
+  initial=false;initialArrived();await initialGate;
+  await route.fulfill({response,json:{...(await response.json()),source:'unavailable',status:'source_unavailable',canReconnect:false,message:'Obsolete initial unavailable'}});
+ });
+ await third.goto(url);await third.waitForFunction(()=>window.amplifier?.getState());
+ await third.evaluate(([sid,cid])=>window.amplifier.dispatch('session.select',{id:sid}).then(()=>window.amplifier.dispatch('canvas.select',{id:cid})),[before.session,before.id]);
+ await oldInitial;
+ await third.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});document.dispatchEvent(new Event('visibilitychange'))});
+ await third.waitForTimeout(30);
+ await third.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});document.dispatchEvent(new Event('visibilitychange'))});
+ await freshInitial;releaseInitial();
+ await expect(third.frameLocator('.a-mcp-app-viewer iframe').locator('body')).toHaveAttribute('data-booted','true');
+ await expect(third.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
+ assert.equal(await mutations(),4);
+ await thirdContext.close();
  await mobile.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT||join(directory,'mobile-recovery.png')});
  assert.deepEqual(errors,[]);
- console.log('MCP clients passed: independent phone/desktop status, foreground refresh, stale response rejection, shared reconnect, iframe/input preservation, no replayed calls; three intended mutations.');
+ console.log('MCP clients passed: independent phone/desktop status, foreground refresh, stale response rejection, shared reconnect, iframe/input preservation, no replayed calls; four intended mutations, including a completed call overtaken by disconnect.');
 }finally{await browser?.close();await stop();await rm(directory,{recursive:true,force:true})}

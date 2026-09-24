@@ -73,16 +73,16 @@ export function McpAppViewer({canvas,act,connectionKey}){
   bridge.setHostContext(next);
  },[theme,visible]);
  useEffect(()=>{
-  const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='',availabilityRevision=0;
+  const controller=new AbortController();let bridge,live=true,initialized=false,lastReport='',availabilityRevision=0,latestAvailability;
   const reads=createMcpReadGate({isVisible:()=>visibleRef.current});
   let catalog;
   const clearCatalog=()=>{catalog=undefined};resetCatalog.current=clearCatalog;
   const listTools=()=>canvas.readOnlyVersion?Promise.resolve({tools:[]}):catalog||(catalog=request(viewUrl(canvas,'tools'),{signal:controller.signal}).catch(error=>{catalog=null;throw error}));
   const report=(phase,text)=>{if(!live||lastReport===phase+text)return;lastReport=phase+text;setStatus({phase,text});act('canvas.report',{id:canvas.id,part:'mcp-app',status:phase==='ready'?'ready':phase==='error'?'error':'pending',message:text})};
   renderReport.current=report;
-  const inspectConnection=async()=>{
+  const inspectConnection=()=>{
    const check=++availabilityRevision;
-   try{
+   latestAvailability=(async()=>{try{
     const availability=await request(viewUrl(canvas,'status'),{signal:controller.signal});
     if(live&&check===availabilityRevision){
      rememberConnection(availability);
@@ -90,11 +90,13 @@ export function McpAppViewer({canvas,act,connectionKey}){
      clearCatalog();
     }
     return availability;
-   }catch(error){if(live&&check===availabilityRevision)report('error',error.message);throw error}
+   }catch(error){if(live&&check===availabilityRevision)report('error',error.message);throw error}})();
+   return latestAvailability;
   };
   refreshConnection.current=inspectConnection;
   const start=async()=>{
-   const availability=await inspectConnection();
+   let pending=inspectConnection(),availability;
+   while(live){availability=await pending;if(pending===latestAvailability)break;pending=latestAvailability}
    if(!live)return;
    if(availability.source!=='available'){report('error',availability.message);return}
    hostContext.current={theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};
@@ -102,6 +104,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
     {serverTools:{},serverResources:{},updateModelContext:{text:{},structuredContent:{}},sandbox:{permissions:{},csp:{connectDomains:[],resourceDomains:[],frameDomains:['blob:'],baseUriDomains:[]}}},
     {hostContext:hostContext.current});
    bridge.oncalltool=async params=>{
+    const callAvailabilityRevision=availabilityRevision;
     try{
      if(current.current.readOnlyVersion)throw Error('This saved version is read-only. Select Latest for live features.');
      // Metadata is an optimization hint, not a new admission dependency. The
@@ -114,7 +117,7 @@ export function McpAppViewer({canvas,act,connectionKey}){
      // The tool owns its progress UI. Routine calls (including typing) must
      // not toggle host controls or publish a render report on every batch.
      if(result?.isError)report('error','The tool reported an error. See its result below.');
-     else report('ready','Tool view connected');
+     else if(callAvailabilityRevision===availabilityRevision&&connection.current?.status==='ready')report('ready','Tool view connected');
      return result;
     }catch(error){if(!error.backgroundReadPaused)report('error',error.message);throw error}
    };
