@@ -309,13 +309,15 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def canvas_download(request):
         from .state_storage import resource
+        from urllib.parse import quote
         identity = request.match_info["identity"]
         row = next((row for row in service.state.get("canvasArtifacts", []) if row["id"] == identity), None)
         if not row:
             raise AppError("Canvas artifact unavailable", 404)
         canvas = {**row, **resource(service.db, row["body"]["$resource"])}
+        from .canvas_downloads import filename
         return web.Response(text=canvas_source(canvas,service.db), content_type="text/html",
-                            headers={"Content-Disposition": 'attachment; filename="'+('canvas-3d.html' if canvas.get('kind')=='babylon' else 'canvas.html')+'"'})
+                            headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename(canvas), safe='')})
 
     async def canvas_source_text(request):
         from .state_storage import resource
