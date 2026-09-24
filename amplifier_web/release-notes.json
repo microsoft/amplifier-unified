@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.24",
+      "title": "Reliable tool views, precise exports and quieter voice progress",
+      "changes": [
+        "Refresh saved Smart Tool connection status across open browsers and when returning to the app, preserving unfinished input and avoiding repeated tool calls.",
+        "Reuse one Canvas document when a tool identifies the same dashboard across compatible actions, while keeping independent work and exact saved-version links intact.",
+        "Preview a selected conversation range or everything from a chosen message onward, then copy or download the exact reviewed Markdown with recorded voice and artifact references.",
+        "Pace voice progress notices using current task status, wait during speech and active responses, and suppress repeated notices when nothing has changed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.23",
       "title": "Clearer workspaces, Canvas quotes and feedback follow-ups",
       "changes": [
