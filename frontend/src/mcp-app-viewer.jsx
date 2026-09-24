@@ -96,7 +96,10 @@ export function McpAppViewer({canvas,act,connectionKey}){
   refreshConnection.current=inspectConnection;
   const start=async()=>{
    let pending=inspectConnection(),availability;
-   while(live){availability=await pending;if(pending===latestAvailability)break;pending=latestAvailability}
+   while(live){
+    try{availability=await pending}catch(error){if(pending===latestAvailability)throw error}
+    if(pending===latestAvailability)break;pending=latestAvailability;
+   }
    if(!live)return;
    if(availability.source!=='available'){report('error',availability.message);return}
    hostContext.current={theme:themeRef.current,[MCP_VISIBILITY]:visibleRef.current,displayMode:'inline',availableDisplayModes:['inline'],locale:navigator.language};

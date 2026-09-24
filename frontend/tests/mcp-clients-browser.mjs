@@ -145,6 +145,7 @@ try{
  assert.equal(await mutations(),4);
  // Initial source admission must use the newest check, too. A late
  // obsolete source-unavailable response must not block the saved iframe.
+ for(const initialFailure of ['unavailable','http-error']){
  const thirdContext=await browser.newContext({viewport:{width:900,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const third=await thirdContext.newPage();third.on('pageerror',error=>errors.push(error.message));
  let releaseInitial,initialArrived,currentArrived,initial=true;
@@ -154,7 +155,8 @@ try{
   const response=await route.fetch();
   if(!initial){await route.fulfill({response});currentArrived();return}
   initial=false;initialArrived();await initialGate;
-  await route.fulfill({response,json:{...(await response.json()),source:'unavailable',status:'source_unavailable',canReconnect:false,message:'Obsolete initial unavailable'}});
+  if(initialFailure==='http-error')await route.fulfill({status:503,json:{error:'Obsolete initial failure'}});
+  else await route.fulfill({response,json:{...(await response.json()),source:'unavailable',status:'source_unavailable',canReconnect:false,message:'Obsolete initial unavailable'}});
  });
  await third.goto(url);await third.waitForFunction(()=>window.amplifier?.getState());
  await third.evaluate(([sid,cid])=>window.amplifier.dispatch('session.select',{id:sid}).then(()=>window.amplifier.dispatch('canvas.select',{id:cid})),[before.session,before.id]);
@@ -167,6 +169,7 @@ try{
  await expect(third.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  assert.equal(await mutations(),4);
  await thirdContext.close();
+ }
  await mobile.screenshot({path:process.env.MCP_RECOVERY_SCREENSHOT||join(directory,'mobile-recovery.png')});
  assert.deepEqual(errors,[]);
  console.log('MCP clients passed: independent phone/desktop status, foreground refresh, stale response rejection, shared reconnect, iframe/input preservation, no replayed calls; four intended mutations, including a completed call overtaken by disconnect.');
