@@ -17,13 +17,14 @@ SETUP = {'type': 'object', 'properties': {
 
 
 def defaults(state):
-    current = next((s for s in state.get('sessions', []) if s['id'] == state.get('selectedSessionId')), {})
     view = state.get('view', {})
-    if (is_managed(current) and state.get('selectedWorkspaceId') is None) or (view.get('navChatScope') == 'all' and view.get('navLocationFilter') == 'managed'):
-        return {'title': '', 'workspace': '', 'location': {'kind': 'managed'}, 'bundle': '', 'selection': {}}
+    surface = view.get('workSurface', 'chat')
+    workspace_id = (view.get('workWorkspaceId') if surface == 'workspace'
+                    else state.get('selectedWorkspaceId') if surface == 'chat' else None)
     workspace = next((w for w in state.get('workspaces', [])
-                      if w['id'] == state.get('selectedWorkspaceId')), {})
-    return {'title': '', 'workspace': workspace.get('path') or state['settings'].get('workspace', ''),
+                      if w['id'] == workspace_id), {})
+    path = workspace.get('path') or ''
+    return {'title': '', 'workspace': path, 'location': {'kind': 'workspace' if path else 'managed'},
             'bundle': '', 'selection': {}}
 
 
@@ -35,6 +36,11 @@ def validate_setup(value):
 def open_draft(service, args):
     state = service.state
     setup = copy.deepcopy(state['view'].get('newSessionDraft') or defaults(state))
+    # Returning to an unsent chat preserves its explicit choice. Starting from a
+    # chat or browser uses that visible context, never a hidden global folder.
+    if state.get('selectedSessionId') or state['view'].get('workSurface', 'chat') != 'chat':
+        location = defaults(state)
+        setup.update(workspace=location['workspace'], location=location['location'])
     if 'location' in args:
         setup['location'] = copy.deepcopy(args['location'])
     if 'workspace' in args:

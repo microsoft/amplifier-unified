@@ -293,6 +293,10 @@ class ShellModules:
         view.setdefault('navWorkspaceMode', 'recent')
         scope = instance.get('scope', {})
         workspace_id = scope.get('workspaceId') if scope.get('mode') == 'pinned' else state.get('selectedWorkspaceId')
+        if scope.get('mode') != 'pinned' and state.get('view', {}).get('workSurface') == 'workspace':
+            workspace_id = state['view'].get('workWorkspaceId')
+        if scope.get('mode') != 'pinned' and state.get('view', {}).get('workSurface') == 'chats':
+            view['navChatScope'] = 'all'
         from .managed_chats import is_managed
         selected = next((s for s in state.get('sessions', []) if s['id'] == state.get('selectedSessionId')), {})
         if scope.get('mode') == 'all' or scope.get('mode') != 'pinned' and is_managed(selected) and view.get('navChatScope', 'workspace') == 'workspace' and not view.get('navWorkspaceList'):
@@ -322,6 +326,7 @@ class ShellModules:
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
         overview = {'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})
+        shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}})
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.
         return {'view': view, 'selectedWorkspaceId': workspace_id, 'selectedSessionId': state.get('selectedSessionId'),
@@ -330,6 +335,8 @@ class ShellModules:
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
                 'homeNavigation': home, 'workspaceOverview': overview,
+                'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
+                'recentShortcuts': projections.chats({**scoped, 'view': sidebar_home}, section='recent')['items'][:8],
                 'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},

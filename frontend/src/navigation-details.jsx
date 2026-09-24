@@ -58,7 +58,8 @@ export function NavigationRow({className='',label,children,details,expanded=fals
  useLayoutEffect(()=>{
   if(!open||!panel.current||!row.current)return;
   const place=()=>{
-   const r=row.current.getBoundingClientRect(),p=panel.current.getBoundingClientRect(),margin=10;
+   const anchor=row.current.closest('.a-nav-slot')?row.current:trigger.current||row.current;
+   const r=anchor.getBoundingClientRect(),p=panel.current.getBoundingClientRect(),margin=10;
    const right=r.right+8,left=right+p.width<=innerWidth-margin?right:Math.max(margin,r.left-p.width-8);
    const next={left:Math.min(left,innerWidth-p.width-margin),top:Math.max(margin,Math.min(r.top,innerHeight-p.height-margin))};
    setPosition(previous=>previous.left===next.left&&previous.top===next.top?previous:next);
