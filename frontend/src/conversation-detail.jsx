@@ -3,7 +3,7 @@ import {request} from './api';
 import {Markdown} from './markdown';
 import {readDetail} from './detail-read';
 export {readDetail} from './detail-read';
-export function DetailText({text,reference,markdown=false,automatic=false,writingContext}){
+export function DetailText({text,reference,markdown=false,automatic=false,writingContext,fileContext}){
  const [loaded,setLoaded]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[visible,setVisible]=useState(false);
  const element=useRef(null),abort=useRef(null),key=reference?JSON.stringify(reference):null,current=useRef(key);current.current=key;
  const value=loaded?.key===key?loaded.value:null;
@@ -21,7 +21,7 @@ export function DetailText({text,reference,markdown=false,automatic=false,writin
   finally{if(!controller.signal.aborted&&current.current===captured)setBusy(false)}
  }
  useEffect(()=>{if(automatic&&visible&&reference)load()},[automatic,visible,key]);
- return <div className="a-detail-text" ref={element}>{markdown?<Markdown text={value??text} writingContext={writingContext}/>:<p>{value??text}</p>}{reference&&value===null&&(automatic&&!error?<span className="a-caption" role="status">{busy?'Loading complete response…':'Complete response loads when visible.'}</span>:<button type="button" className="a-link" disabled={busy} onClick={load}>{busy?'Loading full text…':error?'Retry loading full text':'Show full text'}</button>)}{error&&<p role="alert">{error}</p>}</div>;
+ return <div className="a-detail-text" ref={element}>{markdown?<Markdown text={value??text} writingContext={writingContext} fileContext={fileContext}/>:<p>{value??text}</p>}{reference&&value===null&&(automatic&&!error?<span className="a-caption" role="status">{busy?'Loading complete response…':'Complete response loads when visible.'}</span>:<button type="button" className="a-link" disabled={busy} onClick={load}>{busy?'Loading full text…':error?'Retry loading full text':'Show full text'}</button>)}{error&&<p role="alert">{error}</p>}</div>;
 }
 const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
 export function useConversationDetail(source,beforeApply){

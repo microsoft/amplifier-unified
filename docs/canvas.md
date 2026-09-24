@@ -1,5 +1,18 @@
 # Workspaces and agent canvas
 
+Assistant replies can open workspace files directly in Canvas. Local Markdown
+links, inline-code filenames, and plain paths with a separator and file extension
+use the shared `canvas.openFile` action. It binds the original chat and workspace,
+checks the existing file-preview boundaries on click, and preserves the message
+draft. Missing files and paths outside the workspace show a small notice beside
+the reference. Normal web links and fenced code blocks keep their existing behavior.
+
+Recognition currently covers POSIX paths, including `:line[:column]` suffixes;
+the suffix opens the file but does not scroll to a source line. Rendering does not
+scan the filesystem or submit conversation work. Agents can use the same action
+with `sessionId`, `workspace`, `path`, and `clientId` when multiple clients show the
+chat. Unsaved Canvas edits retain their existing protection.
+
 Workspace registrations are durable app state. `workspace.add` accepts an existing
 folder and optional name; `workspace.select`, `workspace.rename`, and
 `workspace.remove` operate on its ID. Selection sets the new-chat default.
