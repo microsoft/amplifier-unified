@@ -92,7 +92,8 @@ ACTION_DEFINITIONS = {
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.deletePreview": ("Review permanent deletion of an idle managed chat and its owned files/history. Show the returned scope to the user before confirmation. Workspace chats can only be archived.", schema({"id": string(100)})),
     "session.delete": ("Permanently delete the managed chat reviewed by session.deletePreview, only after explicit user confirmation of that scope. Requires the unexpired confirmationToken; never infer permission from a preview. Active work and workspace chats refuse.", schema({"id": string(100), "confirmationToken": string(100)}, ["id", "confirmationToken"])),
-    "session.export": ("Export a conversation. format=markdown freezes complete public history; destination=clipboard/download delivers to the connected browser, or none only creates a snapshot. Read result.statePath with state.get for exact Markdown in pages. The default JSON export is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.export": ("Freeze user-visible Markdown history. Optional scope=all/from/range uses exact fromMessageId/throughMessageId boundaries; minimal omits nonessential metadata. destination=none previews an immutable snapshot with counts/size; read result.statePath for exact text and session.exportDeliver to deliver those reviewed bytes. Default JSON is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "scope": {"enum": ["all", "from", "range"]}, "fromMessageId": string(200), "throughMessageId": string(200), "minimal": {"type": "boolean"}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.exportDeliver": ("Copy or download an existing reviewed Markdown snapshot without rereading or rerunning its conversation. Delivery requires a connected browser. A download receipt means started, not proof of a saved file.", schema({"id": string(200), "clientId": string(200), "snapshotId": string(200), "destination": {"enum": ["download", "clipboard"]}}, ["id", "snapshotId", "destination"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
     "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
@@ -1182,8 +1183,10 @@ class AppService:
                 prepared_share = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
+        if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal')):
+            raise AppError('Choose Markdown to export a message range.')
         if action == 'session.export' and args.get('format') == 'markdown':
-            from .conversation_export import markdown
+            from .conversation_export import snapshot
             async with self.lock:
                 # Retried receipts refer to the original bytes even if their
                 # source is now missing. Do not read native history again.
@@ -1199,7 +1202,7 @@ class AppService:
             # Native storage may be slow. Freeze the host-owned portion first,
             # then let navigation and runtime events continue during the read.
             try:
-                prepared_export = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+                prepared_export = (source, await asyncio.to_thread(snapshot, self.data_dir, source, artifacts, args))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         pending = []
@@ -1637,21 +1640,35 @@ class AppService:
                 select_session_workspace(self.state,session)
             elif action == 'session.export' and args.get('format') == 'markdown':
                 from .resource_files import put
-                source, content = prepared_export
+                source, (content, summary) = prepared_export
                 reference = put(self.db, content)
-                identity = reference['$resource']
-                filename = 'amplifier-conversation-' + identity[:12] + '.md'
+                from datetime import datetime, timezone
+                import re
+                identity = hashlib.sha256(json.dumps([source['id'], reference, summary], sort_keys=True).encode()).hexdigest()
+                captured = datetime.now(timezone.utc).isoformat()
+                title = re.sub(r'[^A-Za-z0-9_-]+', '-', source.get('title') or 'conversation').strip('-')[:64] or 'conversation'
+                filename = title + '-' + captured[:10] + '-' + identity[:8] + '.md'
                 diagnostic_result = {'snapshotId': identity, 'sessionId': source['id'], 'filename': filename,
-                    'mimeType': 'text/markdown', 'content': reference,
+                    'mimeType': 'text/markdown', 'content': reference, 'summary': summary, 'capturedAt': captured,
                     'statePath': '/conversationExports/' + identity + '/content',
                     'url': '/api/conversation/exports/' + identity}
-                self.state.setdefault('conversationExports', {})[identity] = copy.deepcopy(diagnostic_result)
+                exports = self.state.setdefault('conversationExports', {})
+                diagnostic_result = copy.deepcopy(exports.setdefault(identity, diagnostic_result))
                 destination = args.get('destination', 'download')
                 if destination != 'none':
                     request_id = str(uuid.uuid4())
                     self.state['view']['conversationExport'] = {'sessionId': source['id'], 'requestId': request_id, 'status': 'pending'}
                     effects.append({'type': 'conversation.export', 'requestId': request_id,
                                     'destination': destination, 'url': diagnostic_result['url']})
+            elif action == 'session.exportDeliver':
+                snapshot = self.state.get('conversationExports', {}).get(args['snapshotId'])
+                if not snapshot or snapshot['sessionId'] != args['id']:
+                    raise AppError('This reviewed export is unavailable for the selected conversation.', 404)
+                diagnostic_result = copy.deepcopy(snapshot)
+                request_id = str(uuid.uuid4())
+                self.state['view']['conversationExport'] = {'sessionId': args['id'], 'requestId': request_id, 'status': 'pending'}
+                effects.append({'type': 'conversation.export', 'requestId': request_id,
+                                'destination': args['destination'], 'url': snapshot['url']})
             elif action == 'session.exportResult':
                 result = self.state['view'].get('conversationExport', {})
                 if result.get('requestId') == args['requestId']:
@@ -2875,7 +2892,9 @@ class AppService:
                 action_args['sessionId'] = session_id
             if args['action'] in {'canvas.show','smartTools.call','smartTools.open','runtime.dependencies','session.sharePreview','session.shareList'}:
                 action_args.setdefault('sessionId',session_id)
-            if args['action'] == 'session.export':
+            if args['action'] in {'session.export', 'session.exportDeliver'}:
+                if action_args.get('id', session_id) != session_id:
+                    raise AppError('Exports must target the calling conversation.', 409)
                 action_args.setdefault('id', session_id)
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
@@ -2902,6 +2921,14 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
+            elif args['action'] == 'session.exportDeliver':
+                from .agent_canvas import target
+                requested = action_args.pop('clientId', input_origin['clientId'] if input_origin is not None else None)
+                canvas_client = target(self, session_id, requested, required=True, connected_only=True)[0]
+                if canvas_client is None:
+                    raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
             elif args['action'] in {'canvas.openFile', 'canvas.reference'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
