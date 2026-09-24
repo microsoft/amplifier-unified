@@ -26,6 +26,15 @@ def test_unknown_and_legacy_data_never_echo_untrusted_fields():
     assert safe_failures([{'module':'tool-fixture','type':'tool'}])[0]['reason_code']=='unknown'
 
 
+def test_provider_instance_diagnostic_is_allowlisted_without_endpoint_or_raw_error():
+    error=ConfiguredModuleError([{'module':'provider-fixture','type':'provider',
+        'instance_id':'team-account','reason_code':'provider_configuration_failed',
+        'error':'private-token','config':{'base_url':'https://private-token'}}])
+    assert error.failures[0]['instance_id']=='team-account'
+    assert '(team-account)' in str(error) and 'private-token' not in str(error)+str(error.failures)
+    assert 'instance_id' not in safe_failures([{'instance_id':'https://private-token'}])[0]
+
+
 @pytest.mark.asyncio
 async def test_real_worker_protocol_preserves_only_safe_diagnostics(tmp_path):
     failures=[{'module':'tool-fixture','type':'tool','reason_code':'invalid_entry_point','error':'private-token'}]

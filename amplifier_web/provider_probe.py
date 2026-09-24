@@ -16,6 +16,7 @@ from amplifier_web.provider_environment import (
     close_provider,
     config_schema,
     construct_provider,
+    construct_schema_provider,
     materialize_provider_config,
     provider_class,
 )
@@ -42,10 +43,9 @@ async def query(request):
         bundle=Bundle.from_dict({'bundle':{'name':'provider-setup'},'providers':[{'module':request['module'],'source':source}]})
         await bundle.prepare(strict=True)
     cls=provider_class(request['module'])
-    # Metadata discovery is deliberately configuration-free. This keeps schema
-    # inspection offline and allows the materializer to decide which optional
-    # references can be blank before the configured provider is constructed.
-    schema_provider=construct_provider(cls,{})
+    # Metadata gets no credentials/config, except the saved endpoint when the
+    # public constructor requires it. No model-list or inference call is made.
+    schema_provider=construct_schema_provider(cls,request.get('config',{}))
     try:
         info=schema_provider.get_info()
         if inspect.isawaitable(info): info=await info

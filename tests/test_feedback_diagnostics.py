@@ -93,6 +93,16 @@ def test_maximum_summary_stays_under_two_kilobytes():
     assert len(json.dumps(diagnostics.snapshot(state, now=100)['troubleshooting']).encode()) <= 2048
 
 
+def test_provider_preflight_summary_counts_reason_without_exporting_account_identity():
+    state = example()
+    state['sessions'][0]['moduleFailures'] = [{'type': 'provider', 'reason_code': reason,
+        'instance_id': 'PRIVATE-account', 'error': 'PRIVATE-secret'} for reason in
+        ('provider_schema_failed', 'provider_configuration_failed')]
+    summary = diagnostics.snapshot(state, now=100)['troubleshooting']
+    assert summary['moduleFailures']['byReason'] == {'provider_schema_failed': 1, 'provider_configuration_failed': 1}
+    assert 'PRIVATE' not in json.dumps(summary)
+
+
 def test_missing_evidence_is_not_success_or_fresh_worker_attestation():
     result = diagnostics.snapshot({}, now=100)
     summary = result['troubleshooting']
