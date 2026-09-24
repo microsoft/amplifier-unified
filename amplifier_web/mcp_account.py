@@ -90,6 +90,10 @@ class Accounts:
                 raise AccountReviewRequired('The connected account changed. Review and explicitly accept it before reconnecting.')
             if not expected:
                 await self.manager._change(lambda _: row.update(accountBinding=copy.deepcopy(current)))
+            if connection.observation_active and expected and row.get('account', {}).get('status') == 'verified':
+                # The exact principal was just re-attested. Quiet reads retain
+                # that evidence in their occurrence, not a timestamp-only app update.
+                return
             await self.changed(row, {'status': 'verified', **current,
                                     'verification': 'Server-attested through authenticated transport; not independent identity verification.'})
 

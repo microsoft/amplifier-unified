@@ -102,7 +102,7 @@ class Worker:
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
-            args = {**args, '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
+            args = {**args, '_inputBindings': [{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids], '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
                 bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
@@ -138,6 +138,8 @@ class Worker:
         if self.controls:
             from amplifier_web.scheduled_input import finish as finish_scheduled_input
             finish_scheduled_input(self.controls, event)
+            from amplifier_web.observation_input import finish as finish_observation_input
+            finish_observation_input(self.controls, event)
         if event.get('type') == 'generation.started':
             self.context_inputs = []
         if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
@@ -688,6 +690,10 @@ class Worker:
                 if data["operation"] == "schedule.submit":
                     from amplifier_web.scheduled_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation)
+                elif data["operation"] == "observation.submit":
+                    from amplifier_web.observation_input import admit
+                    result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("observation.admit", value))
                 elif data["operation"] == "session.naming":
                     self.controls.require_idle()
                     if not self.naming:
@@ -779,6 +785,8 @@ class Worker:
                 if self.ownership.registration:
                     await self.ownership.registration.close()
                 if self.controls:
+                    from amplifier_web.observation_input import finish
+                    finish(self.controls, {'type': 'generation.detached'})
                     await self.controls.close()
                 if self.session:
                     await self.session.cleanup()

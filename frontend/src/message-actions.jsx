@@ -46,7 +46,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?content:<details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary>{content}</details>}</article>;
  }
  return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id}>
-  <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&`via ${m.via} · `}{m.timestampKnown===false?'Time unavailable':stamp(m.createdAt)}</span></div>
+  <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&(m.via==='observation'?'Background follow-up · ':`via ${m.via} · `)}{m.timestampKnown===false?'Time unavailable':stamp(m.createdAt)}</span></div>
   <AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" onSubmit={submit}>
    <textarea autoFocus aria-label="Edit your message" value={text} data-action="view.update" onChange={e=>{setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();patch(null)}if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.currentTarget.form.requestSubmit()}}}/>

@@ -204,9 +204,21 @@ class ClientViews:
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
         return snapshot
 
+    def selection_revision(self, identity):
+        record = self.records[identity]
+        canvas = record.get('canvas') or {}
+        binding = [record.get('selectedSessionId'), record.get('selectedWorkspaceId'),
+                   canvas.get('id'), bool(canvas.get('open')), record.get('canvasViews', {}).get('secondary')]
+        if record.get('_selectionBinding') != binding:
+            record['_selectionBinding'] = copy.deepcopy(binding)
+            record['selectionRevision'] = record.get('selectionRevision', 0) + 1
+            self.dirty.add(identity)
+        return record.get('selectionRevision', 0)
+
     def save(self, identity=None):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
         for identity in pending:
+            self.selection_revision(identity)
             value = copy.deepcopy(self.records[identity])
             # The artifact store already owns large bodies. A presentation
             # record keeps only the currently selected artifact and controls.

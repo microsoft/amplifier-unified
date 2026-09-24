@@ -51,7 +51,9 @@ class Schedules:
 
     async def loop(self):
         while not self.app.closed:
-            try: await self.tick()
+            try:
+                self.app.observations.wake()
+                await self.tick()
             except asyncio.CancelledError: raise
             except Exception as exc:
                 async with self.app.lock:
