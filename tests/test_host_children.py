@@ -28,6 +28,7 @@ def test_real_foundation_child_lifecycle_and_delegate_contract():
     result=subprocess.run([python,str(probe)],text=True,capture_output=True,timeout=30)
     assert result.returncode==0,result.stderr+result.stdout
     assert '"delegate_compatible": true' in result.stdout
+    assert '"failed_resume_preserved": true' in result.stdout
     assert '"cli_imports": false' in result.stdout
 
 
