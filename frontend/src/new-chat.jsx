@@ -2,11 +2,12 @@ import React from 'react';
 import './new-chat.css';
 
 export function newChatSetup(state){
- const workspace=state?.workspaces?.find(row=>row.id===state.selectedWorkspaceId);
- const current=state?.sessions?.find(row=>row.id===state.selectedSessionId);
- const managed=(current?.location?.kind==='managed'&&!state.selectedWorkspaceId)||(state?.view?.navChatScope==='all'&&state?.view?.navLocationFilter==='managed');
- if(managed&&!state?.view?.newSessionDraft)return {title:'',workspace:'',location:{kind:'managed'},bundle:'',selection:{}};
- return {title:'',workspace:workspace?.path||state?.settings?.workspace||'',bundle:'',selection:{},...state?.view?.newSessionDraft};
+ const surface=state?.view?.workSurface||'chat';
+ const id=surface==='workspace'?state?.view?.workWorkspaceId:surface==='chat'?state?.selectedWorkspaceId:null;
+ const workspace=state?.workspaces?.find(row=>row.id===id)?.path||'';
+ const draft=state?.view?.newSessionDraft;
+ const path=draft?.workspace??workspace;
+ return {title:'',workspace,bundle:'',selection:{},...draft,location:draft?.location||{kind:path?'workspace':'managed'}};
 }
 
 export function draftDefaultsKey(setup){

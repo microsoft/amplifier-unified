@@ -163,3 +163,10 @@
 #amp-one.a-approachable-shell .a-pinned-chats .a-navigation-more{opacity:0}
 #amp-one.a-approachable-shell .a-pinned-chats :is(.a-nav-chat:hover,.a-nav-chat:focus-within,.is-peeking)>.a-navigation-more{opacity:1}
 @media(hover:none),(pointer:coarse){#amp-one.a-approachable-shell .a-pinned-chats .a-navigation-more{opacity:1;width:40px;height:44px}}
+
+/* A collapsed sidebar consumes no width and cannot reopen on hover. */
+#amp-one.a-approachable-shell .a-work-nav-toggle{order:-1;flex:none}
+@media(min-width:761px){
+ #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"]{position:absolute;inset:0 auto 0 0;width:0;min-width:0;flex:none}
+ #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"] .a-nav-rail{width:var(--nav-width)}
+}

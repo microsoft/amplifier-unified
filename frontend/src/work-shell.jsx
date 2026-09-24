@@ -1,6 +1,6 @@
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,Pin,Archive,Palette,Bug,ScanEye,PanelLeft,SlidersHorizontal,FileText,Copy,X,Download} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,Pin,Archive,Bug,ScanEye,PanelLeft,FileText,Copy,X,Download} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,PinnedChats} from './shell/navigation-components';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -19,7 +19,7 @@ export function WorkDialog({label,onClose,children}){
 }
 export function ComposerWorkspace({state,act}){
  const [open,setOpen]=useState(false),setup=newChatSetup(state),workspace=state.workspaces?.find(row=>row.path===setup.workspace);
- return <><button type="button" className="a-composer-workspace" aria-label="Choose workspace" aria-expanded={open} onClick={()=>setOpen(true)}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'No workspace':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog label="Choose a workspace" onClose={()=>setOpen(false)}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(result?.accepted)setOpen(false)}}/></WorkDialog>}</>;
+ return <><button type="button" className="a-composer-workspace" aria-label="Choose workspace" aria-expanded={open} onClick={()=>setOpen(true)}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'No workspace':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog label="Choose a workspace" onClose={()=>setOpen(false)}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(!result?.accepted)throw Error(result?.error||'Could not select this workspace.');setOpen(false)}}/></WorkDialog>}</>;
 }
 export function WorkspaceCreation({state,act,onClose}){
  const nav=useContext(WorkNavigationContext);
@@ -31,7 +31,7 @@ function ActionMenu({label,children,icon=<MoreHorizontal/>}){
  return <div className="a-work-menu" ref={ref}><button type="button" className="a-icon" aria-label={label} aria-expanded={open} onClick={()=>setOpen(!open)}>{icon}</button>{open&&<div className="a-work-menu-items" role="group" aria-label={label} onClick={e=>{if(e.target.closest('button'))setOpen(false)}}>{children}</div>}</div>;
 }
 export function AppFooter({state,connected,open,act}){
- return <div className="a-work-footer"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span className="a-nav-reveal">{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options" icon={<Settings/>}><button onClick={()=>open('settings')}><Settings/>Settings<AttentionBadge state={state} settings/></button><button onClick={()=>open('appearance')}><Palette/>Appearance</button><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>;
+ return <div className="a-work-footer"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span className="a-nav-reveal">{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options" icon={<Settings/>}><button onClick={()=>open('settings')}><Settings/>Settings<AttentionBadge state={state} settings/></button><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>;
 }
 export function WorkHeader({state,session,act,open,narrow,presentation}){
  const nav=useContext(WorkNavigationContext),surface=workSurface(state),browsing=surface!=='chat';
@@ -39,11 +39,11 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title||'New chat';
  return <header className="a-work-header" data-part="header">
   <div className="a-brand a-work-brand"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
-  {narrow&&<button type="button" className="a-icon" aria-label="Open navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true}})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button>}
+  {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state} section="chats"/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
    {browsing&&<button type="button" className="a-link" onClick={()=>nav.browse('chat')}><ArrowLeft/>{session?'Back to chat':'Back'}</button>}
-   {!browsing&&session&&<><ActionMenu label="Chat actions"><button onClick={()=>open('session-details')}><Info/>Name and details</button><button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin chat'}</button><button data-action="session.archive" onClick={()=>act('session.archive',{id:session.id})}><Archive/>Archive</button><button onClick={()=>open('session-details')}><Download/>Export chat</button></ActionMenu><button type="button" className="a-icon" aria-label="Chat controls" onClick={()=>open('runtime')}><SlidersHorizontal/></button><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
+   {!browsing&&session&&<><ActionMenu label="Chat actions"><button onClick={()=>open('session-details')}><Info/>Name and details</button><button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin chat'}</button><button data-action="session.archive" onClick={()=>act('session.archive',{id:session.id})}><Archive/>Archive</button><button onClick={()=>open('session-details')}><Download/>Export chat</button></ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
  </header>;
 }

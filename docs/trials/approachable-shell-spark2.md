@@ -14,7 +14,7 @@ This is a running application with real actions, storage and file viewers. It is
 - Workspaces open a main-area page with Chats, Files and Details. Workspace browsing changes presentation only. Selecting a chat is the action that changes the active conversation.
 - New chat has a focused welcome and a composer workspace menu: No workspace, an existing workspace, Create new workspace, or Use an existing folder. Existing name-first placement and native history discovery are reused.
 - Model, effort and bundle controls remain inside the composer. A fresh instance with no providers offers model setup instead of an indefinite loading label. The ownership gate still blocks input and uses owner metadata and the existing takeover action.
-- Chat title actions live beside the title. App settings and appearance live in the sidebar footer. The theme system is retained.
+- Chat title actions live beside the title. App settings live in the sidebar footer; Appearance is inside Settings. The theme system is retained.
 - The right pane has Chat overview, retained file tabs and compact file controls. Overview uses actual outputs, attachments in loaded messages, worker records and existing activity controls. No sample AI replies or results are fabricated.
 
 ## Behavioral contracts
@@ -49,6 +49,14 @@ The follow-up pass compared the real Mac PWA on Spark-1 with this trial. The tri
 - Corrected workspace-picker label spacing and kept the existing creation, history, ownership, model and bundle behavior.
 
 Validation for this pass: 339 frontend tests and the production build passed. Native browser inspection covered the desktop welcome/composer, workspace browser, pinned row, chat actions, contextual details, workspace picker and real Markdown viewer. The empty Shell layout check chat is pinned for inspecting the shared row. No model calls were made. Spark-1 remained read-only; only the owned Spark-2 trial was updated. Mobile and every theme still need broader visual acceptance.
+
+## Navigation and workspace-picker refinement
+
+The next pass removes the duplicate header Chat controls, fully hides collapsed navigation and puts its reopen button in the header. The cog now has Settings, Send feedback and What the agent sees; Appearance is reached inside Settings.
+
+New chat follows the visible workspace context through the shared host action. All chats / All workspaces start without a workspace; an existing unsent draft retains its explicit choices. The new chooser has separate actions, a visible name/path search, bounded 40-result pages, parent-path disambiguation, loading/error recovery, and existing server-folder browsing in the attachment flow.
+
+Validation: 343 frontend tests and 55 targeted backend tests passed, plus the production build. See the [feature inventory against freshly fetched main 0.20.21](shell-inventory-2026-09-23.md) for retained capabilities, omissions and integration work. The trial base remains 0.20.20; upstream 0.20.21 was inspected, not silently merged.
 
 ## Trial limits
 

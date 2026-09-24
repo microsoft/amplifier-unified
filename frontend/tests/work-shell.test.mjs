@@ -11,6 +11,9 @@ const {ConversationList}=await vite.ssrLoadModule('/src/shell/navigation-compone
 const {WorkspaceExplorer}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {AgentCanvas}=await vite.ssrLoadModule('/src/shell-panels.jsx');
 const {newChatSetup}=await vite.ssrLoadModule('/src/new-chat.jsx');
+const {fitPanels}=await vite.ssrLoadModule('/src/panel-layout.jsx');
+const {WorkspacePicker}=await vite.ssrLoadModule('/src/workspace-setup.jsx');
+const {WorkHeader}=await vite.ssrLoadModule('/src/work-shell.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>vite.close());
 const workspace={id:'b',path:'/research',name:'Research',available:true};
@@ -45,4 +48,46 @@ test('browsing suppresses the retained canvas host',()=>{
 test('workspace choices retain draft model and bundle',()=>{
  const setup={workspace:'/research',location:{kind:'workspace'},bundle:'custom',selection:{instance:'provider',model:'actual',effort:'high'}};
  assert.deepEqual(newChatSetup({view:{newSessionDraft:setup}}),{title:'',...setup});
+});
+test('new chat has no hidden global-folder fallback and respects visible workspace context',()=>{
+ const state={settings:{workspace:'/hidden'},workspaces:[workspace],selectedWorkspaceId:'b',view:{}};
+ assert.equal(newChatSetup(state).workspace,'/research');
+ assert.equal(newChatSetup({...state,selectedWorkspaceId:null}).location.kind,'managed');
+ assert.equal(newChatSetup({...state,view:{workSurface:'chats'}}).workspace,'');
+ assert.equal(newChatSetup({...state,selectedWorkspaceId:null,view:{workSurface:'workspace',workWorkspaceId:'b'}}).workspace,'/research');
+ assert.equal(newChatSetup({...state,view:{newSessionDraft:{workspace:'/explicit'}}}).location.kind,'workspace');
+});
+test('collapsed navigation gives all space back, including between chat and canvas',()=>{
+ const collapsed=fitPanels({available:1000,canvasOpen:true,canvasWidth:900});
+ assert.equal(collapsed.nav,0);assert.equal(collapsed.canvas,628);
+ assert.equal(collapsed.nav+collapsed.canvas+360+12,1000);
+ assert.equal(fitPanels({available:675,canvasOpen:true}).overlay,false);
+ assert.equal(fitPanels({available:671,canvasOpen:true}).overlay,true);
+ const expanded=fitPanels({available:1000,navPinned:true,canvasOpen:true});
+ assert.ok(expanded.nav+expanded.canvas+360+24<=1000);
+});
+test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
+ const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
+ assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
+ const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
+ assert.doesNotMatch(expanded,/Open navigation/);
+});
+test('workspace picker searches the host catalog, pages results, and keeps actions separate',async()=>{
+ let root;const calls=[],choices=[];
+ const dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true,result:{items:[{id:'w'+args.offset,name:'Reports',path:'/deep/team/'+(args.query||'q1')+'/reports'}],nextOffset:args.offset===0?40:null,total:41}}};
+ await act(async()=>{root=create(React.createElement(WorkspacePicker,{state:{},setup:{workspace:'',location:{kind:'managed'}},act:dispatch,onChange:value=>choices.push(value)}))});
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,20)));
+ assert.equal(root.root.findAllByType('select').length,0);
+ assert.deepEqual(calls[0],{name:'workspace.list',args:{query:'',offset:0,limit:40}});
+ const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
+ await act(async()=>button('Next').props.onClick());
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,20)));
+ assert.equal(calls.at(-1).args.offset,40);
+ await act(async()=>root.root.findByProps({'aria-label':'Find a workspace'}).props.onChange({target:{value:'q4'}}));
+ await act(async()=>await new Promise(resolve=>setTimeout(resolve,180)));
+ assert.deepEqual(calls.at(-1).args,{query:'q4',offset:0,limit:40});
+ await act(async()=>root.root.findByProps({'aria-label':'Reports · /deep/team/q4/reports'}).props.onClick());
+ assert.deepEqual(choices,[{workspace:'/deep/team/q4/reports',location:{kind:'workspace'}}]);
+ assert.ok(button('New workspace'));assert.ok(button('Use existing folder'));
+ await act(async()=>root.unmount());
 });

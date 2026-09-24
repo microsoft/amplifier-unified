@@ -60,7 +60,7 @@ test('draft model controls discover without creating a session and save choices 
 });
 
 test('inherited choices are displayed without pinning and the popup opens before requests finish',async()=>{
- const calls=[];let state={settings:{workspace:'/new'},view:{},setup:{providersRequestedWorkspace:'/new'},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model',effort:'high'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
+ const calls=[];let state={settings:{workspace:'/new'},workspaces:[{id:'new',path:'/new'}],selectedWorkspaceId:'new',view:{},setup:{providersRequestedWorkspace:'/new'},draftDefaults:{'["/new",""]':{phase:'ready',bundle:'work',effective:{instance:'one',model:'actual-model',effort:'high'},providers:[{id:'one',info:{defaults:{model:'actual-model'}}}]}}};
  const act=(name,args)=>{calls.push({name,args});return new Promise(()=>{})};let root;
  await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act,working:false}))});
  assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('one · actual-model (high)'));
