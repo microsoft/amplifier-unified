@@ -31,6 +31,7 @@ function ComponentSummary({updates,items,busy}){
 export function UpdateSettings({state,act}){
  const unread=(state.attention?.items||[]).filter(item=>item.page==='updates'&&!item.read),releaseUnread=unread.filter(item=>item.id.startsWith('release-notice:')),componentUnread=unread.filter(item=>!item.id.startsWith('release-notice:'));
  const updates=state.updates||{},options=state.settings?.updates||{},replacement=updates.pendingReplacement!=null,busy=replacement||['checking','staging','validating','activating'].includes(updates.phase);
+ const intervalHours=options.intervalHours??4,legacyInterval=![1,4,8,24].includes(intervalHours);
  const application=updates.application||(updates.items||[]).find(item=>item.kind==='app')||{};
  const items=(updates.items||[]).filter(item=>item.kind!=='app'&&item.id!=='application');
  const available=items.filter(item=>item.status==='update').sort((a,b)=>a.label.localeCompare(b.label)),issues=items.filter(item=>['check_failed','local_changes'].includes(item.status));
@@ -68,7 +69,8 @@ export function UpdateSettings({state,act}){
   <div className="a-update-simple-options"><label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false&&options.autoInstall!==false} onChange={e=>change(e.target.checked?{autoCheck:true,autoInstall:true}:{autoInstall:false})}/>Keep Amplifier up to date automatically</label><p className="a-caption">Install eligible app and component updates when work is idle. Existing pins and local edits are kept.</p></div>
   <details className="a-everyday-disclosure"><summary>Update preferences</summary><div className="a-update-options">
    <label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false} onChange={e=>change({autoCheck:e.target.checked,...(!e.target.checked?{autoInstall:false}:{})})}/>Automatically check for updates</label>
-   <label htmlFor="update-frequency">Check every</label><select id="update-frequency" data-action="settings.update" value={options.intervalHours||24} onChange={e=>change({intervalHours:Number(e.target.value)})}><option value="1">Hour</option><option value="6">6 hours</option><option value="24">Day</option><option value="168">Week</option></select>
+   <label htmlFor="update-frequency">Check for updates</label><select id="update-frequency" data-action="settings.update" value={legacyInterval?'':intervalHours} aria-describedby={legacyInterval?'update-frequency-saved':undefined} onChange={e=>change({intervalHours:Number(e.target.value)})}>{legacyInterval&&<option value="" disabled>Choose a new interval</option>}<option value="1">Every 1 hour</option><option value="4">Every 4 hours</option><option value="8">Every 8 hours</option><option value="24">Daily</option></select>
+   {legacyInterval&&<p id="update-frequency-saved" className="a-caption">Your saved schedule checks every {intervalHours} hours. It stays in effect until you choose a new interval.</p>}
   </div></details>
   </div>
   <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Review update issue':'Component updates & details'}<AttentionBadge count={componentUnread.length}/></summary><div className="a-update-disclosure-body">

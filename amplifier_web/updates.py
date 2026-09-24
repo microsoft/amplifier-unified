@@ -20,6 +20,9 @@ from urllib.parse import urlsplit
 import uuid
 from .host.config import write_private
 
+DEFAULT_CHECK_INTERVAL_HOURS = 4
+CHECK_INTERVAL_HOURS = (1, 4, 8, 24)
+
 
 def work_paused(state):
     updates = state.get('updates', {})
@@ -925,7 +928,7 @@ class UpdateManager:
         sequence = state.get('sequence', {})
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
             await self.check(tier=sequence['nextStage'], install=sequence.get('install', False))
-        elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',24)*3600:
+        elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check()
         state=self.service.state['updates']
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
