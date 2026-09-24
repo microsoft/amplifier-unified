@@ -272,6 +272,8 @@ from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
 from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
+from .observations import definitions as observation_definitions
+ACTION_DEFINITIONS.update(observation_definitions(schema, string))
 from .voice_visual import VoiceVisual, definitions as visual_definitions
 ACTION_DEFINITIONS.update(visual_definitions(schema, string))
 from .computer_visual import ComputerVisuals, definitions as computer_visual_definitions
@@ -336,6 +338,7 @@ class AppService:
         self.smart_tools = None
         self.smart_canvas = None
         self.queues = set()
+        self.queue_tokens = {}
         self.queue_clients = {}
         self.queue_sessions = {}
         self.instance_id = str(uuid.uuid4())
@@ -469,6 +472,8 @@ class AppService:
         self.coordination = Coordination(self)
         from .schedules import Schedules
         self.schedules = Schedules(self)
+        from .observations import Observations
+        self.observations = Observations(self)
         from .worktrees import Worktrees
         self.worktrees = Worktrees(self)
         from .publishing import Publishing
@@ -721,12 +726,14 @@ class AppService:
     def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
         self.queues.add(queue)
+        self.queue_tokens[queue] = uuid.uuid4().hex
         self.queue_clients[queue] = self.clients.current.get()
         self.queue_sessions[queue] = session_id
         return queue
 
     def unsubscribe(self, queue):
         self.queues.discard(queue)
+        self.queue_tokens.pop(queue, None)
         client_id = self.queue_clients.pop(queue, None)
         if client_id and client_id not in self.queue_clients.values():
             self.computer_visual.reconcile(client_id, disconnect=True)
@@ -922,7 +929,7 @@ class AppService:
                 raise AppError(str(exc), 403) from None
             # Actor is host provenance, never a claim from the request body.
             args['args'] = {**invocation, 'actor': origin}
-        if action == 'runtime.control' and args.get('operation', '').startswith('schedule.'):
+        if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.')):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
@@ -1000,6 +1007,12 @@ class AppService:
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [],
                 'result': {'host': host, 'worker': worker},
                 **({'state': self.browser_state()} if include_state else {})}
+        if action.startswith('observation.'):
+            try:
+                result = await self.observations.dispatch(action, args, origin, command_id)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+            return {'accepted': True, 'result': result}
         if action.startswith('schedule.'):
             try:
                 result = await self.schedules.dispatch(action, args, origin, command_id)
@@ -2582,7 +2595,7 @@ class AppService:
                 generation_id = payload.get("generationId")
                 repeated = duplicate(session["messages"], payload)
                 if not repeated:
-                    self._message(session, "assistant", payload.get("text", ""), "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown") if key in payload})
+                    self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id") if key in payload})
                 if not repeated or session.get("streaming") == payload.get("text"):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)
@@ -2714,6 +2727,8 @@ class AppService:
                                                  'reason': 'Screen consent requires the connected originating browser.'}
             return snapshot
 
+        if operation == 'observation.admit':
+            return self.observations.authorize_admission(session_id, args)
         if operation == 'memory.context':
             return await self.recall.personalization.context(session_id, expected=args.get('expected'))
         if operation == "questions.admit":
@@ -2781,7 +2796,7 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if row:
                     action_args[key] = row['id']
-            if args['action'].startswith(('question.', 'task.', 'schedule.', 'capacity.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
+            if args['action'].startswith(('question.', 'task.', 'schedule.', 'observation.', 'capacity.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2840,7 +2855,13 @@ class AppService:
                 action_args.setdefault('nativeProject', native_project(self._session(session_id)))
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
-            if args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
+            if args['action'].startswith('observation.'):
+                token = self.observations.input_bindings.set(args.get('_inputBindings', []))
+                try:
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
+                finally:
+                    self.observations.input_bindings.reset(token)
+            elif args['action'] == 'view.update' or args['action'].startswith('computer.visual.'):
                 if args['action'].startswith('computer.visual.'):
                     visual_origin(action_args.get('clientId'))
                 elif input_origin is not None and not action_args.get('clientId') and input_origin['clientId'] is None:
@@ -3000,6 +3021,7 @@ class AppService:
         await self.voice_visual.close()
         await self.computer_visual.close()
         await self.schedules.close()
+        await self.observations.close()
         await self.recall.personalization.close()
         await self.worktrees.close()
         await self.publishing.close()
@@ -3028,5 +3050,6 @@ class AppService:
             self._save()
         await self.operations.close()
         self.schedules.store.close()
+        self.observations.store.close()
         await self.recall.close()
         self.db.close()

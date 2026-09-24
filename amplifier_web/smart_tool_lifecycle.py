@@ -273,7 +273,7 @@ class Lifecycle:
         await self._change(lambda _: self._server(identity).update(loadedSchemas={t["name"]:t for t in selected}, loadedSchemaRevision=revision))
         return {"id": identity, "catalogRevision": revision, "tools": selected}
 
-    async def call_tool(self, identity, name, arguments, origin="ui", timeout_seconds=60, allowed_tools=None, expected_configuration=None, expected_catalog=None):
+    async def call_tool(self, identity, name, arguments, origin="ui", timeout_seconds=60, allowed_tools=None, expected_configuration=None, expected_catalog=None, dispatch_guard=None):
         from .smart_tools import _bounded, _visible, configuration_key
         connection = await self._connection(identity)
         if expected_configuration is not None and configuration_key(self._server(identity)) != expected_configuration:
@@ -293,7 +293,7 @@ class Lifecycle:
         epoch = connection.catalog_epoch
         try:
             result = await connection.request("call_tool", name, arguments, read_timeout_seconds=timeout_seconds,
-                timeout=timeout_seconds + 1, expected_epoch=epoch)
+                timeout=timeout_seconds + 1, expected_epoch=epoch, **({"dispatch_guard": dispatch_guard} if dispatch_guard else {}))
             return self._redact(_bounded(result))
         except AuthenticationRequired:
             await self._change(lambda _: self._server(identity).update(status="auth-required", connectionState="auth-required", authorization=connection.challenge, catalogState="stale", loadedSchemas={}))

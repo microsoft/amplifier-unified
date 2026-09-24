@@ -48,7 +48,13 @@ class ObservedReadStream:
     async def receive(self):
         import anyio
         try:
-            return await self.stream.receive()
+            value = await self.stream.receive()
+            message = getattr(value, 'message', None)
+            if self.connection.observation_active and getattr(message, 'id', None) is not None and getattr(message, 'method', None) not in {None, 'ping'}:
+                # Observation grants no sampling, elicitation, roots or other
+                # client capabilities, even if an SDK later adds defaults.
+                raise ValueError('The observer requested a forbidden client capability')
+            return value
         except (anyio.EndOfStream, anyio.ClosedResourceError, anyio.BrokenResourceError):
             await self.connection._message(ConnectionError("MCP transport closed"))
             self.connection.task.cancel()
@@ -89,6 +95,7 @@ class Connection:
         self.challenge = None
         self.catalog_epoch = 0
         self.account_guard = None
+        self.observation_active = False
         self.account_resource_uri = None
         self.account_authorization = None
         self.last_identity_authorization = None
@@ -193,14 +200,17 @@ class Connection:
                     listener = asyncio.create_task(self._listen(client))
                 try:
                     while True:
-                        method, args, kwargs, current, expected_epoch = await self.queue.get()
+                        method, args, kwargs, current, expected_epoch, dispatch_guard = await self.queue.get()
                         if current.cancelled():
                             continue
                         try:
                             if expected_epoch is not None and expected_epoch != self.catalog_epoch:
                                 raise ValueError("The tool catalog changed before execution. Refresh discovery and review the current schema.")
+                            self.observation_active = dispatch_guard is not None
                             if self.account_guard and method in {"call_tool", "read_resource"}:
                                 await self.account_guard(client)
+                            if dispatch_guard:
+                                dispatch_guard()
                             result = await getattr(client, method)(*args, **kwargs)
                             if not current.done():
                                 current.set_result(_json(result))
@@ -225,6 +235,7 @@ class Connection:
                             if not current.done():
                                 current.set_exception(AuthenticationRequired("Authorization is required. Review this connection's sign-in or credential settings.") if self.challenge else exc)
                         finally:
+                            self.observation_active = False
                             current = None
                 finally:
                     if listener:
@@ -246,12 +257,12 @@ class Connection:
                 await self.changed(self, "closed")
             _private_diagnostics.reset(diagnostic_scope)
 
-    async def request(self, method, *args, timeout=60, expected_epoch=None, **kwargs):
+    async def request(self, method, *args, timeout=60, expected_epoch=None, dispatch_guard=None, **kwargs):
         if self.task.done() or self.failure:
             raise ValueError("The MCP connection is closed. Reconnect before sending another request.")
         future = asyncio.get_running_loop().create_future()
         try:
-            self.queue.put_nowait((method, args, kwargs, future, expected_epoch))
+            self.queue.put_nowait((method, args, kwargs, future, expected_epoch, dispatch_guard))
         except asyncio.QueueFull:
             raise ValueError("This tool has too many pending requests. Try again when it finishes.") from None
         try:
