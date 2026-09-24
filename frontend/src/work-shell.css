@@ -176,3 +176,6 @@
 #amp-one.a-approachable-shell .a-work-live-controls .a-call-strip{flex-wrap:wrap}
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true][data-show-paths=true] .a-workspace-result-path{display:block;font-size:11px}
 #amp-one.a-approachable-shell .a-nav-slot .a-workspace-explorer[data-show-paths=true] .a-workspace-row{height:54px;min-height:54px;max-height:54px}
+
+/* The disclosure must override themes that truncate the compact location line. */
+#amp-one.a-approachable-shell details.a-canvas-file-path{white-space:normal;overflow:visible;border:0;padding:4px 0}
