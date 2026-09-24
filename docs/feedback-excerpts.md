@@ -25,7 +25,12 @@ connected browser target for staging. The user must have reviewed and approved
 the text/visibility; an ordinary feedback request is not that approval.
 
 The final feedback form lists the staged files and requires a separate checkbox
-before `feedback.submit` includes reviewed excerpts. The host verifies hashes and
+before `feedback.submit` includes reviewed excerpts. Consent includes the exact
+`confirmedExcerpts: [{id, sha256}]` set, taken from staged attachment metadata;
+adding, removing or changing an excerpt requires fresh confirmation. The host
+rejects stale consent even when an agent changed the draft. Staging also requires
+the reviewed conversation to remain selected and cannot overwrite newer feedback
+text. The host verifies hashes and
 rechecks repository identity and visibility before any upload. A visibility
 change refuses all file writes and requires new review. Public upload is allowed
 only for explicitly reviewed excerpt files; ordinary attachments still require

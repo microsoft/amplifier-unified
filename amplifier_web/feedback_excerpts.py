@@ -19,7 +19,7 @@ def definitions(schema, string):
             'Prepare an editable local feedback excerpt from a minimal Markdown session.export snapshot. Supply the exact reviewed edited text on a later call to freeze edits. Returns exact text, redactions/warnings, hash and verified GitHub repository visibility. This read-only GitHub check never publishes. User review and explicit disclosure consent are required before staging.',
             schema({'id': string(200), 'snapshotId': string(200), 'text': string(MAX_BYTES)}, ['id', 'snapshotId'])),
         'feedback.excerpt.stage': (
-            'Stage exactly the local feedback excerpt the user reviewed and approved for the stated GitHub visibility. Nothing uploads yet; feedback.submit separately requires confirmExcerpts. Never infer consent from ordinary feedback or transcript-export requests. Exact requestId retries never add twice.',
+            'Stage exactly the local feedback excerpt the user reviewed and approved for the stated GitHub visibility. Nothing uploads yet; feedback.submit separately requires confirmExcerpts and the exact confirmedExcerpts IDs/hashes. Never infer consent from ordinary feedback or transcript-export requests. Exact requestId retries never add twice.',
             schema({'id': string(200), 'clientId': string(200), 'reviewId': string(64),
                     'requestId': {'type':'string','pattern':'^[A-Za-z0-9_-]{8,100}$'},
                     'acknowledgeDisclosure': {'const': True}, 'acknowledgeWarnings': {'type': 'boolean'}},
@@ -105,6 +105,8 @@ class Excerpts:
         row = self.service.db.execute('SELECT session_id,payload FROM feedback_excerpts WHERE id=?', (args['reviewId'],)).fetchone()
         if not row or row[0] != args['id']:
             raise AppError('This reviewed excerpt belongs to a different conversation or is unavailable.', 409)
+        if self.service.state.get('selectedSessionId') != args['id']:
+            raise AppError('The selected conversation changed. Open the reviewed conversation before attaching its excerpt.', 409)
         review = json.loads(row[1])
         if args.get('acknowledgeDisclosure') is not True or review['requiresExtraReview'] and args.get('acknowledgeWarnings') is not True:
             raise AppError('Review the excerpt and acknowledge its disclosure and warnings before attaching it.')

@@ -28,6 +28,10 @@ UNKNOWN = "GitHub may have received this feedback. Check the repository issues b
 UNKNOWN_FILES = "Files may have been stored in the repository, and an issue may have been created. Check the repository issues and attachment branch before starting a new submission; this request will not be posted again."
 
 
+class ExcerptConsentError(ValueError):
+    """A safe, actionable consent error with no user text or file paths."""
+
+
 def definitions(schema, string):
     from .feedback_followup import definitions as followup_definitions
     request_id = {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,100}$"}
@@ -41,10 +45,12 @@ def definitions(schema, string):
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a private feedback-assets branch and remain in repository history. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true after user review. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a feedback-assets branch and remain in repository history. Ordinary files require a private repository; reviewed excerpts use their explicitly approved public/private visibility. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true plus confirmedExcerpts:[{id,sha256}] for the exact complete staged excerpt set after user review. Read each hash from view.feedbackDraft.attachments[].excerpt.sha256; changes require fresh consent. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
+                    "confirmedExcerpts": {"type": "array", "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True,
+                        "items": schema({"id": attachment_id, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["id", "sha256"])},
                     "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
                     "attachmentIds": {"type": "array", "items": attachment_id, "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True}},
                    ["requestId", "title", "body", "category"]),
@@ -54,7 +60,7 @@ def definitions(schema, string):
             schema({"requestId": request_id, "name": {**string(200), "minLength": 1}, "base64": string(12000000)}, ["requestId", "name", "base64"]),
         ),
         "feedback.attachment.remove": (
-            "Remove a locally staged file from the shared feedback draft before submitting. Submitted files cannot be removed this way; they are retained in private repository history.",
+            "Remove a locally staged file from the shared feedback draft before submitting. Submitted files cannot be removed this way; they are retained in repository history with the visibility approved at submission.",
             schema({"id": attachment_id}, ["id"]),
         ),
     }
@@ -135,6 +141,8 @@ class Feedback:
         selected = draft.setdefault("attachments", [])
         if action == "feedback.attachment.remove":
             draft["attachments"] = [row for row in selected if row["id"] != args["id"]]
+            if len(draft["attachments"]) != len(selected):
+                draft.update(confirmExcerpts=False, confirmedExcerpts=[])
             return
         fingerprint = hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()
         existing = self.service.db.execute("SELECT fingerprint FROM feedback_attachments WHERE request_id=?", (args["requestId"],)).fetchone()
@@ -155,9 +163,23 @@ class Feedback:
             raise AppError(str(exc)) from None
         self.service.db.execute("INSERT INTO feedback_attachments VALUES (?,?,?)", (args["requestId"], fingerprint, json.dumps(row)))
         selected.append({key: value for key, value in row.items() if key != "sha256"})
+        draft.update(confirmExcerpts=False, confirmedExcerpts=[])
 
     def selected_files(self, args):
         selected = {row["id"] for row in self.service.state.get("view", {}).get("feedbackDraft", {}).get("attachments", [])}
+        # Consent is a snapshot of the complete staged excerpt set. A boolean
+        # alone could approve a later agent-added file the user never saw.
+        approved = sorted((row["id"], row["sha256"]) for row in args.get("confirmedExcerpts", []))
+        actual = []
+        for identity in selected:
+            saved = self.service.db.execute("SELECT metadata FROM feedback_attachments WHERE json_extract(metadata,'$.id')=?", (identity,)).fetchone()
+            item = json.loads(saved[0]) if saved else {}
+            if item.get("excerpt"):
+                actual.append((identity, item["excerpt"]["sha256"]))
+        if actual or approved:
+            if (args.get("confirmExcerpts") is not True or approved != sorted(actual)
+                    or not {identity for identity, _ in actual}.issubset(args.get("attachmentIds", []))):
+                raise ExcerptConsentError("The staged excerpts changed. Review and explicitly confirm their exact files and hashes before sending.")
         rows = []
         for identity in args.get("attachmentIds", []):
             stored = self.service.db.execute("SELECT metadata FROM feedback_attachments WHERE json_extract(metadata,'$.id')=?", (identity,)).fetchone()
@@ -208,6 +230,8 @@ class Feedback:
             args["_attachments"] = self.selected_files(args)
             if args.get("includeDiagnostics", True):
                 args["_diagnostics"] = feedback_diagnostics.snapshot(self.service.state_context(),args.get("deviceDiagnostics"))
+        except ExcerptConsentError as exc:
+            raise AppError(str(exc), 409) from None
         except (OSError, ValueError):
             raise AppError("An attachment changed or is unavailable. Remove it and attach it again.") from None
         receipt = {"requestId": identity, "title": args["title"], "category": args["category"],

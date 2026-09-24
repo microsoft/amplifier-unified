@@ -45,6 +45,11 @@ async def stage(app, review, **options):
     return (await app.dispatch('feedback.excerpt.stage', args))['result']
 
 
+def consent(*rows):
+    return {'confirmExcerpts': True, 'confirmedExcerpts': [
+        {'id': row['id'], 'sha256': row['excerpt']['sha256']} for row in rows]}
+
+
 def test_redaction_reports_counts_without_retaining_sensitive_values(monkeypatch):
     monkeypatch.setenv('TEST_API_KEY', 'fixture-top-secret')
     text = 'Normal code\nBearer abcdefghij api_key="hidden" fixture-top-secret\n/user@example.com /home/person/private.txt C:\\Users\\name\\private.txt https://private.example/path?token=foo'
@@ -77,7 +82,7 @@ async def test_review_is_local_edited_exact_snapshot_and_private_by_verified_sou
         with pytest.raises(AppError):
             await app.dispatch('feedback.submit', submission(attachmentIds=[row['id']]))
         assert writes==[]
-        await app.dispatch('feedback.submit', submission(attachmentIds=[row['id']],confirmExcerpts=True))
+        await app.dispatch('feedback.submit', submission(attachmentIds=[row['id']],**consent(row)))
         await settle(app)
         assert app.state['feedback']['requests'][0]['status']=='submitted'
         blobs=[payload for endpoint,payload in writes if endpoint.endswith('/git/blobs')]
@@ -100,7 +105,7 @@ async def test_exact_visibility_ack_and_recheck_before_any_write(tmp_path, githu
             await stage(app, review, acknowledgeWarnings=False)
         row=await stage(app,review)
         target['private']=not private
-        await app.dispatch('feedback.submit', submission(attachmentIds=[row['id']],confirmExcerpts=True))
+        await app.dispatch('feedback.submit', submission(attachmentIds=[row['id']],**consent(row)))
         await settle(app)
         assert app.state['feedback']['requests'][0]['status']=='failed' and writes==[] and issue.await_count==0
     finally:
@@ -112,7 +117,7 @@ async def test_explicitly_reviewed_public_excerpt_uploads_once_and_reports_visib
     app=AppService(tmp_path, workspace=tmp_path)
     try:
         review=await preview(app);row=await stage(app,review)
-        args=submission(attachmentIds=[row['id']],confirmExcerpts=True)
+        args=submission(attachmentIds=[row['id']],**consent(row))
         await app.dispatch('feedback.submit',args);await settle(app)
         assert app.state['feedback']['requests'][0]['attachments'][0]['visibility']=='public'
         assert 'publicly visible' in issue.call_args.args[1]
@@ -133,6 +138,9 @@ async def test_foreign_session_review_denied_and_removed_stage_not_resurrected(t
             await app.app_bridge('dispatch',{'action':'feedback.excerpt.review','args':{'id':sid,'snapshotId':review['snapshotId']}},other)
         with pytest.raises(AppError,match='different conversation'):
             await stage(app,review,id=other)
+        with pytest.raises(AppError,match='selected conversation changed'):
+            await stage(app,review)
+        await app.dispatch('session.select', {'id':sid})
         row=await stage(app,review)
         await app.dispatch('feedback.attachment.remove',{'id':row['id']})
         await stage(app,review)
@@ -186,5 +194,50 @@ async def test_ui_owned_hidden_rows_do_not_enter_excerpt(tmp_path, github):
         app._session()['messages'].insert(1, {'id':'hidden','role':'assistant','text':'PRIVATE REASONING','ephemeral':True})
         review = await preview(app)
         assert 'PRIVATE REASONING' not in review['text'] and review['summary']['messageCount'] == 2
+    finally:
+        await app.close()
+
+
+async def test_final_consent_matches_complete_server_excerpt_set_and_exact_retry_survives_changes(tmp_path, github):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        first = await stage(app, await preview(app, text='First explicitly reviewed excerpt'))
+        stale = submission(attachmentIds=[first['id']], **consent(first))
+        app.state['view']['feedbackDraft'].update(consent(first))
+        # Same accepted staging retry neither duplicates nor revokes exact consent.
+        await stage(app, await preview(app, text='First explicitly reviewed excerpt'))
+        assert app.state['view']['feedbackDraft']['confirmExcerpts'] is True
+        sid = app._session()['id']
+        review = await preview(app, text='Second explicitly reviewed excerpt')
+        app.clients.attach('consent-browser')
+        with app.clients.bind('consent-browser'):
+            await app.dispatch('session.select', {'id':sid})
+            app.state['view']['feedbackDraft'] = copy.deepcopy(app._state['view']['feedbackDraft'])
+            queue = app.subscribe()
+        try:
+            response = await app.app_bridge('dispatch', {'action':'feedback.excerpt.stage', 'args':{
+                'clientId':'consent-browser','reviewId':review['reviewId'], 'requestId':'second-excerpt-stage',
+                'acknowledgeDisclosure':True}}, sid)
+            second = response['result']
+            with app.clients.bind('consent-browser'):
+                assert app.state['view']['feedbackDraft']['confirmExcerpts'] is False
+                assert app.state['view']['feedbackDraft']['confirmedExcerpts'] == []
+                for invalid in (stale,
+                                {**stale, 'attachmentIds':[first['id'],second['id']]},
+                                {**stale, 'confirmedExcerpts':[]},
+                                {**stale, 'confirmedExcerpts':[{'id':first['id'],'sha256':'0'*64}]}):
+                    with pytest.raises(AppError,match='exact files and hashes'):
+                        await app.dispatch('feedback.submit', invalid)
+                assert github[1] == [] and github[2].await_count == 0
+                accepted = submission(attachmentIds=[first['id'],second['id']], **consent(first,second))
+                await app.dispatch('feedback.submit', accepted)
+                await settle(app)
+                count = len(github[1])
+                await app.dispatch('feedback.attachment.remove', {'id':second['id']})
+                await app.dispatch('feedback.submit', accepted)
+                await settle(app)
+                assert len(github[1]) == count and github[2].await_count == 1
+        finally:
+            app.unsubscribe(queue)
     finally:
         await app.close()

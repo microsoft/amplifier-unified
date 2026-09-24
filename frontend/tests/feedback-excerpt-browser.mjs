@@ -6,6 +6,7 @@ import {once} from 'node:events';
 import {createServer} from 'vite';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
+const bounded=(promise,label)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Error(label+' timed out')),15000).unref())]);
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
@@ -46,7 +47,7 @@ asyncio.run(main())
 `],{stdio:['ignore','pipe','pipe']});
 let fixtureLog='';fixture.stderr.on('data',chunk=>fixtureLog+=chunk);
 const ready=new Promise((resolve,reject)=>{let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});fixture.once('exit',code=>reject(new Error(`Feedback fixture exited ${code}: ${fixtureLog}`)))});
-let vite,browser;
+let vite,browser,releaseHeld=()=>{};
 try{
  const port=await Promise.race([ready,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Feedback fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
@@ -58,6 +59,12 @@ try{
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'feedback'}}));
  const inspect=()=>page.evaluate(()=>fetch('/api/fixture/feedback').then(response=>response.json()));
+ // Simulate independently delivered agent actions without joining the browser's
+ // serial command queue, which is intentionally awaiting the held response.
+ const direct=(action,args)=>page.evaluate(async({action,args})=>{
+  const response=await fetch('/api/actions',{method:'POST',headers:{'Content-Type':'application/json','X-Amplifier-Client':window.amplifier.getState().client.id},body:JSON.stringify({action,args})});
+  if(!response.ok)throw Error('Fixture action failed: '+response.status);return response.json();
+ },{action,args});
  assert.deepEqual((await inspect()).uploads,[]);
  await page.getByLabel('Title',{exact:true}).fill('Reviewed excerpt fixture');
  await page.getByLabel('Details',{exact:true}).fill('A reproducible issue.');
@@ -82,8 +89,27 @@ try{
  const exact=await editor.inputValue();
  await page.getByRole('checkbox',{name:/I reviewed this exact text/}).check();
  const extra=page.getByRole('checkbox',{name:/I reviewed the scope/});if(await extra.count())await extra.check();
- await attach.click();
+ // Hold a successful staging response after the server committed it. The
+ // form locks local edits/sending, and a newer agent edit must survive it.
+ let stageArrived,releaseStage;
+ const arrived=new Promise(resolve=>stageArrived=resolve),gate=new Promise(resolve=>releaseStage=resolve);
+ releaseHeld=releaseStage;
+ const holdStage=async route=>{
+  if(route.request().postDataJSON()?.action!=='feedback.excerpt.stage')return route.continue();
+  const response=await route.fetch();stageArrived();await gate;await route.fulfill({response});
+ };
+ await page.route('**/api/actions',holdStage);
+ await attach.click();await bounded(arrived,'staging response');
+ await expect(page.getByLabel('Title',{exact:true})).toBeDisabled();
+ await expect(page.locator('form').getByRole('button',{name:'Send feedback',exact:true})).toBeDisabled();
+ await page.waitForFunction(()=>window.amplifier.getState().view.feedbackDraft.attachments?.length===1);
+ await direct('view.update',{patch:{feedbackDraft:{...await page.evaluate(()=>window.amplifier.getState().view.feedbackDraft),title:'Newer agent title',body:'Newer agent details'}}});
+ await expect(page.getByLabel('Title',{exact:true})).toHaveValue('Newer agent title');
+ releaseStage();
  await expect(page.getByRole('button',{name:'Excerpt attached locally',exact:true})).toBeVisible();
+ await page.unroute('**/api/actions',holdStage);
+ await expect(page.getByLabel('Title',{exact:true})).toHaveValue('Newer agent title');
+ await expect(page.getByLabel('Details',{exact:true})).toHaveValue('Newer agent details');
  assert.equal((await inspect()).uploads.filter(row=>row.payload!==null).length,0);
  const send=page.locator('form').getByRole('button',{name:'Send feedback',exact:true});
  assert.equal(await send.isDisabled(),true);
@@ -97,6 +123,34 @@ try{
  const result=await inspect(),blobs=result.uploads.filter(row=>row.endpoint.endsWith('/git/blobs'));
  assert.equal(blobs.length,1);assert.equal(Buffer.from(blobs[0].payload.content,'base64').toString('utf8'),exact);
  assert.equal(result.calls.length,1);assert.match(result.calls[0].body,/publicly visible/);
+ assert.equal(result.calls[0].title,'Newer agent title');assert.match(result.calls[0].body,/Newer agent details/);
+ // Delay a new staging request before it reaches the server, then change
+ // chats. Neither the old review nor its late result may enter the new draft.
+ await page.reload();await page.waitForSelector('#amp-one');
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'feedback'}}));
+ await page.getByRole('button',{name:'Attach transcript excerpt',exact:true}).click();
+ await page.getByRole('button',{name:'Preview selected excerpt'}).click();
+ await expect(page.getByLabel('Edit feedback excerpt')).toBeVisible();
+ await page.getByRole('checkbox',{name:/I reviewed this exact text/}).check();
+ const warnings=page.getByRole('checkbox',{name:/I reviewed the scope/});if(await warnings.count())await warnings.check();
+ let requestArrived,releaseRequest;
+ const waiting=new Promise(resolve=>requestArrived=resolve),requestGate=new Promise(resolve=>releaseRequest=resolve);
+ releaseHeld=releaseRequest;
+ const holdRequest=async route=>{
+  if(route.request().postDataJSON()?.action!=='feedback.excerpt.stage')return route.continue();
+  requestArrived();await requestGate;await route.continue();
+ };
+ await page.route('**/api/actions',holdRequest);
+ await page.getByRole('button',{name:'Attach reviewed excerpt',exact:true}).click();await bounded(waiting,'staging request');
+ await direct('session.create',{title:'Other synthetic conversation'});
+ await direct('view.update',{patch:{panel:'feedback',feedbackDraft:{title:'Other draft',body:'Keep these details',attachments:[],includeDiagnostics:false}}});
+ const rejected=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='feedback.excerpt.stage');
+ releaseRequest();assert.equal((await rejected).status(),409);
+ await page.unroute('**/api/actions',holdRequest);
+ await expect(page.getByLabel('Title',{exact:true})).toHaveValue('Other draft');
+ await expect(page.getByLabel('Details',{exact:true})).toHaveValue('Keep these details');
+ assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().view.feedbackDraft.attachments),[]);
+ assert.equal((await inspect()).calls.length,1);
  assert.deepEqual(errors,[]);
- console.log('Feedback excerpt browser passed: opt-in minimal range, redacted editable review, verified public destination, edits revoke consent, local staging, separate final consent, exact single upload, mobile layout; GitHub intercepted.');
-}finally{await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit')}}
+ console.log('Feedback excerpt browser passed: opt-in minimal range, redacted editable review, verified public destination, edits revoke consent, local staging, separate final consent, exact single upload, mobile layout, delayed staging lock, newer agent edits preserved, chat-switch rejection; GitHub intercepted.');
+}catch(error){console.error(error);throw error}finally{releaseHeld();await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit')}}
