@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.17",
+      "title": "Clearer setup, voice samples and update progress",
+      "changes": [
+        "Guide Smart Tools from selection through review and installation, put installed tools first, and support adding a GitHub URL directly.",
+        "Preview speaking voices with short isolated audio samples and choose an existing environment key or a separate private key for voice.",
+        "Save built-in appearances immediately and mark notices read only when they are visible.",
+        "Show update progress, errors and disabled-action reasons above the details. Enable automatic updates when preferences are unset while preserving existing opt-outs.",
+        "Keep development previews owner-managed and preserve compatibility with older app metadata during managed upgrades."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.16",
       "title": "Clearer connections and private memory jobs",
       "changes": [
