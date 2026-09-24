@@ -100,3 +100,11 @@ ssh spark-2 'systemctl --user stop amplifier-unified-instance-approachable-shell
 ```
 
 For updates, build the frontend, run relevant checks, verify the target unit is idle, sync only this checkout, and restart only this unit. Recheck the guard immediately before restarting. Keep saved chats, drafts, credentials and workspace files in the owner directory. Do not run a broad service restart or remove instance data.
+
+## Approved integration candidate
+
+Integrated main `f2286ab9` (0.20.22), retaining the current Canvas single-viewer, file paths, immutable document versions and provider diagnostics. Final user polish combines the duplicate naming/export entries into **Chat details** and keeps one search focus ring. The integration also restores discovery/refresh/attention access and explicit path preferences, keeps call and screen-sharing controls visible while browsing, and exposes a scoped Stop action for ongoing work.
+
+The integrated frontend passes 346 unit tests, the production build, and a clean repeat-build comparison. Native Edge inspection on the owned Spark-2 instance verified the single search focus outline, autofocus, one Chat details menu item, continued naming/export access, and focus return from Chat details to its menu trigger. Deployment hashes matched all 141 changed files at source `196212933f4ac0aa33b462b216e5adf1dc1eb44c`. The later chooser-trigger focus correction does not alter placement or history data.
+
+The full Python suite is run as part of the release handoff; its exact result is recorded there. Live AI/voice/takeover and every mobile/theme combination are not newly qualified by this visual pass. Existing component and protocol regressions remain the evidence for those paths.
