@@ -55,7 +55,6 @@ try{
  await action('view.update',{patch:{scheme:'system'}});
  await action('canvas.show',{kind:'markdown',title:'Pinned notes',content:'# Notes beside the live tool'});
  const pinned=(await action('canvas.views.inspect',{})).result.views[0];
- await action('canvas.views.open',{resourceId:pinned.resourceId,sessionId:pinned.resource.sessionId});
  const opened=await action('smartTools.open',{id:'counter',tool:'counter_read'});
  await page.waitForFunction(()=>window.amplifier.getState().canvas.kind==='mcp-app');
  const frame=page.frameLocator('.a-canvas-html');
@@ -160,7 +159,7 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await action('view.update',{patch:{canvasFocused:true}});
  assert.equal(await frame.locator('body').getAttribute('data-live-marker'),'same-frame');
- assert.equal((await action('canvas.views.inspect',{})).result.views.find(v=>v.viewId==='secondary').resourceId,pinned.resourceId);
+ assert.ok((await state()).canvasArtifacts.some(row=>row.id===pinned.resourceId),'Opening a tool retains earlier saved artifacts');
  await page.waitForFunction(id=>window.amplifier.getState().smartTools.operations.some(o=>o.id===id&&o.status==='completed'),receipt.operationId);
  state=await page.evaluate(()=>window.amplifier.getState());assert.equal(state.smartTools.operations.find(o=>o.id===receipt.operationId).result.structuredContent.count,5);
  assert.equal(state.smartTools.operations.filter(o=>o.target?.name==='counter_add').length,2,'Presentation changes must not replay accepted tool work');

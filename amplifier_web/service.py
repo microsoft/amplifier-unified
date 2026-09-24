@@ -66,6 +66,7 @@ ACTION_DEFINITIONS = {
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","unverified","error"]},"message":string(2000)},["id","part","status"])),
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
     "canvas.interact": ("Operate a standard HTML preview control from the current canvas.document snapshot. Never executes arbitrary JavaScript.", schema({"id":string(100),"controlId":string(100),"event":{"enum":["click","input"]},"value":string(4000)},["id","controlId","event"])),
+    "canvas.copyPath": ("Copy the selected artifact file path on the app server, absolute or relative to its original workspace; never opens a file or submits a message.", schema({"id":string(100),"format":{"enum":["absolute","relative"]}},["id","format"])),
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
     "canvas.openFile": ("Open a local file in Canvas for the currently displayed chat and its unchanged workspace. Missing or out-of-workspace files return unavailable; never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200)}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
@@ -1253,7 +1254,7 @@ class AppService:
             if action in {'canvas.views.status', 'canvas.views.observe'} and client_id is not None:
                 from .client_observation import update
                 return update(self, action, args, command_id, fingerprint, include_state=include_state)
-            opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose', 'canvas.views.open'} or (action == 'canvas.show' and not args.get('sessionId'))
+            opens_selected_canvas = action in {'canvas.select', 'canvas.reopen', 'canvas.tabClose'} or (action == 'canvas.show' and not args.get('sessionId'))
             if action == 'canvas.select' and origin == 'agent' and caller_session_id and self.state.get('selectedSessionId') != caller_session_id:
                 raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
             if opens_selected_canvas and self.state.get('selectedSessionId') is None:
@@ -1265,7 +1266,6 @@ class AppService:
                 views = self.canvas_views.record()
                 views.pop('retained', None)
                 views.pop('primaryBinding', None)
-                views.pop('secondaryBinding', None)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
@@ -1378,6 +1378,10 @@ class AppService:
                     canvas=self.state['canvas']
                     if canvas.get('id')!=args['id'] or canvas.get('kind')!='browser':raise AppError('Select a browser artifact first.')
                     effects.append({'type':'browser.open','url':canvas['url']})
+                elif action == 'canvas.copyPath':
+                    from .canvas_paths import copy_path
+                    diagnostic_result, path_effects = copy_path(self.state, args)
+                    effects.extend(path_effects)
                 elif action in {'canvas.copy', 'canvas.download'}:
                     canvas = self.state['canvas']
                     if args['id'] != canvas.get('id'):

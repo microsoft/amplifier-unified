@@ -69,7 +69,7 @@ def remember(state, db):
             canvas['contentResource']=reference
             canvas.pop('content',None)
     previous = next((r for r in rows if r['id']==canvas['id']), None)
-    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource') if key in canvas}
+    record = {key:copy.deepcopy(canvas[key]) for key in ('id','title','kind','path','workspacePath','url','sessionId','workspaceId','messageId','createdAt','view','events','sharedToolView','contentResource') if key in canvas}
     if 'mcp' in canvas:
         from .resource_files import put
         record['mcpState'] = put(db, canvas['mcp'])

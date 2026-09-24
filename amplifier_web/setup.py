@@ -204,20 +204,22 @@ class SetupManager:
         probe_workspace=Path(workspace)
         while not probe_workspace.is_dir() and probe_workspace.parent!=probe_workspace:
             probe_workspace=probe_workspace.parent
-        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env=env,cwd=probe_workspace)
+        from .probe_diagnostics import communicate, stderr_tail, failure_detail
+        process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,start_new_session=True,env=env,cwd=probe_workspace)
+        stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,_=await asyncio.wait_for(process.communicate(json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),90)
+                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),stderr_task),90)
             except TimeoutError:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
             except (ValueError,UnicodeError):
                 raise ValueError(
                     f'The provider check ended without a valid result (exit code {process.returncode}). '
-                    'Check the runtime installation or update the app, then retry.'
+                    + failure_detail(stderr)
                 ) from None
             if result.get('error'):raise ValueError(result['error'])
-            if process.returncode:raise ValueError('The provider check could not finish. Please retry.')
+            if process.returncode:raise ValueError(f'The provider check could not finish (exit code {process.returncode}). '+failure_detail(stderr))
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
             response={'providerMetadata':metadata}
             if action=='providers.models':response.update(models=result.get('models',[]),modelsProviderId=args['id'],modelsSupported=result.get('modelsSupported',True))
@@ -228,6 +230,7 @@ class SetupManager:
                 try:os.killpg(process.pid,signal.SIGKILL)
                 except ProcessLookupError:pass
                 await process.wait()
+            await asyncio.gather(stderr_task,return_exceptions=True)
 
     def _keys(self,updates):
         path=self.store.shared_home/'keys.env'

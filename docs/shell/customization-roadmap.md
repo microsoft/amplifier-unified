@@ -24,7 +24,7 @@ contracts below remain proposed and must not be taught as installed APIs.
 | Surface | Current contract | Remaining boundary |
 | --- | --- | --- |
 | Workspace manager and chat list | Registered navigation modules, including custom modules and up to 12 instances with stable IDs | Baseline snapshots/actions are bounded to navigation; PR #60 adds the named slots below |
-| Artifact content viewers | Validated renderer packages selected per canvas view; primary and pinned secondary views | A renderer does not replace canvas tabs, toolbar, view routing or the whole canvas container |
+| Artifact content viewers | Validated renderer packages selected per canvas view; one selected artifact per client | A renderer does not replace canvas tabs, toolbar, view routing or the whole canvas container |
 | Interactive conversation surfaces | Sandboxed HTML/CSS/JS, typed state and events, stable identity, revisions, restore and shared user/agent interaction | Conversation artifacts, not installable shell modules; privileged requests currently allow only theme preview/apply/revert |
 | Appearance and layout | Complete CSS skins, palette changes, scheme, density, accent and three layout presets | PR #58 adds complete light/dark definitions and backgrounds; extensible layouts remain future work |
 | Header, app actions/status, composer actions, canvas toolbar, Appearance and additional Settings sections | PR #60 registers replaceable outlets and built-in fallbacks, including mobile placement and Settings navigation | Same-origin trusted components; capability checks are not isolation |

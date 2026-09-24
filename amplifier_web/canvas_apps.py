@@ -218,7 +218,7 @@ def command(service, action, args, origin):
                             'dirty': bool(preference.get('dirty')), 'renderStatus': preference.get('activation')}
                            for identity, client in service.clients.records.items()
                            for key, preference in client.get('canvasViews', {}).get('preferences', {}).items()
-                           if key.endswith(':' + row['id'])]
+                           if key == 'primary:' + row['id']]
 
         if args.get('requestId'):
             request = next((r for r in row['app']['requests'] if r['id'] == args['requestId']), None)
@@ -232,7 +232,7 @@ def command(service, action, args, origin):
     if name in {'revise', 'restore'}:
         for client in service.clients.records.values():
             for key, preference in client.get('canvasViews', {}).get('preferences', {}).items():
-                if key.endswith(':' + row['id']) and preference.get('dirty'):
+                if key == 'primary:' + row['id'] and preference.get('dirty'):
                     fail('Finish or cancel the surface edit before refining it. Inspect this surface for dirty view client IDs; save its unfinished input before retrying.', 409)
         if name == 'restore':
             version = next((v for v in app['versions'] if v['version'] == args['version']), None)

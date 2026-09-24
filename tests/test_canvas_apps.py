@@ -99,9 +99,8 @@ async def test_incompatible_revision_requires_explicit_valid_migration(app):
 async def test_all_views_share_canonical_state_and_dirty_views_block_revision(app):
     row = await create(app)
     await dispatch(app, 'canvas.select', {'id': row['id']}, client='two')
-    await dispatch(app, 'canvas.views.open', {'resourceId': row['id'], 'sessionId': row['sessionId']}, client='two')
     with app.clients.bind('two'):
-        target = {k: app.canvas_views.summary('secondary')[k] for k in ['viewId', 'resourceId', 'resourceRevision', 'generation']}
+        target = {k: app.canvas_views.summary('primary')[k] for k in ['viewId', 'resourceId', 'resourceRevision', 'generation']}
     await dispatch(app, 'canvas.views.dirty', {**target, 'dirty': True}, client='two')
     with pytest.raises(AppError, match='Finish or cancel'):
         await edit(app, row, 'revise', content='updated')
@@ -110,7 +109,7 @@ async def test_all_views_share_canonical_state_and_dirty_views_block_revision(ap
     row = await edit(app, row, 'state', patch={'note': 'Shared on every view'})
     await dispatch(app, 'view.update', {'patch': {'canvasWidth': 600}}, client='two')
     with app.clients.bind('two'):
-        assert app.canvas_views.summary('secondary')['app'] == row['app']
+        assert app.canvas_views.summary('primary')['app'] == row['app']
         assert app.state['canvas']['app'] == row['app']
     assert app.state['canvasArtifacts'][0]['app'] == row['app']
 

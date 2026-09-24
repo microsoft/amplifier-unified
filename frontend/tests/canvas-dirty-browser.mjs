@@ -28,48 +28,11 @@ try {
  const otherArtifact=await view('primary');
  await action('canvas.show',{kind:'markdown',title:'Editable artifact',content:'# Original retained source'});
  const first=await view('primary');
- await action('canvas.views.open',{resourceId:first.resourceId,sessionId:session});
  const manifest={id:'example.dirty-editor',label:'Unsaved editor',version:'1.0.0',apiVersion:'1.0',profile:'trusted-native-renderer-v1',stateSchema:'canvas-view-v1',resourceKinds:['markdown'],capabilities:['canvas.resource.read','canvas.view.update']};
  // The edit deliberately lives only in React state, exercising the public dirty contract.
  const source='export default ({React})=>function Editor({host}){const [text,setText]=React.useState("");return React.createElement("label",null,"Unsaved renderer edit",React.createElement("input",{value:text,onChange:event=>{setText(event.target.value);host.setDirty(true)}}))}';
  const digest=(await action('shell.packages.stage',{manifest,source})).result.digest;
  assert.equal((await action('shell.packages.validate',{digest})).result.status,'passed');
- await page.getByRole('combobox',{name:'Open secondary with'}).selectOption(digest);
- const secondary=page.locator('[data-canvas-view="secondary"]').getByLabel('Unsaved renderer edit');
- await secondary.fill('SECONDARY UNSAVED EDIT');
- await expect.poll(async()=>(await view('secondary')).dirty).toBe(true);
- const secondaryTarget=target(await view('secondary'));
- await page.evaluate(()=>{window.secondaryEditor=document.querySelector('[data-canvas-view="secondary"] input')});
- await page.getByRole('button',{name:'Close secondary view'}).click();
- await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- for(let cycle=0;cycle<2;cycle++){
-  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
-  await expect(page.getByRole('region',{name:'Saved canvas artifacts'})).toBeVisible();
-  await expect(secondary).toHaveCount(1);await expect(secondary).toBeHidden();
-  assert.equal(await secondary.evaluate(el=>el.closest('.a-canvas-workspace').inert),true);
-  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
-  await expect(secondary).toBeVisible();await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- }
- await page.getByRole('button',{name:'Close canvas panel'}).click();
- await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- assert.equal((await state()).canvas.open,false);
- await expect(secondary).toBeHidden();
- await page.getByRole('button',{name:'Open canvas',exact:true}).click();
- await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- assert.equal((await state()).canvas.open,true,'Visibility changes retain the dirty editor');
- await expect(secondary).toBeVisible();
- await action('canvas.visibility',{open:false});
- // A secondary edit must not prevent safe primary/chat navigation.
- await action('canvas.select',{id:otherArtifact.resourceId});
- await action('canvas.tabClose',{id:otherArtifact.resourceId});
- await action('canvas.visibility',{open:false});
- await action('session.select',{id:otherSession});
- await expect(secondary).toBeHidden();
- await action('canvas.visibility',{open:true});
- await expect(secondary).toBeVisible();await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- await action('session.select',{id:session});
- assert.deepEqual(target(await view('secondary')),secondaryTarget);
- assert.equal(await page.evaluate(()=>window.secondaryEditor===document.querySelector('[data-canvas-view="secondary"] input')),true);
  // Primary edits block all transitions that would replace the primary mount.
  await page.getByRole('combobox',{name:'Open with',exact:true}).selectOption(digest);
  const primary=page.locator('[data-canvas-view="primary"]').getByLabel('Unsaved renderer edit');
@@ -92,6 +55,18 @@ try {
  await page.unroute('**/api/actions',holdDirty);
  await expect.poll(async()=>(await view('primary')).dirty).toBe(true);
  const before=(await inspect()).map(target);
+ for(let cycle=0;cycle<2;cycle++){
+  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
+  await expect(primary).toBeHidden();
+  assert.equal(await primary.evaluate(el=>el.closest('.a-canvas-workspace').inert),true);
+  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
+  await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+ }
+ await page.getByRole('button',{name:'Close canvas panel'}).click();
+ await expect(primary).toBeHidden();
+ await page.getByRole('button',{name:'Open canvas',exact:true}).click();
+ await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
+
  await page.getByRole('button',{name:'Saved artifacts (2)'}).click();
  await page.getByRole('button',{name:/Other artifact.*markdown/}).click();
  await expect(primary).toBeVisible();await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
@@ -106,20 +81,15 @@ try {
   assert.equal((await state()).view.draft,'Keep composer target and draft');
   assert.deepEqual((await inspect()).map(target),before);
   await expect(primary).toHaveValue('PRIMARY UNSAVED EDIT');
-  await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
  }
  // Explicit recovery discards just the targeted local edit and retains sources.
  await action('canvas.views.recover',target(await view('primary')));
  await expect(primary).toHaveCount(0);
  assert.equal((await state()).canvas.content,'# Original retained source');
- await expect(secondary).toHaveValue('SECONDARY UNSAVED EDIT');
- await action('canvas.views.recover',target(await view('secondary')));
- await expect(secondary).toHaveCount(0);
  await action('canvas.close');assert.equal((await state()).canvas.open,false);
  await action('canvas.reopen');
- await expect(page.getByRole('combobox',{name:'Open secondary with'})).toHaveValue('builtin.canvas.markdown');
  assert.equal((await state()).view.draft,'Keep composer target and draft');
  assert.equal((await state()).canvasArtifacts.length,2);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,checks:['Library hides and retains dirty renderer DOM','panel close preserves dirty secondary','primary and chat navigation retain dirty secondary','dirty primary prevents selection/composer/binding changes','chat navigation waits for delayed dirty declaration','explicit targeted recovery and close/reopen retain sources and draft']}));
+ console.log('Canvas single viewer: dirty edits, delayed navigation, visibility retention, recovery and saved sources passed');
 } finally {await browser?.close();fixture.kill();}
