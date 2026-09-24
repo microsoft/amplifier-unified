@@ -172,6 +172,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "amplifier-module-hooks-session-naming"
+version = "0.2.0"
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#2a63c56ef11e5e9b49a1268c4845e3046d397230" }
+
+[[package]]
 name = "amplifier-module-tool-computer-use"
 version = "0.1.0"
 source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#5f4fda44ff4c56400f05abc3c749f2c61aac3029" }
@@ -192,6 +197,7 @@ dependencies = [
     { name = "amplifier-core" },
     { name = "amplifier-foundation" },
     { name = "amplifier-memory" },
+    { name = "amplifier-module-hooks-session-naming" },
     { name = "cryptography" },
     { name = "filelock" },
     { name = "httpx" },
@@ -236,6 +242,7 @@ requires-dist = [
     { name = "amplifier-core", specifier = ">=2.0.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
     { name = "amplifier-memory", git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main" },
+    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main" },
     { name = "amplifier-module-tool-computer-use", marker = "extra == 'native-desktop'", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
     { name = "cryptography", specifier = ">=44,<51" },
     { name = "filelock", specifier = ">=3.20,<4" },

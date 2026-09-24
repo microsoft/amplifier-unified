@@ -15,8 +15,11 @@ import {useNavigation} from '../../../packages/shell-sdk/index.js';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
- const submitting=useRef(false);
- useEffect(()=>setName(chat.title||''),[chat.title]);
+ const submitting=useRef(false),dirty=useRef(false);
+ const naming=chat.naming?.status==='working';
+ const busy=['starting','working','running','stopping'].includes(chat.status)||chat.configurationBusy;
+ const automatic=chat.autoName??(chat.titleSource!=='manual'&&chat.nativeNameSource!=='manual');
+ useEffect(()=>{if(!dirty.current)setName(chat.title||'')},[chat.title]);
  const submit=async e=>{
   e.preventDefault();
   const title=name.trim();
@@ -29,7 +32,23 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
   }catch(error){setError(error.message||'Could not rename. Please try again.')}
   finally{submitting.current=false;setSaving(false)}
  };
- return <form aria-busy={saving} className="a-nav-chat a-nav-chat-rename" data-session-id={chat.id} onSubmit={submit}><input id={inputId} maxLength={200} aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>setName(e.target.value)}/><button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button><button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>{error&&<small role="alert" className="a-danger">{error}</small>}</form>;
+ async function generate(){
+  if(submitting.current||naming||busy||name!==(chat.title||''))return;
+  submitting.current=true;setSaving(true);setError('');
+  try{
+   const result=await act('session.naming',{id:chat.id,regenerate:true});
+   if(!result||result.accepted===false)throw Error(result?.error||'Could not generate a name. Your current name is kept.');
+  }catch(error){setError(error.message)}finally{submitting.current=false;setSaving(false)}
+ }
+ return <form aria-busy={saving||naming} className="a-nav-chat a-nav-chat-rename" data-session-id={chat.id} onSubmit={submit}>
+  <input id={inputId} maxLength={200} aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>{dirty.current=e.target.value!==(chat.title||'');setName(e.target.value);setError('')}}/>
+  <button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button>
+  <button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>
+  <button type="button" className="a-link" data-action="session.naming" disabled={saving||naming||busy||name!==(chat.title||'')} onClick={generate}><RefreshCw/>{naming?'Naming…':'Auto name now'}</button>
+  <small className="a-nav-name-help">Generate one name. Future automatic naming stays {automatic?'on':'off'}.{busy?' Wait for current work to finish.':name!==(chat.title||'')?' Save or cancel your edit first.':''}</small>
+  {naming&&<small role="status">Generating chat name…</small>}
+  {(error||chat.naming?.error)&&<small role="alert" className="a-danger">{error||chat.naming.error}</small>}
+ </form>;
 }
 export function useNavigationController(host,kind){
  const state=useNavigation(React,host),act=host.dispatch,prefix=host.instanceId==='workspaces'?'nav-workspace':'nav-'+host.instanceId;

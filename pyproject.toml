@@ -9,6 +9,7 @@ dependencies = [
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=2.0.1",
     "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+    "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/hooks-session-naming",
     "aiohttp>=3.12,<4",
     "packaging>=24",
     "cryptography>=44,<51",

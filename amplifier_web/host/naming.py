@@ -14,6 +14,35 @@ from amplifier_foundation.session.metadata import has_generated_or_manual_name
 log=logging.getLogger(__name__)
 
 
+def claim_root_lifecycle(coordinator):
+    """Take scheduling before root execute; never mutate an imported module.
+
+    New hooks expose a session-local handoff. Known older pinned hooks use
+    public registry operations for one recognized scheduler. Older registries
+    cannot reliably remove duplicate handler names, so those require the public
+    handoff. Cleanup drains stay registered.
+    """
+    control = getattr(coordinator, 'get_capability', lambda _: None)('session.naming.lifecycle')
+    if control is not None:
+        if getattr(control, 'version', None) != 1:
+            raise ValueError('The naming module has an unsupported lifecycle handoff.')
+        control.use_external()
+        if control.mode != 'external':
+            raise ValueError('The naming module did not transfer its automatic lifecycle.')
+        return
+    expected = sum(row.get('module') == 'hooks-session-naming' and row.get('enabled', True)
+                   for row in coordinator.config.get('hooks', []))
+    registry = coordinator.hooks
+    handlers = registry.list_handlers()
+    if (expected != 1 or handlers.get('prompt:complete', []).count('session-naming') != expected
+            or handlers.get('session:end', []).count('session-naming-drain') != expected
+            or any('session-naming' in names for event, names in handlers.items() if event != 'prompt:complete')):
+        raise ValueError('This pinned naming module does not expose a recognized lifecycle. Update it before using app naming.')
+    registry.unregister('session-naming')
+    if any('session-naming' in names for names in registry.list_handlers().values()):
+        raise ValueError('The naming module did not release its automatic lifecycle. App naming remains unavailable.')
+
+
 class LiveSessionNaming:
     def __init__(self,coordinator,home,publish,completed_inputs=()):
         self.coordinator=coordinator
@@ -30,15 +59,36 @@ class LiveSessionNaming:
         self.last_attempt=len(self.completed)
         rows=coordinator.config.get('hooks',[])
         row=next((r for r in rows if r.get('module')=='hooks-session-naming' and r.get('enabled',True)),None)
-        if not row:return
+        # Naming belongs to the app, including for saved plans and bundles
+        # without a naming hook. Do not insert modules into the saved plan.
+        # If a bundle did mount its own scheduler, transfer lifecycle ownership
+        # before execution so it cannot bypass Auto=false or double-charge.
+        if row:
+            claim_root_lifecycle(coordinator)
+        self.unavailable='The configured automatic naming module could not be initialized. Check its configuration and installation.'
         try:
             module=importlib.import_module('amplifier_module_hooks_session_naming')
-            config=row.get('config') or {}
+            # The app default uses the conversation's selected provider. An
+            # explicitly configured naming module may opt into a model role.
+            config=(row.get('config') or {}) if row else {'model_role': None}
             keys=('initial_trigger_turn','update_interval_turns','max_name_length','max_description_length','max_retries','model_role')
             settings=module.SessionNamingConfig(**{k:config[k] for k in keys if k in config})
             if settings.initial_trigger_turn<1 or settings.update_interval_turns<1:raise ValueError('Invalid naming intervals')
             adapter=self
             class AppNamingHook(module.SessionNamingHook):
+                def _select_session_provider(self, providers):
+                    # Unified's live pin is an orchestrator selection, not the
+                    # Foundation CLI's conversation.provider_pin capability.
+                    loop = coordinator.get('orchestrator')
+                    selected = getattr(loop, 'root_provider', None)
+                    if selected is not None:
+                        from .session import SelectedProvider
+                        original = selected.original if isinstance(selected, SelectedProvider) else selected
+                        for name, provider in providers.items():
+                            if provider is original:
+                                return name, provider
+                        raise ValueError('The selected naming provider is no longer mounted. Choose a provider before naming.')
+                    return super()._select_session_provider(providers)
                 def _get_session_dir(self,session_id):return adapter.directory
                 def _load_metadata(self,session_dir):
                     from .storage import SessionStore
@@ -111,7 +161,7 @@ class LiveSessionNaming:
     async def suggest(self):
         """One explicit naming call, with no transcript input or metadata write."""
         if not self.hook:
-            raise ValueError('This conversation bundle does not provide automatic naming.')
+            raise ValueError(self.unavailable)
         if self.pending and not self.pending.done():
             raise ValueError('A chat name is already being generated. Try again when it finishes.')
         before = self.hook._load_metadata(self.directory)

@@ -8,6 +8,7 @@ dependencies = [
   "amplifier-core>=2.0.1",
   "amplifier-module-loop-live",
   "amplifier-foundation",
+  "amplifier-module-hooks-session-naming",
   "amplifier-module-loop-streaming",
   "amplifier-module-context-simple",
   "amplifier-module-provider-anthropic",
@@ -43,6 +44,7 @@ default = true
 [tool.uv.sources]
 amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
+amplifier-module-hooks-session-naming = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main", subdirectory = "modules/hooks-session-naming" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
 amplifier-module-context-simple = { git = "https://github.com/microsoft/amplifier-module-context-simple", rev = "main" }
 amplifier-module-provider-anthropic = { git = "https://github.com/microsoft/amplifier-module-provider-anthropic", rev = "main" }

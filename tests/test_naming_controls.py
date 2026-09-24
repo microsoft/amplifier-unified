@@ -7,6 +7,10 @@ from amplifier_web.host.storage import SessionStore
 from amplifier_web.naming import accept_generated, automatic_metadata, directory_for, read
 from amplifier_web.service import AppError, AppService
 
+@pytest.fixture(autouse=True)
+def lifecycle_owned_by_host(monkeypatch):
+    monkeypatch.setattr('amplifier_web.host.naming.claim_root_lifecycle', lambda _: None)
+
 
 class NamingRuntime:
     def __init__(self, home):
@@ -198,3 +202,27 @@ async def test_edit_while_runtime_prepares_wins_over_regeneration(named):
     await settled(app, session)
     assert session['title'] == 'Chosen while preparing'
     assert session['naming']['status'] == 'conflict'
+
+
+async def test_sidebar_projection_refreshes_naming_policy_and_progress(named):
+    app, runtime, session = named
+    from amplifier_web.state_projections import StateProjections
+    projections = StateProjections()
+    def row():
+        return next(item for item in projections.chats(app.state)['items'] if item['id'] == session['id'])
+    def saved():
+        projections.shell_key(app.state)
+        projections.invalidate()
+    assert row()['titleSource'] == 'manual'
+    saved()
+    await app.dispatch('session.naming', {'id':session['id'], 'automatic':False})
+    assert row()['autoName'] is False
+    saved()
+    await app.dispatch('session.naming', {'id':session['id'], 'regenerate':True})
+    assert row()['naming'] == {'status':'working'}
+    await runtime.ready.wait()
+    saved()
+    runtime.release.set()
+    await settled(app, session)
+    assert row()['naming']['status'] == 'ready'
+    assert row()['autoName'] is False
