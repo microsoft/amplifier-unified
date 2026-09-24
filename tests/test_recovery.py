@@ -25,6 +25,7 @@ async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_pat
     assert not (config/'settings.yaml').exists()
     assert (Path(service.state['maintenance']['retained'])/'config/fixture.txt').read_text()=='private fixture'
     assert len(service.state['sessions'])==1
+    assert service.state['settings']['updates']=={'autoCheck':True,'autoInstall':False,'intervalHours':4}
     await service.close()
 
 

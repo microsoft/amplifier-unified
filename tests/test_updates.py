@@ -111,6 +111,7 @@ async def test_check_is_read_only_and_failures_are_not_current(app,repo,monkeypa
 
 async def test_default_and_update_settings_preserve_existing_conversation(app):
     assert app.state['settings']['bundle']=='work'
+    assert app.state['settings']['updates']['intervalHours']==4
     assert app.state['sessions'][0]['bundle']=='anchors-amp-dev'
     await app.dispatch('settings.update',{'patch':{'updates':{'autoCheck':False}}})
     with pytest.raises(AppError):await app.dispatch('settings.update',{'patch':{'updates':{'autoInstall':True}}})
@@ -118,6 +119,63 @@ async def test_default_and_update_settings_preserve_existing_conversation(app):
     app.state['updates']['phase']='activating'
     with pytest.raises(AppError):await app.dispatch('conversation.send',{'text':'new work'})
     with pytest.raises(AppError):await app.voice_delegate('new work','voice:1')
+
+
+@pytest.mark.parametrize('interval', [1, 4, 8, 24])
+async def test_supported_check_intervals_use_shared_settings_action(app, interval):
+    await app.dispatch('settings.update', {'patch': {'updates': {'intervalHours': interval}}})
+    assert app.state['settings']['updates']['intervalHours'] == interval
+
+
+@pytest.mark.parametrize('interval', [6, 168, 0, True, 4.0, '4'])
+async def test_new_check_intervals_reject_unsupported_values_without_mutation(app, interval):
+    original = dict(app.state['settings']['updates'])
+    with pytest.raises(AppError, match='1, 4 or 8 hours, or daily'):
+        await app.dispatch('settings.update', {'patch': {'updates': {'intervalHours': interval}}})
+    assert app.state['settings']['updates'] == original
+
+
+@pytest.mark.parametrize('interval', [6, 24, 168])
+async def test_saved_check_interval_survives_restart_and_unrelated_switch_change(tmp_path, interval):
+    service = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
+    service.state['settings']['updates'] = {'autoCheck': False, 'autoInstall': False, 'intervalHours': interval}
+    service._publish()
+    await service.close()
+    restored = AppService(tmp_path/'app', Runtime(), workspace=tmp_path)
+    try:
+        assert restored.state['settings']['updates'] == {'autoCheck': False, 'autoInstall': False, 'intervalHours': interval}
+        await restored.dispatch('settings.update', {'patch': {'updates': {'autoCheck': True}}})
+        assert restored.state['settings']['updates']['intervalHours'] == interval
+        await restored.dispatch('settings.update', {'patch': {'updates': {'intervalHours': 4}}})
+        assert restored.state['settings']['updates']['intervalHours'] == 4
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('saved_interval', [None, 1, 4, 8, 24, 6, 168])
+async def test_background_check_respects_schedule_and_recent_attempt(app, monkeypatch, saved_interval):
+    options = app.state['settings']['updates']
+    options['autoInstall'] = False
+    if saved_interval is None:
+        options.pop('intervalHours')
+    else:
+        options['intervalHours'] = saved_interval
+    interval = saved_interval or 4
+    now = 2_000_000_000
+    monkeypatch.setattr('amplifier_web.updates.time.time', lambda: now)
+    checks = []
+    async def check(): checks.append('check')
+    app.update_manager.check = check
+    state = app.state['updates']
+    state.update(lastCheck=now-interval*3600+1, lastAttempt=0)
+    await app.update_manager.tick()
+    assert checks == []
+    state['lastCheck'] -= 1
+    await app.update_manager.tick()
+    assert checks == ['check']
+    state['lastAttempt'] = now
+    await app.update_manager.tick()
+    assert checks == ['check']
 
 async def test_background_policy_preserves_explicit_opt_out(app):
     manager=app.update_manager;events=[]

@@ -16,6 +16,36 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+test('update frequency defaults to four hours and submits each supported interval through settings',async()=>{
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(),act:(name,args)=>calls.push({name,args})}))});
+ const select=root.root.findByProps({id:'update-frequency'});
+ assert.equal(select.props.value,4);
+ assert.deepEqual(select.findAllByType('option').map(option=>[option.props.value,option.children.join('')]),[['1','Every 1 hour'],['4','Every 4 hours'],['8','Every 8 hours'],['24','Daily']]);
+ assert.deepEqual(calls,[]);
+ for(const value of ['1','4','8','24'])await renderAct(async()=>select.props.onChange({target:{value}}));
+ assert.deepEqual(calls,[1,4,8,24].map(intervalHours=>({name:'settings.update',args:{patch:{updates:{intervalHours}}}})));
+ await renderAct(async()=>root.unmount());
+});
+
+test('saved older update intervals are explained without silently choosing or submitting a replacement',async()=>{
+ for(const intervalHours of [6,168]){
+  const calls=[];let root;const initial={...state(),settings:{updates:{intervalHours}}};
+  await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:initial,act:(name,args)=>calls.push({name,args})}))});
+  const select=root.root.findByProps({id:'update-frequency'});
+  assert.equal(select.props.value,'');
+  assert.equal(select.props['aria-describedby'],'update-frequency-saved');
+  assert.deepEqual(select.findAllByType('option').filter(option=>!option.props.disabled).map(option=>option.props.value),['1','4','8','24']);
+  assert.match(root.root.findByProps({id:'update-frequency-saved'}).children.join(''),new RegExp(`every ${intervalHours} hours`));
+  assert.deepEqual(calls,[]);
+  await renderAct(async()=>root.unmount());
+ }
+ const savedDaily={...state(),settings:{updates:{intervalHours:24}}};
+ const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state:savedDaily,act:()=>{}}));
+ assert.match(html,/<option value="24" selected="">Daily<\/option>/);
+ assert.doesNotMatch(html,/update-frequency-saved/);
+});
+
 const release={version:'0.6.4',title:'Shared settings',changes:['Workspace settings now apply.'],notices:[{id:'shared',title:'Review shared settings',detail:'A setting affects other apps.',action:'Check your workspace.'}]};
 const noticeId='release-notice:0.6.4:shared';
 test('changelog separates installed, upcoming and earlier versions and escapes authored text',()=>{
