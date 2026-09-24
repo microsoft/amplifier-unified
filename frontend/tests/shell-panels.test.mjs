@@ -360,6 +360,10 @@ test('inline automatic name reflects completed results and recoverable errors',a
  await renderAct(async()=>generate().props.onClick());
  assert.match(root.root.findByProps({role:'alert'}).children.join(''),/Retry later/);
  assert.equal(root.root.findByType('input').props.value,'Original');
+ await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'Temporary edit'}}));
+ assert.equal(generate().props.disabled,true);
+ await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'Original'}}));
+ assert.equal(generate().props.disabled,false);
  chat={...chat,title:'New automatic name',naming:{status:'ready'}};
  await renderAct(async()=>root.update(render()));
  assert.equal(root.root.findByType('input').props.value,'New automatic name');

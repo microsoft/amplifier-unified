@@ -41,7 +41,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
   }catch(error){setError(error.message)}finally{submitting.current=false;setSaving(false)}
  }
  return <form aria-busy={saving||naming} className="a-nav-chat a-nav-chat-rename" data-session-id={chat.id} onSubmit={submit}>
-  <input id={inputId} maxLength={200} aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>{dirty.current=true;setName(e.target.value);setError('')}}/>
+  <input id={inputId} maxLength={200} aria-label={`New name for ${chat.title||'conversation'}`} value={name} disabled={saving} required autoFocus onChange={e=>{dirty.current=e.target.value!==(chat.title||'');setName(e.target.value);setError('')}}/>
   <button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button>
   <button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>
   <button type="button" className="a-link" data-action="session.naming" disabled={saving||naming||busy||name!==(chat.title||'')} onClick={generate}><RefreshCw/>{naming?'Naming…':'Auto name now'}</button>
