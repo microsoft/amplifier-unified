@@ -58,6 +58,10 @@ New chat follows the visible workspace context through the shared host action. A
 
 Validation: 343 frontend tests and 55 targeted backend tests passed, plus the production build. See the [feature inventory against freshly fetched main 0.20.21](shell-inventory-2026-09-23.md) for retained capabilities, omissions and integration work. The trial base remains 0.20.20; upstream 0.20.21 was inspected, not silently merged.
 
+Native browser acceptance for this revision verified: no residual app rail after collapse; keyboard focus returns to the header reopen control; expansion works; the cog lists no Appearance entry; All chats → New chat selects No workspace; a workspace page → global New chat selects that workspace; ancestor-path search narrows results; Use existing folder opens the real server path browser and cancellation does not attach anything; an existing chat has one composer Chat controls button and no duplicate in the header. The final polish also aligns the new-chat header with its chosen workspace and focuses chooser search on open.
+
+Deployment file hashes matched the local commit. The existing Spark-2 services retained their process IDs. No model call, live ownership takeover, or production change was performed. Search pagination was exercised by automated fixtures; the live trial has only its two private workspaces. Mobile layouts were not requalified in this pass.
+
 ## Trial limits
 
 - Connect a model provider in this instance's Settings before asking it to perform AI work. Provider credentials, production settings and conversation history were not copied. Model calls, voice and live cross-client ownership takeover were not exercised here.

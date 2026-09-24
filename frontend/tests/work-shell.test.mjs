@@ -71,6 +71,8 @@ test('collapsed sidebar toggle lives in the header without duplicate chat contro
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);
+ const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));
+ assert.doesNotMatch(draft,/Research/);
 });
 test('workspace picker searches the host catalog, pages results, and keeps actions separate',async()=>{
  let root;const calls=[],choices=[];

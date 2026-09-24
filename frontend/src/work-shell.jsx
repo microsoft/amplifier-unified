@@ -13,13 +13,14 @@ import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
 import {chatPage} from './chat-navigation';
 
-export function WorkDialog({label,onClose,children}){
+export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);
+ useEffect(()=>{if(initialFocus)ref.current?.querySelector(initialFocus)?.focus()},[initialFocus]);
  return createPortal(<div className="a-work-dialog-backdrop" onSubmit={e=>e.stopPropagation()} onPaste={e=>e.stopPropagation()} onDrop={e=>e.stopPropagation()} onClick={e=>{if(e.target===e.currentTarget)onClose()}}><section ref={ref} role="dialog" aria-modal="true" aria-label={label} className="a-work-dialog"><div className="a-work-dialog-head"><strong>{label}</strong><button type="button" className="a-icon" aria-label={'Close '+label} onClick={onClose}><X/></button></div>{children}</section></div>,document.getElementById('amp-one'));
 }
 export function ComposerWorkspace({state,act}){
  const [open,setOpen]=useState(false),setup=newChatSetup(state),workspace=state.workspaces?.find(row=>row.path===setup.workspace);
- return <><button type="button" className="a-composer-workspace" aria-label="Choose workspace" aria-expanded={open} onClick={()=>setOpen(true)}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'No workspace':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog label="Choose a workspace" onClose={()=>setOpen(false)}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(!result?.accepted)throw Error(result?.error||'Could not select this workspace.');setOpen(false)}}/></WorkDialog>}</>;
+ return <><button type="button" className="a-composer-workspace" aria-label="Choose workspace" aria-expanded={open} onClick={()=>setOpen(true)}><Folder/><span>{setup.location?.kind==='managed'||!setup.workspace?'No workspace':workspace?.name||setup.workspace.split('/').at(-1)}</span><ChevronRight/></button>{open&&<WorkDialog initialFocus='input[type="search"]' label="Choose a workspace" onClose={()=>setOpen(false)}><WorkspacePicker state={state} act={act} setup={setup} onChange={async value=>{const result=await act('view.update',{patch:{newSessionDraft:{...setup,...value}}});if(!result?.accepted)throw Error(result?.error||'Could not select this workspace.');setOpen(false)}}/></WorkDialog>}</>;
 }
 export function WorkspaceCreation({state,act,onClose}){
  const nav=useContext(WorkNavigationContext);
@@ -35,7 +36,8 @@ export function AppFooter({state,connected,open,act}){
 }
 export function WorkHeader({state,session,act,open,narrow,presentation}){
  const nav=useContext(WorkNavigationContext),surface=workSurface(state),browsing=surface!=='chat';
- const workspace=state.workspaces?.find(row=>row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
+ const setup=!session&&!browsing?newChatSetup(state):null;
+ const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
  const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title||'New chat';
  return <header className="a-work-header" data-part="header">
   <div className="a-brand a-work-brand"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
