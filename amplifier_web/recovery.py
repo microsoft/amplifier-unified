@@ -162,7 +162,8 @@ async def _reset(manager,args):
                     service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
                     service.db.execute('DELETE FROM commands')
                 if 'settings' in parts:
-                    service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':24}
+                    from .updates import DEFAULT_CHECK_INTERVAL_HOURS
+                    service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':DEFAULT_CHECK_INTERVAL_HOURS}
                     service._shared_preferences_stamp=None
                     service._refresh_shared_preferences()
                     service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})

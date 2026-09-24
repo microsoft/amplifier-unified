@@ -17,7 +17,7 @@ from weakref import WeakValueDictionary
 from jsonschema import validate, ValidationError
 import tinycss2
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
-from .updates import work_paused
+from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 
 
@@ -182,7 +182,7 @@ ACTION_DEFINITIONS = {
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
-    "settings.update": ("Change voice or workspace defaults", schema({"patch": {"type": "object"}})),
+    "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
     "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
     "theme.reset": ("Restore the default skin", schema()),
     "theme.export": ("Export the applied skin", schema()),
@@ -423,7 +423,7 @@ class AppService:
         update_options = self.state["settings"].setdefault("updates", {})
         update_options.setdefault("autoCheck", True)
         update_options.setdefault("autoInstall", update_options["autoCheck"])
-        update_options.setdefault("intervalHours", 24)
+        update_options.setdefault("intervalHours", DEFAULT_CHECK_INTERVAL_HOURS)
         self.state["devices"] = {}
         from .workspace_canvas import initialize
         initialize(self.state)
@@ -1960,8 +1960,8 @@ class AppService:
                         raise AppError("Invalid update settings.")
                     for key in ("autoCheck","autoInstall"):
                         if key in options and type(options[key]) is not bool: raise AppError("Update switches must be true or false.")
-                    if "intervalHours" in options and (type(options["intervalHours"]) is not int or not 1 <= options["intervalHours"] <= 168):
-                        raise AppError("Check interval must be between 1 and 168 hours.")
+                    if "intervalHours" in options and (type(options["intervalHours"]) is not int or options["intervalHours"] not in CHECK_INTERVAL_HOURS):
+                        raise AppError("Choose an update check interval of 1, 4 or 8 hours, or daily (24 hours).")
                     if options.get("autoCheck") is False and "autoInstall" not in options:
                         options = {**options, "autoInstall": False}
                     patch = {**patch, "updates": {**self.state["settings"].get("updates",{}), **options}}
