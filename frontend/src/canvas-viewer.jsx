@@ -1,3 +1,4 @@
+import {selectedReference} from './canvas-reference';
 import {CanvasControl} from './canvas-controls';
 import {clientUrl} from './api';
 import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
@@ -46,11 +47,11 @@ export function Diagram({kind,source,canvas,act,part='preview',embedded=false}){
  </div>;
 }
 function CanvasMarkdown({canvas,act}){
- const overrides=useMemo(()=>({pre:({children})=><div className="a-canvas-code-block">{children}</div>,code:({className,children,node})=>{
+ const overrides=useMemo(()=>({pre:({children})=><div className="a-canvas-code-block">{children}</div>,code:({className,children,node,...props})=>{
   const language=/language-(\w+)/.exec(className||'')?.[1],source=String(children).replace(/\n$/,'');
-  return ['mermaid','dot','graphviz'].includes(language)?<Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={act} embedded part={`fence-${node?.position?.start?.offset||0}`}/>:<code className={className}>{children}</code>;
+  return ['mermaid','dot','graphviz'].includes(language)?<Diagram kind={language==='mermaid'?'mermaid':'dot'} source={source} canvas={canvas} act={act} embedded part={`fence-${node?.position?.start?.offset||0}`}/>:<code className={className} {...props}>{children}</code>;
  }}),[canvas.id,act]);
- return <Markdown text={canvas.content} overrides={overrides}/>;
+ return <Markdown text={canvas.content} overrides={overrides} mapSource/>;
 }
 function CodePreview({text}){
  const [html,setHtml]=useState('');
@@ -59,6 +60,21 @@ function CodePreview({text}){
 }
 export function CanvasViewer({canvas,act}){
  const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image'].includes(canvas.kind);
+ const textBody=useRef(null),quoteControl=useRef(null),quotePending=useRef(false),[selection,setSelection]=useState(null),[quoting,setQuoting]=useState(false),[quoteNotice,setQuoteNotice]=useState('');
+ const referenceable=['markdown','text'].includes(canvas.kind)&&!view.source;
+ useEffect(()=>{
+  setSelection(null);setQuoteNotice('');
+  if(!referenceable)return;
+  const changed=()=>{if(quotePending.current||quoteControl.current?.contains(document.activeElement))return;setSelection(selectedReference(textBody.current,window.getSelection(),source));setQuoteNotice('')};
+  document.addEventListener('selectionchange',changed);return()=>document.removeEventListener('selectionchange',changed);
+ },[source,referenceable,canvas.id,canvas.resourceRevision]);
+ async function referenceText(){
+  if(!selection?.excerpt||quotePending.current)return;
+  quotePending.current=true;setQuoting(true);setQuoteNotice('');
+  try{const result=await act('canvas.reference',{id:canvas.id,sessionId:canvas.sessionId,version:canvas.selectedVersion||canvas.revision||canvas.latestVersion,...selection});if(result?.result?.status==='referenced'){setQuoteNotice('Reference added to your draft. Nothing was sent.');setSelection(null);window.getSelection()?.removeAllRanges()}}
+  catch(error){setQuoteNotice(error.message||'The reference could not be added.')}
+  finally{quotePending.current=false;setQuoting(false)}
+ }
  const parsed=useMemo(()=>{if(!['json','jsonl'].includes(canvas.kind))return{};try{return{value:canvas.kind==='json'?JSON.parse(source):source.split('\n').filter(l=>l.trim()).map(l=>JSON.parse(l))}}catch(e){return{error:e.message}}},[canvas.kind,source]);
  useEffect(()=>{if(!['html','babylon','image','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
  const reports=Object.values(canvas.renderReports||{}),error=reports.find(r=>r.status==='error'),pending=reports.some(r=>r.status==='pending');
@@ -69,8 +85,9 @@ export function CanvasViewer({canvas,act}){
    <button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>
    <button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>
   </div></CanvasControl>
-  <div className="a-canvas-preview">
-   {view.source?(canvas.contentResource?<StoredSource canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain">{source}</pre>}
+  {referenceable&&<div className="a-canvas-reference" ref={quoteControl}><button type="button" className="a-soft" data-action="canvas.reference" disabled={quoting||!selection?.excerpt} onMouseDown={event=>event.preventDefault()} onClick={referenceText}>{quoting?'Adding reference…':'Reference in chat'}</button><span role="status" className="a-caption">{quoteNotice||selection?.error||(selection?.excerpt?`${[...selection.excerpt].length} characters selected`:'Select document text to quote in your draft.')}</span></div>}
+  <div className="a-canvas-preview" ref={textBody} tabIndex={referenceable?0:undefined} aria-label={referenceable?'Document text':undefined}>
+   {view.source?(canvas.contentResource?<StoredSource canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain"><span data-canvas-source-start="0" data-canvas-source-end={source.length} data-canvas-literal="true">{source}</span></pre>}
   </div>
   <CanvasControl inline={!!error||pending}><div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div></CanvasControl>
  </div>;

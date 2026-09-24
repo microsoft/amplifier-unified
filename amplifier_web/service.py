@@ -267,6 +267,8 @@ from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 from .canvas_versions import definitions as canvas_version_definitions
 ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
+from .canvas_reference import definitions as canvas_reference_definitions
+ACTION_DEFINITIONS.update(canvas_reference_definitions(schema, string))
 from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
@@ -1043,7 +1045,7 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1369,6 +1371,9 @@ class AppService:
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
                     diagnostic_result = open_file(self, args, origin)
+                elif action == 'canvas.reference':
+                    from .canvas_reference import command
+                    diagnostic_result = command(self, args)
                 elif action.startswith('canvas.versions.'):
                     from .canvas_versions import command
                     diagnostic_result = command(self, action, args, origin)
@@ -2851,7 +2856,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
+            if args['action'] == 'canvas.reference' or args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2870,6 +2875,9 @@ class AppService:
             if action_args.get('sessionId') == session_id and session_id:
                 from .session_identity import project as native_project
                 action_args.setdefault('nativeProject', native_project(self._session(session_id)))
+            if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
+                if action_args.get('args', {}).get('sessionId') != session_id:
+                    raise AppError('References must target the calling conversation.', 409)
             compact_smart_tool = args['action'].startswith('smartTools.')
             canvas_client = None
             if args['action'].startswith('observation.'):
@@ -2889,7 +2897,7 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
-            elif args['action'] == 'canvas.openFile':
+            elif args['action'] in {'canvas.openFile', 'canvas.reference'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
                 with self.clients.bind(canvas_client):
