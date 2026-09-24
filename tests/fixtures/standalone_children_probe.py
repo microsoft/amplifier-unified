@@ -95,6 +95,25 @@ async def run():
         assert len(store.load('child-session')[0])==5
         assert registry.snapshot()[0]['status']=='completed'
         assert all('task' not in row and 'runtime' not in row for row in registry.snapshot())
+        # Admission after real Core initialization must not checkpoint the
+        # empty context over a saved child when its provider cannot be restored.
+        failed_id = 'unavailable-selection-child'
+        saved_rows, saved_metadata = store.load('child-session')
+        store.save(failed_id, saved_rows, {**saved_metadata,
+            'effective_selection': {'instance': 'missing-account', 'model': 'saved-model'}})
+        original_files = {name: (store.directory(failed_id) / name).read_bytes()
+                          for name in ('transcript.jsonl', 'metadata.json')}
+        executions = len(decisions)
+        try:
+            await registry.resume(failed_id, 'must not execute', parent)
+        except ValueError as exc:
+            assert 'inherited provider instance is unavailable' in str(exc), exc
+        else:
+            raise AssertionError('Unavailable inherited account was admitted')
+        assert created[-1]['id'] == failed_id and created[-1]['resumed'] is True
+        assert len(decisions) == executions, 'Rejected resume must not execute a turn'
+        assert registry.rows[failed_id]['status'] == 'error'
+        assert {name: (store.directory(failed_id) / name).read_bytes() for name in original_files} == original_files
         # The actual community tool-delegate calls the app's exact spawn contract.
         from amplifier_module_tool_delegate import DelegateTool
         delegate=DelegateTool(parent.coordinator,{'features':{'self_delegation':{'enabled':True}}})
@@ -182,7 +201,7 @@ async def run():
         assert (await asyncio.wait_for(mentioned_task, 2)).success
     await parent.cleanup()
     assert not any(name.startswith(('amplifier_app_cli','amplifier_loop_live_cli')) for name in sys.modules)
-    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'runtime_mentions':True,'cli_imports':False}))
+    print(json.dumps({'real_child_lineage':True,'checkpoint_resume':True,'failed_resume_preserved':True,'approval_denied':True,'delegate_compatible':True,'persistent_steering':True,'provider_instances':True,'runtime_mentions':True,'cli_imports':False}))
 
 if __name__=='__main__':
     asyncio.run(run())

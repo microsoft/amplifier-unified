@@ -254,7 +254,7 @@ jobs:
           key: ${{ steps.runtime-cache.outputs.key }}
       - name: Verify surface context and recipe children through Core and loop-live
         run: |
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/surface-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/surface-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_child_resume_admission.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
       - name: Record the unchanged runtime graph and selected candidate
         run: |
           uv run --no-sync python scripts/qualify_host_dependencies.py --verify --evidence "$RUNNER_TEMP/host-resolution"

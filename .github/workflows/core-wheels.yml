@@ -60,7 +60,7 @@ jobs:
           python scripts/release_qualification.py runtime-snapshot --runtime "$RUNNER_TEMP/core-runtime"
       - name: Qualify real runtime behavior without model calls
         run: |
-          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/core-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/core-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
+          UNIFIED_RUNTIME_PYTHON="$RUNNER_TEMP/core-runtime/.venv/bin/python" WARM_RECIPES_PATH="$GITHUB_WORKSPACE/.ci/recipes" "$RUNNER_TEMP/core-runtime/.venv/bin/python" -m pytest tests/test_app_guidance.py tests/test_host_children.py tests/test_child_resume_admission.py tests/test_host_components.py tests/test_runtime_module_cache.py -q
           cp "$RUNNER_TEMP/core-runtime/qualified-runtime.json" "$RUNNER_TEMP/before-tests.json"
           python scripts/release_qualification.py runtime-snapshot --runtime "$RUNNER_TEMP/core-runtime"
           cmp "$RUNNER_TEMP/before-tests.json" "$RUNNER_TEMP/core-runtime/qualified-runtime.json"

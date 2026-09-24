@@ -272,8 +272,11 @@ class Children:
         if selection:
             metadata["effective_selection"] = selection
         continuity = None
+        checkpoint_ready = False
         async def checkpoint(status=None):
-            if not child:
+            # Setup callbacks and failure handling can run before saved history
+            # is fully restored. Never publish that empty or partial context.
+            if not child or not checkpoint_ready:
                 return
             context = child.coordinator.get("context")
             messages = await context.get_messages() if context else []
@@ -326,12 +329,9 @@ class Children:
                 coordinator.register_capability("live.jobs", ledger)
                 row["runtime"] = self._runtime(row)
                 coordinator.register_capability("live.runtime", row["runtime"])
-                if parent_messages:
-                    parent_messages, recovered = ledger.recover(parent_messages)
-                    coordinator.register_capability("live.recovered_jobs", [item["job_id"] for item in recovered])
             else:
                 coordinator.register_capability("live.runtime", None)
-            if parent_messages:
+            if parent_messages is not None:
                 await coordinator.get("context").set_messages(copy.deepcopy(parent_messages))
             await self.install(child, child_prepared)
             # Use the same app-control capability on behalf of this child. The
@@ -340,6 +340,16 @@ class Children:
             if app_control:
                 await coordinator.mount("tools", app_control, name="app_control")
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
+            if ledger and parent_messages is not None:
+                # Recover evidence only after original history and admission
+                # setup succeed. A pending dispatch becomes interrupted, never
+                # replayed; failed recovered-context restoration still must not
+                # overwrite the canonical transcript or metadata.
+                recovered_messages, recovered = ledger.recover(parent_messages)
+                coordinator.register_capability("live.recovered_jobs", [item["job_id"] for item in recovered])
+                if recovered_messages != parent_messages:
+                    await coordinator.get("context").set_messages(recovered_messages)
+            checkpoint_ready = True
             row["status"] = "running"
             self._emit(row)
             await checkpoint()
