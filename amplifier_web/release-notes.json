@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.26",
+      "title": "Preserve saved history when a worker cannot resume",
+      "changes": [
+        "Keep saved worker messages and chat details intact if restoring a provider, loading history or preparing the worker fails.",
+        "Report failed or cancelled startup attempts without replacing saved history; continue saving new work after a successful start.",
+        "Recover pending worker activity as interrupted evidence without repeating earlier tool calls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.25",
       "title": "Reviewed conversation excerpts for actionable feedback",
       "changes": [
