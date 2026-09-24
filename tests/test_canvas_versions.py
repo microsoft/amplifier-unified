@@ -54,6 +54,43 @@ async def test_file_identity_unchanged_reopen_changed_source_and_distinct_same_n
     assert len(app.state['canvasArtifacts']) == 2
 
 
+@pytest.mark.parametrize('transition', ['small-large', 'large-small'])
+async def test_file_versions_replace_content_storage_mode_and_survive_restart(app, tmp_path, transition):
+    from amplifier_web.canvas_documents import raw_source
+    small = '<h1>Small saved version</h1>'
+    large = '<h1>Large saved version</h1><!--' + 'x' * 1_100_000 + '-->'
+    first, second = (small, large) if transition == 'small-large' else (large, small)
+    path = tmp_path/'versions.html'
+    path.write_text(first)
+    identity = (await call(app, 'canvas.show', {'kind': 'auto', 'path': str(path)}))['result']['id']
+    path.write_text(second)
+    await call(app, 'canvas.show', {'kind': 'auto', 'path': str(path)})
+    path.unlink()  # Saved versions must not depend on the source file.
+    assert row(app, identity)['revision'] == 2
+    assert bool(row(app, identity).get('contentResource')) == (second == large)
+    for version, expected in ((1, first), (2, second), (None, second)):
+        await call(app, 'canvas.select', {'id': identity, **({'version': version} if version else {})})
+        assert raw_source(canvas(app), app.db) == expected
+        with app.clients.bind('one'):
+            assert raw_source(app.canvas_views.canvas('primary'), app.db) == expected
+        inspected = (await call(app, 'canvas.versions.inspect', {'id': identity, 'version': version or 2, 'includeSource': True}))['result']
+        assert inspected['source']['content'] == expected
+    await call(app, 'canvas.select', {'id': identity, 'version': 1})
+    app._save()
+    await app.close()
+    reopened = AppService(app.data_dir, workspace=tmp_path)
+    try:
+        reopened.clients.attach('one')
+        assert raw_source(canvas(reopened), reopened.db) == first
+        await call(reopened, 'canvas.select', {'id': identity})
+        assert raw_source(canvas(reopened), reopened.db) == second
+        await call(reopened, 'canvas.versions.restore', {'id': identity, 'expectedRevision': 2, 'version': 1})
+        assert raw_source(canvas(reopened), reopened.db) == first
+        assert row(reopened, identity)['revision'] == 3
+    finally:
+        await reopened.close()
+
+
 async def test_exact_links_latest_followers_cas_restore_and_restart(app, tmp_path):
     original = (await call(app, 'canvas.show', {'kind': 'markdown', 'title': 'Plan', 'content': '# One'}))['result']
     identity = original['id']

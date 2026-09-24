@@ -99,6 +99,9 @@ def remember(state, db):
         if previous:
             record['view'] = copy.deepcopy(previous.get('view', {}))
     if previous:
+        from .canvas_versions import FIELDS
+        for key in FIELDS:
+            previous.pop(key, None)
         previous.update(record)
     else:
         rows.append(record)

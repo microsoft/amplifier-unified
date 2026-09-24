@@ -34,6 +34,11 @@ def definition(row, version=None, db=None):
         else:
             raise AppError('This saved artifact version is unavailable. Its history has not been replaced.', 404)
     result = copy.deepcopy(row)
+    # Document snapshots replace the definition, including absent optional
+    # fields. Otherwise an old inline body inherits the latest large-body URL.
+    # Interactive app versions store only title/body; their kind is invariant.
+    for key in (('body', 'contentResource') if row.get('app') else FIELDS):
+        result.pop(key, None)
     result.update({key: copy.deepcopy(saved[key]) for key in FIELDS if key in saved})
     result['selectedVersion'] = version
     result['latestVersion'] = latest(row)

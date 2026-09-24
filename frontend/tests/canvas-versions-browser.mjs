@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
@@ -48,7 +49,30 @@ try{
  await expect(page.getByRole('heading',{name:'Revised plan',exact:true})).toBeVisible();
  assert.equal((await state()).view.draft,'Keep this unsent draft');
  assert.equal((await state()).canvasArtifacts.length,1);
+ // Changing storage mode must never substitute another revision's HTML body.
+ const snapshot=await state();
+ const workspace=snapshot.sessions.find(s=>s.id===snapshot.selectedSessionId).workspace;
+ assert.match(workspace,/amplifier-empty-host-/);
+ const file=workspace+'/versions.html';
+ await writeFile(file,'<h1>Small first</h1>');
+ const html=(await action('canvas.show',{kind:'html',title:'Saved HTML',path:file})).result;
+ const frame=()=>page.locator('[data-canvas-view="primary"]').frameLocator('iframe');
+ await expect(frame().getByRole('heading',{name:'Small first',exact:true})).toBeVisible();
+ await writeFile(file,'<h1>Large second</h1><!--'+'x'.repeat(1100000)+'-->');
+ await action('canvas.show',{kind:'html',title:'Saved HTML',path:file});
+ await expect(frame().getByRole('heading',{name:'Large second',exact:true})).toBeVisible();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('1');
+ await expect(frame().getByRole('heading',{name:'Small first',exact:true})).toBeVisible();
+ await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ await expect(frame().getByRole('heading',{name:'Small first',exact:true})).toBeVisible();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('latest');
+ await writeFile(file,'<h1>Small third</h1>');
+ await action('canvas.show',{kind:'html',title:'Saved HTML',path:file});
+ await expect(frame().getByRole('heading',{name:'Small third',exact:true})).toBeVisible();
+ await page.getByRole('combobox',{name:'Artifact version',exact:true}).selectOption('2');
+ await expect(frame().getByRole('heading',{name:'Large second',exact:true})).toBeVisible();
+ assert.equal((await state()).view.draft,'Keep this unsent draft');
  assert.deepEqual(errors,[]);
  await page.screenshot({path:'/tmp/canvas-versions-browser.png',fullPage:true});
- console.log('Canvas saved versions: exact Markdown/turn links, single tab, Latest, reload, restore and unsent draft passed');
+ console.log('Canvas saved versions: exact Markdown/turn links, single tab, Latest, reload, restore, small/large HTML transitions and unsent draft passed');
 }finally{await browser?.close();fixture.kill()}
