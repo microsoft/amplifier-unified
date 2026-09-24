@@ -25,12 +25,10 @@ test('acknowledgement includes the exact observed fingerprints',async()=>{
  let sent;await readItems((name,args)=>sent={name,args},[{id:'completion:a',fingerprint:'g1'}]);
  assert.deepEqual(sent,{name:'attention.read',args:{ids:['completion:a'],fingerprints:{'completion:a':'g1'}}});
 });
-test('settings review binds acknowledgement to the visible occurrences',async()=>{
- const calls=[],state={attention:{items:[{id:'update:one',page:'updates',fingerprint:'visible-version',read:false},{id:'update:old',page:'updates',fingerprint:'old',read:true},{id:'completion:a',page:'chats',fingerprint:'other-page',read:false}]}};let root;
- await renderAct(async()=>{root=create(React.createElement(AttentionReview,{state,page:'updates',act:(action,args)=>calls.push({action,args})}))});
- await renderAct(async()=>root.root.findByType('button').props.onClick());
- assert.deepEqual(calls,[{action:'attention.read',args:{ids:['update:one'],fingerprints:{'update:one':'visible-version'}}}]);
- await renderAct(async()=>root.unmount());
+test('updates defer acknowledgement to visible notice content and have no manual read control',()=>{
+ const state={attention:{items:[{id:'update:one',page:'updates',fingerprint:'v1',read:false}]}};
+ assert.equal(render(AttentionReview,{state,page:'updates',act:()=>{}}),'');
+ assert.doesNotMatch(render(ActivityPanel,{state,act:()=>{}}),/Mark all reviewed|Mark reviewed/);
 });
 test('viewing a conversation can only acknowledge its completion, not errors or permissions',()=>{
  const state={selectedSessionId:'target',attention:{items:[{id:'session:target',sessionId:'target'},{id:'approval:permission',sessionId:'target'},{id:'completion:other',sessionId:'other'}]}};

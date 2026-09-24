@@ -10,6 +10,12 @@ original=collections.main
 async def main(home):
     app=await original(home)
     os.environ['OPENAI_API_KEY']='fixture-environment-key'
+    from amplifier_web.voice import VoiceService
+    from amplifier_web import voice_settings
+    import base64
+    async def sample(*args):return voice_settings.wav_audio(bytes(9600))
+    voice_settings.render_sample=sample
+    app['service'].voice_service=VoiceService(app['service'])
     manager=setup.SetupManager(home);workspace=str(home/'workspace')
     path=home/'oauth.json';write_private(path,json.dumps({'access_token':'fixture-oauth','refresh_token':'fixture-refresh'}))
     await manager.perform('providers.save',{'workspace':workspace,'module':'provider-openai-chatgpt','id':'chatgpt-connected','config':{'default_model':'fixture-model','token_file_path':str(path)}})

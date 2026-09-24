@@ -40,6 +40,11 @@ function facts(event){
  if(event.durationMs!==undefined)parts.push(event.durationMs<1000?event.durationMs+' ms':(event.durationMs/1000).toFixed(1)+' s');
  return parts.join(' · ');
 }
+export function UpdateIssueSummary({state}){
+ const updates=state.updates||{},failure=updates.diagnostics?.lastFailure;
+ if(!failure||reconciledFailure(updates))return null;
+ return <div className="a-update-failure" role="alert"><AlertCircle aria-hidden="true"/><div><strong>Last update did not finish: {label(failure.phase)}</strong><p>{failure.phase==='target-discovery'?'This installation cannot be replaced by the in-app updater. Ask the person who runs Amplifier to update this installation.':facts(failure)||'Open Component updates & details for the failure receipt.'}</p></div></div>;
+}
 export function UpdateDiagnostics({state,act}){
  const updates=state.updates||{},diagnostics=updates.diagnostics||{},failure=diagnostics.lastFailure,events=diagnostics.events||[];
  if(!events.length&&!failure)return null;

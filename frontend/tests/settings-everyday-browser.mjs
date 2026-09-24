@@ -31,7 +31,7 @@ try{
  assert.ok((await state()).setup.providers.some(p=>p.module==='provider-anthropic'&&p.config.default_model==='fixture-alternative'));
  assert.ok(!JSON.stringify(await state()).includes('everyday-private-fixture-key'));
  await page.screenshot({path:'/tmp/settings-everyday-ai-desktop.png'});
- await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();
  await page.getByRole('button',{name:'Review & install',exact:true}).click();
  await expect(page.getByRole('region',{name:'Review installation',exact:true})).toBeVisible();

@@ -81,7 +81,7 @@ async def test_auth_failure_never_silently_changes_model(monkeypatch):
 
 async def test_no_key_and_no_session_fail_before_network():
     manager=VoiceService(Service(),api_key='',http=object())
-    with pytest.raises(VoiceError,match='OPENAI_API_KEY'): await manager.connect('v=0')
+    with pytest.raises(VoiceError,match='Voice settings'): await manager.connect('v=0')
     manager.api_key='secret';manager.service.state['selectedSessionId']=None
     with pytest.raises(VoiceError,match='conversation'): await manager.connect('v=0')
 

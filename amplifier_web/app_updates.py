@@ -109,8 +109,12 @@ def install_requirement(revision,extras):
 
 def application_state():
     from .release_notes import history
+    try:
+        editable=bool(json.loads(metadata.distribution('amplifier-unified').read_text('direct_url.json') or '{}').get('dir_info',{}).get('editable'))
+    except (metadata.PackageNotFoundError,ValueError,TypeError):
+        editable=False
     return {'id':'application','label':'Amplifier Unified','kind':'app','current':__version__,'repository':SOURCE,
-            'channel':'github-releases','status':'not_checked','detail':'Check for a published application release.',
+            'channel':'github-releases','canInstall':not editable,'status':'not_checked','detail':'Check for a published application release.',
             'releaseNotes':history()}
 
 async def check():
@@ -168,6 +172,8 @@ async def _stage(manager, *, selected=None):
     release=({'status':'update','revision':selected['hostApp']['revision'],
               'latest':selected['hostApp']['version'],'featureSelection':selected}
              if selected else manager.service.state['updates'].get('application',{}))
+    if release.get('canInstall') is False:
+        raise ValueError('This development preview is managed by its owner. Update its checkout and restart it to install a new app version.')
     if release.get('status')!='update':raise ValueError('Check for an application release first')
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
