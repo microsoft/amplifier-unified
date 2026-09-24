@@ -67,6 +67,7 @@ ACTION_DEFINITIONS = {
     "canvas.snapshot": ("Report visible HTML preview text and standard controls as untrusted display data", schema({"id":string(100),"document":schema({"text":string(16000),"controls":{"type":"array","maxItems":100,"items":schema({"id":string(100),"tag":string(30),"type":string(30),"label":string(200),"value":string(4000),"disabled":{"type":"boolean"}},["id","tag","type","label","value","disabled"])}})})),
     "canvas.interact": ("Operate a standard HTML preview control from the current canvas.document snapshot. Never executes arbitrary JavaScript.", schema({"id":string(100),"controlId":string(100),"event":{"enum":["click","input"]},"value":string(4000)},["id","controlId","event"])),
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
+    "canvas.openFile": ("Open a local file in Canvas for the currently displayed chat and its unchanged workspace. Missing or out-of-workspace files return unavailable; never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200)}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
     "canvas.select": ("Reopen a saved artifact in the calling chat. Supply clientId when multiple clients display that chat.", schema({"id":string(100),"clientId":string(100)}, ["id"])),
@@ -1346,7 +1347,10 @@ class AppService:
                         pending.append((self.history.load, (selected['id'],)))
             elif action.startswith("canvas."):
                 from .workspace_canvas import canvas_command
-                if action.startswith('canvas.apps.'):
+                if action == 'canvas.openFile':
+                    from .canvas_files import open_file
+                    diagnostic_result = open_file(self, args, origin)
+                elif action.startswith('canvas.apps.'):
                     from .canvas_apps import command
                     diagnostic_result = command(self, action, args, origin)
                 elif action.startswith('canvas.views.'):
@@ -2811,6 +2815,10 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Visual capture must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
+            if args['action'] == 'canvas.openFile':
+                if action_args.get('sessionId', session_id) != session_id:
+                    raise AppError('File navigation must target the calling conversation.', 409)
+                action_args['sessionId'] = session_id
             if args['action'].startswith('canvas.apps.'):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
@@ -2843,6 +2851,11 @@ class AppService:
                 canvas_client = target(self, session_id, requested_client, required=True, connected_only=True)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
+            elif args['action'] == 'canvas.openFile':
+                from .agent_canvas import target
+                canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
+                with self.clients.bind(canvas_client):
+                    result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
             elif args['action'] in {'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}:
                 from .agent_canvas import selection_target
                 canvas_client = selection_target(self, session_id, {**action_args, 'id': action_args.get('canvasId', action_args.get('id'))})
