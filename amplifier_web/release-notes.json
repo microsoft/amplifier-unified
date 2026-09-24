@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.25",
+      "title": "Reviewed conversation excerpts for actionable feedback",
+      "changes": [
+        "Attach a short, explicitly selected conversation excerpt to feedback, starting with one visible message and keeping hidden instructions, tool payloads and file contents out.",
+        "Preview and edit the exact excerpt, review automatic redactions and the verified GitHub destination, then approve the specific files before sending. A changed excerpt requires fresh approval.",
+        "Preserve newer feedback edits while preparing attachments, reject stale requests after switching chats, and keep exact retries from posting the same feedback twice."
+      ],
+      "notices": [
+        {
+          "id": "review-feedback-excerpts",
+          "title": "Review before sharing",
+          "detail": "Automatic redaction can miss sensitive information. Submitted excerpts may remain in GitHub history; structured tool logs are not included.",
+          "action": "Review every line and the destination visibility before approving and sending."
+        }
+      ]
+    },
+    {
       "version": "0.20.24",
       "title": "Reliable tool views, precise exports and quieter voice progress",
       "changes": [
