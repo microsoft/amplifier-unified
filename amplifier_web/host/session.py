@@ -473,8 +473,15 @@ def installed_loop_source():
     return installed_package_source('amplifier-module-loop-live', 'amplifier_module_loop_live')
 
 
+def installed_naming_source():
+    return installed_package_source('amplifier-module-hooks-session-naming', 'amplifier_module_hooks_session_naming')
+
+
 def required_components():
-    return HostComponents({'loop-live': LOOP_SOURCE}, {'loop-live': installed_loop_source})
+    # Any bundle naming hook and the app adapter must share one implementation.
+    # Resolve the included dependency without changing saved mount declarations.
+    return HostComponents({'loop-live': LOOP_SOURCE}, {'loop-live': installed_loop_source,
+        'hooks-session-naming': installed_naming_source})
 
 
 def module_source(config, snapshot, module, source, components=None):

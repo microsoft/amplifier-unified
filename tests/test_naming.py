@@ -6,6 +6,12 @@ from amplifier_web.service import AppService
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.runtime import normalize_event
 
+@pytest.fixture(autouse=True)
+def lifecycle_owned_by_host(monkeypatch):
+    # These isolated adapter tests supply a stub community implementation.
+    # Actual mounted-hook handoff is exercised in test_naming_lifecycle.py.
+    monkeypatch.setattr('amplifier_web.host.naming.claim_root_lifecycle', lambda _: None)
+
 async def test_names_persist_preserve_manual_choices_and_checkpoint_metadata(tmp_path):
     app=AppService(tmp_path,workspace=tmp_path)
     try:

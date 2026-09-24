@@ -259,3 +259,16 @@ def test_internal_history_stays_out_of_browser_counts_and_notifications(app_fact
     assert all(row['sessionId'] != 'internal-job' for row in result['notificationMessages'])
     assert all(row['id'] != 'internal-job' for row in result['chatNavigation']['items'])
     assert app.state['sessions'][-1]['messages'][0]['text'] == 'private job output'
+
+
+def test_summary_retains_naming_controls_without_conversation_payloads():
+    from amplifier_web.browser_state import summary
+    row = {'id':'native-chat', 'title':'Hi!', 'titleSource':'native', 'nativeNameSource':'manual',
+           'autoName':False, 'naming':{'status':'working'}, 'configurationBusy':True,
+           'messages':[{'content':'private conversation'}]}
+    projected = summary(row)
+    assert projected['autoName'] is False
+    assert projected['nativeNameSource'] == 'manual'
+    assert projected['naming'] == {'status':'working'}
+    assert projected['configurationBusy'] is True
+    assert projected['messages'] == []

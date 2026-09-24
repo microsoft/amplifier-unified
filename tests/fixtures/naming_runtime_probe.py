@@ -35,7 +35,7 @@ async def run():
         class Context:
             async def get_messages(self):return [{'role':'user','content':'Create an interactive solar system'},{'role':'assistant','content':'I built orbit controls'},{'role':'user','content':'Add camera rotation'}]
         context=Context();hooks=Hooks()
-        coordinator=SimpleNamespace(session_id='fixture',config={'hooks':[{'module':'hooks-session-naming','config':{'model_role':None}}]},hooks=hooks,mount_points={'context':context},get=lambda k:{'providers':{'fixture':provider},'context':context}.get(k),get_capability=lambda k:None,register_cleanup=lambda f:None)
+        coordinator=SimpleNamespace(session_id='fixture',config={'hooks':[]},hooks=hooks,mount_points={'context':context},get=lambda k:{'providers':{'fixture':provider},'context':context}.get(k),get_capability=lambda k:None,register_cleanup=lambda f:None)
         def publish(e):
             events.append(e)
             if e['type']=='session.naming':persist(home,{'id':'fixture','title':e['name'],'titleSource':'generated','description':e['description']})
@@ -53,6 +53,10 @@ async def run():
         rows=[e['event'] for e in events if e.get('type')=='execution.event' and e['event'].get('phase')=='completed']
         assert len(rows)==2 and all(r['label']=='Session naming' and r['usage']['totalTokens']==65 for r in rows),rows
         assert [r['turnId'] for r in rows]==['2','5']
+        before=SessionStore.for_app(home,Path.cwd()).load('fixture')
+        assert (await namer.suggest())['name']=='Build an orbit explorer'
+        assert len(calls)==3
+        assert SessionStore.for_app(home,Path.cwd()).load('fixture')==before
         await namer.close()
-    print('Real Foundation hook verified: first name after turn 2, description at turn 5, configured provider, bounded request, durable metadata, attributed usage; no network calls.')
+    print('Real Foundation hook verified: first name after turn 2, description at turn 5, configured provider, bounded request, durable metadata, attributed usage, explicit suggestion from a hook-free bundle; no network calls.')
 asyncio.run(run())

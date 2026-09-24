@@ -224,6 +224,7 @@ def catalog(state, *, indexed=None):
         if status_filter != 'all' and summary['kind'] != status_filter:
             continue
         rows.append({'id': session['id'], 'title': title, 'description': description,
+                     **{key: session[key] for key in ('titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy') if key in session},
                      'status': session.get('status', 'idle'), 'workspace': workspace['path'],
                      'workspaceId': workspace['id'], 'workspaceName': workspace.get('name', ''),
                      'workspaceLabel': 'No workspace' if managed else labels[workspace['path']], 'activity': summary,

@@ -149,7 +149,7 @@ test('reopening the canvas keeps its saved snapshot without creating another art
 });
 
 
-test('rename preserves failed text, prevents duplicate submission, and reflects agent renames',async()=>{
+test('rename preserves failed text and newer drafts across external renames',async()=>{
  let finish;const calls=[];let cancelled=0;
  const act=async(name,args)=>{calls.push({name,args});return await new Promise(resolve=>finish=resolve)};
  let chat={id:'a',title:'Original'},root;
@@ -165,7 +165,7 @@ test('rename preserves failed text, prevents duplicate submission, and reflects 
  assert.equal(root.root.findByProps({role:'alert'}).children.length,1);
  chat={...chat,title:'Agent supplied title'};
  await renderAct(async()=>root.update(render()));
- assert.equal(root.root.findByType('input').props.value,'Agent supplied title');
+ assert.equal(root.root.findByType('input').props.value,'My new name');
  await renderAct(async()=>root.unmount());
 });
 
@@ -319,5 +319,49 @@ test('default sidebar prevents duplicate pending reorders and allows retry after
  assert.deepEqual(state.pinnedSessionIds,['a','hidden','b','off-page']);
  await renderAct(async()=>handle().props.onKeyDown(event));assert.equal(calls.length,2);
  assert.equal(root.root.findAllByProps({role:'alert'}).some(node=>node.children.includes('Pin order changed. Please retry.')),false);
+ await renderAct(async()=>root.unmount());
+});
+
+
+test('inline Auto name now shares the naming action and preserves policy and newer drafts',async()=>{
+ let finish;const calls=[];let cancelled=0;
+ const act=async(name,args)=>{calls.push({name,args});return new Promise(resolve=>finish=resolve)};
+ let chat={id:'native-a',title:'Original',autoName:false,status:'idle'},root;
+ const render=()=>React.createElement(ChatRename,{chat,act,cancel:()=>cancelled++});
+ await renderAct(async()=>{root=create(render())});
+ const generate=()=>root.root.findByProps({'data-action':'session.naming'});
+ assert.match(root.root.findByProps({className:'a-nav-name-help'}).children.join(''),/Future automatic naming stays off/);
+ let pending;
+ await renderAct(async()=>{pending=generate().props.onClick()});
+ await renderAct(async()=>generate().props.onClick());
+ assert.deepEqual(calls,[{name:'session.naming',args:{id:'native-a',regenerate:true}}]);
+ await renderAct(async()=>{finish({accepted:true});await pending});
+ assert.equal(cancelled,0);
+ chat={...chat,naming:{status:'working'}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(generate().props.disabled,true);
+ assert.match(root.root.findByProps({role:'status'}).children.join(''),/Generating/);
+ await renderAct(async()=>root.root.findByType('input').props.onChange({target:{value:'My newer draft'}}));
+ chat={...chat,title:'Generated title',naming:{status:'ready'}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByType('input').props.value,'My newer draft');
+ assert.equal(generate().props.disabled,true);
+ await renderAct(async()=>root.unmount());
+});
+
+test('inline automatic name reflects completed results and recoverable errors',async()=>{
+ let chat={id:'a',title:'Original',status:'working'},root;
+ const render=()=>React.createElement(ChatRename,{chat,act:async()=>({accepted:false,error:'Retry later'}),cancel:()=>{}});
+ await renderAct(async()=>{root=create(render())});
+ const generate=()=>root.root.findByProps({'data-action':'session.naming'});
+ assert.equal(generate().props.disabled,true);
+ chat={...chat,status:'idle'};
+ await renderAct(async()=>root.update(render()));
+ await renderAct(async()=>generate().props.onClick());
+ assert.match(root.root.findByProps({role:'alert'}).children.join(''),/Retry later/);
+ assert.equal(root.root.findByType('input').props.value,'Original');
+ chat={...chat,title:'New automatic name',naming:{status:'ready'}};
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findByType('input').props.value,'New automatic name');
  await renderAct(async()=>root.unmount());
 });

@@ -107,6 +107,7 @@ class StateProjections:
             from .session_navigation import is_top_level
             attention = self.attention(state)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
+                      'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
             rows = [([row.get(key) for key in fields], navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
