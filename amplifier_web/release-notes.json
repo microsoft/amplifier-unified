@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.18",
+      "title": "Open files from chat and preserve Canvas filenames",
+      "changes": [
+        "Open local file links and path mentions in assistant replies directly in Canvas, keeping the original chat, workspace and unsent draft.",
+        "Keep the original source filename when downloading saved Canvas documents.",
+        "Preserve explicitly configured provider endpoints during setup and report provider preparation failures without exposing private configuration. Failed preparation leaves the original provider choices unchanged."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.17",
       "title": "Clearer setup, voice samples and update progress",
       "changes": [
