@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.28",
+      "title": "Restored voice behavior, quoted replies and reliable chat naming",
+      "changes": [
+        "Restore the earlier voice progress behavior after a reported regression; the newer pacing behavior has been removed.",
+        "Reply to an earlier chat message with a saved quote, return to its source, and add or remove emoji reactions. Drafts and reactions survive reloads.",
+        "Generate chat names independently of the selected bundle, including older saved chats, and use Auto name now from the sidebar Rename panel. Manual names and newer edits take precedence."
+      ],
+      "notices": [
+        {
+          "id": "included-naming-component",
+          "title": "Complete the included-components update",
+          "detail": "Automatic naming now includes the shared naming component. Existing conversation workers keep the code they already loaded.",
+          "action": "Let Updates finish the included-components stage. The naming repair takes effect when a fresh conversation worker starts."
+        }
+      ]
+    },
+    {
       "version": "0.20.27",
       "title": "Reliable workspace switching and simpler update schedules",
       "changes": [
