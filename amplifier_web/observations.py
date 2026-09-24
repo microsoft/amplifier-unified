@@ -122,7 +122,11 @@ class Observations:
         return {'origin': origin, 'messageId': source['id'], 'textDigest': fingerprint(source.get('text', '')), 'at': self.clock()}
 
     def reason(self, watch):
-        session = self.app._session(watch['sessionId'])
+        from .updates import work_paused
+        if work_paused(self.app.state): return 'Work is paused for an application or ecosystem update'
+        from .service import AppError
+        try: session = self.app._session(watch['sessionId'])
+        except AppError: return 'The authorizing conversation is no longer available'
         if session.get('configurationBusy'): return 'The execution configuration is changing'
         for key in ('executionRevision', 'interruptionRevision'):
             if session.get(key, 0) != watch[key]: return 'The user stopped or changed the execution context'
@@ -262,13 +266,13 @@ class Observations:
         for item in self.store.rows('outbox'):
             if item['phase'] not in {'pending', 'waiting_worker'}: continue
             watch = self.store.get('watch', item['watchId'])
-            session = self.app._session(watch['sessionId'])
             if watch['status'] != 'ended':
                 self.store.outbox_phase(item['id'], ['pending', 'waiting_worker'], 'suppressed', self.clock()); continue
             try: reason = self.reason(watch)
             except (ValueError, OSError) as exc: reason = str(exc)
             if reason:
                 self.store.review(watch['id'], reason, self.clock()); continue
+            session = self.app._session(watch['sessionId'])
             if session.get('status') in {'working', 'starting', 'running', 'busy', 'stopping'}: continue
             runtime = self.app.runtime
             if (not runtime or not hasattr(runtime, 'observation_input')

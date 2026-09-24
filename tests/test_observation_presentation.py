@@ -26,8 +26,9 @@ def result(data, args, url='http://localhost:8765/result'):
     return value
 
 
-async def arm(app, sid, args, policy=None):
+async def arm(app, sid, args, policy=None, open_canvas=False):
     queue, source = client(app, sid)
+    if open_canvas: app.clients.records['original']['canvas']['open'] = True
     args = {**args, 'sourceMessageId':source, 'presentationRequest':policy or {'kind':'browser','urlPolicy':'loopback-with-explicit-port'}}
     with app.clients.bind('original'):
         watch = await create(app, args)
@@ -65,11 +66,11 @@ async def test_exact_candidate_rechecked_and_opened_once_in_original_client(tmp_
     finally: await app.close()
 
 
-@pytest.mark.parametrize('change',['leave-return','disconnect','reconnect','source-selection','wrong-origin','dirty','expiry','cancel'])
+@pytest.mark.parametrize('change',['leave-return','disconnect','reconnect','source-selection','wrong-origin','dirty','expiry','cancel','activation'])
 async def test_presentation_races_preserve_original_selection_and_offer_reference(tmp_path,monkeypatch,change):
     app,runtime,now,sid,args,data,*_ = await fixture(tmp_path,monkeypatch)
     try:
-        watch,queue,args=await arm(app,sid,args)
+        watch,queue,args=await arm(app,sid,args,open_canvas=change=='dirty')
         result(data,args, 'http://192.168.1.5:8000/' if change=='wrong-origin' else 'http://localhost:8765/result')
         record_before=copy.deepcopy(app.clients.records['original'])
         if change=='leave-return':
@@ -82,10 +83,6 @@ async def test_presentation_races_preserve_original_selection_and_offer_referenc
         elif change=='dirty':
             row=app.clients.records['original']; row['canvas']['open']=True
             row['canvasViews']={'secondary':None,'preferences':{'primary:'+row['canvas']['id']:{'dirty':True}}}
-            # Preserve a same-selection dirty change, independently of selection revision.
-            watch=app.observations.store.get('watch',watch['id'])
-            watch['presentationGrant']['selectionRevision']=app.clients.selection_revision('original')
-            app.observations.store.put('watch',watch)
         original=app.smart_tools.call_tool
         calls=[]
         async def observe(*a,**kw):
@@ -93,6 +90,7 @@ async def test_presentation_races_preserve_original_selection_and_offer_referenc
             if len(calls)==2:
                 if change=='source-selection':
                     value['structuredContent']['presentation']['evidence']['revision']='reselected'
+                elif change=='activation': app._state.setdefault('updates', {})['phase']='activating'
                 elif change=='expiry': now[0]+=200
                 elif change=='cancel':
                     current=app.observations.store.get('watch',watch['id'])

@@ -94,7 +94,7 @@ async def test_exact_retry_before_preview_does_not_rearm_and_conflict_rejected(t
     finally: await app.close()
 
 
-@pytest.mark.parametrize('change', ['task', 'stop', 'execution', 'pause', 'cancel', 'expiry'])
+@pytest.mark.parametrize('change', ['task', 'stop', 'execution', 'pause', 'cancel', 'expiry', 'activation'])
 async def test_read_return_race_cannot_restore_authority(tmp_path, monkeypatch, change):
     app, runtime, now, sid, args, data, control, _ = await fixture(tmp_path, monkeypatch)
     try:
@@ -104,7 +104,8 @@ async def test_read_return_race_cannot_restore_authority(tmp_path, monkeypatch, 
         original = app.smart_tools.call_tool
         async def delayed(*a, **kw):
             result = await original(*a, **kw)
-            if change == 'task': control.write_text(json.dumps({'task': {'id': 'task', 'revision': 2, 'status': 'active'}}))
+            if change == 'activation': app._state.setdefault('updates', {})['phase']='activating'
+            elif change == 'task': control.write_text(json.dumps({'task': {'id': 'task', 'revision': 2, 'status': 'active'}}))
             elif change == 'stop': app._session(sid)['interruptionRevision'] = 1
             elif change == 'execution': app._session(sid)['executionRevision'] = 1
             elif change == 'expiry': now[0] += 31
@@ -305,3 +306,29 @@ def test_audit_pruning_preserves_exact_terminal_tombstone(tmp_path):
         with store.transaction(): store.terminal(store.get('watch','w'),{'status':'actionable','semanticKey':'done'},1702)
         assert len(store.rows('outbox'))==1
     finally: store.close()
+
+
+@pytest.mark.parametrize('phase', ['before-read', 'read-return', 'terminal'])
+async def test_removed_conversation_retains_watch_for_review_without_runtime_activity(tmp_path,monkeypatch,phase):
+    app,runtime,_,sid,args,data,*_=await fixture(tmp_path,monkeypatch)
+    try:
+        watch=await create(app,args)
+        def remove(): app._state['sessions'][:]=[row for row in app._state['sessions'] if row['id']!=sid]
+        if phase=='read-return':
+            original=app.smart_tools.call_tool
+            async def read(*a,**kw):
+                value=await original(*a,**kw); remove(); return value
+            app.smart_tools.call_tool=read
+        else:
+            if phase=='terminal':
+                with app.observations.store.transaction():
+                    app.observations.store.terminal(watch, {'status':'actionable','semanticKey':'done','summary':'Saved outcome','evidence':[]}, app.observations.clock())
+            remove()
+        await app.observations.tick()
+        retained=app.observations.store.get('watch',watch['id'])
+        assert retained['status']=='needs_review' and 'conversation' in retained['reason']
+        if phase=='read-return': assert app.observations.store.rows('run')[0]['phase']=='discarded'
+        else: assert not app.observations.store.rows('run')
+        if phase=='terminal': assert app.observations.store.rows('outbox')[0]['phase']=='suppressed'
+        runtime.observation_input.assert_not_awaited()
+    finally: await app.close()

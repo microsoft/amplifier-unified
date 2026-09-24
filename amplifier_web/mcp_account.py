@@ -91,8 +91,8 @@ class Accounts:
             if not expected:
                 await self.manager._change(lambda _: row.update(accountBinding=copy.deepcopy(current)))
             if connection.observation_active and expected and row.get('account', {}).get('status') == 'verified':
-                # The exact principal was just re-attested. Quiet reads retain
-                # that evidence in their occurrence, not a timestamp-only app update.
+                # The exact principal was just re-attested. A quiet check does
+                # not need a timestamp-only publication of the whole app state.
                 return
             await self.changed(row, {'status': 'verified', **current,
                                     'verification': 'Server-attested through authenticated transport; not independent identity verification.'})

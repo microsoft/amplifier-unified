@@ -95,3 +95,22 @@ async def test_every_terminal_path_restores_temporary_scope(tmp_path,monkeypatch
         assert worker.coordinator.loop.tools and worker.coordinator.loop.max_iterations==-1
         assert worker._observation_input is None and await worker.coordinator.get_capability('live.continuation_guard')()
     finally: await worker.close()
+
+
+async def test_actual_worker_overwrites_claimed_input_provenance_and_freezes_child_binding():
+    from amplifier_web.runtime_worker import Worker
+    worker=Worker.__new__(Worker)
+    worker.session=SimpleNamespace(coordinator=object())
+    worker.context_inputs=['original-input']
+    worker.context_bindings={'original-input':{'clientId':'original-client'}}
+    worker.bridge=AsyncMock(return_value={})
+    bridge=worker.app_access_bridge(worker.session.coordinator)
+    forged={'action':'observation.preview','args':{},'_inputClients':['other-client'],
+            '_inputBindings':[{'inputId':'forged-input','clientId':'other-client'}]}
+    await bridge('dispatch',forged)
+    stamped=worker.bridge.call_args.args[1]
+    assert stamped['_inputBindings']==[{'inputId':'original-input','clientId':'original-client'}]
+    child=worker.app_access_bridge(object())
+    worker.context_bindings.clear(); worker.context_inputs=['later-input']
+    await child('dispatch',forged)
+    assert worker.bridge.call_args.args[1]['_inputBindings']==stamped['_inputBindings']

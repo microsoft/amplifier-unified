@@ -98,11 +98,12 @@ class Worker:
         # Workers inherit the originating inputs at assignment, never
         # another client's later input or another coordinator's receipts.
         assigned = None if coordinator is self.session.coordinator else list(self.context_inputs)
-        assigned_clients = None if assigned is None else [self.context_bindings.get(i, {}).get('clientId') for i in assigned]
+        assigned_bindings = None if assigned is None else [{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in assigned]
+        assigned_clients = None if assigned_bindings is None else [b['clientId'] for b in assigned_bindings]
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
-            args = {**args, '_inputBindings': [{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids], '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
+            args = {**args, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
                 bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
