@@ -9,6 +9,7 @@ from amplifier_web.voice import VoiceCall, VoiceService
 class Service:
     def __init__(self, directory):
         self.data_dir = directory
+        self.default_workspace = str(directory)
         self.state = {'sessions': []}
         self.statuses = []
 
