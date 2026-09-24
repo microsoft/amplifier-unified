@@ -540,6 +540,7 @@ class RuntimeManager:
     async def send(self, session, text, input_id, emit):
         await self._start_for_input(session, emit)
         return await self._request(session["id"], "send", text=text, input_id=input_id,
+            reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
@@ -567,6 +568,7 @@ class RuntimeManager:
     async def retry(self, session, text, input_id, emit):
         await self._start_for_input(session, emit)
         return await self._request(session['id'], 'retry', text=text, input_id=input_id,
+            reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))
 

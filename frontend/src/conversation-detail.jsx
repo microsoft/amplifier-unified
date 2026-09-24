@@ -31,10 +31,11 @@ export function useConversationDetail(source,beforeApply){
  useEffect(()=>{setSaved(null);setError('');setBusy('')},[source?.id,source?.sharedHistoryOffset]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
- const session=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
+ const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
+ const session=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.messageOffset,before:extra.messages[0].id}:{} )},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
-  executionWindow:{...source.executionWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:source;
+  executionWindow:{...source.executionWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected;
  async function earlier(part){
   if(busy||!session)return;const id=session.id,window=part==='messages'?session.messageWindow:session.executionWindow;
   setBusy(part);setError('');try{

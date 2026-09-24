@@ -137,6 +137,7 @@ class ClientViews:
         restore_body(record.get("canvas", {}), self.service.db)
         # The empty key is the client's pre-conversation draft. Unlike None,
         # it keeps its identity through JSON persistence and reload.
+        record["view"]["messageReply"] = copy.deepcopy(record.get("messageReplies", {}).get(record.get("selectedSessionId")))
         draft = record.get("drafts", {}).get(record.get("selectedSessionId") or "", "")
         if record["view"].get("draft") != draft:
             record["view"]["draft"] = draft

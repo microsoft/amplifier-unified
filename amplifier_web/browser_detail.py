@@ -77,7 +77,8 @@ def page(session, part, before=None):
         end=next((i for i,row in enumerate(rows) if row.get('id')==before),None)
         if end is None:raise ValueError('This history changed. Return to the latest messages and try again.')
     start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
-    items=[compact(row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
+    from .message_interactions import annotate
+    items=[compact(annotate(session, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
@@ -105,7 +106,8 @@ def project(session):
                   sharedHistoryUserTurnOffset=messages['userOffset'])
     if session.get('nativeProject') and session.get('historyManaged'):
         # Native history already has its own bounded, user-controlled loader.
-        result['messages']=[compact(row,session['id'],'messages',TEXT_LIMIT) for row in session.get('messages',[])]
+        from .message_interactions import annotate
+        result['messages']=[compact(annotate(session,row),session['id'],'messages',TEXT_LIMIT) for row in session.get('messages',[])]
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
@@ -114,6 +116,7 @@ def project(session):
     # Reports and completed generation bodies are not activity badges.
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]
     result['generations']=[{k:v for k,v in row.items() if k!='text'} for row in session.get('generations',[])[-20:]]
+    result.pop('messageQuotes', None)
     if 'historyActivity' in result:
         result['historyActivity']={'diagnostics':result['historyActivity'].get('diagnostics',[])}
     return result

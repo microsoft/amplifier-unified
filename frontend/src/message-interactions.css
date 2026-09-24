@@ -1,0 +1,19 @@
+#amp-one .a-reply-preview,#amp-one .a-reply-quote{border-left:3px solid var(--a-accent,#18708b);background:var(--a-soft,rgba(100,130,140,.09));padding:.65rem .8rem;border-radius:.4rem;margin:.4rem 0 .7rem;min-width:0;overflow-wrap:anywhere}
+#amp-one .a-reply-preview{display:flex;align-items:flex-start;gap:.6rem;max-height:9rem;overflow:auto}
+#amp-one .a-reply-preview>div{flex:1;min-width:0}
+#amp-one .a-reply-preview p{margin:.25rem 0;white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+#amp-one .a-quoted-source{display:block;text-align:left;width:100%;padding:0;color:inherit;background:none;border:0;cursor:pointer;font:inherit}
+#amp-one .a-quoted-source:disabled{cursor:default;opacity:1}
+#amp-one .a-quoted-source strong,#amp-one .a-quoted-source span{display:block}
+#amp-one .a-quoted-source span{white-space:pre-wrap;max-height:10rem;overflow:auto;font-size:.93em;margin-top:.3rem}
+#amp-one .a-message-actions{flex-wrap:wrap}
+#amp-one .a-reaction-control{position:relative;display:flex}
+#amp-one .a-reaction-picker{position:absolute;left:0;bottom:100%;z-index:8;display:grid;grid-template-columns:repeat(4,40px);gap:3px;background:var(--a-surface,#f5f8fa);color:var(--a-ink,#22313a);box-shadow:0 3px 15px #0003;border:1px solid var(--a-line,#bbcbd1);border-radius:.65rem;padding:.4rem}
+#amp-one .a-reaction-picker button,#amp-one .a-reaction-chip{border:1px solid transparent;background:transparent;border-radius:.55rem;font-size:1.15rem;min-height:36px;cursor:pointer}
+#amp-one .a-reaction-picker button:hover,#amp-one .a-reaction-picker button[aria-pressed=true],#amp-one .a-reaction-chip{background:var(--a-soft,#e1f0f4);border-color:var(--a-accent,#18708b)}
+#amp-one .a-message-interaction-error{flex-basis:100%;font-size:.85em}
+#amp-one .a-message:focus{outline:2px solid var(--a-accent,#18708b);outline-offset:5px;border-radius:.5rem}
+@media(pointer:coarse){#amp-one .a-message-actions .a-icon{width:40px;height:40px;min-height:40px}}
+
+#amp-one .a-user .a-reaction-picker{left:auto;right:0}
+#amp-one .a-reaction-picker[data-below=true]{bottom:auto;top:100%}

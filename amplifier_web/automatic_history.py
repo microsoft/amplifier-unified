@@ -20,7 +20,8 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'workspaceId', 'workspaceAvailable', 'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt', 'navigationActivityPending',
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
-                'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose')
+                'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
+                'messageAnnotations', 'messageQuotes')
 
 
 def identity(project, session):

@@ -101,7 +101,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image to a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(12000000)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -270,6 +270,8 @@ from .canvas_versions import definitions as canvas_version_definitions
 ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
 from .canvas_reference import definitions as canvas_reference_definitions
 ACTION_DEFINITIONS.update(canvas_reference_definitions(schema, string))
+from .message_interactions import definitions as message_interaction_definitions, ACTIONS as MESSAGE_INTERACTIONS
+ACTION_DEFINITIONS.update(message_interaction_definitions(schema, string))
 from .questions import definitions as question_definitions
 ACTION_DEFINITIONS.update(question_definitions(schema, string))
 from .task_continuity import definitions as task_definitions
@@ -1057,7 +1059,9 @@ class AppService:
                 raise AppError(str(exc)) from None
         if action.startswith(('recall.', 'memory.')):
             return await self.recall.dispatch(action,args,origin,command_id)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView'}) and 'clientId' in args:
+        if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
+            raise AppError('Message actions must target the calling conversation.', 403)
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1557,6 +1561,9 @@ class AppService:
                     pins[:] = [identity for identity in pins if identity != args['id']]
                 self.state['view'].pop('navChatPage', None)
 
+            elif action in MESSAGE_INTERACTIONS:
+                from .message_interactions import command
+                diagnostic_result = command(self, action, args)
             elif action == 'message.copy':
                 source = self._session(args['sessionId'])
                 message = next((m for m in source['messages'] if m['id']==args['messageId']), None)
@@ -1595,7 +1602,7 @@ class AppService:
                     session['configurationBusy'] = True
                     session['historyEdit'] = {'operationId':command_id or str(uuid.uuid4()),'messageId':original['id'],
                         'text':text,'via':'text' if original.get('via')=='text' else 'chat','inputOrigin':origin,
-                        'attachments':copy.deepcopy(original.get('attachments',[])), 'phase':'working'}
+                        'attachments':copy.deepcopy(original.get('attachments',[])), 'replyTo':copy.deepcopy(original.get('replyTo')), 'phase':'working'}
                     pending.append((self._edit_current,(copy.deepcopy(session),)))
                 else:
                     session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
@@ -1606,7 +1613,7 @@ class AppService:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
                     input_id = command_id or str(uuid.uuid4())
-                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,inputOrigin=origin,attachments=copy.deepcopy(original.get('attachments',[])),delivery={'status':'sending'})
+                    self._message(session,'user',text,'text' if original.get('via')=='text' else 'chat',inputId=input_id,inputOrigin=origin,attachments=copy.deepcopy(original.get('attachments',[])),**({'replyTo':copy.deepcopy(original['replyTo'])} if original.get('replyTo') else {}),delivery={'status':'sending'})
                     self._activity(session,'queued','Generating from your edited message.',reset=True)
                     session['status']='working'
                     ensure_turn(session,input_id,text)
@@ -1707,6 +1714,8 @@ class AppService:
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
                 text = args["text"].strip()
+                from .message_interactions import resolve_quote
+                quote = resolve_quote(session, args.get("replyId"))
                 requested=args.get('attachmentIds',[])
                 available={row['id']:row for row in self.clients.attachments(session)}
                 if any(identity not in available for identity in requested):raise AppError('An attachment is no longer in this draft. Refresh and retry.')
@@ -1722,7 +1731,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,delivery={'status':'sending'})
+                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 from .naming import persist
@@ -2209,7 +2218,7 @@ class AppService:
             await self.runtime.start(source, self.on_runtime_event)
             result = await self.runtime.control(source['id'], 'history.edit', {
                 'source':source,'messageId':edit['messageId'],'operationId':edit['operationId'],
-                'text':edit['text'],'attachments':edit['attachments']})
+                'text':edit['text'],'reply_context':edit.get('replyTo'),'attachments':edit['attachments']})
             async with self.lock:
                 current = self._session(source['id'])
                 apply_revision(self, current, result)
@@ -2404,6 +2413,11 @@ class AppService:
             draft_attachments[:] = [row for row in draft_attachments if row["id"] not in attached]
             client = self.clients.record()
             if client is not None:
+                quote = sent.get('replyTo')
+                if quote and client.get('messageReplies', {}).get(current['id'], {}).get('id') == quote['id']:
+                    client['messageReplies'].pop(current['id'], None)
+                    if client.get('selectedSessionId') == current['id']:
+                        client['view']['messageReply'] = None
                 if not preserve_draft and client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
                     self.clients.draft(current['id'], '')
             elif (not preserve_draft and self.state["selectedSessionId"] == current["id"]
@@ -2891,7 +2905,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] == 'canvas.reference' or args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
+            if args['action'] in MESSAGE_INTERACTIONS or args['action'] == 'canvas.reference' or args['action'].startswith(('canvas.apps.', 'canvas.versions.')):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Surface actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -2942,9 +2956,9 @@ class AppService:
                     raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
-            elif args['action'] in {'canvas.openFile', 'canvas.reference'}:
+            elif args['action'] in {'canvas.openFile', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
                 from .agent_canvas import target
-                canvas_client = target(self, session_id, action_args.get('clientId'), required=True)[0]
+                canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
             elif args['action'] in {'canvas.select', 'smartTools.viewStatus', 'smartTools.reconnectView'}:
