@@ -253,3 +253,14 @@ async def test_destination_replaced_while_opening_is_not_used(app, tmp_path, mon
 async def test_native_alias_resolution_retains_action_input_validation(app):
     with pytest.raises(AppError):
         await app.dispatch('session.select', {'id': ['not-a-session-id']})
+
+
+async def test_workspace_picker_pages_and_searches_deep_paths(app):
+    app.state['workspaces'] = [dict(id=str(i), name='Reports', path=f'/teams/group-{i:03}/deep/reports', available=True) for i in range(105)]
+    first = (await app.dispatch('workspace.list', {'limit': 40}))['result']
+    second = (await app.dispatch('workspace.list', {'offset': first['nextOffset'], 'limit': 40}))['result']
+    assert len(first['items']) == len(second['items']) == 40
+    assert first['total'] == 105 and first['nextOffset'] == 40 and second['nextOffset'] == 80
+    assert not set(row['id'] for row in first['items']) & set(row['id'] for row in second['items'])
+    match = (await app.dispatch('workspace.list', {'query': 'group-104/deep', 'limit': 40}))['result']
+    assert match['total'] == 1 and match['items'][0]['id'] == '104' and match['nextOffset'] is None

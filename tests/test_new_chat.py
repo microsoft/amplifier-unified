@@ -324,3 +324,28 @@ async def test_draft_provider_discovery_targets_requested_workspace_without_crea
     assert observed and all(workspace==str(path) for workspace in observed)
     assert not app.state['sessions'] and not app.runtime.started and not app.runtime.sent
     assert not path.exists()
+
+
+@pytest.mark.parametrize('client', ['web', 'agent'])
+async def test_new_chat_uses_visible_workspace_or_managed_and_keeps_unsent_choices(app, tmp_path, client):
+    project = tmp_path / 'visible'; project.mkdir()
+    await command(app, client, 'workspace.add', {'path': str(project)})
+    workspace_id = snapshot(app, client)['selectedWorkspaceId']
+    await command(app, client, 'view.update', {'patch': {'workSurface': 'workspace', 'workWorkspaceId': workspace_id}})
+    await command(app, client, 'session.draft')
+    state = snapshot(app, client)
+    assert state['view']['newSessionDraft']['workspace'] == str(project)
+    await command(app, client, 'view.update', {'patch': {'draft': 'Keep me', 'newSessionDraft': {'workspace': str(project), 'bundle': 'chosen', 'selection': {'instance': 'p', 'model': 'm'}}}})
+    await command(app, client, 'view.update', {'patch': {'workSurface': 'chats'}})
+    await command(app, client, 'session.draft')
+    state = snapshot(app, client)
+    setup = state['view']['newSessionDraft']
+    assert setup['workspace'] == '' and setup['location']['kind'] == 'managed'
+    assert setup['bundle'] == 'chosen' and setup['selection']['model'] == 'm'
+    assert state['view']['draft'] == 'Keep me' and state['sessions'] == []
+    # Returning to that draft keeps its selected location, even with a previous workspace in state.
+    await command(app, client, 'session.draft')
+    assert snapshot(app, client)['view']['newSessionDraft'] == setup
+    await command(app, client, 'view.update', {'patch': {'workSurface': 'workspace', 'workWorkspaceId': workspace_id}})
+    await command(app, client, 'session.draft')
+    assert snapshot(app, client)['view']['newSessionDraft']['workspace'] == str(project)
