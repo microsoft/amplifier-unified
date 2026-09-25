@@ -1,8 +1,9 @@
-import {CallWakeLock} from './call-wake-lock';
+import {CallWakeLock} from './call-wake-lock.js';
+import {CallAudioSession} from './call-audio-session.js';
 
 /** Browser media transport. The server owns credentials, delegation, and state. */
 export class VoiceClient {
-  constructor({request, onState = () => {}, onError = () => {}}) {
+  constructor({request, onState = () => {}, onError = () => {}, onAction}) {
     this.request = request;
     this.onState = onState;
     this.onError = onError;
@@ -13,10 +14,14 @@ export class VoiceClient {
     this.stream = null;
     this.events = null;
     this.audio = null;
+    this.callAudio = new CallAudioSession({getAudio:()=>this.audio,onState:patch=>this.update(patch),onError,
+      onAction:onAction||((action,args)=>action==='call.mute'?this.setMuted(args.muted):this.end())});
     this.readySent = false;
     this.onPageHide = () => {
+      ++this.generation;
       if (this.state.id) this.request('/api/voice/end', {method: 'POST', body: {id: this.state.id}, keepalive: true}).catch(() => {});
       this.release();
+      this.update({status:'ended',id:null});
     };
     window.addEventListener('pagehide', this.onPageHide);
   }
@@ -37,20 +42,26 @@ export class VoiceClient {
     try {
       const config = await this.request('/api/voice/config');
       if (!config.available) throw new Error(config.reason || 'Voice is not configured on the host.');
+      if (generation !== this.generation) return this.state;
+      this.callAudio.start();
+      this.callAudio.setMuted(false);
       const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
       if (generation !== this.generation) {
         stream.getTracks().forEach(track => track.stop());
         return this.state;
       }
       this.stream = stream;
+      // A system mute action can arrive while microphone permission is pending.
+      stream.getAudioTracks().forEach(track=>{track.enabled=!this.state.muted;});
+      this.callAudio.attachStream(stream);
       const peer = this.peer = new RTCPeerConnection();
       this.audio = new Audio();
       this.audio.autoplay = true;
       this.audio.setAttribute('playsinline', '');
       peer.addEventListener('track', event => {
-        if (!this.audio) return;
+        if (generation !== this.generation || !this.audio) return;
         this.audio.srcObject = event.streams[0] || new MediaStream([event.track]);
-        this.audio.play().catch(() => this.onError(new Error('Your browser blocked voice playback. Use its site audio controls, then reconnect.')));
+        this.callAudio.resumePlayback();
       });
       stream.getTracks().forEach(track => peer.addTrack(track, stream));
       const channel = this.events = peer.createDataChannel('oai-events');
@@ -121,6 +132,7 @@ export class VoiceClient {
     const value = Boolean(muted);
     this.stream?.getAudioTracks().forEach(track => { track.enabled = !value; });
     this.update({muted: value});
+    this.callAudio.setMuted(value);
   }
 
   async end() {
@@ -138,6 +150,7 @@ export class VoiceClient {
   }
 
   release() {
+    this.callAudio.stop();
     this.wakeLock.setActive(false);
     clearTimeout(this.connectionTimer);
     this.stream?.getTracks().forEach(track => track.stop());
@@ -152,5 +165,6 @@ export class VoiceClient {
     this.onPageHide();
     window.removeEventListener('pagehide', this.onPageHide);
     this.wakeLock.dispose();
+    this.callAudio.dispose();
   }
 }

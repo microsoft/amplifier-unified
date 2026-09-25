@@ -21,6 +21,18 @@ All routes use the application's existing local authentication and origin checks
 
 ## Validation
 
+### Mobile audio and interruptions
+
+The browser requests `navigator.audioSession.type = "play-and-record"` where available for the duration of a call, restoring its previous audio mode on hangup or failed setup. Supported Media Session `togglemicrophone` and `hangup` controls use the same shared actions as the app buttons. System metadata shows only “Amplifier voice call”, without a chat title or transcript.
+
+Audio-session and microphone interruptions are displayed without ending the call or changing the user's mute choice. Returning to the page or recovering audio retries playback on the existing audio element; it does not request another microphone stream, reconnect the provider, or replay messages. If playback requires a gesture, **Resume audio** retries it. A stopped microphone requires ending the call and starting again. Actual navigation away still ends browser media.
+
+**Keep screen awake** remains an optional foreground fallback. Audio Session and Media Session provide audio integration and supported system controls, not permission to run indefinitely in the background. Screen lock, power saving, Bluetooth routing and incoming calls must be checked on physical devices. Installing a PWA alone does not establish that guarantee.
+
+References: [Audio Session specification](https://www.w3.org/TR/audio-session/), [Chrome Media Session call-control sample](https://googlechrome.github.io/samples/media-session/video-conferencing.html).
+
+Physical acceptance checklist (not yet executed): on iPhone Safari and its installed PWA, and Android Chrome and its installed PWA, disable the screen-awake fallback and test a locked screen through a quiet interval; then test Bluetooth car audio, an incoming-call interruption, a background/foreground transition, and battery-saving mode. Confirm both incoming audio and microphone capture, preserved mute, no duplicate transcript/delegation, and controls cleared after hangup.
+
 Tests cover the delegation-only boundary, completed-generation correlation, pending-worker status, coalesced-result deduplication, continued steering, background notices, protocol-specific signaling and sidebands, fallback classification, missing configuration, pinned sessions, transcript deduplication, correlated results, and call/work lifetime separation. No paid API requests are made by the automated tests. Actual audio, account-specific model access, latency, and browser microphone/playback behavior must be verified with a real call.
 
 Sources verified during implementation:

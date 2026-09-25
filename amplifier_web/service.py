@@ -193,6 +193,7 @@ ACTION_DEFINITIONS = {
     "call.start": ("Start a realtime voice call on the connected browser", schema()),
     "call.mute": ("Mute or unmute the call microphone", schema({"muted": {"type": "boolean"}})),
     "call.keepAwake": ("Keep the calling browser screen awake while its voice call is active; does not grant background execution.", schema({"enabled": {"type": "boolean"}}, ["enabled"])),
+    "call.resumeAudio": ("Retry speaker playback on the calling browser without starting a new call or microphone capture.", schema()),
     "call.end": ("End audio while leaving the work running", schema()),
 }
 
@@ -2003,7 +2004,7 @@ class AppService:
                 self.state["view"]["themePreview"] = False
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
-            elif action in {"call.start", "call.mute", "call.end", "call.keepAwake"}:
+            elif action in {"call.start", "call.mute", "call.end", "call.keepAwake", "call.resumeAudio"}:
                 call_args = dict(args)
                 if action == "call.start":
                     if self.state.get("voicePreviewBusy"):
@@ -2020,7 +2021,7 @@ class AppService:
                     self.state["voice"]["muted"] = args["muted"]
                 elif action == "call.keepAwake":
                     self.state["voice"]["keepAwake"] = args["enabled"]
-                elif self.voice_service:
+                elif action == "call.end" and self.voice_service:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})
