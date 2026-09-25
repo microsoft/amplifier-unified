@@ -52,6 +52,9 @@ def classify(home, rows):
     seen = set()
     required_urls = {key[0] for key in required}
     for row in rows:
+        if row.get('kind') == 'smart tool':
+            row['updateTier'] = 'other'
+            continue  # A tool package is not an installed conversation dependency.
         try:
             key = source_key(row['url'], row['ref']) if row.get('url') and row.get('ref') else None
         except ValueError:

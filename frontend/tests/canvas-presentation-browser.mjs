@@ -18,7 +18,7 @@ try{
  page.on('pageerror',error=>errors.push(error.message));await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const act=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const operation=async(name,args)=>{const receipt=await act(name,args);if(!receipt.operationId)return receipt.result;for(let i=0;i<200;i++){const row=await(await page.request.get(url+'/api/smart-tools/operations/'+receipt.operationId)).json();if(row.status==='completed')return {id:receipt.operationId,...row.result};if(row.status==='failed')throw Error(row.error);await page.waitForTimeout(50)}throw Error('Timed out')};
- await act('session.create');await act('view.update',{patch:{canvasControlsPinned:true,draft:'Keep my unfinished question'}});
+ await act('session.create');await act('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,draft:'Keep my unfinished question'}});
  await operation('smartTools.configure',{id:'fixture',name:'Entity dashboard',command:python,args:[root+'tests/fixtures/canvas_presentation_mcp_server.py',html,calls]});await operation('smartTools.connect',{id:'fixture'});
  const present=async(tool,entity,value)=>{const call=await operation('smartTools.call',{id:'fixture',name:tool,arguments:{entity_id:entity,value}});return operation('smartTools.open',{id:'fixture',tool,operationId:call.id})};
  const first=await present('dashboard_read','alpha',1),frame=page.frameLocator('.a-mcp-app-viewer iframe');await expect(frame.locator('#value')).toHaveText('alpha:1');

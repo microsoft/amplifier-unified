@@ -25,7 +25,7 @@ try{
  const view=async id=>(await inspect()).views.find(view=>view.viewId===id);
  const target=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
  await action('session.create',{});
- await action('view.update',{patch:{canvasControlsPinned:true,canvasWidth:640}});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep this draft through viewer changes');
  await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Keep this draft through viewer changes');
  await context.grantPermissions(['clipboard-read','clipboard-write']);
@@ -101,7 +101,7 @@ try{
  await expect(page.getByRole('combobox',{name:'Open with',exact:true})).toHaveValue('builtin.canvas.markdown');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this draft through viewer changes');
  await page.setViewportSize({width:390,height:844});
- await action('view.update',{patch:{canvasFocused:true,canvasControlsPinned:true}});
+ await action('view.update',{patch:{canvasFocused:true,canvasControlsPinned:true,canvasControlsExpanded:true}});
  await expect(page.getByRole('combobox',{name:'Open with',exact:true})).toBeVisible();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'The single-view shell must fit a narrow display');
  await page.screenshot({path:root+'output/canvas-proof/single-view-mobile.png'});

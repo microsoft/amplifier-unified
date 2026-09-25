@@ -126,6 +126,7 @@ ACTION_DEFINITIONS = {
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
+    "providers.testMessage": ("Send a small real inference request using a saved provider and model. May incur provider usage charges. Creates no conversation.",schema({"id":string(200),"sessionId":string(200),"workspace":string(4000),"model":string(200)},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
     "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"location": LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
     "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
@@ -179,6 +180,7 @@ ACTION_DEFINITIONS = {
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
+    "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
@@ -190,6 +192,8 @@ ACTION_DEFINITIONS = {
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema()),
     "call.mute": ("Mute or unmute the call microphone", schema({"muted": {"type": "boolean"}})),
+    "call.keepAwake": ("Keep the calling browser screen awake while its voice call is active; does not grant background execution.", schema({"enabled": {"type": "boolean"}}, ["enabled"])),
+    "call.resumeAudio": ("Retry speaker playback on the calling browser without starting a new call or microphone capture.", schema()),
     "call.end": ("End audio while leaving the work running", schema()),
 }
 
@@ -2000,7 +2004,7 @@ class AppService:
                 self.state["view"]["themePreview"] = False
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
-            elif action in {"call.start", "call.mute", "call.end"}:
+            elif action in {"call.start", "call.mute", "call.end", "call.keepAwake", "call.resumeAudio"}:
                 call_args = dict(args)
                 if action == "call.start":
                     if self.state.get("voicePreviewBusy"):
@@ -2015,7 +2019,9 @@ class AppService:
                     call_args["sessionId"] = session["id"]
                 elif action == "call.mute":
                     self.state["voice"]["muted"] = args["muted"]
-                elif self.voice_service:
+                elif action == "call.keepAwake":
+                    self.state["voice"]["keepAwake"] = args["enabled"]
+                elif action == "call.end" and self.voice_service:
                     pending.append((self._end_call, ()))
                 self.state["voice"]["command"] = {"id": command_id or str(uuid.uuid4()), "type": action, "args": call_args}
                 effects.append({"type": action, "args": call_args, **args})

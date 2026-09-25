@@ -64,6 +64,10 @@ async def query(request):
     try:
         info=public(await invoke('get_info'))
         result={'info':info,'configSchema':public(schema)}
+        if request['action'] == 'providers.testMessage':
+            from amplifier_web.provider_test import test_message
+            result['messageTest'] = await test_message(provider, config, request.get('model'))
+            return result
         supported=callable(getattr(provider,'list_models',None))
         result['modelsSupported']=supported
         if not supported and request['action']=='providers.test':raise ValueError('Provider does not expose model discovery')

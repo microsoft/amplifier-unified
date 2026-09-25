@@ -122,7 +122,10 @@ from .mcp_connection import Connection as _Connection
 from .smart_tool_lifecycle import Lifecycle
 
 
-class SmartToolsManager(Lifecycle):
+from .smart_tool_updates import ManagedUpdates
+
+
+class SmartToolsManager(Lifecycle, ManagedUpdates):
     def __init__(self, service):
         self.service = service
         self.root = Path(service.data_dir) / "smart-tools"
@@ -602,6 +605,7 @@ class SmartToolsManager(Lifecycle):
                 package = str(_inside(source, info["path"])) + ("[" + ",".join(extras) + "]" if extras else "")
                 await self._run([uv, "pip", "install", "--python", str(python), package], timeout=600, env=environment)
                 row = {**info, "id": identity, "status": "installed", "extras": extras, "installedAt": time.time(), "binDir": str(python.parent), "python": str(python), "sourceDir": str(_inside(source, info["path"])), "nextStep": "Register the tool's documented MCP executable from this bin folder. Installation does not start a server or configure model credentials."}
+                if args.get('_update_from'): row['stagedFrom'] = args['_update_from']
                 await self._change(lambda state: state.update(installations=[item for item in state["installations"] if item["id"] != identity] + [row]))
                 return row
             except BaseException:

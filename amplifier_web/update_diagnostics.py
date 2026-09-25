@@ -45,6 +45,7 @@ def probe_record(output):
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
+        if type(value.get('elapsedMs')) is int and value['elapsedMs']>=0:safe['elapsedMs']=value['elapsedMs']
         if 'ok' in safe:records.append(safe)
     return records[-1] if records else None
 

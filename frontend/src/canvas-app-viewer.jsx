@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {clientUrl,request} from './api';
 import {registerSurfaceCheckpoint} from './surface-checkpoint';
 import './canvas-app-viewer.css';
+import {CanvasControl} from './canvas-controls';
 
 const targetOf=canvas=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,canvas[key]]));
 const tokens=['bg','surface','soft','ink','muted','line','accent','tint','green','danger'];
@@ -104,12 +105,13 @@ export function CanvasAppViewer({canvas,dispatch}){
  const preview=async request=>{const result=await dispatch('canvas.apps.inspect',{id:canvas.id,sessionId:canvas.sessionId,requestId:request.id});setReview({request,input:result.result.requestInput})};
  const url=clientUrl(`/api/canvas/${mounted.id}/app-host?`+new URLSearchParams(targetOf(mounted)));
  return <section className="a-canvas-app" aria-label="Interactive conversation surface">
-  <div className="a-canvas-app-bar"><span>Revision {app.revision}{dirty?' · Unsaved input':''}</span>
+  {dirty&&<p className="a-canvas-unsaved" role="status">Unsaved input</p>}
+  <CanvasControl><div className="a-canvas-app-bar"><span>Revision {app.revision}</span>
    <details><summary>History & shared state</summary><p>Restoring a design keeps compatible current inputs and never repeats actions.</p>
     {app.versions.map(v=><button type="button" key={v.version} disabled={v.version===app.revision||dirty||canvas.readOnlyVersion} onClick={()=>run('canvas.apps.restore',{version:v.version})}>Restore revision {v.version}</button>)}
     <pre aria-label="Shared surface state">{JSON.stringify(app.state,null,2)}</pre>
    </details>
-  </div>
+  </div></CanvasControl>
   {(error||renderError)&&<div className="a-canvas-app-errors" role="alert">{renderError&&<p>{renderError}</p>}{error&&error!==renderError&&<p>{error}</p>}</div>}
   {mounted.app.revision!==app.revision&&<p role="status">A new design is ready. Your unfinished input is still here. <button type="button" onClick={async()=>{try{await dispatch('canvas.views.dirty',{...targetOf(latest.current),dirty:false});dirtyRef.current=false;setDirty(false);mount(latest.current)}catch(e){setError(e.message)}}}>Discard unfinished input and load revision {app.revision}</button></p>}
   {app.requests.filter(r=>r.status==='pending').map(r=><div className="a-canvas-app-request" key={r.id}><span>{r.action==='theme.preview'?'Preview on this device':r.action==='theme.apply'?'Apply to the shared shell':'Revert this device’s last theme change'}: {r.summary}</span><button type="button" onClick={()=>preview(r).catch(e=>setError(e.message))}>Review theme change</button><button type="button" onClick={()=>run('canvas.apps.resolve',{requestId:r.id,approve:false})}>Decline</button></div>)}

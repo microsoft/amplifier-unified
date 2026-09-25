@@ -14,6 +14,18 @@ class Runtime:
         return {}
     async def close(self):pass
 
+async def test_screen_awake_preference_uses_shared_call_action_without_starting_audio(tmp_path):
+    app=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    try:
+        await app.dispatch('session.create',{})
+        sid=app._session()['id']
+        await app.app_bridge('dispatch',{'action':'call.keepAwake','args':{'enabled':False}},sid)
+        assert app.state['voice']['keepAwake'] is False
+        assert app.state['voice'].get('status') not in {'connecting','connected'}
+        assert app.state['voice']['command']['type']=='call.keepAwake'
+        assert app.state['voice']['command']['args']=={'enabled':False}
+    finally:await app.close()
+
 async def test_agent_can_rename_select_model_and_inspect_visible_draft(tmp_path):
     runtime=Runtime();app=AppService(tmp_path,runtime,workspace=tmp_path);app.management=Management(app)
     try:
@@ -48,4 +60,21 @@ async def test_private_runtime_alias_cannot_bypass_shared_operation_authority(tm
             with pytest.raises(AppError,match='shared computation'):
                 await app.app_bridge('dispatch',{'action':'runtime.control','args':{'sessionId':target,'operation':operation,'args':{'actor':'ui','language':'python'}}},first)
         app.runtime.control.assert_not_awaited()
+    finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_audio_is_shared_and_does_not_start_or_end_a_call(tmp_path):
+    from amplifier_web.service import AppService
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    app=AppService(tmp_path/'app',workspace=tmp_path,runtime=Runtime())
+    try:
+        await app.dispatch('session.create',{});sid=app._session()['id']
+        app.voice_service=SimpleNamespace(end=AsyncMock())
+        await app.app_bridge('dispatch',{'action':'call.resumeAudio','args':{}},sid)
+        assert app.state['voice']['command']['type']=='call.resumeAudio'
+        assert app.state['voice'].get('status')!='connecting'
+        app.voice_service.end.assert_not_awaited()
+        app.voice_service=None
     finally:await app.close()

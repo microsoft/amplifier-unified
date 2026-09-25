@@ -361,7 +361,7 @@
 #amp-one .a-source-list .a-check-result{margin:8px 0 0;padding:8px}
 #amp-one .a-check-inline{display:flex;align-items:center;gap:6px}
 #amp-one .a-check-inline>svg{width:14px;height:14px}
-#amp-one .a-attention-badge{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--a-accent);color:var(--a-surface);font-size:var(--a-text-xs,12px);line-height:1}
+#amp-one .a-attention-badge{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;box-sizing:border-box;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--a-accent);color:var(--a-surface);font-size:var(--a-text-xs,12px);line-height:1}
 #amp-one .a-icon:has(>.a-attention-badge){position:relative}
 #amp-one .a-icon>.a-attention-badge{position:absolute;top:0;right:-3px}
 #amp-one .a-settings-group-title>span:first-child{flex:1}

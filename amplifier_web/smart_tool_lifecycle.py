@@ -127,7 +127,7 @@ class Lifecycle:
                 await self.accounts.changed(row, {'status': 'unconfirmed', 'expected': copy.deepcopy(row.get('accountBinding')), 'detail': 'Authorization changed after account verification. Reconnect explicitly to confirm the account.'})
             await self._change(lambda _: row.update(status="disconnected", connectionState="account-review" if review else "disconnected", catalogState="stale", loadedSchemas={}, error=str(connection.failure) if review else "The connection closed. Reconnect explicitly; previous work was not replayed."))
 
-    async def _refresh(self, identity, connection):
+    async def _discover_catalog(self, connection):
         from .smart_tools import MAX_TOOLS, _bounded, _ui
         epoch, tools, cursor, seen = connection.catalog_epoch, [], None, set()
         for _ in range(20):
@@ -144,22 +144,27 @@ class Lifecycle:
             seen.add(cursor)
         else:
             raise ValueError("Tool discovery did not finish after 20 pages.")
-        if epoch != connection.catalog_epoch or self.connections.get(identity) is not connection:
+        if epoch != connection.catalog_epoch:
             raise ValueError("The tool catalog changed while it was loading. Refresh discovery again.")
         names = [tool.get("name") for tool in tools]
         if any(not isinstance(name, str) or not name or len(name) > 200 for name in names) or len(set(names)) != len(names):
             raise ValueError("The server returned invalid or duplicate tool names.")
         definitions = self._redact(tools)
-        revision = uuid.uuid4().hex
+        return definitions, {
+            'tools': [summary(t) for t in definitions], 'loadedSchemas': {},
+            'catalogRevision': uuid.uuid4().hex, 'catalogState': 'current', 'catalogEpoch': epoch,
+            'catalogCheckedAt': time.time(), 'toolCount': len(tools),
+            'uiCapable': any(_ui(tool).get('resourceUri') for tool in tools)}
+
+    async def _refresh(self, identity, connection):
+        definitions, values = await self._discover_catalog(connection)
         def publish(_):
             # Schemas and their generation are one authority snapshot. A saved
             # view must never observe new definitions under its old generation.
-            if epoch != connection.catalog_epoch or self.connections.get(identity) is not connection:
+            if values['catalogEpoch'] != connection.catalog_epoch or self.connections.get(identity) is not connection:
                 raise ValueError('The tool connection changed before discovery could be published.')
             self.schemas[identity] = definitions
-            self._server(identity).update(tools=[summary(t) for t in definitions],
-                loadedSchemas={}, catalogRevision=revision, catalogState="current", catalogEpoch=epoch,
-                catalogCheckedAt=time.time(), toolCount=len(tools), uiCapable=any(_ui(tool).get("resourceUri") for tool in tools))
+            self._server(identity).update(values)
         await self._change(publish)
 
     async def connect(self, identity, reconnect=False, *, auth=None, auth_timeout=30, expected_configuration=None):

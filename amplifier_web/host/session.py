@@ -592,7 +592,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None,
-                          refresh_dependencies=False, install_overrides=None, **kwargs):
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, **kwargs):
     if refresh_dependencies and resume:
         raise ValueError("Dependency refresh is limited to a new isolated qualification session.")
     from amplifier_foundation import SessionConfigurator
@@ -694,7 +694,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         preparation_policy["install_overrides"] = Path(install_overrides)
     # Activate modules from the same generation as the bundle registry. The
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
-    prepared = await loaded.prepare(strict=True, **preparation_policy,
+    prepared = await loaded.prepare(strict=True, install_deps=not qualification_readonly, **preparation_policy,
         cache_dir=config.registry_home / "cache",
         source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
         progress_callback=progress)

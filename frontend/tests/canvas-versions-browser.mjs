@@ -22,7 +22,7 @@ try{
  const send=async text=>{await action('conversation.send',{text});await expect.poll(async()=>{const value=await state();return value.sessions.find(s=>s.id===value.selectedSessionId)?.status}).not.toBe('working')};
  await action('session.create');
  await send('Create the first version');
- await action('view.update',{patch:{canvasControlsPinned:true,draft:'Keep this unsent draft'}});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,draft:'Keep this unsent draft'}});
  const first=(await action('canvas.show',{kind:'markdown',title:'Versioned plan',content:'# Original plan\n\nKeep the first facts.'})).result;
  await send(`[Open original plan](${first.reference})`);
  await action('canvas.versions.revise',{id:first.id,expectedRevision:1,content:'# Revised plan\n\nKeep the second facts.'});
