@@ -106,6 +106,33 @@ test('browsing retains live call controls and an explicitly scoped stop action',
  assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
  await act(async()=>root.unmount());
 });
+
+test('call work stays stoppable in chat and targets the call even after navigating elsewhere',async()=>{
+ const calls=[];let root;
+ const callSession={id:'voice-chat',title:'Voice task',status:'working'};
+ const render=props=>React.createElement(LiveChatActivity,{callActive:true,browsing:false,working:false,session:{id:'other-chat'},voice:{status:'connected',muted:true},callSession,act:async(...args)=>calls.push(args),...props});
+ await act(async()=>{root=create(render())});
+ const stop=()=>root.root.findByProps({'data-action':'conversation.stop'});
+ assert.equal(stop().props.disabled,false);
+ await act(async()=>stop().props.onClick());
+ assert.deepEqual(calls,[['conversation.stop',{sessionId:'voice-chat'}]]);
+ assert.match(root.root.findByProps({'data-action':'call.mute'}).props.title,/Unmute/);
+ assert.match(root.root.findByProps({'data-action':'call.end'}).props.title,/work continues/);
+ assert.ok(root.root.findAllByType('small').some(node=>node.children.includes('Microphone muted. Replies and work continue.')));
+ await act(async()=>root.update(render({callSession:{...callSession,status:'stopping'}})));
+ assert.equal(stop().props.disabled,true);
+ assert.ok(stop().children.includes('Stopping work…'));
+ // An idle foreground turn can still have active delegated work.
+ await act(async()=>root.update(render({callSession:{...callSession,status:'idle',workers:[{status:'running'}]}})));
+ assert.equal(stop().props.disabled,false);
+ await act(async()=>root.update(render({callSession:{...callSession,historyReadOnlyReason:'Moved elsewhere'}})));
+ assert.equal(stop().props.disabled,true);
+ await act(async()=>root.update(render({callSession:{...callSession,status:'idle'}})));
+ assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
+ await act(async()=>root.update(render({callSession:undefined})));
+ assert.equal(root.root.findAllByProps({'data-action':'conversation.stop'}).length,0);
+ await act(async()=>root.unmount());
+});
 test('quiet navigation keeps discovery status, failures and refresh access',()=>{
  const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));

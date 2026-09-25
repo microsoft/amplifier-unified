@@ -59,9 +59,11 @@ amplifier-unified service install
 amplifier-unified service status
 ```
 
-Available lifecycle commands are `install`, `start`, `stop`, `restart`, `status`, `logs`, and `uninstall`. Use `amplifier-unified service install --replace` only to replace an existing generated unit; it saves a timestamped private backup first.
+Available lifecycle commands are `install`, `start`, `stop`, `restart`, `status`, `logs`, and `uninstall`. Repeating `install` with the same configuration reuses its definition and starts an inactive service without restarting a running host. After a package update, use `amplifier-unified service restart` to load the new version.
 
-The service installation captures the current shell's `PATH` so Unified can find `uv`. If the location of `uv` changes, rerun installation from a shell where `uv --version` works.
+If the generated definition differs, rerun the same install command with `--replace` to save a timestamped private backup and restart with the new definition. The command reports the backup location. Custom service files are preserved unless `--replace` is explicit; review them before replacing. Expected service setup errors are reported without a Python traceback and do not undo a separately completed package installation.
+
+The service installation captures the current shell's `PATH` so Unified can find `uv`. If the location of `uv` changes, rerun installation with `--replace` from a shell where `uv --version` works, preserving any original `--data-dir` and `--workspace` options.
 
 For WSL, enable systemd in `/etc/wsl.conf`, restart WSL with `wsl --shutdown`
 from Windows PowerShell, then run the Linux installation commands above.

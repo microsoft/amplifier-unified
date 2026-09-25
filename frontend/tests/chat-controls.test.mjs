@@ -4,9 +4,18 @@ import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {ModelControl}=await server.ssrLoadModule('/src/chat-controls.jsx');
+const {ModelControl,readAttachment}=await server.ssrLoadModule('/src/chat-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('attachment intake accepts 32 MiB and rejects oversized files before reading',async()=>{
+ const previous=globalThis.FileReader;let reads=0;
+ globalThis.FileReader=class{readAsDataURL(){reads++;this.result='data:image/png;base64,fixture';this.onload()}};
+ try{
+  for(const size of [8*1024*1024+1,22*1024*1024,32*1024*1024])assert.equal(await readAttachment({size,name:'camera.png'}),'fixture');
+  for(const size of [0,32*1024*1024+1])await assert.rejects(readAttachment({size,name:'bad.png'}),/32 MB/);
+  assert.equal(reads,3);
+ }finally{globalThis.FileReader=previous}
+});
 test('provider configuration changes refresh draft choices without retaining stale defaults',async()=>{
  const calls=[];let state={configurationRevision:0,view:{newSessionDraft:{workspace:'/trial',selection:{}}},setup:{providersRequestedWorkspace:'/trial'},draftDefaults:{'["/trial",""]':{phase:'ready',effective:{instance:'old',model:'old-model'},providers:[{id:'old',info:{defaults:{model:'old-model'}}}]}}},root;
  const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};

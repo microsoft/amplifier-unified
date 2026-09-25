@@ -44,3 +44,7 @@ Sources verified during implementation:
 - [Realtime call API](https://developers.openai.com/api/reference/typescript/resources/realtime/subresources/calls/methods/create)
 
 The local Relay example also informed lifecycle and sideband separation.
+
+## Call controls
+
+Mute disables microphone capture; it does not cancel speech already playing or work already accepted. End call closes audio and leaves accepted work running. While the call’s conversation has active work, its call strip also offers **Stop work**, which invokes the shared conversation stop action for that conversation even after navigating to another chat. The call stays connected so the user can give another instruction. The control reports **Stopping work…** while cancellation settles. It does not undo completed actions or guarantee that an external operation already submitted can be recalled.
