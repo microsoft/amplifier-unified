@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -36,6 +37,44 @@ def test_private_storage_sniffs_content_and_bounds_data(tmp_path):
     for identity in ('../outside', '', None, 'z' * 32):
         with pytest.raises(ValueError):
             attachments.file_path(tmp_path, identity)
+
+
+async def test_full_size_upload_crosses_http_schema_and_storage_boundaries(authenticated_client, tmp_path):
+    # Exceeds both the original 8 MiB intake cap and 13 MB HTTP body cap.
+    data = PNG + bytes(attachments.MAX_BYTES - len(PNG))
+    encoded = base64.b64encode(data).decode()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    await app['service'].dispatch('session.create', {})
+    client = await authenticated_client(app)
+    response = await client.post('/api/actions', json={
+        'action': 'attachment.add', 'args': {'name': 'camera.png', 'base64': encoded},
+    })
+    assert response.status == 200, await response.text()
+    result = await response.json()
+    assert encoded not in json.dumps(result)
+    rows = list((tmp_path / 'attachments').glob('*/metadata.json'))
+    assert len(rows) == 1
+    row = attachments.metadata(tmp_path, rows[0].parent.name)
+    assert row['size'] == 32 * 1024 * 1024
+    downloaded = await client.get(row['url'])
+    assert downloaded.status == 200
+    assert hashlib.sha256(await downloaded.read()).digest() == hashlib.sha256(data).digest()
+    with pytest.raises(ValueError, match='32 MB'):
+        upload(tmp_path, 'too-large.png', data + b'!')
+
+
+async def test_feedback_keeps_its_independent_file_limit(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        with pytest.raises(AppError, match='8 MB'):
+            await app.dispatch('feedback.attachment.add', {
+                'requestId': 'oversize-feedback', 'name': 'report.bin',
+                'base64': base64.b64encode(bytes(8 * 1024 * 1024 + 1)).decode(),
+            })
+        assert not (tmp_path / 'attachments').exists()
+    finally:
+        await app.close()
 
 
 @pytest.mark.parametrize('part', ['content', 'metadata.json', 'directory', 'root'])
