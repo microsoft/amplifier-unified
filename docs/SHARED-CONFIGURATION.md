@@ -35,6 +35,22 @@ stores credential references in YAML and secrets in this private file. Existing
 explicit OAuth token paths are retained. Newly created ChatGPT token files live
 under the shared root. Tokens are not copied to a second refresh owner.
 
+In Settings → AI connections, open a connection to see its **Service API key**
+preview and source (service environment, private `keys.env`, or provider
+configuration). Advanced provider settings show the same preview. **Refresh
+credentials** reads the running service's environment and reloads file-managed
+keys; it cannot import a changed environment from your terminal. Restart the
+service with its updated environment if that source still shows an old key.
+Existing chats can retain credentials from when their provider was mounted.
+
+Previews expose only the first six and last four characters of keys at least
+16 characters long; shorter or unusual values remain fully masked. Full keys
+and OAuth tokens stay private. The same masked metadata is available through
+`providers.list` and `providers.credentials`. Known provider fallback order is
+respected, including the compatible API provider's environment-first behavior.
+Provider-managed authentication without an inspectable API key has no preview;
+an available key does not establish that the provider will accept it.
+
 User-authored routing matrices live in `$AMPLIFIER_HOME/routing/`, as in the CLI.
 Unified additionally supports `.amplifier/routing/` and
 `.amplifier/routing.local/` in a workspace, ahead of global custom matrices and

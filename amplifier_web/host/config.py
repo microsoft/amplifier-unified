@@ -107,6 +107,13 @@ def worker_environment():
             if name not in _KEY_FILE_VALUES or value != _KEY_FILE_VALUES[name]}
 
 
+def credential_environment_source(name):
+    """Describe the effective environment value without returning its contents."""
+    if name in _KEY_FILE_VALUES and os.environ.get(name) == _KEY_FILE_VALUES[name]:
+        return "key-file"
+    return "environment"
+
+
 def expand_environment(value, *, environment=None):
     values = os.environ if environment is None else environment
     if isinstance(value, dict):

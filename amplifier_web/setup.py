@@ -18,7 +18,7 @@ import yaml
 from filelock import FileLock
 from .preferences import SettingsStore
 from .shared_settings import atomic_write, routing_dirs, overlay
-from .host.config import load_config, write_private
+from .host.config import credential_environment_source, expand_environment, load_config, write_private
 from .bundles import SECRET_KEYS, validate_uri
 
 KNOWN_PROVIDER_SOURCES=json.loads(Path(__file__).with_name('provider_sources.json').read_text())
@@ -40,7 +40,58 @@ PROVIDER_ENV = {
 def credential_field(module):
     return 'github_token' if module=='provider-github-copilot' else 'api_key'
 
+
+def key_preview(module, value, env_name, *, configured=False):
+    """Identify the service's configured key, never serialize a complete secret.
+
+    This is configuration for a new provider, not a claim about an already
+    mounted conversation or the validity of the credential at its issuer.
+    """
+    if module == 'provider-openai-chatgpt':
+        return None  # OAuth access/refresh tokens are not API keys.
+    # Display the mounted provider's fallback order, which can differ from its
+    # preferred setup variable. Explicit Copilot config is promoted by Unified
+    # into COPILOT_AGENT_TOKEN before mounting. Compatible API instead gives
+    # its ambient environment key precedence over config in its constructor.
+    if configured:
+        if module == 'provider-chat-completions' and os.environ.get('CHAT_COMPLETIONS_API_KEY'):
+            value, env_name = None, 'CHAT_COMPLETIONS_API_KEY'
+        elif not value:
+            defaults = {
+                'provider-github-copilot': ('COPILOT_AGENT_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'),
+                'provider-azure-openai': ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_KEY'),
+                'provider-ollama': ('OLLAMA_API_KEY',),
+                'provider-vllm': ('VLLM_API_KEY',),
+            }.get(module, PROVIDER_ENV.get(module, ()))
+            env_name = next((name for name in defaults if os.environ.get(name)), env_name)
+    source = 'configuration'
+    reference = re.fullmatch(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', value) if isinstance(value, str) else None
+    if reference:
+        env_name = reference.group(1)
+    elif value:
+        env_name = ''
+    if env_name:
+        source = credential_environment_source(env_name)
+        value = os.environ.get(env_name)
+    elif isinstance(value, str):
+        try:
+            value = expand_environment(value)
+        except ValueError:
+            value = None
+    elif not value:
+        return {'status': 'provider-managed', 'source': 'provider-managed', 'masked': None, 'envVar': ''}
+    available = isinstance(value, str) and bool(value)
+    # Short or unusual credentials get no characters exposed. Never include
+    # length, a reusable digest, or a reveal/copy-full-key path in public state.
+    masked = None
+    if available:
+        masked = value[:6] + '…' + value[-4:] if len(value) >= 16 and value.isascii() and value.isprintable() else '••••'
+    return {'status': 'available' if available else 'missing', 'source': source,
+            'masked': masked, 'envVar': env_name}
+
+
 def environment_credential(module,raw=None,env_var=None):
+    configured=raw is not None and env_var is None
     raw=raw or {}
     defaults=PROVIDER_ENV.get(module,())
     value=raw.get(credential_field(module))
@@ -51,7 +102,8 @@ def environment_credential(module,raw=None,env_var=None):
     return {'module':module,'field':credential_field(module),'defaultEnvVar':defaults[0] if defaults else '',
             'alternatives':list(defaults[1:]),'envVar':chosen,'available':bool(chosen and os.environ.get(chosen)),
             'explicit':bool(reference),'hasStoredKey':bool(value and not reference),
-            'supported':module!='provider-openai-chatgpt'}
+            'supported':module!='provider-openai-chatgpt',
+            'preview':key_preview(module,value,chosen,configured=configured)}
 
 def github_cli_token():
     """Read host CLI credentials only; never return them to interface state/logs."""
