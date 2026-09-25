@@ -63,3 +63,7 @@
  #amp-one .a-settings-page-heading h3{font-size:24px}
  #amp-one .a-settings-page-content input:not([type=checkbox]):not([type=radio]),#amp-one .a-settings-page-content select,#amp-one .a-settings-page-content textarea{font-size:16px}
 }
+
+.a-settings-experience{position:relative}
+.a-settings-draft-overlay{position:absolute;inset:0;z-index:20;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.45);border-radius:inherit}
+.a-settings-draft-confirm{max-width:520px;padding:24px;background:var(--a-surface);color:var(--a-ink);border:1px solid var(--a-line);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.3)}

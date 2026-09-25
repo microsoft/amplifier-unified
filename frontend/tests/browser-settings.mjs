@@ -5,8 +5,11 @@ export async function openSettingsDialog(page){
  if(await page.locator('.a-settings-experience').isVisible())return;
  // The menu's attention badge adds its own accessible unread-item label.
  const settings=page.getByRole('button',{name:/^Settings\b/});
- if(!await settings.isVisible())await page.getByRole('button',{name:'More app options',exact:true}).click();
- await settings.click();
+ if(await settings.isVisible()){await settings.click();return;}
+ const options=page.getByRole('button',{name:'App options',exact:true});
+ if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await options.click();
+ await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings\b/}).click();
 }
 export async function openSettingsPage(page,destination){
  await openSettingsDialog(page);

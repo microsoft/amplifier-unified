@@ -149,7 +149,7 @@ test('an empty resolved provider catalog offers setup instead of loading forever
  const calls=[],state={view:{newSessionDraft:{workspace:'/trial'},composerModel:{open:true,sessionId:null}},draftDefaults:{'["/trial",""]':{phase:'ready',providers:[],effective:{}}}};
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,act:async(...args)=>calls.push(args)}))});
  assert.ok(root.root.findByProps({'aria-label':'Model and reasoning settings'}).findByType('span').children.includes('Set up a model'));
- const setup=root.root.findAllByType('button').find(row=>row.children.includes('Connect a model in Settings'));
+ const setup=root.root.findAllByType('button').find(row=>row.children.includes('Add connection'));
  await renderAct(async()=>setup.props.onClick());
  assert.equal(calls.at(-1)[1].patch.panel,'settings');
  assert.deepEqual(calls.at(-1)[1].patch.settingsExpanded,['ai-connections']);
@@ -161,5 +161,18 @@ test('model picker discloses inherited routing from the shared runtime catalog',
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session,act:async()=>{},working:false}))});
  const text=root.root.findByProps({'data-part':'delegation-routing'}).children.join('');
  assert.match(text,/bundle and agent model settings/);assert.match(text,/personal/);assert.match(text,/user settings/);assert.match(text,/Other connected providers may be used/);
+ await renderAct(async()=>root.unmount());
+});
+
+test('a configured model picker can add or manage connections without changing this conversation',async()=>{
+ const calls=[],session={id:'chat',status:'idle'},state={view:{composerModel:{open:true,sessionId:'chat'}},runtimeControl:{chat:{'configuration.providers':{providers:[{id:'one',info:{defaults:{model:'first'}}}],effective:{instance:'one',model:'first'}}}}};
+ let root;await renderAct(async()=>root=create(React.createElement(ModelControl,{state,session,act:async(...args)=>calls.push(args)})));
+ for(const [label,step] of [['Add connection','services'],['Manage connections','list']]){
+  const button=root.root.findAllByType('button').find(row=>row.children.includes(label));assert.ok(button);
+  calls.length=0;await renderAct(async()=>button.props.onClick());
+  assert.equal(calls.length,1);assert.equal(calls[0][0],'view.update');
+  assert.equal(calls[0][1].patch.panel,'settings');assert.equal(calls[0][1].patch.composerModel.open,false);
+  assert.equal(calls[0][1].patch.aiConnectionEditor.step,step);
+ }
  await renderAct(async()=>root.unmount());
 });

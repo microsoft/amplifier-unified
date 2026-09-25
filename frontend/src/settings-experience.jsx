@@ -26,6 +26,7 @@ import {WorkspaceSettings} from './workspace-setup';
 import {VoiceSettings,InstallAppSettings} from './settings-personal';
 import {SettingsLayoutContext,useSettingsCompact,useSettingsHistory,useSettingsViewport} from './settings-layout';
 import {settingsTrail,settingsBaseNavigation,mergeSettingsNavigation} from './settings-mobile';
+import {SettingsDraftProvider,useSettingsDrafts} from './settings-drafts';
 
 const icons={ai:Network,privacy:Archive,workspaces:Layers,overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
 export function SettingsExperience({state,session,act,dispatch,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
@@ -35,11 +36,12 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const {page,section}=settingsLocation(state.view,sections),heading=useRef(null),body=useRef(null),root=useRef(null),[footer,setFooter]=useState(null);
  const compact=useSettingsCompact(root),trail=settingsTrail(state.view,state,sections),route=trail.at(-1),index=compact&&route.key==='index',detail=compact&&trail.length>(settingsParent(page,sections)?3:2);
  useSettingsViewport(root,compact);
- const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef});
+ const drafts=useSettingsDrafts();
+ const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef,confirmClose:drafts.confirmClose,hasUnsaved:drafts.hasUnsaved});
  const navigate=(page,reset=false)=>{navigation.rememberScroll();act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
  useLayoutEffect(()=>{if(!state.view?.settingsRootVisit)return;if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;},[state.view?.settingsRootVisit]);
  useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
- const props={state,session,act};
+ const props={state,session,act,navigate};
  // Keep visited editors mounted while the dialog is open. Private fields stay
  // in component memory, never in shared view state, when changing sections.
  const editors=useRef(new Map());
@@ -73,7 +75,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  if(page==='conversation'&&session)content=<>{content}<ConversationLibrary key={'library-'+session.id} {...props}/><ConversationSharing key={'sharing-'+session.id} {...props}/></>;
  return content;
  }
- return <div ref={root} className="a-settings-experience a-settings-everyday" data-part="settings-experience" data-settings-page={page} data-compact={compact} data-settings-index={index} data-settings-detail={detail} data-settings-route={route.key}>
+ return <SettingsDraftProvider value={drafts.context}><div ref={root} className="a-settings-experience a-settings-everyday" data-part="settings-experience" data-settings-page={page} data-compact={compact} data-settings-index={index} data-settings-detail={detail} data-settings-route={route.key}>
   <header className="a-settings-mobile-head">
    {index?<span/>:<button type="button" className="a-link" data-action="view.update" aria-label={'Back to '+(trail.at(-2)?.title||'Settings')} onClick={navigation.back}><ArrowLeft/><span>{trail.length>2?'Back':'Settings'}</span></button>}
    <h3 ref={compact?heading:undefined} tabIndex={-1}>{route.title}</h3>
@@ -84,9 +86,11 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
    <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
    {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
+   {drafts.count>0&&<p className="a-alert" role="status">You have unsaved connection changes. They are kept while Settings stays open.</p>}
    {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}
    <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
   </div>
   <div ref={setFooter} className="a-settings-mobile-actions"/>
- </div>;
+  {drafts.dialog}
+ </div></SettingsDraftProvider>;
 }
