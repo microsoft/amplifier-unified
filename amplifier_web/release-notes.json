@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.31",
+      "title": "More reliable setup, instructions, images and conversation controls",
+      "changes": [
+        "Load global and project instructions reliably, resolve nested references relative to their containing instruction file, and refresh stale draft provider/model defaults.",
+        "Accept conversation attachments up to 32 MiB and adopt context repairs that avoid treating encoded image bytes as ordinary text tokens. Provider limits still apply.",
+        "Keep safe failure details and actionable app-control recovery guidance, and forward native provider timeouts correctly.",
+        "Keep Stop work available during voice calls and clear stale computer readiness when screen sharing changes.",
+        "Protect unsaved connection settings, expose Add/manage connections in the picker, and show delegation routing plus observed child provider/model and usage.",
+        "Make repeated service installation recoverable, preserve packaged login-page integrity, and document a Unified-only reset for older hackathon installs."
+      ],
+      "notices": [
+        {
+          "id": "charlie-runtime-adoption",
+          "title": "Finish component updates",
+          "detail": "Instruction, image-context and native-provider fixes span the application and its Foundation, loop, context and OpenAI provider components. Existing workers retain their loaded code.",
+          "action": "Let Settings → Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged."
+        },
+        {
+          "id": "charlie-validation-scope",
+          "title": "Some follow-ups remain open",
+          "detail": "Delegation routing visibility does not enforce cross-provider consent. Ordinary tool-read recursive references, provider-aware image preparation, and physical device or Windows/WSL acceptance remain separate work.",
+          "action": "Review connection and routing choices before delegated work. Verify your device and provider with the intended workflow."
+        }
+      ]
+    },
+    {
       "version": "0.20.30",
       "title": "Better provider checks, complete managed updates and a cleaner canvas",
       "changes": [
