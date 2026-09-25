@@ -284,14 +284,25 @@ def main():
         return
     if args.command == "service":
         from . import deployment_service
-        if args.replace and args.service_command != "install":
-            raise ValueError("--replace is only valid with service install.")
-        if args.service_command == "install":
-            deployment_service.install(data_dir, args.workspace, replace=args.replace)
-        elif args.service_command == "uninstall":
-            deployment_service.uninstall()
-        else:
-            deployment_service.command(args.service_command)
+        import subprocess
+        try:
+            if args.replace and args.service_command != "install":
+                raise ValueError("--replace is only valid with service install.")
+            if args.service_command == "install":
+                result = deployment_service.install(data_dir, args.workspace, replace=args.replace)
+                if result['status'] == 'current':
+                    print(f"Service configuration already matches: {result['path']}\n"
+                          "After a package update, use amplifier-unified service restart to load the new version.")
+                else:
+                    print(f"Service {result['status']}: {result['path']}")
+                if result.get('backup'):
+                    print(f"Previous definition saved at: {result['backup']}")
+            elif args.service_command == "uninstall":
+                deployment_service.uninstall()
+            else:
+                deployment_service.command(args.service_command)
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+            raise SystemExit(f"Service {args.service_command} did not complete: {exc}") from None
         return
     config = load_server_config(data_dir, overrides=_server_overrides(args))
     args.port, args.data_dir = config["port"], str(data_dir)

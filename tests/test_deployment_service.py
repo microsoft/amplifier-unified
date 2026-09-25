@@ -71,12 +71,34 @@ def test_install_replace_creates_private_timestamped_backup(tmp_path, monkeypatc
     monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: None)
     monkeypatch.setattr(deployment_service.shutil, "which", lambda name: "/usr/bin/amplifier-unified")
     deployment_service.install(tmp_path / "data")
+    original = unit.read_bytes()
+    assert deployment_service.install(tmp_path / "data")['status'] == 'current'
+    unit.write_text(unit.read_text().replace("RestartSec=5", "RestartSec=9"))
+    customized = unit.read_bytes()
     with pytest.raises(RuntimeError, match="--replace"):
         deployment_service.install(tmp_path / "data")
-    deployment_service.install(tmp_path / "data", replace=True)
+    assert unit.read_bytes() == customized
+    result = deployment_service.install(tmp_path / "data", replace=True)
     backups = list(tmp_path.glob("amplifier-unified.service.backup-*"))
     assert len(backups) == 1
     assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert backups[0].read_bytes() == customized and unit.read_bytes() == original
+    assert result['backup'] == str(backups[0]) and result['status'] == 'replaced'
+
+
+def test_repeat_systemd_install_starts_without_rewrite_backup_or_restart(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(deployment_service, "_systemctl", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(deployment_service.shutil, "which", lambda name: "/usr/bin/amplifier-unified")
+    first = deployment_service.install(tmp_path / 'data', tmp_path)
+    path = Path(first['path'])
+    original, modified = path.read_bytes(), path.stat().st_mtime_ns
+    calls.clear()
+    result = deployment_service.install(tmp_path / 'data', tmp_path)
+    assert result['status'] == 'current'
+    assert path.read_bytes() == original and path.stat().st_mtime_ns == modified
+    assert not list(tmp_path.glob('*.backup-*'))
+    assert calls == [('daemon-reload',), ('enable', deployment_service.UNIT_NAME), ('start', deployment_service.UNIT_NAME)]
 
 
 def test_uninstall_absent_unit_does_not_disable_service(tmp_path, monkeypatch):
@@ -271,6 +293,43 @@ def test_macos_install_refuses_unmanaged_launch_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(deployment_service, "launchd_path", lambda: plist)
     with pytest.raises(RuntimeError, match="unmanaged"):
         deployment_service.install(tmp_path / "data")
+
+
+@pytest.mark.parametrize('loaded', [True, False])
+def test_repeat_macos_install_reuses_definition_and_only_bootstraps_if_unloaded(tmp_path, monkeypatch, loaded):
+    calls = []
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(deployment_service.shutil, 'which', lambda name: '/usr/bin/amplifier-unified')
+    _macos_launchctl(monkeypatch, calls)
+    first = deployment_service.install(tmp_path / 'data', tmp_path)
+    path = Path(first['path'])
+    original, modified = path.read_bytes(), path.stat().st_mtime_ns
+    calls.clear()
+    monkeypatch.setattr(deployment_service, '_launchd_loaded', lambda uid: loaded)
+    result = deployment_service.install(tmp_path / 'data', tmp_path)
+    assert result['status'] == 'current'
+    assert path.read_bytes() == original and path.stat().st_mtime_ns == modified
+    assert not list(tmp_path.glob('*.backup-*'))
+    assert [call[0][0] for call in calls] == ([] if loaded else ['bootstrap'])
+
+
+def test_changed_macos_definition_is_preserved_until_explicit_private_backup(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(deployment_service.shutil, 'which', lambda name: '/usr/bin/amplifier-unified')
+    _macos_launchctl(monkeypatch, calls)
+    first = deployment_service.install(tmp_path / 'data', tmp_path)
+    path = Path(first['path'])
+    original = path.read_bytes()
+    calls.clear()
+    with pytest.raises(RuntimeError, match='definition has changed'):
+        deployment_service.install(tmp_path / 'new-data', tmp_path)
+    assert path.read_bytes() == original and calls == []
+    assert not (tmp_path / 'new-data').exists()
+    result = deployment_service.install(tmp_path / 'new-data', tmp_path, replace=True)
+    backup = Path(result['backup'])
+    assert result['status'] == 'replaced' and backup.read_bytes() == original
+    assert backup.stat().st_mode & 0o777 == 0o600
 
 
 def test_macos_service_command_restarts_launch_agent(tmp_path, monkeypatch):
