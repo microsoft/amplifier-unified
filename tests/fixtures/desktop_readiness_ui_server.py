@@ -155,6 +155,12 @@ async def main(home):
         if data.get('end'):
             service.voice_service.call.closed = True
             await service.set_voice_status({'status': 'ended'})
+        if data.get('computerSource'):
+            visual = service.computer_visual.for_client(data['sessionId'])
+            await visual.grant_source({'sessionId': data['sessionId'],
+                'source': {'kind': 'window', 'label': data['computerSource']}})
+        if data.get('computerRevoke'):
+            await service.dispatch('computer.visual.revoke', {'sessionId': data['sessionId']})
         return web.json_response({'ok': True})
 
     async def inspect(request):

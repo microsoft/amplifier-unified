@@ -18,7 +18,7 @@ export function executionData(session){
  for(const worker of workers){
   const id=worker.sessionId||worker.id,call=worker.callId||worker.call_id;
   const parentWorker=workersBySession.get(worker.parentSessionId);
-  nodes.push({id:`worker:${id}`,kind:'worker',turnId,label:worker.name||worker.agent||worker.title||'Worker',status:worker.status,phase:worker.phase,summary:worker.detail||worker.report||worker.result,summaryDetail:worker.detail?worker.detailDetail:worker.report?worker.reportDetail:worker.resultDetail,startedAt:worker.startedAt,endedAt:worker.endedAt,workerId:worker.id||id,parentId:tools.has(call)?`tool:${call}`:parentWorker?`worker:${parentWorker.sessionId||parentWorker.id}`:null});
+  nodes.push({id:`worker:${id}`,kind:'worker',turnId,routing:worker.routing,provider:worker.provider,model:worker.model,label:worker.name||worker.agent||worker.title||'Worker',status:worker.status,phase:worker.phase,summary:worker.detail||worker.report||worker.result,summaryDetail:worker.detail?worker.detailDetail:worker.report?worker.reportDetail:worker.resultDetail,startedAt:worker.startedAt,endedAt:worker.endedAt,workerId:worker.id||id,parentId:tools.has(call)?`tool:${call}`:parentWorker?`worker:${parentWorker.sessionId||parentWorker.id}`:null});
  }
  return {nodes,turns:[{id:turnId,label:'Recent execution activity',status:nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed'}]};
 }

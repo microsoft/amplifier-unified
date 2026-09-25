@@ -116,3 +116,17 @@ def test_selected_provider_info_reports_effort_without_mutating_bundle_defaults(
     assert provider.get_info().defaults == {'model': 'bundle-model', 'reasoning_effort': 'high'}
     assert SelectedProvider(provider, {'max_output_tokens': 321}).get_info().defaults == {
         'model': 'bundle-model', 'reasoning_effort': 'high', 'max_output_tokens': 321}
+
+
+async def test_shared_provider_catalog_reports_routing_without_changing_parent_choice(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    controls, loop, providers = mounted_controls(SELECTION)
+    loop.config = {'inherit_effective_model':True}
+    resolver = SimpleNamespace(name='personal-routing', matrix_source='user', matrix_path='/private/routing.yaml')
+    controls.coordinator.get_capability = lambda name: resolver if name=='model_role_resolver' else None
+    catalog = await controls.perform('configuration.providers')
+    assert catalog['delegationRouting'] == {'modelInheritance':'conversation_when_unspecified',
+        'crossProviderRestriction':'not_enforced','resolverActive':True,'resolverName':'personal-routing','matrixSource':'user'}
+    assert catalog['effective'] == SELECTION
+    assert loop.root_provider.selection == SELECTION
+    assert 'matrix_path' not in catalog['delegationRouting']

@@ -383,7 +383,7 @@ class Worker:
             # Keep absolute module sources and full mount plans on disk. The UI
             # gets a compact capability report, not credentials or config blobs.
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
-                "tools", "agents", "provider_choices", "selection", "effective_selection", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
+                "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
             publish({"type": "runtime.ready", "report": public})
         except asyncio.CancelledError:
             raise

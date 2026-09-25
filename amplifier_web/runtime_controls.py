@@ -502,7 +502,8 @@ class RuntimeControls:
             defaults=(info.get('defaults',{}) if isinstance(info,dict) else getattr(info,'defaults',{})) or {}
             selected_config=next((row.get('config',{}) for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
             effective={'instance':name,'model':defaults.get('model') or defaults.get('default_model'),'effort':(self.selection or {}).get('effort') or defaults.get('reasoning_effort') or selected_config.get('reasoning_effort')}
-            return {"catalogRevision":self.catalog_revision,"providers":rows,'selection':self.selection,'effective':effective,'pinned':bool(self.selection)}
+            from .host.model_selection import delegation_routing
+            return {"delegationRouting":delegation_routing(self.coordinator),"catalogRevision":self.catalog_revision,"providers":rows,'selection':self.selection,'effective':effective,'pinned':bool(self.selection)}
         name = args.get("provider") or args.get("instance")
         provider = providers.get(name)
         if provider is None:

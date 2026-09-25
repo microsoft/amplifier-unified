@@ -15,7 +15,11 @@ def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
+    fields.update({'routing', 'runId', 'parentProvider'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
+    if 'routing' in result:
+        from .host.model_selection import public_routing
+        result['routing'] = public_routing(result['routing'])
     for field in ('input', 'output', 'error', 'request'):
         if row.get('_eventFields', {}).get(field) and row.get(field + 'Detail'):
             result[field + 'Detail'] = row[field + 'Detail']

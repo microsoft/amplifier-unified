@@ -74,7 +74,7 @@ def _launchctl(*args: str, check: bool = True, **kwargs):
     return subprocess.run(["launchctl", *args], check=check, **kwargs)
 
 
-def _backup(path: Path, content: str | bytes) -> None:
+def _backup(path: Path, content: str | bytes) -> Path:
     timestamp = int(time.time())
     for suffix in range(1_000):
         separator = "" if suffix == 0 else f"-{suffix}"
@@ -87,7 +87,7 @@ def _backup(path: Path, content: str | bytes) -> None:
             stream.write(content.encode() if isinstance(content, str) else content)
             stream.flush()
             os.fsync(stream.fileno())
-        return
+        return backup
     raise RuntimeError(f"Could not create a unique backup for {path}")
 
 
@@ -112,7 +112,7 @@ def _service_values(data_dir: Path, workspace: str | Path | None) -> tuple[list[
     return command, service_path, state_home, data_dir, workspace
 
 
-def _install_systemd(data_dir: Path, workspace: str | Path | None, *, replace: bool) -> None:
+def _install_systemd(data_dir: Path, workspace: str | Path | None, *, replace: bool) -> dict:
     command, service_path, state_home, _, _ = _service_values(data_dir, workspace)
     # Escape systemd's quoted assignment and percent specifiers, not shell syntax.
     service_path = service_path.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
@@ -123,12 +123,6 @@ def _install_systemd(data_dir: Path, workspace: str | Path | None, *, replace: b
         previous = path.read_text()
     except FileNotFoundError:
         previous = None
-    if previous is not None:
-        if MARKER not in previous and not replace:
-            raise RuntimeError(f"Refusing to replace unmanaged unit: {path}")
-        if not replace:
-            raise RuntimeError(f"Generated unit already exists: {path}. Re-run with --replace to back it up and replace it.")
-        _backup(path, previous)
     content = f"""{MARKER}
 [Unit]
 Description=Amplifier Unified
@@ -145,11 +139,25 @@ Environment="AMPLIFIER_SESSION_STATE_HOME={state_home}"
 [Install]
 WantedBy=default.target
 """
+    if previous == content and not replace:
+        _systemctl("daemon-reload")
+        _systemctl("enable", UNIT_NAME)
+        _systemctl("start", UNIT_NAME)
+        return {"status": "current", "path": str(path)}
+    backup = None
+    if previous is not None:
+        if MARKER not in previous and not replace:
+            raise RuntimeError(f"Refusing to replace unmanaged unit: {path}. Review it first; --replace saves a backup before replacement.")
+        if not replace:
+            raise RuntimeError(f"The generated service definition has changed: {path}. Re-run the same install command with --replace to back it up and replace it.")
+        backup = _backup(path, previous)
     write_private(path, content)
     _systemctl("daemon-reload")
     _systemctl("enable", UNIT_NAME)
     # enable --now leaves an already-running host's old environment in place.
     _systemctl("restart", UNIT_NAME)
+    return {"status": "replaced" if previous is not None else "installed", "path": str(path),
+            **({"backup": str(backup)} if backup else {})}
 
 
 def _launchd_loaded(uid: int) -> bool:
@@ -192,20 +200,14 @@ def _launchd_logs(data_dir: Path) -> tuple[Path, Path]:
     return stdout, stderr
 
 
-def _install_launchd(data_dir: Path, workspace: str | Path | None, *, replace: bool) -> None:
+def _install_launchd(data_dir: Path, workspace: str | Path | None, *, replace: bool) -> dict:
     command, service_path, state_home, data_dir, workspace = _service_values(data_dir, workspace)
     path = launchd_path()
     try:
         previous = path.read_bytes()
     except FileNotFoundError:
         previous = None
-    if previous is not None:
-        if not managed_launchd() and not replace:
-            raise RuntimeError(f"Refusing to replace unmanaged launch agent: {path}")
-        if not replace:
-            raise RuntimeError(f"Generated launch agent already exists: {path}. Re-run with --replace to back it up and replace it.")
-        _backup(path, previous)
-    stdout, stderr = _launchd_logs(data_dir)
+    stdout, stderr = data_dir / "logs/launchd.out.log", data_dir / "logs/launchd.err.log"
     contents = {
         "Label": LAUNCHD_LABEL,
         "AmplifierUnifiedMarker": LAUNCHD_MARKER,
@@ -221,17 +223,37 @@ def _install_launchd(data_dir: Path, workspace: str | Path | None, *, replace: b
         "StandardOutPath": str(stdout),
         "StandardErrorPath": str(stderr),
     }
-    write_private(path, plistlib.dumps(contents, sort_keys=False))
+    current = None
+    if previous is not None:
+        try:
+            current = plistlib.loads(previous)
+        except (ValueError, plistlib.InvalidFileException):
+            pass
     uid = os.getuid()
+    if current == contents and not replace:
+        if not _launchd_loaded(uid):
+            _launchd_logs(data_dir)
+            _launchd_bootstrap(uid)
+        return {"status": "current", "path": str(path)}
+    backup = None
+    if previous is not None:
+        if not managed_launchd() and not replace:
+            raise RuntimeError(f"Refusing to replace unmanaged launch agent: {path}. Review it first; --replace saves a backup before replacement.")
+        if not replace:
+            raise RuntimeError(f"The generated launch agent definition has changed: {path}. Re-run the same install command with --replace to back it up and replace it.")
+        backup = _backup(path, previous)
+    _launchd_logs(data_dir)
+    write_private(path, plistlib.dumps(contents, sort_keys=False))
     _launchd_bootout(uid)
     _launchd_bootstrap(uid)
+    return {"status": "replaced" if previous is not None else "installed", "path": str(path),
+            **({"backup": str(backup)} if backup else {})}
 
 
-def install(data_dir: Path, workspace: str | Path | None = None, *, replace: bool = False) -> None:
+def install(data_dir: Path, workspace: str | Path | None = None, *, replace: bool = False) -> dict:
     if sys.platform == "darwin":
-        _install_launchd(data_dir, workspace, replace=replace)
-    else:
-        _install_systemd(data_dir, workspace, replace=replace)
+        return _install_launchd(data_dir, workspace, replace=replace)
+    return _install_systemd(data_dir, workspace, replace=replace)
 
 
 def _uninstall_systemd() -> None:

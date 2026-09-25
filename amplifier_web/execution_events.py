@@ -52,6 +52,7 @@ class ExecutionEvents:
         self.turn_id = None
         self.calls = {}
         self.children = {}
+        self.last_foreground_provider = {}
         self.requests = weakref.WeakKeyDictionary()
         self.nodes = {}
         self.admission_guard = None
@@ -59,6 +60,17 @@ class ExecutionEvents:
         self.streaming_calls = set()
 
     def publish(self, row):
+        # Observe both wrapped and hook-only provider paths. Optional naming or
+        # compaction calls retain their own usage but do not relabel the worker.
+        if row.get("kind") == "llm" and row.get("provider") and not CALL_PURPOSE.get() and row.get("lifecycle") != "background":
+            sid = row.get("sessionId")
+            self.last_foreground_provider[sid] = row["provider"]
+            child = self.children.get(sid)
+            if child:
+                observed = {**child, "provider": row["provider"], "model": row.get("model")}
+                if observed != child:
+                    self.children[sid] = observed
+                    self.publish(observed)
         row = {**row, "revision": self.nodes.get(row["id"], {}).get("revision", 0) + 1}
         row = {**row, "liveObservation": True}
         self.nodes[row["id"]] = row
@@ -78,7 +90,7 @@ class ExecutionEvents:
             previous = self.children.get(identity, {})
             row = {"id": "worker:" + identity, "parentId": parent.get("id") or previous.get("parentId"),
                    "turnId": previous.get("turnId") or parent.get("turnId") or self.turn_id,
-                   "sessionId": identity, "rootSessionId": self.root_id, "kind": "worker",
+                   "sessionId": identity, "rootSessionId": self.root_id, "parentSessionId": parent_sid, "kind": "worker",
                    "phase": event.get("status", "running"), "label": event.get("agent") or "Worker",
                    "toolCallId": call_id, "startedAt": previous.get("startedAt", time.time())}
             if row["phase"] in {"completed", "cancelled", "error", "interrupted"}:
@@ -88,6 +100,26 @@ class ExecutionEvents:
             if isinstance(event.get("report"),str) and event["report"]:
                 row["summary"]=event["report"][:12000]
             elif previous.get("summary"):row["summary"]=previous["summary"]
+            same_run = not event.get("runId") or event.get("runId") == previous.get("runId")
+            if not same_run:
+                self.last_foreground_provider.pop(identity, None)
+            if not same_run or not previous:
+                # Snapshot the spawning parent's observation. Later parent
+                # model changes must not rewrite the cause of existing work.
+                if self.last_foreground_provider.get(parent_sid):
+                    row["parentProvider"] = self.last_foreground_provider[parent_sid]
+            for key in ("provider", "model", "parentProvider"):
+                if same_run and key in previous:
+                    row[key] = previous[key]
+            for key in ("routing", "runId"):
+                if key in event:
+                    if key == "routing":
+                        from .host.model_selection import public_routing
+                        row[key] = public_routing(event[key])
+                    else:
+                        row[key] = event[key]
+                elif same_run and key in previous:
+                    row[key] = previous[key]
             self.children[identity] = row
             self.publish(row)
 
