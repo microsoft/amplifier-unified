@@ -4,7 +4,7 @@
 #amp-one button.a-everyday-row{width:100%;display:flex;align-items:center;gap:14px;text-align:left;padding:17px 18px;border:0;border-radius:0;background:var(--a-surface);color:var(--a-ink);min-height:68px}
 #amp-one .a-everyday-row+.a-everyday-row{border-top:1px solid var(--a-line)}
 #amp-one button.a-everyday-row:hover{background:var(--a-tint);color:var(--a-ink)}
-#amp-one .a-everyday-row>span{flex:1;min-width:0}
+#amp-one .a-everyday-row>span:not(.a-attention-badge){flex:1;min-width:0}
 #amp-one .a-everyday-row strong,#amp-one .a-everyday-row small{display:block}
 #amp-one .a-everyday-row strong{font-weight:600}
 #amp-one .a-everyday-row small{font-weight:400;color:var(--a-muted);font-size:13px;margin-top:4px;overflow-wrap:anywhere}
@@ -107,7 +107,7 @@
 #amp-one .a-advanced-group>summary{list-style:none;padding:17px 18px;display:flex;align-items:center;gap:14px;cursor:pointer}
 #amp-one .a-advanced-group>summary::-webkit-details-marker{display:none}
 #amp-one .a-advanced-group>summary:hover{background:var(--a-tint)}
-#amp-one .a-advanced-group>summary>span{flex:1}
+#amp-one .a-advanced-group>summary>span:not(.a-attention-badge){flex:1}
 #amp-one .a-advanced-group>summary small{margin-top:4px;font-size:13px}
 #amp-one .a-advanced-group[open]>summary>svg{transform:rotate(90deg)}
 #amp-one .a-advanced-group>div{border-top:1px solid var(--a-line);padding:0 12px;background:var(--a-soft)}

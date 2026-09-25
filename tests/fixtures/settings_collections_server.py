@@ -10,6 +10,8 @@ import yaml
 calls=Counter()
 async def probe(self,action,args,workspace):
     await asyncio.sleep(2 if action=='providers.models' else .1)
+    if action=='providers.testMessage':
+        return {'messageTest': {'providerId':args['id'], 'model':'fixture-model', 'method':'provider.complete', 'reachable':args['id']!='two', 'response':'OK', 'error':'insufficient_quota', 'statusCode':429 if args['id']=='two' else None, 'elapsedMs':100}}
     return {'models':[{'id':'fixture-model'},{'id':'fixture-alternative'}],'modelsProviderId':args.get('id'),'providerMetadata':{'module':'provider-openai','info':{'config_fields':[{'id':'reasoning_effort','display_name':'Reasoning effort','choices':['low','high'],'field_type':'choice'}]}}}
 base.SetupManager.probe=probe
 async def catalog(self):

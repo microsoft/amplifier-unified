@@ -24,7 +24,7 @@ try{
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create',{});
- await action('view.update',{patch:{canvasControlsPinned:true,canvasWidth:640}});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:640}});
  const content=`<style>body{font:16px system-ui;padding:24px;color:#21334a}section{display:flex;gap:16px;flex-wrap:wrap}video{width:240px}audio{width:240px}button{padding:12px}</style>
  <h1>Embedded media review</h1><section>
  <div><h2>Embedded video</h2><video id="data-video" controls muted playsinline src="data:video/webm;base64,${media.video}"></video></div>

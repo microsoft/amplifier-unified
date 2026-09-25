@@ -12,7 +12,7 @@ try{
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1500,height:1100},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(action,args={})=>page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
- await action('session.create',{});await action('view.update',{patch:{canvasControlsPinned:true,canvasWidth:650}});
+ await action('session.create',{});await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,canvasWidth:650}});
  const draft='Keep my drawing conversation draft';await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);
  const row=(await action('canvas.apps.create',drawingSurface())).result,id=row.id;
  const inspect=()=>action('canvas.apps.inspect',{id}).then(r=>r.result),cas=async()=>{const r=await inspect();return {id,expectedRevision:r.app.revision,expectedStateRevision:r.app.stateRevision}};

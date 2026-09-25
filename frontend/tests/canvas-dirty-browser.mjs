@@ -23,7 +23,7 @@ try {
  const target=v=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(k=>[k,v[k]]));
  await action('session.create');const otherSession=(await state()).selectedSessionId;
  await action('session.create');const session=(await state()).selectedSessionId;
- await action('view.update',{patch:{canvasControlsPinned:true,draft:'Keep composer target and draft'}});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true,draft:'Keep composer target and draft'}});
  await action('canvas.show',{kind:'markdown',title:'Other artifact',content:'# Other source'});
  const otherArtifact=await view('primary');
  await action('canvas.show',{kind:'markdown',title:'Editable artifact',content:'# Original retained source'});

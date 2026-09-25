@@ -106,6 +106,7 @@ function App(){
     if(effect.type==='voice.visual.capture')await visualClient.current?.capture(effect);
     if(effect.type==='computer.visual.capture')await computerClient.current?.capture(effect);
     if(effect.type==='call.end')await voiceClient.current.end();
+    if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
    }).catch(e=>setError(actionErrorMessage(e)));

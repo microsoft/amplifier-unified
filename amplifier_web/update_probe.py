@@ -5,6 +5,7 @@ from pathlib import Path
 import importlib.util
 import json
 import sys
+import time
 if __package__:
     from .runtime_bootstrap import bootstrap_app_package
 else:
@@ -18,7 +19,9 @@ async def main():
     parser.add_argument("bundle")
     parser.add_argument("--refresh-dependencies", action="store_true")
     parser.add_argument("--install-overrides", type=Path)
+    parser.add_argument("--read-only", action="store_true")
     args = parser.parse_args()
+    started = time.monotonic()
     async def deny(*args): return 'deny'
     facts={'ok':False,'stage':'prepare'}
     session=None
@@ -30,7 +33,7 @@ async def main():
         else:
             from amplifier_web.host.session import prepare_manager
             session,runtime,report=await prepare_manager(args.workspace,bundle=args.bundle,resume=False,ask=deny,
-                install_overrides=args.install_overrides)
+                install_overrides=args.install_overrides, qualification_readonly=args.read_only)
             facts.update(stage='capabilities',standalone=bool(report.get('standalone')),providersPresent=bool(report.get('providers')))
             if not facts['standalone'] or not facts['providersPresent']:raise RuntimeError('Incomplete staged runtime')
             facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))
@@ -41,6 +44,7 @@ async def main():
         if session:
             try:await session.cleanup()
             except Exception as error:facts.update(ok=False,stage='cleanup',errorType=exception_type(error))
+    facts['elapsedMs'] = round((time.monotonic() - started)*1000)
     print(PROBE_PREFIX+json.dumps(facts),flush=True)
     if not facts['ok']:raise SystemExit(1)
 

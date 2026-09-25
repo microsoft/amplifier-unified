@@ -660,3 +660,42 @@ async def test_new_automatic_default_installs_eligible_updates_but_not_managed_p
     await manager.tick();assert events==['check','install']
     app.state['updates'].update(appAvailable=True,application={'canInstall':False})
     await manager.tick();assert events==['check','install']
+
+async def test_smart_tool_update_waits_for_idle_and_keeps_worker_runtime(app, monkeypatch):
+    manager = app.update_manager
+    called=[]
+    async def activate(previous, target): called.append((previous,target))
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools=SmartToolsManager(app)
+    monkeypatch.setattr(app.smart_tools,'activate_update',activate)
+    app.state['updates'].update(pendingSmartTools=[{'previous':'old','target':'new'}], phase='staged')
+    app.state['sessions'][0]['status']='working'
+    await manager.activateSmartTools()
+    assert not called and app.runtime.closed == 0
+    app.state['sessions'][0]['status']='idle'
+    await manager.activateSmartTools()
+    assert called == [('old','new')] and app.runtime.closed == 0
+    assert app.state['updates']['pendingSmartTools'] == []
+
+async def test_smart_tool_install_recovers_saved_inventory(app, monkeypatch):
+    manager=app.update_manager
+    rows=[{'id':'smart-tool:old','installationId':'old','kind':'smart tool','status':'update','eligible':True}]
+    (manager.directory/'inventory.json').write_text(json.dumps(rows))
+    called=[]
+    async def install(): called.append(True)
+    monkeypatch.setattr(manager,'installSmartTools',install)
+    await manager.install()
+    assert called and manager.inventory == rows
+
+async def test_smart_tool_rollback_disables_reinstallation(app, monkeypatch):
+    manager=app.update_manager
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools=SmartToolsManager(app)
+    app.smart_tools.state['installations']=[{'id':'new','previousInstallationId':'old'}]
+    app.state['updates']['sequence']={'stage':'other','install':True}
+    async def activate(): pass
+    monkeypatch.setattr(manager,'activateSmartTools',activate)
+    await manager.smartToolRollback('new')
+    assert app.state['updates']['pendingSmartTools'] == [{'previous':'new','target':'old'}]
+    assert app.state['updates']['sequence']['install'] is False
+    assert app.state['settings']['updates']['autoInstall'] is False

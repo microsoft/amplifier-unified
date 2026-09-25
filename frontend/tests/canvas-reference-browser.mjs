@@ -22,7 +22,7 @@ try{
  const sessionId=(await state()).selectedSessionId;
  const source='# Document\n\nA **bold** &amp; 😀 `code`.\n\nRepeated passage.\n\nRepeated passage.';
  const artifact=(await action('canvas.show',{kind:'markdown',title:'Reference document',content:source})).result;
- await action('view.update',{patch:{draft:'Keep my draft  ',canvasControlsPinned:true}});
+ await action('view.update',{patch:{draft:'Keep my draft  ',canvasControlsPinned:true,canvasControlsExpanded:true}});
  await expect(button).toBeDisabled();
  const before=(await state()).revision,saves=draftSaves.length;
  await select(page.locator('.a-canvas-preview p').filter({hasText:'A bold & 😀 code.'}));

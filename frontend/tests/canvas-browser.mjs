@@ -11,7 +11,7 @@ page.on('pageerror',e=>errors.push(e.message));
 const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const ready=()=>page.waitForFunction(()=>window.amplifier.getState().canvas.renderReports?.preview?.status==='ready',{},{timeout:30000});
 try{
- await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');await action('view.update',{patch:{canvasControlsPinned:true}});
+ await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
  await action('canvas.show',{kind:'html',title:'Interactive example',content:`<!doctype html><html><head><style>body{font:16px system-ui;padding:24px;background:#eef2ff}button{padding:12px}</style></head><body><h1>Interactive canvas</h1><button onclick="this.textContent='Clicked'">Try it</button><p id="boundary"></p><script>let denied=false;try{parent.document.title}catch(e){denied=true}document.getElementById('boundary').textContent=denied?'Parent isolated':'FAILED';fetch('/api/state').then(()=>document.body.dataset.network='FAILED').catch(()=>document.body.dataset.network='blocked');</script></body></html>`});
  await ready();
  await page.waitForFunction(()=>window.amplifier.getState().canvas.document?.controls?.some(c=>c.label==='Try it'));

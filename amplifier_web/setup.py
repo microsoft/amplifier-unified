@@ -51,12 +51,10 @@ def key_preview(module, value, env_name, *, configured=False):
         return None  # OAuth access/refresh tokens are not API keys.
     # Display the mounted provider's fallback order, which can differ from its
     # preferred setup variable. Explicit Copilot config is promoted by Unified
-    # into COPILOT_AGENT_TOKEN before mounting. Compatible API instead gives
-    # its ambient environment key precedence over config in its constructor.
+    # into COPILOT_AGENT_TOKEN before mounting. Explicit API keys take
+    # precedence over ambient defaults, including Compatible API.
     if configured:
-        if module == 'provider-chat-completions' and os.environ.get('CHAT_COMPLETIONS_API_KEY'):
-            value, env_name = None, 'CHAT_COMPLETIONS_API_KEY'
-        elif not value:
+        if not value:
             defaults = {
                 'provider-github-copilot': ('COPILOT_AGENT_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'),
                 'provider-azure-openai': ('AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_KEY'),
@@ -261,7 +259,7 @@ class SetupManager:
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),stderr_task),90)
+                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),stderr_task),90)
             except TimeoutError:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
@@ -275,6 +273,7 @@ class SetupManager:
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
             response={'providerMetadata':metadata}
             if action=='providers.models':response.update(models=result.get('models',[]),modelsProviderId=args['id'],modelsSupported=result.get('modelsSupported',True))
+            if action=='providers.testMessage':response['messageTest']={**result['messageTest'],'providerId':args['id'],'checkedAt':time.time()}
             if action=='providers.test':response['test']={**result['test'],'providerId':args['id']}
             return response
         finally:
@@ -424,8 +423,8 @@ class SetupManager:
             self.config(workspace) # Load app-owned keys as well as the launch environment.
             return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'githubCliAvailable':cli,'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
-        if action in {'providers.schema','providers.models','providers.test'}:
-            return await (self.probe(action,args,workspace) if action=='providers.test' else self.cached_probe(action,args,workspace))
+        if action in {'providers.schema','providers.models','providers.test','providers.testMessage'}:
+            return await (self.probe(action,args,workspace) if action in {'providers.test','providers.testMessage'} else self.cached_probe(action,args,workspace))
         if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
             enabled={row['id'] for row in self.provider_rows(workspace) if row['enabled']}

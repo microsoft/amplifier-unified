@@ -209,3 +209,46 @@ def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatc
     monkeypatch.setattr(importlib.util, 'find_spec', lambda name: SimpleNamespace(origin=str(tmp_path / 'other-copy/__init__.py')))
     with pytest.raises(ValueError, match='does not match its installed distribution'):
         installed_loop_source()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path, monkeypatch, fail):
+    import asyncio
+    counts = {'prepare': 0, 'check': 0}
+    peaks = dict(counts)
+    completed = []
+    project = tmp_path / 'project'
+    release = '9' * 32
+    receipt = runtime_environment.receipt_directory(tmp_path, release)
+    receipt.mkdir(parents=True)
+    async def stage(*args, **kwargs): return project
+    async def freeze(*args): return project
+    async def overrides(project, target): return target
+    class Diagnostics:
+        async def run(self, phase, function, *command, **kwargs):
+            if phase == 'ecosystem-runtime-policy': return await function(*command, **kwargs)
+            key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
+            assert ('--read-only' in command) == (key == 'check')
+            assert ('--no-sync' in command) == (key == 'check')
+            assert ('--refresh-dependencies' in command) == (key == 'prepare')
+            counts[key] += 1
+            peaks[key] = max(peaks[key], counts[key])
+            try:
+                if fail and key == 'check': raise ValueError('incompatible')
+                await asyncio.sleep(.01)
+                completed.append(key)
+            finally: counts[key] -= 1
+    monkeypatch.setattr(runtime_environment, 'stage', stage)
+    monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
+    monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda *args: None)
+    settings = {'workspace': str(tmp_path), 'bundle': 'work'}
+    state = {'sessions': [dict(settings, bundle=f'bundle-{i}') for i in range(7)] + [dict(settings, bundle='historical', historyManaged=True)], 'settings': settings}
+    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(), service=SimpleNamespace(get_state=lambda: state))
+    if fail:
+        with pytest.raises(ValueError, match='incompatible'): await UpdateManager.validate(manager, receipt, release)
+    else:
+        await UpdateManager.validate(manager, receipt, release)
+        assert completed.count('check') == 8 and peaks['check'] == 4
+    assert completed.count('prepare') == 8 and peaks['prepare'] == 1
+    assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.

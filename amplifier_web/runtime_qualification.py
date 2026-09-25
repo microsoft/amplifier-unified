@@ -18,6 +18,7 @@ def installed_graph(project):
     paths = list((Path(project) / '.venv').glob('lib/python*/site-packages'))
     paths += [Path(project) / '.venv/Lib/site-packages']
     rows = []
+    roots = {}  # One fresh evidence snapshot per real checkout, per call.
     for dist in importlib.metadata.distributions(path=[str(path) for path in paths if path.is_dir()]):
         row = {'name': environments.package_name(dist.metadata['Name']), 'version': dist.version}
         direct = json.loads(dist.read_text('direct_url.json') or '{}')
@@ -30,18 +31,19 @@ def installed_graph(project):
                 for parent in (path, *path.parents):
                     meta = parent / '.amplifier_cache_meta.json'
                     if meta.is_file() and (parent / '.git').exists():
-                        data = json.loads(meta.read_text())
-                        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, text=True).strip()
-                        dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, text=True).strip()
-                        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent).split(b'\0')
-                        tree = hashlib.sha256()
-                        for raw in sorted(item for item in tracked if item):
-                            file = parent / raw.decode()
-                            tree.update(raw + b'\0')
-                            tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
-                        row['cacheSource'] = {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
-                                              'revision': revision, 'subdirectory': str(path.relative_to(parent)),
-                                              'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
+                        if parent not in roots:
+                            data = json.loads(meta.read_text())
+                            revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, text=True).strip()
+                            dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, text=True).strip()
+                            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent).split(b'\0')
+                            tree = hashlib.sha256()
+                            for raw in sorted(item for item in tracked if item):
+                                file = parent / raw.decode()
+                                tree.update(raw + b'\0')
+                                tree.update(file.read_bytes() if file.is_file() and not file.is_symlink() else b'<non-regular>')
+                            roots[parent] = {'url': data['git_url'], 'ref': data.get('ref') or 'HEAD',
+                                             'revision': revision, 'dirty': bool(dirty), 'trackedContentSha256': tree.hexdigest()}
+                        row['cacheSource'] = {**roots[parent], 'subdirectory': str(path.relative_to(parent))}
                         break
         rows.append(row)
     names = [row['name'] for row in rows]

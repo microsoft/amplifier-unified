@@ -27,7 +27,7 @@ try{
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await action('session.create');
- await action('view.update',{patch:{canvasControlsPinned:true}});
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
  await action('canvas.show',{kind:'markdown',title:'Restored notes',content:'# Readable after restart\n\nThe source stays with its saved artifact.'});
  await expect(page.getByRole('heading',{name:'Readable after restart',exact:true})).toBeVisible();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep the unsent draft too');

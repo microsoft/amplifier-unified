@@ -14,6 +14,18 @@ class Runtime:
         return {}
     async def close(self):pass
 
+async def test_screen_awake_preference_uses_shared_call_action_without_starting_audio(tmp_path):
+    app=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    try:
+        await app.dispatch('session.create',{})
+        sid=app._session()['id']
+        await app.app_bridge('dispatch',{'action':'call.keepAwake','args':{'enabled':False}},sid)
+        assert app.state['voice']['keepAwake'] is False
+        assert app.state['voice'].get('status') not in {'connecting','connected'}
+        assert app.state['voice']['command']['type']=='call.keepAwake'
+        assert app.state['voice']['command']['args']=={'enabled':False}
+    finally:await app.close()
+
 async def test_agent_can_rename_select_model_and_inspect_visible_draft(tmp_path):
     runtime=Runtime();app=AppService(tmp_path,runtime,workspace=tmp_path);app.management=Management(app)
     try:

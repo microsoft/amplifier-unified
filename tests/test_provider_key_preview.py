@@ -129,11 +129,13 @@ def test_copilot_sdk_priority_and_explicit_unified_override(monkeypatch):
     assert preview['masked'] == 'github…1111'
 
 
-def test_compatible_api_reports_environment_overriding_saved_key(monkeypatch):
+def test_compatible_api_reports_saved_key_before_environment_fallback(monkeypatch):
     monkeypatch.setenv('CHAT_COMPLETIONS_API_KEY', 'actual-private-middle-key-1111')
-    preview = environment_credential('provider-chat-completions', {'api_key': 'unused-private-middle-key-2222'})['preview']
-    assert preview['source'] == 'environment' and preview['envVar'] == 'CHAT_COMPLETIONS_API_KEY'
-    assert preview['masked'] == 'actual…1111'
+    preview = environment_credential('provider-chat-completions', {'api_key': 'chosen-private-middle-key-2222'})['preview']
+    assert preview['source'] == 'configuration' and preview['envVar'] == ''
+    assert preview['masked'] == 'chosen…2222'
+    fallback = environment_credential('provider-chat-completions', {'api_key': ''})['preview']
+    assert fallback['masked'] == 'actual…1111'
     # An explicit environment check still reports the variable being checked.
     monkeypatch.setenv('TEAM_KEY', 'choice-private-middle-key-3333')
     checked = environment_credential('provider-chat-completions', env_var='TEAM_KEY')['preview']

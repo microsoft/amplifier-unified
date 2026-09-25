@@ -1,10 +1,13 @@
+import {CallWakeLock} from './call-wake-lock';
+
 /** Browser media transport. The server owns credentials, delegation, and state. */
 export class VoiceClient {
   constructor({request, onState = () => {}, onError = () => {}}) {
     this.request = request;
     this.onState = onState;
     this.onError = onError;
-    this.state = {status: 'idle', muted: false};
+    this.state = {status: 'idle', muted: false, keepAwake: true, wakeLock: 'off'};
+    this.wakeLock = new CallWakeLock({onState: wakeLock => this.update({wakeLock})});
     this.generation = 0;
     this.peer = null;
     this.stream = null;
@@ -21,6 +24,7 @@ export class VoiceClient {
   update(patch) {
     this.state = {...this.state, ...patch};
     this.onState({...this.state});
+    if(patch.status)this.wakeLock.setActive(['connecting','connected'].includes(patch.status));
   }
 
   async start({provider = 'auto', sessionId = null} = {}) {
@@ -108,6 +112,11 @@ export class VoiceClient {
     }
   }
 
+  setKeepAwake(enabled) {
+    this.update({keepAwake: Boolean(enabled)});
+    this.wakeLock.setEnabled(Boolean(enabled));
+  }
+
   setMuted(muted) {
     const value = Boolean(muted);
     this.stream?.getAudioTracks().forEach(track => { track.enabled = !value; });
@@ -129,6 +138,7 @@ export class VoiceClient {
   }
 
   release() {
+    this.wakeLock.setActive(false);
     clearTimeout(this.connectionTimer);
     this.stream?.getTracks().forEach(track => track.stop());
     this.events?.close();
@@ -141,5 +151,6 @@ export class VoiceClient {
     ++this.generation;
     this.onPageHide();
     window.removeEventListener('pagehide', this.onPageHide);
+    this.wakeLock.dispose();
   }
 }

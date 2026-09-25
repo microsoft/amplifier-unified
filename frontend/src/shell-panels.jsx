@@ -7,7 +7,7 @@ import {ShellModules,ShellSlot} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -70,8 +70,9 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
  },[canvas.open]);
  const mounted=useRef(false);
  if(canvas.open)mounted.current=true;
- const focused=!suppressed&&!!state.selectedSessionId&&!!canvas.open&&!!view.canvasFocused,controls=true;
- const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},canvasControlsExpanded:true});
+ const focused=!suppressed&&!!state.selectedSessionId&&!!canvas.open&&!!view.canvasFocused,controls=!!view.canvasControlsExpanded;
+ const resourceView=state.canvasWorkspace?.views?.find(item=>item.viewId==='primary');
+ const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},...((value.open||value.browser)?{canvasControlsExpanded:true}:{})});
  useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}));
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
  if(!mounted.current)return null;
@@ -82,10 +83,12 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
   <div className="a-canvas-chrome">
    <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-pressed={!!draft.library||!hasContent} onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Chat overview</button><CanvasTabs state={state} act={act}/>
 
+    {resourceView?.versions?.length>1&&<button type="button" className="a-link a-canvas-version-shortcut" aria-label="Choose artifact version" onClick={async()=>{await patch(act,{canvasControlsExpanded:true});requestAnimationFrame(()=>panel.current?.querySelector('[aria-label="Artifact version"]')?.focus())}}>v{resourceView.selectedVersion??resourceView.latestVersion}</button>}
+    <button type="button" className="a-icon" aria-label="Canvas options" aria-expanded={controls} aria-controls="canvas-options" data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><MoreHorizontal/></button>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
     <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X/></button>
    </header>
-   <div className="a-canvas-controls" inert={!controls}>
+   <div id="canvas-options" className="a-canvas-controls" hidden={!controls} inert={!controls}>
     <div className="a-canvas-location">{(hasContent||hasArtifacts)&&<details className="a-file-actions-menu"><summary>Open…</summary><div className="a-canvas-actions"><ShellSlot name="canvas.toolbar"><button type="button" className="a-soft" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Saved outputs</button><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/>File</button></ShellSlot></div></details>}{canvas.path&&!draft.library&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}</div>
 
   {draft.browser&&<BrowserAddress state={state} act={act}/>}

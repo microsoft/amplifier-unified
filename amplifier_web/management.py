@@ -154,7 +154,7 @@ class Management:
         if action == 'providers.list':
             return await self.list_providers(args, command_id)
         await self.provider_status(action,args,command_id,'queued')
-        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'}
+        independent=action in {'configuration.defaults','providers.list','providers.credentials','providers.schema','providers.models','providers.test','providers.testMessage','routing.list','routing.show'}
         async with (nullcontext() if independent else self.lock):
             await self.provider_status(action,args,command_id,'working')
             await self.publish(management={'phase':'working','operation':action,'error':None})
@@ -431,7 +431,7 @@ class Management:
             else:
                 self.setup_manager.runtime_operation=runtime_operation
                 self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','routing.list','routing.show'} else self.setup_manager
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.test','providers.testMessage','routing.list','routing.show'} else self.setup_manager
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
             if action=='providers.list':
@@ -446,6 +446,8 @@ class Management:
                     if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
                 if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
+                if result.get('messageTest'):
+                    setup.setdefault('messageTests',{})[args['id']]=result['messageTest']
                 setup.update(result)
                 if result.get('providerMetadata'):
                     setup.setdefault('metadata',{})[result['providerMetadata']['module']]=result['providerMetadata']
