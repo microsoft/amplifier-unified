@@ -8,6 +8,7 @@ import {treeForTurn,usageLabel,isRunning,elapsedLabel} from './timeline-data';
 import {actionContent,cleanSummary} from './execution-content.js';
 import {useExecutionField,ToolContent,ModelContent} from './execution-content.jsx';
 import './execution-content.css';
+import {delegationRoutingLabel} from './delegation-routing.js';
 
 function Usage({value,pending=false}){const label=usageLabel(value,{pending});return label?<span className="a-execution-usage" title={label.title}>{label.text}</span>:null}
 function Status({status}){return ['error','failed','cancelled','interrupted'].includes(status)?<AlertCircle className="a-execution-warning" aria-label={status}/>:['complete','completed','success','done'].includes(status)?<Check className="a-execution-complete" aria-label="Completed"/>:isRunning({phase:status})?<span className="a-execution-dot" aria-label={status}/>:<Circle aria-label={status||'Recorded'}/>}
@@ -21,16 +22,17 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle})
  if(depth>20||ancestors.includes(node.id))return null;
  const action=tool?actionContent(node,input.value,output.value):null;
  const Icon=node.kind==='worker'?GitBranch:node.kind==='llm'?MessageCircle:({command:Terminal,read:FileText,write:FilePenLine,patch:FilePenLine,tasks:ListChecks,delegate:GitBranch}[action?.kind]||Wrench);
- const phase=node.status||node.phase,elapsed=elapsedLabel(node,now),usage=node.kind==='llm'?node.usage:null;
+ const phase=node.status||node.phase,elapsed=elapsedLabel(node,now),usage=node.kind==='llm'?node.usage:node.kind==='worker'?node.aggregateUsage:null;
  const label=action?.title||node.label||node.model||node.kind,model=[node.provider,node.model].filter(Boolean).join(' · ');
  return <div className="a-execution-node" data-kind={node.kind} data-node-id={node.id} data-action-kind={action?.kind}>
   <Header className="a-execution-line a-execution-action-line" {...(collapsible?{type:"button",'data-action':'view.update','data-view-label':[label,action?.target,model,phase].filter(Boolean).join(' · '),'aria-expanded':open,onClick:()=>toggle(node.id)}:{})}>
    {collapsible&&<ChevronRight className={`a-execution-chevron ${open?'open':''}`}/>}<Icon/>
-   <span className="a-execution-label" title={[label,action?.target,model,action?.preview||summary].filter(Boolean).join(' · ')}><span>{label}{action?.target&&<> <code>{action.target}</code></>}{node.kind==='llm'&&model&&<> · {model}</>}{!action?.target&&action?.preview&&<> · {action.preview}</>}{action?.kind==='patch'&&(action.added>0||action.removed>0)&&<span className="a-execution-counts"><span>+{action.added}</span><span>−{action.removed}</span></span>}</span></span>
-   <span className="a-execution-phase" title={[node.toolCallId&&`Call: ${node.toolCallId}`,stamp(node.startedAt),stamp(node.endedAt)].filter(Boolean).join(" · ")}>{isRunning(node)||['error','failed','cancelled','interrupted'].includes(phase)?`${phase}${elapsed?' · ':''}`:''}{elapsed}</span><Usage value={usage} pending={node.kind==='llm'&&isRunning(node)}/><Status status={phase}/>
+   <span className="a-execution-label" title={[label,action?.target,model,action?.preview||summary].filter(Boolean).join(' · ')}><span>{label}{action?.target&&<> <code>{action.target}</code></>}{['llm','worker'].includes(node.kind)&&model&&<> · {model}</>}{!action?.target&&action?.preview&&<> · {action.preview}</>}{action?.kind==='patch'&&(action.added>0||action.removed>0)&&<span className="a-execution-counts"><span>+{action.added}</span><span>−{action.removed}</span></span>}</span></span>
+   <span className="a-execution-phase" title={[node.toolCallId&&`Call: ${node.toolCallId}`,stamp(node.startedAt),stamp(node.endedAt)].filter(Boolean).join(" · ")}>{isRunning(node)||['error','failed','cancelled','interrupted'].includes(phase)?`${phase}${elapsed?' · ':''}`:''}{elapsed}</span><Usage value={usage} pending={['llm','worker'].includes(node.kind)&&isRunning(node)}/><Status status={phase}/>
   </Header>
   {open&&<div className="a-execution-body">
    {tool?<ToolContent node={node} action={action} input={input} output={output} error={error}/>:node.kind==='llm'?<ModelContent node={node} request={request} error={error} requestOpen={requestOpen} requestInline={requestInline} toggleRequest={()=>toggle(`request:${node.id}`)} now={now}/>:summary&&<DetailText text={summary} reference={node.summaryDetail||node.detailDetail} automatic markdown/>}
+   {node.kind==='worker'&&node.routing&&<p className="a-muted">{delegationRoutingLabel(node.routing)}{node.parentProvider&&node.provider&&node.parentProvider!==node.provider&&` This worker used ${node.provider}; the parent used ${node.parentProvider}.`}</p>}
    {node.kind==='worker'&&isRunning(node)&&(node.workerId||node.sessionId)&&<button className="a-link a-danger" data-action="worker.stop" onClick={()=>act('worker.stop',{id:node.workerId||node.sessionId})}><Square/>Stop worker</button>}
    {children.length>0&&<div className="a-execution-children">{children.map(child=><ExecutionNode key={child.id} node={child} depth={depth+1} ancestors={[...ancestors,node.id]} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}
   </div>}

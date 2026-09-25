@@ -1,3 +1,4 @@
+import {delegationRoutingLabel} from './delegation-routing.js';
 import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useEffect,useState,useRef} from 'react';
 import {ChevronDown,X,Paperclip} from 'lucide-react';
@@ -122,6 +123,7 @@ export function ModelControl({state,session,act,working}){
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
    {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={working||!draft.model} data-action={isDraft?'view.update':'runtime.control'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>Reasoning effort is not configurable for this model.</small>}
+   {!isDraft&&<p className="a-muted" data-part="delegation-routing">{delegationRoutingLabel(catalog?.delegationRouting||session?.runtimeReport?.delegationRouting)}</p>}
    {noProviders&&<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections']}})}>Connect a model in Settings</button>}
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}

@@ -69,3 +69,11 @@ test('public result links accept only explicit web URLs without credentials',asy
  assert.deepEqual(detailLinks(JSON.stringify({url:'https://example.com/report',nested:{uri:'file:///private/key',artifact_url:'javascript:alert(1)'},items:[{html_url:'https://user:pass@example.com'},{web_url:'https://example.com/report'}]})),['https://example.com/report']);
  assert.deepEqual(detailLinks('unstructured result'),[]);
 });
+
+test('worker routing distinguishes selected inheritance from deliberate overrides',async()=>{
+ const {delegationRoutingLabel}=await import('../src/delegation-routing.js');
+ assert.match(delegationRoutingLabel({selectionSource:'inherited_conversation'}),/inherited the conversation selection/);
+ assert.match(delegationRoutingLabel({selectionSource:'delegation_preferences'}),/delegation provider preferences/);
+ assert.match(delegationRoutingLabel({resolverActive:true}),/Routing is active/);
+ assert.equal(delegationRoutingLabel(null),'Worker routing has not been reported.');
+});
