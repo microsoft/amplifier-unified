@@ -65,8 +65,12 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
-            "toolCallId", "provider", "model", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
-        return "execution.event", {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+            "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
+        public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if "routing" in public:
+            from .host.model_selection import public_routing
+            public["routing"] = public_routing(public["routing"])
+        return "execution.event", public
     if kind == "runtime.activity":
         allowed = {"model", "processing", "waiting-workers", "tools", "retrying", "compacting"}
         phase = event.get("phase")
@@ -108,10 +112,12 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "kind": "session", "updatedAt": event.get("time"),
             **{key:event[key] for key in ("runId", "retryAttempt", "retryMax") if key in event}}
     if kind == "child.updated":
+        from .host.model_selection import public_routing
         return "worker.updated", {**base, "id": event.get("sessionId"),
             "status": event.get("status", "running"), "name": event.get("agent", "Worker"),
             "report": event.get("report", ""), "persistent": event.get("persistent", False),
             "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
+            **({"routing": public_routing(event["routing"])} if "routing" in event else {}),
             **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
     statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
                 "input.delivered": "working"}

@@ -155,3 +155,11 @@ test('an empty resolved provider catalog offers setup instead of loading forever
  assert.deepEqual(calls.at(-1)[1].patch.settingsExpanded,['ai-connections']);
  await renderAct(async()=>root.unmount());
 });
+
+test('model picker discloses inherited routing from the shared runtime catalog',async()=>{
+ const session={id:'routing-chat',status:'idle'},state={view:{composerModel:{open:true,sessionId:'routing-chat'}},runtimeControl:{'routing-chat':{'configuration.providers':{providers:[],delegationRouting:{modelInheritance:'bundle',resolverActive:true,resolverName:'personal',matrixSource:'user',crossProviderRestriction:'not_enforced'}}}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session,act:async()=>{},working:false}))});
+ const text=root.root.findByProps({'data-part':'delegation-routing'}).children.join('');
+ assert.match(text,/bundle and agent model settings/);assert.match(text,/personal/);assert.match(text,/user settings/);assert.match(text,/Other connected providers may be used/);
+ await renderAct(async()=>root.unmount());
+});

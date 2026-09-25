@@ -14,6 +14,17 @@ async def main(home):
                                    {'id':'voice:second','startedAt':12,'phase':'running'},
                                    {'id':'voice:third','startedAt':13,'endedAt':19,'phase':'completed'}],
                           'nodes':[{'id':'tool-'+str(n),'kind':'tool','turnId':turn,'label':'Tool '+str(n),'phase':'completed'} for n,turn in enumerate(['voice:first','voice:second','voice:third'])]}
+    routing={'modelInheritance':'bundle','resolverActive':True,'resolverName':'fixture-routing',
+             'matrixSource':'user','crossProviderRestriction':'not_enforced','selectionSource':'delegation_preferences'}
+    session['runtimeReport']={'delegationRouting':routing}
+    session['execution']['nodes'].extend([
+        {'id':'worker:fixture','kind':'worker','turnId':'voice:second','parentId':'tool-1','sessionId':'fixture-child',
+         'label':'Fixture worker','provider':'anthropic','model':'child-model','parentProvider':'subscription',
+         'routing':routing,'phase':'completed','summary':'Fixture task finished.'},
+        {'id':'llm:fixture','kind':'llm','turnId':'voice:second','parentId':'worker:fixture','sessionId':'fixture-child',
+         'label':'Model call','provider':'anthropic','model':'child-model','phase':'completed','usage':{'costType':'unavailable'}}])
+    from amplifier_web.execution import refresh_usage
+    refresh_usage(session['execution'])
     service._publish()
     return app
 

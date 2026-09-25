@@ -820,7 +820,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 path = config.workspace / path
             if path.is_file():
                 config_inputs.append(str(path.resolve()))
-        report = {"bundle": chosen, "root_bundle": bundle_identity, "workspace": str(config.workspace),
+        from .model_selection import delegation_routing
+        report = {"delegationRouting": delegation_routing(coordinator), "bundle": chosen, "root_bundle": bundle_identity, "workspace": str(config.workspace),
             "contextIntelligence": {"enabled": bool((coordinator.get_capability('context_intelligence._hook_state') or {}).get('unregister_fns'))},
             "session_id": runtime.session_id, "resumed": messages is not None,
             "providers": list(providers), "tools": list(coordinator.get("tools") or {}),
