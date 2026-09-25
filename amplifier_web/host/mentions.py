@@ -1,8 +1,26 @@
 """CLI-compatible input mentions using Foundation's shared expansion mechanism."""
+from copy import copy
 from pathlib import Path
 
 from amplifier_foundation.mentions import BaseMentionResolver, expand_mentions_in_instruction
 from amplifier_foundation.paths.resolution import get_amplifier_home
+
+
+def include_instruction_files(bundle):
+    """Include the CLI's optional instruction files without freezing their contents.
+
+    Call after composition and runtime overrides, before preparing an ordinary
+    root. Foundation resolves these mentions afresh for the session workspace
+    on each request. Exported snapshot bundles retain their frozen instructions.
+    """
+    from amplifier_foundation.mentions import parse_mentions
+    instruction = getattr(bundle, 'instruction', None) or ''
+    declared = set(parse_mentions(instruction))
+    missing = [path for path in ('@~/.amplifier/AGENTS.md', '@.amplifier/AGENTS.md') if path not in declared]
+    result = copy(bundle)
+    if missing:
+        result.instruction = '\n\n'.join(part for part in (instruction, '\n'.join(missing)) if part)
+    return result
 
 
 class AppMentionResolver:

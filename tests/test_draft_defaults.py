@@ -1,7 +1,41 @@
 import types
+import asyncio
 from pathlib import Path
 import pytest
 from amplifier_web.draft_defaults_probe import query
+
+
+async def test_provider_changes_invalidate_defaults_and_discard_old_probe(tmp_path, monkeypatch):
+    from amplifier_web.server import create_app
+    from amplifier_web import draft_defaults
+    from unittest.mock import AsyncMock
+    started, finish = asyncio.Event(), asyncio.Event()
+    async def resolve(*args, **kwargs):
+        started.set()
+        await finish.wait()
+        return {'effective': {'instance': 'old', 'model': 'old-model'}}
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    app = await create_app(tmp_path / 'app', workspace=str(tmp_path), voice=False, background_updates=False)
+    service = app['service']
+    monkeypatch.setattr(service.management, 'warm_providers', AsyncMock())
+    service.state['draftDefaults'] = {'old': {'phase': 'ready', 'effective': {'model': 'old-model'}}}
+    service.state['setup'] = {'providersRequestedWorkspace': str(tmp_path)}
+    pending = asyncio.create_task(service.management.perform('configuration.defaults', {'workspace': str(tmp_path)}))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        previous = service.state.get('configurationRevision', 0)
+        await service.management.invalidate_configuration()
+        assert service.state.get('configurationRevision') == previous + 1
+        assert service.state['draftDefaults'] == {}
+        assert 'providersRequestedWorkspace' not in service.state['setup']
+        finish.set()
+        await pending
+        assert service.state['draftDefaults'] == {}, 'A result from before the change must not restore stale choices'
+    finally:
+        finish.set()
+        await pending
+        await service.runtime.close()
+        for task in list(service.tasks): task.cancel()
 
 @pytest.mark.asyncio
 async def test_composed_defaults_use_provider_priority_without_session_or_inference(tmp_path,monkeypatch):

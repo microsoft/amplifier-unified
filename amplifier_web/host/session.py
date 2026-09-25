@@ -670,6 +670,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         for key in ("providers", "tools", "hooks", "session", "agents"):
             if key in edited:
                 setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    if not snapshot:
+        from .mentions import include_instruction_files
+        loaded = include_instruction_files(loaded)
     baseline = loaded.to_mount_plan()
     adapted, replacements = live_plan(baseline, background_delegate)
     # Modify the public Bundle fields before prepare(): loop-live and every

@@ -24,7 +24,8 @@ export function ModelControl({state,session,act,working}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  // A bundle change validates defaults in the background. Keep the current
  // workspace's resolved choices visible until the new result is ready.
- const defaultsContext=JSON.stringify([setup.location?.kind||'workspace',setup.workspace]);
+ const configurationRevision=state.configurationRevision||0;
+ const defaultsContext=JSON.stringify([setup.location?.kind||'workspace',setup.workspace,configurationRevision]);
  const previousDefaults=useRef(null);
  if(isDraft&&defaults.phase==='ready')previousDefaults.current={context:defaultsContext,value:defaults};
  const resolvedDefaults=defaults.phase==='ready'||defaults.phase==='error'?defaults:previousDefaults.current?.context===defaultsContext?previousDefaults.current.value:defaults;
@@ -77,13 +78,13 @@ export function ModelControl({state,session,act,working}){
  const request=useRef(''),touched=useRef(false);
  useEffect(()=>{
   if(!isDraft||(!setup.workspace&&!managed))return;
-  const key=draftDefaultsKey(setup);if(request.current===key)return;
+  const key=JSON.stringify([draftDefaultsKey(setup),configurationRevision]);if(request.current===key)return;
   const timer=setTimeout(()=>{request.current=key;
   // Prefetch during the draft, never on the click path and never by starting a session.
   act('configuration.defaults',{workspace:setup.workspace,bundle:setup.bundle||'',...location});
   if(draftCatalog===EMPTY)act('providers.list',{workspace:setup.workspace,...location});
   },250);return()=>clearTimeout(timer);
- },[isDraft,setup.workspace,setup.bundle,managed]);
+ },[isDraft,setup.workspace,setup.bundle,managed,configurationRevision]);
  useEffect(()=>{
   if(open&&!touched.current&&providers.length){const row=providers.find(p=>p.id===(effective.instance||effective.id))||providers[0];edit({instance:row.id,model:effective.model||row.info?.defaults?.model||'',effort:effectiveEffort||''})}
  },[open,sessionId,providers.map(row=>row.id).join('|'),effective.model,effectiveEffort]);
