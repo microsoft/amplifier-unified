@@ -30,9 +30,10 @@ This works with the older Linux service and the current Linux/macOS services.
 If Unified was run in a terminal or through a custom launcher, stop that
 launcher instead. Do not stop all Python, Amplifier, or memory processes.
 
-### Linux/WSL fallback if the old command is broken or already removed
+### Linux/WSL service cleanup
 
-Use this only for the standard **user** unit named `amplifier-unified.service`:
+For the standard **user** unit named `amplifier-unified.service`, use this
+fallback if the old command is broken or already removed:
 
 ```sh
 systemctl --user disable --now amplifier-unified.service
@@ -41,6 +42,10 @@ systemctl --user show amplifier-unified.service --property=MainPID --value
 
 Confirm the PID is `0` (or the unit is absent) before continuing. If stopping
 fails for another reason, resolve that first so it cannot restart during the reset.
+
+After successful uninstallation or the fallback above, remove any remaining
+Unified-only service definition and overrides. The normal uninstall removes
+the generated unit but does not remove separately added override files:
 
 ```sh
 rm -f -- "$HOME/.config/systemd/user/amplifier-unified.service"
