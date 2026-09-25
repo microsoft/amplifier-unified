@@ -152,12 +152,12 @@ async def install_native(loop, coordinator, providers):
             finally:
                 LOOP_REQUEST.reset(token)
 
-        async def _native_response(self, params):
+        async def _native_response(self, params, **kwargs):
             # Async jobs are dispatched inside this boundary. Bind only when
             # the provider has actually admitted its own native request.
             token = LOOP_REQUEST.set(self if PROVIDER_REQUEST.get() is self else None)
             try:
-                return await super()._native_response(params)
+                return await super()._native_response(params, **kwargs)
             finally:
                 LOOP_REQUEST.reset(token)
 

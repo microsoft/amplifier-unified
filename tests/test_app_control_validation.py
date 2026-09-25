@@ -112,3 +112,36 @@ async def test_wrong_envelope_cannot_mutate_real_app_then_corrected_request_can(
         bridge.assert_awaited_once_with('dispatch', action)
     finally:
         await app.close()
+
+
+async def test_reported_theme_envelope_has_executable_read_only_recovery(tmp_path):
+    from amplifier_web.service import AppService
+
+    app = AppService(tmp_path, SimpleNamespace(close=AsyncMock()), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session_id = app._session()['id']
+        async def real_bridge(operation, args):
+            return await app.app_bridge(operation, args, session_id)
+        bridge = AsyncMock(side_effect=real_bridge)
+        tool = await mounted_tool(bridge)
+        result = await tool.execute({'operation': 'list_actions', 'parameters': {'prefix': 'theme.'}})
+        assert not result.success and result.error['effect'] == 'none'
+        bridge.assert_not_awaited()
+        correction = result.error['recovery']
+        assert correction == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
+        result = await tool.execute(correction)
+        assert result.success and 'theme.apply' in str(result.output)
+        bridge.assert_awaited_once_with('list_actions', {'prefix': 'theme.'})
+    finally:
+        await app.close()
+
+
+async def test_malformed_mutation_suggests_discovery_and_never_echoes_action_arguments():
+    bridge = AsyncMock()
+    tool = await mounted_tool(bridge)
+    result = await tool.execute({'operation': 'dispatch', 'parameters': {
+        'action': 'theme.apply', 'args': {'css': 'private payload'}}})
+    assert result.error['recovery'] == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
+    assert 'private payload' not in str(result.error)
+    bridge.assert_not_awaited()

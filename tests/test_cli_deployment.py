@@ -61,3 +61,25 @@ def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypat
     monkeypatch.setattr(cli.web, "run_app", lambda *args, **kwargs: pytest.fail("unsafe configuration bound a socket"))
     with pytest.raises(ValueError, match="Non-loopback"):
         cli._serve(args, tmp_path)
+
+
+def test_expected_service_failure_is_a_concise_cli_error(tmp_path, monkeypatch):
+    from amplifier_web import deployment_service
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path), 'service', 'install'])
+    def fail(*args, **kwargs):
+        raise RuntimeError('Definition has changed. Use --replace to save a backup.')
+    monkeypatch.setattr(deployment_service, 'install', fail)
+    with pytest.raises(SystemExit, match='Service install did not complete:.*--replace') as captured:
+        cli.main()
+    assert captured.value.__suppress_context__
+
+
+def test_service_cli_reports_reused_definition_and_backup(tmp_path, monkeypatch, capsys):
+    from amplifier_web import deployment_service
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path), 'service', 'install'])
+    monkeypatch.setattr(deployment_service, 'install', lambda *a, **kw: {'status': 'current', 'path': '/fixture/service'})
+    cli.main()
+    assert 'already matches' in capsys.readouterr().out
+    monkeypatch.setattr(deployment_service, 'install', lambda *a, **kw: {'status': 'replaced', 'path': '/fixture/service', 'backup': '/fixture/service.backup-1'})
+    cli.main()
+    assert 'Previous definition saved at: /fixture/service.backup-1' in capsys.readouterr().out

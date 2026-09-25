@@ -19,6 +19,23 @@ def coordinator(workspace, bundles=None):
     return value
 
 
+def test_per_call_relative_scope_preserves_session_shortcuts(tmp_path, monkeypatch):
+    workspace, nested, user, bundle = (tmp_path / name for name in ('workspace', 'nested', 'user', 'bundle'))
+    for path in (workspace / '.amplifier', nested, user, bundle):
+        path.mkdir(parents=True)
+        (path / 'rules.md').write_text(str(path))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(user))
+    owner = coordinator(workspace, {'bundle': Bundle(name='bundle', base_path=bundle)})
+    resolver = owner.get_capability('mention_resolver')
+    assert resolver.resolve_relative('@./rules.md', nested) == nested / 'rules.md'
+    assert resolver.resolve_relative('@project:rules.md', nested) == workspace / '.amplifier/rules.md'
+    assert resolver.resolve_relative('@user:rules.md', nested) == user / 'rules.md'
+    assert resolver.resolve_relative('@bundle:rules.md', nested) == bundle / 'rules.md'
+    assert resolver.resolve_relative('@../rules.md', nested) is None
+    assert resolver.workspace == workspace
+    assert resolver.resolve('@./rules.md') is None
+
+
 async def test_workspace_shortcuts_and_composed_namespace_use_shared_expander(tmp_path, monkeypatch):
     workspace = tmp_path / 'workspace'
     bundle = tmp_path / 'bundle'

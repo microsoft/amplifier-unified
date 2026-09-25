@@ -298,3 +298,47 @@ async def test_selected_observed_surface_native_budget_checkpoint_and_reconnect(
     assert all(row['phase']=='completed' and row['model']=='gpt-6-astra' for row in c.telemetry.nodes.values())
     assert selected.selection['effort']=='high' and not native.request_uncertain
     assert 'PRIVATE OPAQUE' not in json.dumps(list(c.telemetry.nodes.values()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [{}, {"timeout": 7.25}, {"timeout": None}])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_native_boundary_forwards_options_and_restores_scope(tmp_path, monkeypatch, options, outcome):
+    import asyncio
+
+    native = pytest.importorskip("amplifier_module_provider_openai.native")
+    OpenAIProvider = pytest.importorskip("amplifier_module_provider_openai").OpenAIProvider
+    from amplifier_module_loop_live.scope import NATIVE_REQUEST as LOOP_REQUEST
+
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    c = Coordinator(OpenAIProvider(api_key="fixture", config={"default_model": "gpt-6-astra"}))
+    await install_native(c.loop, c, c.providers)
+    provider = c.get_capability("web.native_provider").provider
+    params, result, previous = {}, object(), object()
+    seen = []
+
+    async def native_response(self, received, **kwargs):
+        seen.append((self, received, kwargs, LOOP_REQUEST.get()))
+        if outcome == "error":
+            raise ValueError("fixture failure")
+        if outcome == "cancel":
+            raise asyncio.CancelledError
+        return result
+
+    monkeypatch.setattr(native.NativeResponsesProvider, "_native_response", native_response)
+    loop_token = LOOP_REQUEST.set(previous)
+    provider_token = native.NATIVE_REQUEST.set(provider)
+    try:
+        if outcome == "success":
+            assert await provider._native_response(params, **options) is result
+        else:
+            with pytest.raises(ValueError if outcome == "error" else asyncio.CancelledError):
+                await provider._native_response(params, **options)
+        assert len(seen) == 1
+        assert seen[0][0] is provider and seen[0][1] is params
+        assert seen[0][2] == options and seen[0][3] is provider
+        assert LOOP_REQUEST.get() is previous
+        assert native.NATIVE_REQUEST.get() is provider
+    finally:
+        LOOP_REQUEST.reset(loop_token)
+        native.NATIVE_REQUEST.reset(provider_token)

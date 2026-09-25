@@ -2633,11 +2633,16 @@ class AppService:
                 error_type = payload.get('errorType') or session.get('turnErrorType')
                 from .session_health import failure_details
                 projected = failure_details(detail, error_type)
+                existing = session.get('failure')
+                if isinstance(existing, dict) and existing.get('stage'):
+                    # A later generic process-exit error must not replace the
+                    # structured cause published at the manager boundary.
+                    projected = existing
+                    detail = projected['summary'] + ' ' + projected['guidance']
                 session['errorType'] = error_type
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
-                    if projected['category'] == 'context_limit' else detail)
-                existing = session.get('failure')
+                    if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
                 if not isinstance(existing, dict) or existing.get('category') == 'unknown':
                     session['failure'] = {**projected, 'recordedAt': session['errorAt']}
                 session.pop('health', None)
@@ -2658,6 +2663,12 @@ class AppService:
                     session.pop('errorAt', None)
                 elif root_generation and payload.get('event') == 'generation.failed':
                     session['turnErrorType'] = payload.get('error_type')
+                    from .session_health import generation_failure
+                    failure = generation_failure(payload)
+                    existing = session.get('failure')
+                    if failure and (not isinstance(existing, dict) or existing.get('category') == 'unknown'):
+                        session['failure'] = {**failure, 'recordedAt': event['at'],
+                            'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
                 if root_generation and payload.get("event") == "generation.finished":
                     if not scheduled_generation:
                         from .attention import completed
