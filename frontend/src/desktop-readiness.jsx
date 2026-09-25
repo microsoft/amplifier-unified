@@ -6,7 +6,8 @@ function Environment({value}){
  return <details className="a-everyday-disclosure"><summary>Technical environment details</summary><p className="a-wrap">{value.host.label} · {value.platform}<br/>Python {value.python.version}<br/><code>{value.python.path}</code><br/>Computer-use package: {value.computerUsePackage.version||value.computerUsePackage.status}</p></details>;
 }
 export function DesktopReadiness({state,session,act}){
- const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id,state.updates?.installedAt]);
+ const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id,
+  state.computerVisual?.id,state.computerVisual?.available,state.computerVisual?.sessionId,state.updates?.installedAt]);
  const sequence=useRef(0),[report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [installPending,setInstallPending]=useState(false),[installError,setInstallError]=useState('');
  useEffect(()=>{sequence.current++;setReport(null);setBusy(false);setError('');return ()=>{sequence.current++}},[context]);

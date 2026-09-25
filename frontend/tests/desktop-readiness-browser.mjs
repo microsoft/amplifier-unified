@@ -22,6 +22,7 @@ try{
  assert.equal((await inspect()).started.length,0);assert.deepEqual((await inspect()).runtimeCalls,[]);
  await action('session.create',{title:'Readiness caller'});const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await action('view.update',{patch:{draft:'Preserve this unsent draft'}});await setup();await check();
+ await page.getByRole('region',{name:'Conversation computer tools',exact:true}).locator('summary').filter({hasText:'Technical environment details'}).click();
  await expect(page.getByText('/synthetic/worker/bin/python',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Open computer target setup',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Open computer target setup',exact:true}).click();
@@ -51,6 +52,15 @@ try{
  await check();await expect(page.getByText(/Selected browser: Synthetic selected tab/)).toBeVisible();
  await scenario({source:'Replacement tab',sessionId:first});await check();await expect(page.getByText(/Selected browser: Replacement tab/)).toBeVisible();
  await scenario({end:true});await check();await expect(page.getByText("No source is shared for this conversation in this browser.",{exact:true})).toBeVisible();
+ await scenario({computerSource:'Text chat window',sessionId:first});
+ await expect(page.getByText("No source is shared for this conversation in this browser.",{exact:true})).toHaveCount(0);
+ await check();await expect(page.getByText(/Selected window: Text chat window/)).toBeVisible();
+ await scenario({computerSource:'Replacement text window',sessionId:first});
+ await expect(page.getByText(/Selected window: Text chat window/)).toHaveCount(0);
+ await check();await expect(page.getByText(/Selected window: Replacement text window/)).toBeVisible();
+ await scenario({computerRevoke:true,sessionId:first});
+ await expect(page.getByText(/Selected window: Replacement text window/)).toHaveCount(0);
+ await check();await expect(page.getByText("No source is shared for this conversation in this browser.",{exact:true})).toBeVisible();
  await action('session.create',{title:'Different conversation',select:false});const second=await page.evaluate(first=>window.amplifier.getState().sessions.find(row=>row.id!==first).id,first);
  await scenario({delay:true});const delayed=check();await expect.poll(async()=>(await inspect()).delayEntered).toBe(true);
  await action('session.select',{id:second});assert.notEqual(first,second);
