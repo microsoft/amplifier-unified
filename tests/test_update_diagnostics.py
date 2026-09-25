@@ -121,8 +121,9 @@ async def test_candidate_install_failure_cannot_replace_host_or_become_generic(t
 
 async def test_restart_helper_failure_keeps_host_and_distinguishes_installed_package(tmp_path,monkeypatch):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    private_detail='fixture-restart-launch-secret-4ad670'
     async def command(*args,**kwargs):return '99.0.0' if '-c' in args else ''
-    async def spawn(*args,**kwargs):raise PermissionError('fixture sensitive launch detail')
+    async def spawn(*args,**kwargs):raise PermissionError(private_detail)
     monkeypatch.setattr(app_updates,'process',command)
     monkeypatch.setattr(app_updates.asyncio,'create_subprocess_exec',spawn)
     monkeypatch.setattr(app_updates.os,'kill',lambda *args:pytest.fail('no termination'))
@@ -133,7 +134,8 @@ async def test_restart_helper_failure_keeps_host_and_distinguishes_installed_pac
     assert 'installed' in service.state['updates']['error']
     assert service.state['updates']['phase']=='activating'
     assert service.state['updates']['pendingRestart']['version']=='99.0.0'
-    assert 'sensitive' not in json.dumps(service.state['updates'])
+    # Match the private diagnostic, not ordinary words in public release notes.
+    assert private_detail not in json.dumps(service.state['updates'])
     await service.close()
 
 
