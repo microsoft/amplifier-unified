@@ -516,7 +516,9 @@ asyncio.run(Probe().run())
 '''
         proc=await asyncio.create_subprocess_exec(sys.executable,'-c',script,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,limit=MAX_MESSAGE_BYTES)
         try:
-            payload='x'*7_000_000
+            from amplifier_web.attachments import MAX_ENCODED_BYTES, MAX_REQUEST_BYTES
+            self.assertGreater(MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES)
+            payload='x'*MAX_ENCODED_BYTES
             async def write():
                 proc.stdin.write((json.dumps({'op':'echo','payload':payload})+'\n').encode());await proc.stdin.drain()
             send=asyncio.create_task(write())

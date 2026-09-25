@@ -156,7 +156,7 @@ class Feedback:
             decoded_size = len(args["base64"]) // 4 * 3 - (len(args["base64"]) - len(args["base64"].rstrip("=")))
             if sum(item["size"] for item in selected) + decoded_size > feedback_attachments.MAX_TOTAL_BYTES:
                 raise ValueError("Feedback attachments can total up to 24 MB.")
-            row = attachments.save(self.service.data_dir, args["name"], args["base64"])
+            row = attachments.save(self.service.data_dir, args["name"], args["base64"], max_bytes=feedback_attachments.MAX_FILE_BYTES)
             path, _ = attachments.file_path(self.service.data_dir, row["id"])
             row["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         except (OSError, ValueError) as exc:

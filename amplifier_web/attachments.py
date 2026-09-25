@@ -8,7 +8,11 @@ import uuid
 
 from .host.config import write_private
 
-MAX_BYTES = 8 * 1024 * 1024
+# App intake capacity, independent of provider-specific image/request limits.
+MAX_BYTES = 32 * 1024 * 1024
+MAX_ENCODED_BYTES = ((MAX_BYTES + 2) // 3) * 4
+# Uploads contain one base64 file plus the JSON action envelope.
+MAX_REQUEST_BYTES = MAX_ENCODED_BYTES + 1024 * 1024
 MAX_FILES = 8
 MAX_INLINE_TEXT_BYTES = 100_000
 _IMAGE_MIMES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
@@ -45,15 +49,16 @@ def metadata(home, identity):
     return {key: row[key] for key in ('id', 'name', 'size', 'mime')} | {'url': '/api/attachments/' + identity}
 
 
-def save(home, name, encoded):
-    if not isinstance(encoded, str) or len(encoded) > ((MAX_BYTES + 2) // 3) * 4:
-        raise ValueError('Choose a nonempty file up to 8 MB')
+def save(home, name, encoded, *, max_bytes=MAX_BYTES):
+    size_error = f'Choose a nonempty file up to {max_bytes // (1024 * 1024)} MB'
+    if not isinstance(encoded, str) or len(encoded) > ((max_bytes + 2) // 3) * 4:
+        raise ValueError(size_error)
     try:
         data = base64.b64decode(encoded, validate=True)
     except (ValueError, TypeError):
         raise ValueError('The attachment could not be decoded') from None
-    if not data or len(data) > MAX_BYTES:
-        raise ValueError('Choose a nonempty file up to 8 MB')
+    if not data or len(data) > max_bytes:
+        raise ValueError(size_error)
     name = Path(name.replace('\\', '/')).name[:200] or 'attachment'
     name = ''.join(c for c in name if ord(c) >= 32 and ord(c) != 127)
     if name in {'', '.', '..'}:
