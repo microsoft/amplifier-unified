@@ -18,6 +18,7 @@ from urllib.parse import quote
 from . import attachments
 
 MAX_FILES = 8
+MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 24 * 1024 * 1024
 
 
@@ -39,7 +40,7 @@ def read_verified(home, row):
                 info = os.fstat(handle.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_size != row["size"]:
                     raise ValueError("A feedback attachment changed. Remove it and attach it again.")
-                data = handle.read(attachments.MAX_BYTES + 1)
+                data = handle.read(MAX_FILE_BYTES + 1)
         finally:
             os.close(directory_fd)
     finally:

@@ -28,8 +28,11 @@ try{
  await expect.poll(async()=>(await css()).color).toBe('rgb(238, 248, 246)');
  const preview=await css();assert.match(preview.background,/linear-gradient/);assert.doesNotMatch(preview.background,/207, 196, 255/);
  await action('theme.apply',{name:'Quiet water',definition});assert.deepEqual(await css(),preview);
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await page.getByRole('button',{name:'App options',exact:true}).click();
+ await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings/}).click();
  await page.locator('[data-settings-section="appearance"]').click();
+ await page.getByText('Layout & background',{exact:true}).click();
  const decoration=page.getByRole('checkbox',{name:'Show decorative theme background'});
  const setDecoration=async enabled=>{
   await expect(decoration).toBeEnabled();
