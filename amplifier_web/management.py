@@ -354,6 +354,11 @@ class Management:
         workspace=self.service.state.get('setup',{}).get('providersWorkspace')
         if workspace:self.background(self.warm_providers(SetupManager(self.service.data_dir,catalog=self.provider_catalog),workspace))
         async with self.service.lock:
+            # Drafts have no session to refresh. Re-resolve their defaults and
+            # prevent an in-flight probe from restoring the old configuration.
+            self.service.state['configurationRevision'] = self.service.state.get('configurationRevision', 0) + 1
+            self.service.state['draftDefaults'] = {}
+            self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
                 if not session.get('historyManaged'):
                     session['configurationPending']=True
@@ -401,12 +406,15 @@ class Management:
             if not workspace or managed and args.get('workspace', '').strip():
                 raise ValueError('Choose a workspace or a chat without a workspace.')
             key=json.dumps(['' if managed else workspace,args.get('bundle') or '']+(['managed'] if managed else []),separators=(',',':'),ensure_ascii=False)
+            revision = self.service.state.get('configurationRevision', 0)
             try:
                 result=await resolve_defaults(self.service.data_dir,workspace,args.get('bundle'),self.service.state['settings'].get('appBundle'),**({'global_only':True} if managed else {}))
                 result['phase']='ready'
             except Exception:
                 result={'phase':'error','error':'Could not resolve this bundle’s model. Open model settings to choose a provider, or check the bundle configuration.'}
             async with self.service.lock:
+                if revision != self.service.state.get('configurationRevision', 0):
+                    return
                 entries=self.service.state.setdefault('draftDefaults',{})
                 entries[key]=result
                 while len(entries)>32:entries.pop(next(iter(entries)))

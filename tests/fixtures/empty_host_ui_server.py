@@ -57,8 +57,9 @@ async def main(home):
     workspace.mkdir()
     runtime = Runtime()
     if '--chat-controls' in sys.argv:
+        preferred_model = ['first']
         from amplifier_web.setup import SetupManager
-        SetupManager.provider_rows=lambda self,workspace:[{'id':'test-provider','module':'provider-test','config':{'model':'first'},'enabled':True}]
+        SetupManager.provider_rows=lambda self,workspace:[{'id':'test-provider','module':'provider-test','config':{'model':preferred_model[0]},'enabled':True}]
         async def catalog(self,action,args,workspace):
             return {'modelsProviderId':'test-provider','models':[{'id':'first'},{'id':'chosen-model'}],
                     'providerMetadata':{'module':'provider-test','info':{'display_name':'Test provider'},
@@ -66,8 +67,8 @@ async def main(home):
         SetupManager.cached_probe=catalog
         import amplifier_web.draft_defaults as draft_defaults
         async def resolve_defaults(home,workspace,bundle=None,app_bundle=None,**kwargs):
-            return {'bundle':bundle or 'work','effective':{'instance':'test-provider','model':'first'},
-                    'providers':[{'id':'test-provider','info':{'display_name':'Test provider','defaults':{'model':'first'}},
+            return {'bundle':bundle or 'work','effective':{'instance':'test-provider','model':preferred_model[0]},
+                    'providers':[{'id':'test-provider','info':{'display_name':'Test provider','defaults':{'model':preferred_model[0]}},
                     'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','high']}]}}]}
         draft_defaults.resolve_defaults=resolve_defaults
     if '--retention' in sys.argv:
@@ -86,6 +87,13 @@ async def main(home):
 
     app.router.add_get("/fixture", inspect)
     if '--chat-controls' in sys.argv:
+        async def provider_preference(request):
+            preferred_model[0] = (await request.json())['model']
+            await app['service'].management.invalidate_configuration()
+            return web.json_response({'ok': True})
+
+        app.router.add_post('/fixture/provider-preference', provider_preference)
+
         async def activity(request):
             data = await request.json()
             service = app['service']

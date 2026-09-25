@@ -7,6 +7,25 @@ const server=await createServer({server:{middlewareMode:true,hmr:false},appType:
 const {ModelControl}=await server.ssrLoadModule('/src/chat-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('provider configuration changes refresh draft choices without retaining stale defaults',async()=>{
+ const calls=[];let state={configurationRevision:0,view:{newSessionDraft:{workspace:'/trial',selection:{}}},setup:{providersRequestedWorkspace:'/trial'},draftDefaults:{'["/trial",""]':{phase:'ready',effective:{instance:'old',model:'old-model'},providers:[{id:'old',info:{defaults:{model:'old-model'}}}]}}},root;
+ const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+ const render=()=>React.createElement(ModelControl,{state,act,working:false});
+ await renderAct(async()=>{root=create(render());});
+ await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/old-model/);
+ state={...state,configurationRevision:1,draftDefaults:{},setup:{}};
+ await renderAct(async()=>root.update(render()));
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/Loading model/);
+ await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
+ assert.equal(calls.filter(row=>row.name==='configuration.defaults').length,2);
+ assert.equal(calls.filter(row=>row.name==='providers.list').length,1);
+ // An explicit draft choice survives discovery and a preference change.
+ state={...state,view:{newSessionDraft:{workspace:'/trial',selection:{instance:'chosen',model:'chosen-model'}}}};
+ await renderAct(async()=>root.update(render()));
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/chosen-model/);
+ await renderAct(async()=>root.unmount());
+});
 test('a new workspace stays idle until its model controls are explicitly opened',async()=>{
  const calls=[],session={id:'new-workspace-chat',status:'idle',deferRuntimeUntilInteraction:true};
  const act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{}};

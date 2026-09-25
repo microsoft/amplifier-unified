@@ -47,7 +47,9 @@ jobs:
         run: npm run test:empty-host-browser
       - name: Verify draft-first chat setup and composer controls
         working-directory: frontend
-        run: npm run test:new-chat-browser
+        run: |
+          npm run test:new-chat-browser
+          npm run test:draft-provider-refresh-browser
       - name: Verify new-chat recovery and submission drafts
         working-directory: frontend
         run: |

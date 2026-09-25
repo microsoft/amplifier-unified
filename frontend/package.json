@@ -69,6 +69,7 @@
     "test:scheduled-new-tasks-browser": "node tests/scheduled-new-tasks-browser.mjs",
     "test:settings-collections-browser": "node tests/settings-collections-browser.mjs",
     "test:new-chat-browser": "node tests/new-chat-browser.mjs",
+    "test:draft-provider-refresh-browser": "node tests/draft-provider-refresh-browser.mjs",
     "test:new-chat-recovery-browser": "node tests/new-chat-recovery-browser.mjs",
     "test:composer-primary-action-browser": "node tests/composer-primary-action-browser.mjs",
     "test:composer-readiness-browser": "node tests/composer-readiness-browser.mjs",
