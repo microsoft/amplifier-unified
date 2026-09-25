@@ -5,6 +5,7 @@ import React,{useEffect,useRef,useState,useContext} from 'react';
 import {Plus,ArrowLeft,RefreshCw,Sparkles,ExternalLink,Trash2} from 'lucide-react';
 import {SettingsLink} from './settings-everyday';
 import {SettingsActions,SettingsLayoutContext} from './settings-layout';
+import {useSettingsDraft} from './settings-drafts';
 import {ResultNotice} from './settings-ui';
 import {ModelSelect} from './model-select';
 import {modelOptions} from './setup-data';
@@ -60,6 +61,10 @@ export function AIConnections({state,session,act,navigate}){
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:d.scope||'global',...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');
  const back=()=>{setError('');edit({step:step==='services'||step==='detail'?'list':step==='model'?'detail':'services'});};
  const advanced=()=>navigate('providers');
+ const unsaved=!!key||(step==='connect'&&!!d.baseUrl&&d.baseUrl!==(selected?.config?.base_url||''))||(step==='model'&&!!d.model&&d.model!==(selected?.config?.default_model||selected?.config?.model||''));
+ useSettingsDraft('ai-connections',{label:'AI connection setup',dirty:unsaved,
+  review:()=>{navigate('ai-connections');edit({step})},
+  discard:()=>{setKey('');setError('');edit({step:'list',id:'',module:'',model:'',baseUrl:'',saved:false})}});
  return <section data-part="ai-connections" className="a-ai-form">
   {step==='list'?<>
    <p className="a-everyday-intro">Connect the AI services Amplifier can use for your work.</p>

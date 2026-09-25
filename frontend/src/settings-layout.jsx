@@ -43,9 +43,10 @@ export function useSettingsViewport(root,compact){
  },[compact]);
 }
 
-export function useSettingsHistory({compact,trail,view,act,close,body,navigationRef}){
+export function useSettingsHistory({compact,trail,view,act,close,body,navigationRef,confirmClose=()=>Promise.resolve(true),hasUnsaved=()=>false}){
  const latest=useRef(null),session=useRef(null),scrolls=useRef(new Map()),lastKey=useRef(null),scrollRestore=useRef(false);
- latest.current={trail,view,act,close};
+ const [confirming,setConfirming]=useState(false),closePending=useRef(false);
+ latest.current={trail,view,act,close,confirmClose};
  const route=trail.at(-1),key=route.key,visit=useRef(view.settingsRootVisit);
  // The scroll position belongs to the navigation level, not to every state update.
  useEffect(()=>{
@@ -63,9 +64,18 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   const current={token,entries:inherited?[...latest.current.trail]:[],index:inherited?.index||0,closing:false};session.current=current;
   const push=entry=>{current.entries.splice(current.index);current.entries.push(entry);current.index=current.entries.length;history.pushState({...original,amplifierSettings:{token,index:current.index}},'');};
   if(!inherited)latest.current.trail.forEach(push);
-  const pop=event=>{
+  const pop=async event=>{
    const marker=event.state?.amplifierSettings;
-   if(marker?.token!==token){current.closing=true;latest.current.close();return;}
+   if(marker?.token!==token){
+    if(current.confirming)return;
+    if(current.closing){latest.current.close();return;}
+    current.confirming=true;setConfirming(true);
+    const accepted=await latest.current.confirmClose();current.confirming=false;
+    if(accepted){current.closing=true;latest.current.close();}
+    else {for(let index=1;index<=current.index;index++)history.pushState({...original,amplifierSettings:{token,index}},'');}
+    setConfirming(false);
+    return;
+   }
    current.index=marker.index;const entry=current.entries[current.index-1];if(!entry)return;
    const orderEditor=Object.keys(entry.navigation).find(name=>entry.navigation[name]?.orderOpen===true);
    // A completed/cancelled order has no draft to reopen with browser Forward.
@@ -81,7 +91,7 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   };
  },[compact]);
  useLayoutEffect(()=>{
-  const current=session.current;if(!compact||!current||current.closing)return;
+  const current=session.current;if(!compact||!current||current.closing||current.confirming)return;
   const entry=current.entries[current.index-1];
   // A history level represents the current hierarchy, not a stale editor snapshot.
   // Sibling tabs replace their level; deep links populate all missing parents.
@@ -93,14 +103,21 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   }
   while(current.index<trail.length){current.index++;history.pushState({...history.state,amplifierSettings:{token:current.token,index:current.index}},'');}
 
- },[key,compact]);
+ },[key,compact,confirming]);
  const back=()=>{
   const current=session.current;
   if(current&&current.index>1){rememberScroll();history.back();}
   else if(trail.length>1){const entry=trail.at(-2),patch={...entry.navigation};for(const name of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor'])if(patch[name])patch[name]={...view[name],...patch[name]};act('view.update',{patch});}
   else dismiss();
  };
- const dismiss=()=>{const current=session.current;if(current&&!current.closing){current.closing=true;history.go(-current.index);}else close();};
- useEffect(()=>{if(navigationRef)navigationRef.current={close:dismiss};return()=>{if(navigationRef)navigationRef.current=null;};});
+ const dismiss=async()=>{
+  if(closePending.current)return;closePending.current=true;
+  const current=session.current;if(current)current.confirming=true;setConfirming(true);
+  const accepted=await latest.current.confirmClose();
+  if(current)current.confirming=false;
+  if(accepted){if(current&&!current.closing){current.closing=true;history.go(-current.index);}else close();}
+  closePending.current=false;setConfirming(false);
+ };
+ useEffect(()=>{if(navigationRef)navigationRef.current={close:dismiss,confirmClose,hasUnsaved};return()=>{if(navigationRef)navigationRef.current=null;};});
  return {back,dismiss,rememberScroll};
 }

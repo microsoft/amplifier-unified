@@ -63,6 +63,11 @@ async def main(home):
   app['control_token']='fixture-browser-control-token'
   app['allowed_origins']=app['allowed_origins']|{'http://127.0.0.1:8957','http://127.0.0.1:8958'}
  service=app['service'];await service.dispatch('session.create',{'title':'Settings test','workspace':str(workspace),'bundle':'anchors'})
+ async def agent_view(request):
+  payload=await request.json()
+  result=await service.app_bridge('dispatch',{'action':'view.update','args':{'clientId':payload['clientId'],'patch':payload['patch']}},service._session()['id'])
+  return web.json_response(result)
+ app.router.add_post('/fixture/agent-view',agent_view)
  service.state['updates']['items']=group_sources([{'id':str(i),'label':f'fixture-source-{i}','status':'current'} for i in range(86)]+[{'id':'copy-'+str(i),'label':'github.com/example/amplifier-bundle-computer-use','kind':'bundle / module','ref':'main','current':'123456789','latest':'abcdefghi','status':'update'} for i in range(2)])
  service.state['updates']['available']=1
  return app

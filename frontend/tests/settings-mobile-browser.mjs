@@ -102,9 +102,9 @@ try{
   }
  }
  await page.setViewportSize({width:390,height:844});await openSettingsPage(page,'providers');await providers.locator('[data-collection-id=two]>button').click();assert.equal(await page.locator('#provider-key').inputValue(),'mobile-private-never-share');
- const historyLength=await page.evaluate(()=>history.length);await page.reload();await route('providers/detail');assert.equal(await page.evaluate(()=>history.length),historyLength);
+ const historyLength=await page.evaluate(()=>history.length);page.once('dialog',dialog=>dialog.accept());await page.reload();await route('providers/detail');assert.equal(await page.evaluate(()=>history.length),historyLength);
  await back();await route('providers');await back();await route('advanced');await back();await route('index');
- await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await openSettingsDialog(page);await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
+ await page.getByRole('button',{name:'Close settings',exact:true}).click();await page.getByRole('button',{name:'Discard changes',exact:true}).click();await expect(root).toHaveCount(0);assert.equal(await page.evaluate(()=>history.state?.amplifierSettings),undefined);await openSettingsDialog(page);await route('index');await page.evaluate(()=>history.back());await expect(root).toHaveCount(0);
  assert.deepEqual(errors,[]);console.log('Mobile Settings: index, browser Back/Forward, private drafts, nested routing, footer actions, ordering, catalog selection and all destinations at 5 widths passed.');
 }catch(error){if(page)await page.screenshot({path:'/tmp/settings-mobile-failure.png'});throw error;}
 finally{await browser?.close();fixture.kill('SIGTERM');}

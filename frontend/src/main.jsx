@@ -4,6 +4,7 @@ import workShellCss from './work-shell.css?raw';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
 import {SettingsExperience} from './settings-experience';
+import {useGuardedSettingsPanel} from './settings-drafts';
 import {useMessageOutbox,outboxMessages} from './message-outbox';
 import {clientId,clientUrl,attachClient} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
@@ -233,7 +234,8 @@ function App(){
  useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key}},[state?.theme]);
  useEffect(()=>{const v=state?.view;if(!v)return;if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.themeDraft!==undefined)setThemeDraft(v.themeDraft);if(v.themeDraftName!==undefined)setThemeName(v.themeDraftName);if(v.themePreview!==undefined)setPreview(v.themePreview);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.workerDraft,state?.view?.themeDraft,state?.view?.themeDraftName,state?.view?.themePreview,state?.view?.agentAction,state?.view?.agentArgs]);
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}});
- const session=detail.session,view=state?.view||{},mode=view.mode||'chat',panel=view.panel,activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
+ const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
+ const panel=useGuardedSettingsPanel(view.panel,settingsNavigation,panel=>act('view.update',{patch:{panel}}));
  useEffect(()=>{const title=session?.title?.trim();document.title=title?title+' - Amplifier':'Amplifier'},[session?.id,session?.title]);
  useReadCompletion(state,act,messagesPane,shell.ready);
  const live=liveActivity(session,activityClock),execution=splitWork(messages,executionData(session));
