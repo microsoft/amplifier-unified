@@ -68,10 +68,6 @@ account that runs Unified.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
-Already installed the older hackathon version from `bkrabach`? Follow the
-[Unified-only fresh install guide](docs/HACKATHON-RESET.md) to clear its setup
-while keeping your Amplifier CLI, shared settings, and native chats.
-
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.
