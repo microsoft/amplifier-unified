@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.30",
+      "title": "Better provider checks, complete managed updates and a cleaner canvas",
+      "changes": [
+        "Send a small real test message from either provider settings screen to verify inference and see account or model errors without creating a chat.",
+        "Update app-managed Smart Tools alongside other components, validate their connections before switching while idle, and restore the previous version when needed.",
+        "Check independent runtime configurations in parallel after dependency preparation, while retaining isolated validation and dependency consistency checks.",
+        "Scroll long Chat overviews inside the canvas, keep secondary controls behind Canvas options, and use the version shortcut to reach saved revisions. Settings counters keep their compact shape.",
+        "Use supported browser call-audio mode and system mute/hang-up controls, preserve mute during interruptions, and resume existing speaker playback without creating another call. Keep the screen awake optionally during calls.",
+        "Prefer explicit Compatible API connection keys over environment defaults, consistently with other keyed providers."
+      ],
+      "notices": [
+        {
+          "id": "complete-provider-update",
+          "title": "Finish the component update",
+          "detail": "The Compatible API credential repair is delivered in the provider component. Existing workers keep the credentials and code they already loaded.",
+          "action": "Let Updates finish checking and installing components, then start a fresh conversation worker to use the updated provider."
+        },
+        {
+          "id": "mobile-call-validation",
+          "title": "Mobile background calls still need device testing",
+          "detail": "Browser audio integration and interruption recovery are included. Uninterrupted screen-lock and car Bluetooth operation have not been verified on physical iPhone or Android devices.",
+          "action": "Keep the screen-awake fallback enabled when reliability is needed; test your device before relying on a locked-screen call."
+        }
+      ]
+    },
+    {
       "version": "0.20.29",
       "title": "Identify the API key used by your service",
       "changes": [
