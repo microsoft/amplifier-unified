@@ -5,6 +5,35 @@ import re
 import time
 
 
+def generation_failure(event):
+    """Project loop-live's bounded failure vocabulary, never arbitrary messages."""
+    category = event.get('error_category')
+    messages = {
+        'unknown': ('The manager turn failed.', 'Inspect saved details before continuing. A recovery copy preserves readable history without replaying completed actions.'),
+        'context_limit': ('The request could not fit within the context budget.', 'Inspect the active instructions and attachments, or choose a model with more context. Completed actions were not replayed.'),
+        'authentication': ('The selected provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'),
+        'rate_limit': ('The selected provider rate limit was reached.', 'Wait for the provider limit to reset before continuing.'),
+        'content_filter': ('The provider stopped the request under its content policy.', 'Review the request and the provider guidance. Recovery does not clear a safety stop.'),
+        'invalid_request': ('The provider could not accept the request format.', 'Inspect the selected model, attachments and tool configuration before continuing.'),
+        'provider_timeout': ('The provider request timed out; its outcome may be unknown.', 'Inspect saved results before retrying. An interrupted request may already have had effects.'),
+        'provider_unavailable': ('The selected provider is unavailable.', 'Check the connection and service availability before continuing.'),
+    }
+    if category not in messages:
+        return None
+    summary, guidance = messages[category]
+    stage = event.get('error_stage')
+    if stage not in {'turn_setup', 'context_preparation', 'provider_request', 'manager_turn'}:
+        stage = 'manager_turn'
+    if category == 'context_limit' and stage == 'context_preparation':
+        summary = 'Local context preparation could not fit the required content within the input budget.'
+        guidance = 'Inspect the active instructions and attachments. This was a local budget check, not a provider response. Required content was not discarded; earlier actions were not replayed.'
+    kind = event.get('error_type')
+    kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
+    return {'category': category, 'errorType': kind, 'stage': stage,
+            'summary': summary, 'guidance': guidance, 'effects': 'not_rolled_back',
+            'replayed': False, 'retryable': event.get('retryable') is True}
+
+
 def failure_details(error, error_type=None):
     """Classify public errors without retaining arbitrary SDK payloads or secrets."""
     field = (lambda name: error.get(name)) if isinstance(error, dict) else (lambda name: getattr(error, name, None))

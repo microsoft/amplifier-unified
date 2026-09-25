@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 from . import __version__
+from .attachments import MAX_REQUEST_BYTES
 from .auth import auth_required, control_token, data_identity, login_page, post_login, session_secret
 from .deployment import canonical_host, load_server_config, validate_origin, validate_server
 from .service import AppError, AppService
@@ -66,7 +67,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                      preload_providers=True, server_config=None):
     data_dir = Path(data_dir).expanduser().resolve()
     config = validate_server(server_config) if server_config is not None else load_server_config(data_dir)
-    app = web.Application(middlewares=[boundaries, auth_required, client_context], client_max_size=13_000_000)
+    app = web.Application(middlewares=[boundaries, auth_required, client_context], client_max_size=MAX_REQUEST_BYTES)
     app["server_config"] = config
     app["permitted_hosts"] = frozenset({"localhost", "127.0.0.1", "::1"} |
                                        {canonical_host(urlsplit(origin).hostname) for origin in config["public_origins"]})

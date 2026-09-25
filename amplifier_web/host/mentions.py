@@ -31,6 +31,10 @@ class AppMentionResolver:
         self.workspace = Path(workspace)
 
     def resolve(self, mention):
+        return self.resolve_relative(mention, self.workspace)
+
+    def resolve_relative(self, mention, relative_to):
+        """Scope local references without retargeting project/user shortcuts."""
         if not mention.startswith('@') or '..' in mention:
             return None
         body = mention[1:]
@@ -46,8 +50,8 @@ class AppMentionResolver:
             return self.foundation.resolve(mention) if self.foundation else None
         else:
             # Retain Foundation's plain-path and omitted-.md behavior used by
-            # filesystem tools, scoped to this session's workspace.
-            return BaseMentionResolver(base_path=self.workspace).resolve(mention)
+            # filesystem tools, scoped to the workspace or referring file.
+            return BaseMentionResolver(base_path=relative_to).resolve(mention)
         if not relative:
             return None
         path = root / relative
