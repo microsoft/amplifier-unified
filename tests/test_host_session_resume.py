@@ -80,6 +80,35 @@ def snapshot(messages):
     return {"messages": copy.deepcopy(messages), "metadata": {}, "bundle": "anchors"}
 
 
+@pytest.mark.parametrize('frozen', [False, True])
+async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
+    h = mounted_host
+    observed = []
+    class Root:
+        instruction = 'Original root.'
+        def to_mount_plan(self):
+            return {**copy.deepcopy(h.prepared.mount_plan), 'instruction': self.instruction}
+        async def prepare(self, **kwargs):
+            observed.append(self.instruction)
+            return h.prepared
+    root = Root()
+    h.registry.load.return_value = root
+    host.compose_configured_bundle.return_value = root
+    monkeypatch.setattr(host, 'is_snapshot', lambda _: frozen)
+    from amplifier_web.runtime_controls import override_path
+    path = override_path(h.runtime.session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'session': {**h.prepared.mount_plan['session'], 'context': {'module': 'context-simple'}},
+                               'providers': [{'module': 'provider-fixture'}],
+                               'instruction': 'Edited root.'}))
+    monkeypatch.setattr(host, '_apply_host_policy', lambda bundle, *args, **kwargs: bundle)
+    await h.prepare()
+    assert observed == ['Edited root.' if frozen else
+                        'Edited root.\n\n@~/.amplifier/AGENTS.md\n@.amplifier/AGENTS.md']
+    # The source object is not given the host's added tail.
+    assert root.instruction == 'Edited root.'
+
+
 async def test_prepared_new_chat_selection_reaches_public_controls_and_first_request(mounted_host):
     from amplifier_web.runtime_controls import RuntimeControls
     h = mounted_host
