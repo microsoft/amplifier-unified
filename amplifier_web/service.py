@@ -1467,6 +1467,10 @@ class AppService:
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     apply(self, session, inherited)
+                    from .new_chat import initial_model
+                    initial = initial_model(self.state, args, session['workspace'], session['bundle'])
+                    if initial:
+                        session['initialModel'] = initial
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if args.get('fromDraft') and command_id:

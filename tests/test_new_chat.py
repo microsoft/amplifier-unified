@@ -22,6 +22,45 @@ async def app(tmp_path):
         await service.close()
 
 
+@pytest.mark.parametrize('explicit', [False, True])
+async def test_creation_preserves_draft_model_label_without_pinning_default(app, tmp_path, explicit):
+    import json
+    setup = {'workspace': str(tmp_path), 'bundle': 'chosen-bundle'}
+    if explicit:
+        setup['selection'] = {'instance': 'test', 'model': 'explicit-model'}
+    app._state['draftDefaults'] = {json.dumps([str(tmp_path), 'chosen-bundle'], separators=(',', ':')): {
+        'phase': 'ready', 'bundle': 'chosen-bundle',
+        'effective': {'instance': 'test', 'model': 'default-model', 'effort': 'high'},
+        'providers': [{'id': 'test', 'info': {'display_name': 'Test provider'}, 'config': {'api_key': 'never-copy'}}]}}
+    result = await command(app, 'web', 'session.create', setup)
+    session = app._session(result['sessionId'])
+    assert session['initialModel']['model'] == ('explicit-model' if explicit else 'default-model')
+    assert session['initialModel']['providerLabel'] == 'Test provider'
+    assert session.get('selection') == setup.get('selection')
+    assert 'never-copy' not in json.dumps(session)
+    assert not app.runtime.started and not app.runtime.sent
+    await app.close()
+    app.test_closed = True
+    restored = AppService(app.data_dir, Runtime(), workspace=tmp_path)
+    try:
+        assert restored._session(session['id'])['initialModel'] == session['initialModel']
+    finally:
+        await restored.close()
+
+
+def test_initial_model_is_scoped_and_requires_current_resolved_bundle():
+    import json
+    from amplifier_web.new_chat import initial_model
+    entry = {'phase': 'ready', 'bundle': 'work', 'effective': {'instance': 'p', 'model': 'm'}}
+    state = {'draftDefaults': {json.dumps(['/one', ''], separators=(',', ':')): entry}}
+    assert initial_model(state, {}, '/one', 'work')['model'] == 'm'
+    assert initial_model(state, {}, '/two', 'work') == {}
+    assert initial_model(state, {}, '/one', 'changed-default') == {}
+    assert initial_model(state, {'location': {'kind': 'managed'}}, '/one', 'work') == {}
+    entry['phase'] = 'error'
+    assert initial_model(state, {}, '/one', 'work') == {}
+
+
 async def test_setup_is_private_durable_and_does_not_create_a_session(app, tmp_path):
     setup = {'workspace': str(tmp_path / 'not-chosen-yet'), 'title': 'Planned work',
              'bundle': 'custom', 'selection': {'instance': 'provider-a', 'model': 'model-b'}}
