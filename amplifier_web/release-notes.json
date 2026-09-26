@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.32",
+      "title": "Faster settings saves and shared provider catalogs",
+      "changes": [
+        "Save provider, model and bundle settings without waiting for each idle conversation to refresh. Active work keeps its loaded configuration until a safe refresh.",
+        "Reuse model lists and provider metadata across settings and conversation controls when their configuration matches. Refresh after relevant changes, on request, or after 24 hours.",
+        "Batch catalog updates and combine waiting editor changes, while keeping saves ordered and allowing them to finish during slow model-list lookups.",
+        "Remove the one-time reset guide for older hackathon installations from the repository."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.31",
       "title": "More reliable setup, instructions, images and conversation controls",
       "changes": [
