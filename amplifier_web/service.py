@@ -1136,6 +1136,11 @@ class AppService:
                     await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
+                if action in {'conversation.send','conversation.retry','worker.spawn','call.start','runtime.control','configuration.inspect','configuration.apply','bundle.save','bundle.export','bundle.preview','bundle.switch','bundle.fork'}:
+                    await self.refresh_configuration(sid)
+                    current=self._session(sid)
+                    if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
+                        raise AppError(current['configurationRefresh']['error'],409)
         fingerprint = hashlib.sha256((json.dumps([action, args, origin, client_id], sort_keys=True) if client_id is not None and action not in {'conversation.send', 'worker.message'} and not action.startswith('question.') and not (action=='session.create' and args.get('fromDraft')) else json.dumps([action, args, origin], sort_keys=True)).encode()).hexdigest()
         prepared_workspace = None
         prepared_identity = None
@@ -2746,25 +2751,57 @@ class AppService:
             else:
                 self._publish()
 
+    def _claim_configuration_refresh(self,session):
+        """Reserve an idle runtime under the service lock before deferring it."""
+        if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
+        if session.get('historyManaged') or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
+        if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
+        workers=getattr(self.runtime,'workers',None)
+        if self.runtime is None or isinstance(workers,dict) and session['id'] not in workers:
+            # There is no mounted configuration to retire. The next start reads
+            # the committed settings; no busy cycle or per-chat save is needed.
+            session['configurationPending']=False
+            session.pop('configurationRefresh',None)
+            return
+        session['configurationBusy']=True
+        revision=session.get('configurationPendingRevision',0)
+        session['configurationRefresh']={'phase':'applying','revision':revision}
+        return session['id'],revision
+
+    async def _refresh_claimed_configuration(self,identity,revision):
+        succeeded=False
+        try:
+            if self.runtime:await self.runtime.stop(identity)
+            succeeded=True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            async with self.lock:
+                session=self._session(identity)
+                session['configurationRefresh']={'phase':'error','revision':revision,
+                    'error':'Saved settings could not be applied to this idle conversation. Retry its configuration refresh.'}
+        finally:
+            async with self.lock:
+                try:session=self._session(identity)
+                except AppError:return
+                session['configurationBusy']=False
+                if succeeded and session.get('configurationPendingRevision',0)==revision:
+                    session['configurationPending']=False
+                    session.pop('configurationRefresh',None)
+                elif session.get('configurationRefresh',{}).get('phase')!='error':
+                    session['configurationRefresh']={'phase':'pending','revision':session.get('configurationPendingRevision',revision)}
+                self._publish_progress()
+                if succeeded and session.get('configurationPending'):
+                    self._task(self.refresh_configuration(identity))
+
     async def refresh_configuration(self,identity):
         async with self.lock:
             try:session=self._session(identity)
             except AppError:return
-            if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
-            if session.get('historyManaged') or not session.get('configurationPending') or session.get('configurationBusy') or session['status'] not in {'idle','stopped','interrupted','error'}:return
-            if any(w.get('persistent') and w.get('status') in {'idle','running','starting'} for w in session.get('workers',[])):return
-            session['configurationBusy']=True
-            self._publish()
-        try:
-            if self.runtime:await self.runtime.stop(identity)
-            async with self.lock:
-                session=self._session(identity);session['configurationPending']=False
-                self._publish()
-        finally:
-            async with self.lock:
-                try:self._session(identity)['configurationBusy']=False
-                except AppError:pass
-                self._publish()
+            previous=bool(session.get('configurationPending'))
+            claimed=self._claim_configuration_refresh(session)
+            if claimed or previous!=bool(session.get('configurationPending')):self._publish_progress()
+        if claimed:await self._refresh_claimed_configuration(*claimed)
 
     async def _notify_completion(self,session,generation):
         try:

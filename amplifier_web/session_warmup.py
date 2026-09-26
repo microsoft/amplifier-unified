@@ -22,6 +22,7 @@ class SessionWarmup:
         from .updates import work_paused
         return (not self.service.closed and not work_paused(self.service.state)
                 and not session.get("configurationBusy")
+                and not session.get("configurationPending")
                 and session.get("workspaceAvailable") is not False
                 and not session.get("historyReadOnlyReason")
                 and session.get("status") not in {"starting", "working", "running", "stopping"}

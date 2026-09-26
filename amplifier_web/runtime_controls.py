@@ -488,8 +488,14 @@ class RuntimeControls:
                     schema = await schema
                 from .provider_catalog import fingerprint
                 mounted=next((row for row in getattr(self.session,'config',{}).get('providers',[]) if (row.get('id') or row.get('instance_id') or row.get('module','').removeprefix('provider-'))==name),{})
-                catalog_key=fingerprint([name,mounted or getattr(provider,'config',{}),public_config(info)])
-                rows.append({"id":name,"catalogKey":catalog_key,"info":public_config(info),"configSchema":public_config(schema),
+                catalog_key=fingerprint([self.catalog_revision,name,mounted or getattr(provider,'config',{}),public_config(info)])
+                shared={}
+                captured=self.coordinator.get_capability('web.provider_catalog')
+                if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
+                    from .provider_catalog import configuration_key
+                    current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
+                    if current==captured['keys'][name]:shared['sharedCatalogKey']=current
+                rows.append({"id":name,"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info),"configSchema":public_config(schema),
                     "supports":{"models":callable(getattr(provider,"list_models",None)),
                                 "test":callable(getattr(provider,"list_models",None)),
                                 "login":callable(getattr(provider,"login",None))}})

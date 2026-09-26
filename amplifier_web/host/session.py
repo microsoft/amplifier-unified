@@ -728,11 +728,21 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         messages = repair_interrupted_receipts(messages)
     approvals = Approvals(runtime, ask)
     session = None
+    from ..provider_catalog import mounted_catalog_keys
+    catalog_sources={row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
+        module_source(config,snapshot,row['module'],row.get('source'),components)
+        for row in prepared.mount_plan.get('providers',[])}
+    catalog_keys=mounted_catalog_keys(config.home,config.workspace,prepared.mount_plan.get('providers',[]),catalog_sources)
     try:
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
         coordinator.register_capability('web.history_workspace', str(config.workspace))
+        # Freeze credential/file/source/generation identity before provider
+        # construction. A later rotation cannot relabel an old mounted result.
+        coordinator.register_capability('web.provider_catalog', {
+            'home':str(config.home),'workspace':str(config.workspace),
+            'sources':catalog_sources,'keys':catalog_keys})
         coordinator.register_capability("live.runtime", runtime)
         coordinator.register_capability("live.jobs", jobs)
         coordinator.register_capability("live.recovered_jobs", [row["job_id"] for row in recovered])
