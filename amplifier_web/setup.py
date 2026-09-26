@@ -118,6 +118,7 @@ def github_cli_token():
 def account_connected(config):
     # Match the provider's token-file contract, without starting a login or refresh.
     path=config.get('token_file_path')
+    if path is None:path='~/.amplifier/openai-chatgpt-oauth.json'
     if not isinstance(path,str):return False
     try:
         file=Path(path).expanduser()
@@ -357,7 +358,17 @@ class SetupManager:
                         credential=environment_credential(module)
                         if credential['supported'] and credential['available']:config[field]='${'+credential['envVar']+'}' 
                 if module=='provider-openai-chatgpt':
-                    config['token_file_path']=config.get('token_file_path') or old.get('token_file_path') or str(self.store.shared_home/('openai-chatgpt-'+identity+'-oauth.json'))
+                    same_provider=existing is not None and existing['module']==module
+                    token_path=config.get('token_file_path') or (old.get('token_file_path') if same_provider else None)
+                    if token_path:
+                        config['token_file_path']=token_path
+                    elif same_provider:
+                        # Legacy connections already use the provider's default OAuth
+                        # file. Editing their model must not select a different account.
+                        config.pop('token_file_path',None)
+                    else:
+                        # New accounts get distinct sign-ins, even if legacy tokens exist.
+                        config['token_file_path']=str(self.store.shared_home/('openai-chatgpt-'+identity+'-oauth.json'))
                     config['login_on_mount']=False
                 row={'id':identity,'module':module,'config':private(config)}
                 source=args.get('source') or (existing or {}).get('source') or (KNOWN_PROVIDER_SOURCES.get(module) if module in {'provider-chat-completions','provider-azure-openai','provider-ollama','provider-vllm'} else None)
