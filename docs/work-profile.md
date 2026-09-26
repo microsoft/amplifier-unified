@@ -1,6 +1,6 @@
 # Work profile in Unified
 
-Optional image generation and editing use the existing provider and capability
+Shared image generation and editing use the existing provider and capability
 controls without changing the Work root or chat model. See
 [image setup and acceptance](IMAGE-GENERATION.md).
 

@@ -1,13 +1,19 @@
-# Image generation in ordinary Work conversations
+# Image generation across Amplifier Unified bundles
 
-Image generation is an optional paid tool. It uses the chosen image account/model
+The shared Image generation behavior exposes a tool and skill across ordinary
+root bundles. It uses the chosen image account/model
 independently of the conversation's selected chat provider/model. The application
 owns setup, file policy and saved outputs; the generic image tool owns requests and
 files; the provider owns its Images API backend.
 
-## Enable through existing controls
+The portable [imagegen bundle](https://github.com/microsoft/amplifier-bundle-imagegen)
+owns the module, library, skill and brief capability guidance. It does not change
+the selected root, orchestrator, context manager or conversational provider.
+Mounting it makes no image request and creates no account or credentials. Missing
+backend configuration is reported by capabilities; it does not prevent ordinary
+chat. Requested generation/editing still requires an explicitly enabled backend.
 
-After the reviewed module/provider/Work changes are published:
+## Enable through existing controls
 
 1. In **Settings → Model providers**, choose the existing **OpenAI API** connection
    whose ordinary API account should pay for image calls. Keep its instance name,
@@ -29,19 +35,23 @@ After the reviewed module/provider/Work changes are published:
    Images API access. Use an existing ordinary OpenAI API connection or create one
    through the same provider controls, keeping the chat selection unchanged.
 
-2. In **Settings → Capabilities → Add capabilities**, add this source with role
-   **behavior**, then enable it:
+2. **Settings → Capabilities** shows **Image generation** as an enabled app behavior
+   when no explicit app-behavior list is saved. It applies to any ordinary root
+   bundle. Disable or remove it through the same controls used for other behaviors.
+   Existing explicit lists, including an empty list, remain authoritative. To add
+   image generation to such a configuration, use **Add capabilities**, role
+   **behavior**, with this source:
 
    ```text
-   git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=behaviors/work-images.yaml
+   git+https://github.com/microsoft/amplifier-bundle-imagegen@main#subdirectory=behaviors/imagegen.yaml
    ```
 
-   This explicitly enables requested paid image calls and adds the tool as an app
-   behavior overlay. Leave the conversation root as **Work**. The same agent path
+   The behavior permits requested image calls through the separately configured
+   backend. Keep the conversation's chosen root bundle. The same agent path
    is `bundles.add` with this URI and `role: behavior`; read its schema first.
    The existing `providers.save` action accepts the same nested configuration.
 
-3. Start a fresh ordinary **Work** conversation, keeping the desired chat model.
+3. Start a fresh conversation, keeping the desired root and chat model.
    Ask it to inspect `image_generate` capabilities. Ready means the tool/backend
    are configured, not that the account's image entitlement was independently
    checked. The first successful generation qualifies actual API access.
@@ -53,11 +63,20 @@ reported as `image_model`. Provider listing, a successful chat request or a visi
 model does not establish image-generation access. Existing running sessions keep
 their mounted capabilities until remounted through normal host controls.
 
+The existing Work image behavior/preset forwards to the same portable behavior.
+Composing it in both a root and the host does not add another image tool. An
+imagegen host behavior retains an already-declared image tool's source/configuration,
+including paid-call opt-outs and named instances, while adding image skill discovery.
+Other skill directories and explicit module settings remain effective. Saving an
+explicit app-behavior list does not change this preservation rule. Other behavior
+overlays keep their normal precedence.
+
+The bundle and module sources track `main`. Normal source overrides and generation
+qualification apply. Git access to the bundle repository is required to resolve it;
+an inaccessible source is a setup failure, not proof of a missing image account.
+Saved snapshots remain complete plans and are not injected with new behaviors.
+Active worker generations keep their mounted capabilities until normal refresh.
 No production settings are changed by the implementation or acceptance scripts.
-The Work image skill remains available with other compatible image tools too.
-Before the new `microsoft/amplifier-module-tool-image` repository exists, use an
-explicit local source override in an isolated environment; the branch-tracking
-remote will not resolve yet.
 
 ## Generation, edit and delivery
 

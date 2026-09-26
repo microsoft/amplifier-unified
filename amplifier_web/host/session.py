@@ -11,7 +11,7 @@ from pathlib import Path
 import stat
 
 from .config import HostConfig, expand_environment, load_config, merge, write_private
-from .components import HostComponents, ComponentResolver, compose_bundles, installed_package_source
+from .components import HostComponents, ComponentResolver, compose_bundles, imagegen_defaults, installed_package_source
 from ..provider_environment import iter_provider_rows, materialize_bundle_providers
 
 LOOP_SOURCE = "git+https://github.com/microsoft/amplifier-module-loop-live@main"
@@ -433,11 +433,14 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     snapshot = is_snapshot(loaded)
+    root_identity = {key: getattr(loaded, key) for key in ('name', 'version') if hasattr(loaded, key)}
     components = required_components()
     if not snapshot:
-        from ..builtin_behaviors import resolve_builtin_behavior
+        from ..builtin_behaviors import IMAGEGEN_BEHAVIOR_URI, resolve_builtin_behavior
         for behavior in config.app_bundles:
             selected, _ = await load_configured_bundle(registry, config, resolve_builtin_behavior(behavior))
+            if behavior == IMAGEGEN_BEHAVIOR_URI:
+                loaded, selected = imagegen_defaults(loaded, selected)
             components.select_bundle(selected, config.module_sources)
             loaded = compose_bundles(loaded, selected)
         if not any(row.get('module') == 'hook-context-intelligence' for row in loaded.hooks):
@@ -460,6 +463,10 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
         for row in loaded.hooks:
             if row.get("module") in {"hook-context-intelligence", "hooks-routing"}:
                 components.select(row["module"], config.module_sources.get(row["module"]) or row.get("source"))
+    # Behaviors retain their own resource namespaces, but do not become the
+    # selected conversation root through Foundation's last-overlay metadata.
+    for key, value in root_identity.items():
+        setattr(loaded, key, value)
     loaded = components.apply(loaded)
     # Credentials and safety policy remain local host responsibilities. They
     # do not add modules or replace the saved source/model/routing selections.

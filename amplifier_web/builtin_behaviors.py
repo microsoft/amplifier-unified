@@ -2,6 +2,11 @@
 from pathlib import Path
 
 SHELL_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-unified@main#subdirectory=behaviors/unified-shell.yaml"
+IMAGEGEN_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-imagegen@main#subdirectory=behaviors/imagegen.yaml"
+DEFAULT_BEHAVIORS = {
+    SHELL_BEHAVIOR_URI: "Unified shell",
+    IMAGEGEN_BEHAVIOR_URI: "Image generation",
+}
 
 
 def resource_root():
@@ -17,12 +22,10 @@ def app_behaviors(settings):
     if "app" in bundle:
         return list(bundle["app"])
     metadata = settings.get("web_bundles", {})
-    if SHELL_BEHAVIOR_URI in metadata.get("excluded", []):
-        return []
-    if any(row.get("uri") == SHELL_BEHAVIOR_URI and row.get("enabled") is False
-           for row in metadata.get("entries", [])):
-        return []
-    return [SHELL_BEHAVIOR_URI]
+    disabled = set(metadata.get("excluded", []))
+    disabled.update(row.get("uri") for row in metadata.get("entries", [])
+                    if row.get("enabled") is False)
+    return [uri for uri in DEFAULT_BEHAVIORS if uri not in disabled]
 
 
 def resolve_builtin_behavior(uri):

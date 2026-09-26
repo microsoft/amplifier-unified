@@ -26,13 +26,69 @@ def _module_id(row):
     return row.get("module") or row.get("id")
 
 
-def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None):
+def _restrict_child_images(rows, policies, working_dir):
+    """Image permission lists are boundaries, not additive configuration lists."""
+    images = [row for row in rows if row.get("module") == "tool-image"]
+    if not images:
+        return
+    from .config import expand_environment
+    root = Path(working_dir or Path.cwd()).expanduser().resolve()
+
+    def paths(values):
+        values = expand_environment(values)
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError("Image file-access paths must be lists of strings.")
+        return [((path if path.is_absolute() else root / path).resolve())
+                for value in values for path in (Path(value).expanduser(),)]
+
+    restrictions = {}
+    for kind in ("read", "write"):
+        allowed, denied = f"allowed_{kind}_paths", f"denied_{kind}_paths"
+        limits = [paths(policy[allowed]) for policy in policies if allowed in policy]
+        if limits:
+            effective = limits[0]
+            for limit in limits[1:]:
+                effective = [a if a.is_relative_to(b) else b
+                             for a in effective for b in limit
+                             if a.is_relative_to(b) or b.is_relative_to(a)]
+            restrictions[allowed] = list(dict.fromkeys(str(path) for path in effective))
+        if any(denied in policy for policy in policies):
+            restrictions[denied] = list(dict.fromkeys(str(path) for policy in policies
+                for path in paths(policy.get(denied, []))))
+    if any(policy.get("allow_paid") is False for policy in policies):
+        restrictions["allow_paid"] = False
+    # The mounted image API has one fixed tool name. Changing a declaration's
+    # instance ID must not bypass its parent's file or paid-call restrictions.
+    for row in images:
+        row.setdefault("config", {}).update(copy.deepcopy(restrictions))
+
+
+def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None, working_dir=None,
+               retained_image_tools=None):
     """Compose immutable agent settings and honor explicit inheritance policies."""
     from amplifier_foundation import deep_merge
     parent, overlay = copy.deepcopy(parent), copy.deepcopy(overlay)
     agents = parent.get("agents", {})
     agent_filter = overlay.pop("agents", None)
     spawn = parent.get("spawn") or {}
+    image_policies = []
+    if retained_image_tools is not None and not isinstance(retained_image_tools, list):
+        raise ValueError("Saved child tools must be a list of module declarations.")
+    for index, rows in enumerate((parent.get("tools", []), spawn.get("tools", []), overlay.get("tools", []),
+                                  retained_image_tools or [])):
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or row.get("module") not in {"tool-image", "tool-filesystem"}:
+                continue
+            config = row.get("config", {})
+            if not isinstance(config, dict):
+                raise ValueError("Image and filesystem configuration must be dictionaries.")
+            policy = {key: copy.deepcopy(value) for key, value in config.items()
+                      if key in {"allowed_read_paths", "allowed_write_paths", "denied_read_paths", "denied_write_paths"}}
+            if row["module"] == "tool-image" and (index != 2 or "allow_paid" in config):
+                # Mounted/replacement declarations are disabled unless literally
+                # True. Only an overlay omission means inherit the parent grant.
+                policy["allow_paid"] = config.get("allow_paid") is True
+            image_policies.append(policy)
     if isinstance(spawn.get("tools"), list):
         parent["tools"] = copy.deepcopy(spawn["tools"])
     if spawn.get("exclude_tools"):
@@ -63,6 +119,10 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None)
                 if item.get("id") and not item.get("instance_id"):
                     item["instance_id"] = item["id"]
         result[section] = merge_modules(inherited, declared)
+    if retained_image_tools is not None and not any(
+            isinstance(row, dict) and row.get("module") == "tool-image" for row in retained_image_tools):
+        result["tools"] = [row for row in result.get("tools", []) if row.get("module") != "tool-image"]
+    _restrict_child_images(result.get("tools", []), image_policies, working_dir)
     if agent_filter == "none":
         result["agents"] = {}
     elif isinstance(agent_filter, list):
@@ -219,7 +279,12 @@ class Children:
         prepared = self.prepared.get(parent.session_id)
         if prepared is None:
             raise RuntimeError("Parent bundle is not attached to the standalone host")
-        plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance, hook_inheritance=hook_inheritance)
+        working_dir = getattr(parent.coordinator, "get_capability", lambda _: None)("session.working_dir")
+        cwd = Path(working_dir or Path.cwd())
+        retained_plan = (session_metadata or {}).get("mount_plan") if resumed else None
+        plan = child_plan(parent.coordinator.config, overlay, tool_inheritance=tool_inheritance,
+                          hook_inheritance=hook_inheritance, working_dir=cwd,
+                          retained_image_tools=retained_plan.get("tools", []) if isinstance(retained_plan, dict) else None)
         components = getattr(getattr(prepared, "bundle", None), "_host_components", None)
         if components is not None:
             # Late and resumed overlays follow the same supported-loop policy
@@ -251,11 +316,15 @@ class Children:
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")
         effective = compose_bundles(prepared.bundle, overlay_bundle)
+        # Preserve the qualified image boundary in the prepared bundle as well
+        # as its mount plan, including child tool-inheritance exclusions.
+        effective.tools = [row for row in effective.tools if row.get("module") != "tool-image"]
+        effective.tools.extend(copy.deepcopy(row) for row in plan.get("tools", [])
+                               if row.get("module") == "tool-image")
         effective.agents = copy.deepcopy(plan.get("agents", {}))
         if components is not None:
             components.apply(effective)
         child_prepared = replace(prepared, mount_plan=plan, bundle=effective)
-        cwd = Path(parent.coordinator.get_capability("session.working_dir") or Path.cwd())
         persistent = _PERSISTENT.get()
         call_id = (session_metadata or {}).get("tool_call_id") or JOB_CALL.get()
         row = {"sessionId": identity, "parentSessionId": parent.session_id, "callId": call_id, "runId": str(uuid.uuid4()),

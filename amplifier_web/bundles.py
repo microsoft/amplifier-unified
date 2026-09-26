@@ -19,7 +19,7 @@ import uuid
 
 import yaml
 
-from .builtin_behaviors import SHELL_BEHAVIOR_URI, app_behaviors
+from .builtin_behaviors import DEFAULT_BEHAVIORS, app_behaviors
 
 SNAPSHOT_VERSION = "1.0.0+amplifier-unified.snapshot.1"
 MAX_DOCUMENT = 256 * 1024
@@ -197,7 +197,7 @@ class BundleManager:
                     "uri": uri, "name": previous.get("name", name) if role == "behavior" else name, "role": role, "enabled": True}
         for uri in app_behaviors(settings):
             if isinstance(uri, str):
-                rows.append(entry(uri, "behavior", "Unified shell" if uri == SHELL_BEHAVIOR_URI else uri.split("/")[-1]))
+                rows.append(entry(uri, "behavior", DEFAULT_BEHAVIORS.get(uri, uri.split("/")[-1])))
         for name, uri in settings.get("bundle", {}).get("added", {}).items():
             if isinstance(uri, str):
                 rows.append(entry(uri, "standalone", name))
