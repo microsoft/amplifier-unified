@@ -150,13 +150,21 @@ def is_entry_navigation(request: web.Request) -> bool:
 
     A browser link and its /login redirect can both carry cross-site Fetch
     Metadata. They still pass the normal Host, Origin, and authentication gates.
+    Chromium clears destination to the literal "empty" when our service worker
+    forwards a document navigation with fetch(event.request). Accept that only
+    for the two entry paths the shipped worker forwards, not APIs or callbacks.
+    Missing destination is not "empty"; ordinary script fetches cannot choose
+    navigate mode. The worker excludes frames, and CSP still blocks embedding.
     """
     return (
         request.method in {"GET", "HEAD"}
         and request.path in {"/", "/login", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete"}
         and "Origin" not in request.headers
         and request.headers.get("Sec-Fetch-Mode") == "navigate"
-        and request.headers.get("Sec-Fetch-Dest") == "document"
+        and (
+            request.headers.get("Sec-Fetch-Dest") == "document"
+            or (request.path in {"/", "/login"} and request.headers.get("Sec-Fetch-Dest") == "empty")
+        )
     )
 
 

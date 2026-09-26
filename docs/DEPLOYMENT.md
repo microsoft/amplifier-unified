@@ -75,6 +75,26 @@ launchd agent. Its standard output and error logs are private files under
 Unified's data directory. Use `amplifier-unified service status` to inspect the
 agent and `amplifier-unified service logs` to read its recent output.
 
+## Installed app opens a cross-origin error
+
+An installed PWA or external link can enter through its service worker.
+Chromium's `fetch(event.request)` forwards that navigation with
+`Sec-Fetch-Mode: navigate` but changes `Sec-Fetch-Dest` from `document` to the
+literal `empty`. Servers that require `document` for every entry reject the
+forwarded launch with `{"error": "Cross-origin requests are not permitted."}`.
+
+The entry check permits this forwarded form only for GET/HEAD `/` and `/login`,
+with no Origin header. Host validation, login/session authentication, exact
+Origin checks, CSRF checks, and cross-site API/frame rejection remain in place.
+Do not work around this error by disabling these protections or accepting
+arbitrary origins. A server containing this fix handles already-installed
+workers; reinstalling the PWA is not required for this particular failure.
+
+The regression in `tests/test_browser_auth.py` exercises the shipped service
+worker and real Chromium request metadata before and after worker control,
+including sign-in and blocked API/frame navigation. It is not a physical
+Android Edge installation test.
+
 ## Limits
 
 Unified owns its own HTTPS listener and authentication. It does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.

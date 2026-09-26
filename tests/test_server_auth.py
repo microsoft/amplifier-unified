@@ -253,6 +253,74 @@ async def test_external_document_navigation_reaches_login_or_setup(aiohttp_clien
     assert (await client.get("/api/state")).status == 401
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/", "/login"])
+async def test_service_worker_forwarded_entry_navigation(aiohttp_client, tmp_path, method, path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    # Chromium's fetch(event.request) preserves navigate/cross-site but clears
+    # destination and user activation on the forwarded document request.
+    headers = {**NAVIGATION_HEADERS, "Sec-Fetch-Dest": "empty"}
+    headers.pop("Sec-Fetch-User")
+    response = await client.request(method, path, headers=headers, allow_redirects=False)
+    if path == "/":
+        assert response.status == 307 and response.headers["Location"] == "/login"
+        response = await client.request(method, "/login", headers=headers, allow_redirects=False)
+    assert response.status == 200
+    assert (await client.get("/api/state")).status == 401
+    headers["Cookie"] = "amplifier_unified_session=" + new_session(app["session_secret"])
+    assert (await client.request(method, "/", headers=headers)).status == 200
+
+
+@pytest.mark.parametrize("path", ["/api/state", "/api/actions", "/api/events", "/api/health",
+                                 "/api/ca", "/api/canvas/private/document", "/api/attachments/private",
+                                 "/index.html", "/setup", "/oauth/mcp/callback", "/oauth/mcp/complete"])
+async def test_forwarded_navigation_does_not_exempt_other_routes(aiohttp_client, tmp_path, path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS, "Sec-Fetch-Dest": "empty",
+               "Cookie": "amplifier_unified_session=" + new_session(app["session_secret"])}
+    assert (await client.get(path, headers=headers, allow_redirects=False)).status == 403
+
+
+@pytest.mark.parametrize("origin", ["https://attacker.example", "null",
+                                   "android-app://com.microsoft.emmx", "", "http://127.0.0.1:8941"])
+async def test_forwarded_navigation_with_origin_stays_blocked(aiohttp_client, tmp_path, origin):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS, "Sec-Fetch-Dest": "empty",
+               "Host": "127.0.0.1:8941", "Origin": origin}
+    assert (await client.get("/login", headers=headers)).status == 403
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+async def test_forwarded_entry_metadata_does_not_allow_mutations(aiohttp_client, tmp_path, monkeypatch, method):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    monkeypatch.setattr("amplifier_web.auth.authenticate_pam",
+                        lambda *args: pytest.fail("cross-site mutation must not invoke PAM"))
+    csrf = new_csrf(app["session_secret"])
+    headers = {**NAVIGATION_HEADERS, "Sec-Fetch-Dest": "empty", "Cookie": f"{CSRF_COOKIE}={csrf}"}
+    assert (await client.request(method, "/login", headers=headers, data={"csrf": csrf})).status == 403
+
+
+async def test_forwarded_entry_requires_destination_and_known_host(aiohttp_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    headers = {**NAVIGATION_HEADERS}
+    headers.pop("Sec-Fetch-Dest")
+    assert (await client.get("/login", headers=headers)).status == 403
+    headers.update({"Sec-Fetch-Dest": "empty", "Host": "attacker.example"})
+    response = await client.get("/login", headers=headers)
+    assert response.status == 403
+    assert (await response.json())["error"] == "This Host is not configured."
+
+
 @pytest.mark.parametrize("path", ["/api/state", "/api/actions", "/api/events", "/api/health",
                                  "/api/ca", "/ca.crt", "/index.html"])
 async def test_navigation_metadata_does_not_exempt_other_routes(aiohttp_client, tmp_path, path):
@@ -265,8 +333,10 @@ async def test_navigation_metadata_does_not_exempt_other_routes(aiohttp_client, 
 
 
 @pytest.mark.parametrize("mode,destination", [("cors", "empty"), ("no-cors", "image"),
+                                            ("no-cors", "empty"), ("same-origin", "empty"),
                                             ("navigate", "iframe"), ("websocket", "empty"),
-                                            ("", ""), ("navigate", "")])
+                                            ("", ""), ("", "empty"), ("navigate", ""),
+                                            ("navigate", "frame"), ("navigate", "object"), ("navigate", "image")])
 async def test_cross_site_fetches_and_frames_stay_blocked(aiohttp_client, tmp_path, mode, destination):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
