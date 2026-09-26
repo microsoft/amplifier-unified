@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.32",
+      "title": "Faster settings saves and shared image tools",
+      "changes": [
+        "Save provider, model and bundle settings without waiting for each idle conversation to refresh. Active work keeps its loaded configuration until a safe refresh.",
+        "Reuse model lists and provider metadata across settings and conversation controls when their configuration matches. Refresh after relevant changes, on request, or after 24 hours.",
+        "Batch catalog updates and combine waiting editor changes, while keeping saves ordered and allowing them to finish during slow model-list lookups.",
+        "Make shared image generation and editing available through the public imagegen bundle, with the same input and output permissions for main agents and delegated work.",
+        "Remove the one-time reset guide for older hackathon installations from the repository."
+      ],
+      "notices": [
+        {
+          "id": "shared-imagegen-component-update",
+          "title": "Finish component updates",
+          "detail": "Shared image generation and editing also require the updated Work bundle and the imagegen component. Existing workers retain their loaded code.",
+          "action": "Let Settings → Updates finish installing components, then use a fresh worker."
+        }
+      ]
+    },
+    {
       "version": "0.20.31",
       "title": "More reliable setup, instructions, images and conversation controls",
       "changes": [

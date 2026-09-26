@@ -34,6 +34,7 @@ import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
 import {request,download,visibleView,applyIconTooltips} from './api';
 import {createPendingView} from './pending-view';
+import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
 import {createViewReporter} from './view-reporter';
 import {createConversationNavigation} from './conversation-navigation';
@@ -116,6 +117,7 @@ function App(){
  },[]);
  effectHandler.current=handleEffects;
  const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
+ const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve()),handledActionResults=useRef(new WeakSet());
  const acceptState=useCallback(next=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
@@ -179,16 +181,23 @@ function App(){
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
-   if(pending)pendingView.current.settle(pending);
-   if(navigationToken)conversationNavigation.current.settle(navigationToken);
-   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
-   handleEffects(result.effects);return result;
+   return result;
   };
   const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
   const exactReview=action==='attention.read'&&Array.isArray(args.ids)&&args.ids.length>0&&args.ids.every(id=>typeof args.fingerprints?.[id]==='string');
-  const queue=action.startsWith('coordination.')||meta.presentation?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:commandQueue;
-  const promise=queue.current.then(execute,execute).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});queue.current=promise.catch(()=>{});
+  const catalogRead=isProviderCatalogRead(action,meta);
+  const queue=action.startsWith('coordination.')||meta.presentation?{current:Promise.resolve()}:action==='canvas.visibility'?canvasVisibilityQueue:navigation?navigationQueue:exactReview?reviewQueue:['conversation.send','message.edit','question.answer'].includes(action)?sendQueue:catalogRead?providerReadQueue:commandQueue;
+  const promise=enqueueSettings.current(queue,execute,settingsDraftKey(action,args,meta),catalogRead?commandQueue.current:null).then(result=>{
+   // Each caller owns an optimistic token even when several waiting editor
+   // snapshots share the final request. Settle all callers after its receipt.
+   if(pending)pendingView.current.settle(pending);
+   if(navigationToken)conversationNavigation.current.settle(navigationToken);
+   if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
+   if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
+   return result;
+  }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});
+  queue.current=promise.catch(()=>{});
   if(action==='canvas.views.dirty'){
    canvasDirtyBarrier.current=promise;
    const settled=()=>{if(canvasDirtyBarrier.current===promise)canvasDirtyBarrier.current=null};
