@@ -202,6 +202,30 @@ def compose_bundles(base, overlay):
     return result
 
 
+def imagegen_defaults(base, behavior):
+    """Add image discovery without replacing an explicit root tool's policy.
+
+    The canonical host behavior adds a capability; module settings still choose
+    its configuration. Persisting the default in an explicit app list must not
+    change that policy. These tools expose fixed names, so a named module instance
+    also counts as an existing mount. Other overlays keep normal precedence.
+    """
+    base, behavior = copy.deepcopy(base), copy.deepcopy(behavior)
+    existing = {row['module'] for row in base.tools}
+    skill_paths = []
+    for row in behavior.tools:
+        if row['module'] == 'tool-skills':
+            skill_paths.extend(row.get('config', {}).get('skills', []))
+    if 'tool-skills' in existing:
+        for row in base.tools:
+            if row['module'] == 'tool-skills':
+                config = row.setdefault('config', {})
+                config['skills'] = list(dict.fromkeys([*config.get('skills', []), *skill_paths]))
+    behavior.tools = [row for row in behavior.tools
+                      if row['module'] not in {'tool-image', 'tool-skills'} or row['module'] not in existing]
+    return base, behavior
+
+
 class ComponentResolver:
     """Apply the same source rule when a dynamic child lazily adds a module."""
     def __init__(self, resolver, components):

@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from amplifier_web.builtin_behaviors import (
-    SHELL_BEHAVIOR_URI, app_behaviors, resolve_builtin_behavior, resource_root,
+    IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI, app_behaviors, resolve_builtin_behavior, resource_root,
 )
 from amplifier_web.bundles import BundleManager
 from amplifier_web.host.config import load_config
@@ -14,28 +14,33 @@ from amplifier_web.host.config import load_config
 
 def test_default_is_visible_without_writing_settings(tmp_path):
     config = load_config(tmp_path, home=tmp_path / "app")
-    assert config.app_bundles == [SHELL_BEHAVIOR_URI]
-    row, = BundleManager.entries(config.settings)
-    assert row["name"] == "Unified shell" and row["enabled"]
+    assert config.app_bundles == [SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI]
+    rows = BundleManager.entries(config.settings)
+    assert [row["name"] for row in rows] == ["Unified shell", "Image generation"]
+    assert all(row["enabled"] for row in rows)
     assert not config.settings_file.exists()
     assert app_behaviors({"bundle": {"app": []}}) == []
     assert app_behaviors({"bundle": {"app": ["chosen"]}}) == ["chosen"]
-    assert app_behaviors({"web_bundles": {"excluded": [SHELL_BEHAVIOR_URI]}}) == []
+    assert app_behaviors({"web_bundles": {"excluded": [SHELL_BEHAVIOR_URI]}}) == [IMAGEGEN_BEHAVIOR_URI]
+    assert app_behaviors({"web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}) == [SHELL_BEHAVIOR_URI]
+    assert app_behaviors({"web_bundles": {"entries": [{"uri": IMAGEGEN_BEHAVIOR_URI, "enabled": False}]}}) == [SHELL_BEHAVIOR_URI]
     assert resolve_builtin_behavior("git+https://example.org/custom@release") == "git+https://example.org/custom@release"
 
 
-async def test_default_disable_remove_and_explicit_readd_survive_reload(tmp_path):
+@pytest.mark.parametrize("uri, other", [(SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI),
+                                      (IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI)])
+async def test_default_disable_remove_and_explicit_readd_survive_reload(tmp_path, uri, other):
     manager = BundleManager(tmp_path / "app")
     args = {"workspace": str(tmp_path)}
-    row, = (await manager.perform("bundles.list", args))["bundles"]
+    row = next(row for row in (await manager.perform("bundles.list", args))["bundles"] if row["uri"] == uri)
     await manager.perform("bundles.toggle", {**args, "id": row["id"], "enabled": False})
-    assert load_config(tmp_path).app_bundles == []
-    row, = (await BundleManager(tmp_path).perform("bundles.list", args))["bundles"]
+    assert load_config(tmp_path).app_bundles == [other]
+    row = next(row for row in (await BundleManager(tmp_path).perform("bundles.list", args))["bundles"] if row["uri"] == uri)
     assert row["enabled"] is False
     await manager.perform("bundles.remove", {**args, "id": row["id"]})
-    assert (await manager.perform("bundles.list", args))["bundles"] == []
-    await manager.perform("bundles.add", {**args, "uri": SHELL_BEHAVIOR_URI, "name": "Unified shell"})
-    assert load_config(tmp_path).app_bundles == [SHELL_BEHAVIOR_URI]
+    assert [row["uri"] for row in (await manager.perform("bundles.list", args))["bundles"]] == [other]
+    await manager.perform("bundles.add", {**args, "uri": uri, "name": "Restored capability"})
+    assert load_config(tmp_path).app_bundles == [other, uri]
 
 
 async def load_behavior(tmp_path):
@@ -114,7 +119,9 @@ async def test_namespace_anchor_is_not_a_selectable_session_root(tmp_path):
 
 
 @pytest.mark.parametrize("origin", ["ui", "agent"])
-async def test_default_toggle_uses_shared_action_path(tmp_path, origin):
+@pytest.mark.parametrize("uri, other", [(SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI),
+                                      (IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI)])
+async def test_default_toggle_uses_shared_action_path(tmp_path, origin, uri, other):
     import asyncio
     from amplifier_web.service import AppService
     from amplifier_web.management import Management
@@ -122,7 +129,7 @@ async def test_default_toggle_uses_shared_action_path(tmp_path, origin):
     app.management = Management(app)
     try:
         await app.dispatch("session.create", {})
-        row, = BundleManager.entries({})
+        row = next(row for row in BundleManager.entries({}) if row["uri"] == uri)
         args = {"id": row["id"], "enabled": False}
         if origin == "agent":
             result = await app.app_bridge("dispatch", {"action": "bundles.toggle", "args": args, "id": "toggle-shell"}, app.state["selectedSessionId"])
@@ -130,7 +137,7 @@ async def test_default_toggle_uses_shared_action_path(tmp_path, origin):
             result = await app.dispatch("bundles.toggle", args, command_id="toggle-shell")
         assert result["accepted"]
         await asyncio.gather(*tuple(app.tasks))
-        assert load_config(tmp_path).app_bundles == []
-        assert app.state["bundles"][0]["enabled"] is False
+        assert load_config(tmp_path).app_bundles == [other]
+        assert next(row for row in app.state["bundles"] if row["uri"] == uri)["enabled"] is False
     finally:
         await app.close()
