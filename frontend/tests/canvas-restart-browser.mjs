@@ -32,6 +32,13 @@ try{
  await expect(page.getByRole('heading',{name:'Readable after restart',exact:true})).toBeVisible();
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep the unsent draft too');
  await page.waitForFunction(()=>window.amplifier.getState().view.draft==='Keep the unsent draft too');
+ // The browser updates optimistically before its debounced autosave. Confirm
+ // the host has acknowledged the draft before interrupting that host.
+ const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+ await expect.poll(async()=>{
+  const response=await page.request.get(url+'/api/state?clientId='+encodeURIComponent(clientId));
+  return (await response.json()).view?.draft;
+ }).toBe('Keep the unsent draft too');
  const before=await page.evaluate(()=>{const s=window.amplifier.getState();return {artifact:s.canvas.id,session:s.selectedSessionId,host:s.client.hostInstanceId,source:s.canvas.content}});
  await stop();
  await start(Number(new URL(url).port));
