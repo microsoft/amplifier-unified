@@ -1,6 +1,7 @@
 """Provider and routing editors for shared Amplifier configuration."""
 from __future__ import annotations
 import copy
+from contextlib import contextmanager
 import asyncio
 import json
 import signal
@@ -175,11 +176,21 @@ class SetupManager:
         self.progress=progress; self.auth_command=auth_command; self.probe_command=probe_command; self.logins={}
 
     def config(self,workspace):
+        snapshot=getattr(self,'_config_snapshot',None)
+        if snapshot and snapshot[0]==workspace:return snapshot[1]
         if self.allow_missing_workspace:
             workspace=Path(workspace).expanduser().resolve()
             while not workspace.is_dir() and workspace.parent!=workspace:
                 workspace=workspace.parent
         return load_config(workspace,home=self.home,global_only=self.global_only)
+
+    @contextmanager
+    def read_snapshot(self,workspace):
+        """Reuse one config only within a synchronous inventory computation."""
+        previous=getattr(self,'_config_snapshot',None)
+        self._config_snapshot=(workspace,self.config(workspace))
+        try:yield
+        finally:self._config_snapshot=previous
 
     def provider_rows(self,workspace):
         config=self.config(workspace)
@@ -205,31 +216,27 @@ class SetupManager:
         return rows
 
     def catalog_key(self,args,workspace):
-        from .provider_catalog import fingerprint
+        from .provider_catalog import configuration_key
         config=self.config(workspace)
         row=next((row for row in config.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
         module=args.get('module') or (row or {}).get('module')
-        # Priority is Unified-owned ordering, not provider catalog identity.
-        row=copy.deepcopy(row) if row else None
-        if row:row.get('config',{}).pop('priority',None)
         raw=(row or {}).get('config',{})
-        credential=environment_credential(module,raw)
-        environment={name:os.environ.get(name) for name in (*PROVIDER_ENV.get(module,()),credential.get('envVar')) if name}
-        environment.update({name:os.environ.get(name) for name in re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)',json.dumps(raw))})
-        # Include credential-file contents by digest, never in browser-visible data.
-        files={}
-        for name,value in raw.items():
-            if ('token' in name or 'credential' in name) and isinstance(value,str) and Path(value).expanduser().is_file():
-                path=Path(value).expanduser()
-                files[name]=fingerprint(path.read_bytes()) if path.stat().st_size<1_000_000 else str(path.stat().st_mtime_ns)
-        return fingerprint([str(Path(workspace).resolve()),row,module,raw,environment,files,getattr(config,'module_sources',{}).get(module)])
+        return configuration_key(workspace,module,raw,getattr(config,'module_sources',{}).get(module) or (row or {}).get('source'),home=self.home)
 
     async def cached_probe(self,action,args,workspace):
-        key=(action,self.catalog_key(args,workspace))
+        from .provider_catalog import model_key
+        identity=self.catalog_key(args,workspace)
+        key=model_key(identity) if action=='providers.models' else (action,identity)
+        if action=='providers.schema' and not args.get('refresh') and self.catalog.fresh(model_key(identity)):
+            cached=self.catalog.peek(model_key(identity))
+            if cached.get('providerMetadata'):
+                return {'providerMetadata':cached['providerMetadata']}
         result=await self.catalog.get(key,lambda:self.probe(action,args,workspace),refresh=args.get('refresh',False))
-        if key[1]!=self.catalog_key(args,workspace):
+        if identity!=self.catalog_key(args,workspace):
             self.catalog.discard(key)
             raise ValueError('Provider configuration changed during discovery. The new configuration is being refreshed.')
+        if action=='providers.models':
+            result={**result,'modelsProviderId':args['id'],'modelsSupported':result.get('modelsSupported',result.get('supported',True))}
         return result
 
     async def probe(self,action,args,workspace):
@@ -299,8 +306,14 @@ class SetupManager:
         os.environ.update(updates)
 
     def _provider_mutation(self,args,workspace,scope,remove=False):
+        from .provider_catalog import fingerprint,configuration_key
         identity=safe_name(args.get('id') or args.get('module','').removeprefix('provider-'))
         effective=self.config(workspace)
+        def signature(config):
+            return fingerprint([config.providers,
+                [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.providers],
+                config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])])
+        before=signature(effective)
         existing=next((row for row in effective.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
         def mutate(settings):
             rows=settings.setdefault('config',{}).setdefault('providers',[])
@@ -359,7 +372,10 @@ class SetupManager:
             # Clear the older Unified-only flag when editing an existing entry.
             settings.get('overrides',{}).get(identity,{}).pop('enabled',None)
         self.store.update(workspace,scope,mutate)
-        return {'providers':self.provider_rows(workspace),'takesEffect':'new_sessions','scope':scope}
+        with self.read_snapshot(workspace):
+            current=self.config(workspace)
+            changed=before!=signature(current)
+            return {'providers':self.provider_rows(workspace),'takesEffect':'new_sessions','scope':scope,'configurationChanged':changed}
 
     def _routing_dirs(self,workspace):
         # Same first-hit precedence as the mounted routing hook.
