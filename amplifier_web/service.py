@@ -2795,6 +2795,11 @@ class AppService:
                     self._task(self.refresh_configuration(identity))
 
     async def refresh_configuration(self,identity):
+        # Ordinary requests must keep their existing admission-lock order.
+        # An extra no-op lock turn lets later maintenance overtake queued input.
+        try:
+            if not self._session(identity).get('configurationPending'):return
+        except AppError:return
         async with self.lock:
             try:session=self._session(identity)
             except AppError:return
