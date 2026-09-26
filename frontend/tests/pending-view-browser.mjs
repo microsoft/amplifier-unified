@@ -10,15 +10,16 @@ const waiting=[],calls=[],errors=[],copyResults=[];let browser,vite;
 state.notificationMessages=[{id:'old-notice',sessionId:'off-page-chat',role:'assistant',via:'text',text:'Previously finished'}];
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function nextAction(){for(let i=0;i<100&&!waiting.length;i++)await sleep(10);assert.ok(waiting.length,'Expected a queued shared action');return waiting.shift()}
-async function finish({route,action,args},error){
+async function finish({route,action,args},error,effects=[]){
  if(error)return route.fulfill({status:409,json:{accepted:false,error}});
  assert.ok(['view.update','conversation.send','providers.save'].includes(action));state={...state,revision:state.revision+1,view:{...state.view,...(args.patch||{})}};
- await route.fulfill({json:{accepted:true,state}});
+ await route.fulfill({json:{accepted:true,state,effects}});
 }
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(()=>{
+  window.fixtureOpens=[];window.open=url=>window.fixtureOpens.push(url);
   window.fixtureCopies=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.fixtureCopies.push(text)},configurable:true});
   window.fixtureNotifications=[];window.Notification=class{static permission='granted';constructor(title,options){this.title=title;this.options=options;window.fixtureNotifications.push(this)}};
   const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);setTimeout(()=>this.onopen?.(),0)}close(){}};
@@ -119,10 +120,11 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.providerEditor.model),'after-save');
  await finish(initialEditor);const latestEditor=await nextAction();
  assert.equal(latestEditor.args.patch.providerEditor.model,'model-11');
- await finish(latestEditor);const saveProvider=await nextAction();assert.equal(saveProvider.action,'providers.save');
+ await finish(latestEditor,null,[{type:'browser.open',url:'https://example.invalid/review'}]);const saveProvider=await nextAction();assert.equal(saveProvider.action,'providers.save');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.providerEditor.model),'after-save');
  await finish(saveProvider);const afterSave=await nextAction();assert.equal(afterSave.args.patch.providerEditor.model,'after-save');await finish(afterSave);
  await page.evaluate(()=>Promise.all([...window.editorChanges,window.initialEditor,window.saveProvider,window.afterSave]));
+ assert.deepEqual(await page.evaluate(()=>window.fixtureOpens),['https://example.invalid/review'],'A shared response runs its effects once');
  state={...state,revision:state.revision+1,view:{...state.view,providerEditor:{id:'provider',model:'agent-choice'}}};
  await page.evaluate(state=>window.emitFixtureState(state),state);
  await page.waitForFunction(()=>window.amplifier.getState().view.providerEditor.model==='agent-choice');

@@ -117,7 +117,7 @@ function App(){
  },[]);
  effectHandler.current=handleEffects;
  const stateWaiters=useRef(new Set()),stateRecovery=useRef(null);
- const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve());
+ const enqueueSettings=useRef(createSettingsActionQueue()),providerReadQueue=useRef(Promise.resolve()),handledActionResults=useRef(new WeakSet());
  const acceptState=useCallback(next=>{
   if(!next||typeof next!=='object')return;
   if(serverState.current && next.client?.hostInstanceId===serverState.current.client?.hostInstanceId && next.revision<serverState.current.revision)return;
@@ -181,7 +181,7 @@ function App(){
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
    if(result.state)acceptState(result.state);
    else await awaitState(result);
-   handleEffects(result.effects);return result;
+   return result;
   };
   const navigation=['session.select','session.draft','workspace.select'].includes(action)||(action==='shell.command'&&['session.select','session.draft','workspace.select'].includes(args.action));
   // Reviewing exact item fingerprints is independent of send admission and view changes.
@@ -194,6 +194,7 @@ function App(){
    if(pending)pendingView.current.settle(pending);
    if(navigationToken)conversationNavigation.current.settle(navigationToken);
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
+   if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
   }).catch(error=>{if(navigationToken){conversationNavigation.current.settle(navigationToken);if(serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}}if(error.state)acceptState(error.state);if(pending){pendingView.current.settle(pending);if(latest.current)setState(pendingView.current.apply(latest.current))}throw error}).finally(()=>{settleTracking();settleFeedback()});
   queue.current=promise.catch(()=>{});
