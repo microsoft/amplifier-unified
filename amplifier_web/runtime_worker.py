@@ -263,6 +263,7 @@ class Worker:
 
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
+        startup_capture = None
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
@@ -276,6 +277,8 @@ class Worker:
                 from runtime_bootstrap import bootstrap_app_package
             bootstrap_app_package()
             from amplifier_web.host.config import app_home
+            from amplifier_web.worker_diagnostics import StartupCapture
+            startup_capture = StartupCapture()
             from amplifier_web.host.session import prepare_manager
             from amplifier_web.execution_events import ExecutionEvents
             from amplifier_web.runtime_controls import RuntimeControls
@@ -388,9 +391,12 @@ class Worker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            diagnostic = startup_capture.save(exc, config.get("id")) if startup_capture else None
             if raise_errors:
                 raise
             error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
+            if diagnostic:
+                error["diagnosticReceipt"] = diagnostic.name
             from amplifier_web.module_failures import ConfiguredModuleError
             if isinstance(exc, ConfiguredModuleError):
                 error.update(code="module_load_failed", moduleFailures=exc.failures)
@@ -399,6 +405,8 @@ class Worker:
             publish(error)
             self.shutdown.set()
         finally:
+            if startup_capture:
+                startup_capture.close()
             if progress:
                 progress.cancel()
                 await asyncio.gather(progress, return_exceptions=True)

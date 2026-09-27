@@ -87,7 +87,7 @@ def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (
         'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
-        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy')),
+        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt')),
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
@@ -99,6 +99,10 @@ def inspect_session(home, session):
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
               'selection': session.get('selection', {}), 'workReplayed': False,
               'capturedAt': time.time()}
+    from .worker_diagnostics import receipt_path
+    diagnostic = receipt_path(session.get('diagnosticReceipt'), home=home)
+    if diagnostic:
+        report['diagnosticReceipt'] = diagnostic.name
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
     current = Path(home) / 'runtime-reports' / identity

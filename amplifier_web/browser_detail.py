@@ -43,7 +43,7 @@ def work_segments(session):
     for _,index in timed:
         position=max(position,index);latest.append(position)
     turns={row['id']:row for row in session.get('execution',{}).get('turns',[])}
-    groups={};anchors={}
+    groups={};anchors={};last_groups={}
     for node in session.get('execution',{}).get('nodes',[]):
         turn=turns.get(node.get('turnId'),{})
         anchor=turn.get('anchorMessageId')
@@ -57,6 +57,9 @@ def work_segments(session):
         identity=str(node.get('turnId'))+'@'+(anchor or 'start')
         group=groups.setdefault(identity,{'id':identity,'anchorMessageId':anchor,'turnId':node.get('turnId'),'members':[]})
         group['members'].append(node)
+        order=(at if isinstance(at,(int,float)) else float('-inf'),len(anchors))
+        if node.get('turnId') not in last_groups or order >= last_groups[node.get('turnId')][0]:
+            last_groups[node.get('turnId')]=(order,identity)
     result=[]
     for group in groups.values():
         nodes=group.pop('members');turn=turns.get(group['turnId'],{})
@@ -66,6 +69,14 @@ def work_segments(session):
         running=running or (not starts and not ends and turn.get('phase') in LIVE_PHASES and not turn.get('endedAt'))
         calls=[row for row in nodes if row.get('kind')=='llm']
         failure=next((row.get('status') or row.get('phase') for row in nodes if (row.get('status') or row.get('phase')) in {'error','failed','cancelled','interrupted'}),None)
+        # A manager can fail after its final model call succeeded. Attribute
+        # that outcome to the last segment without rewriting earlier work or
+        # the successful child call. Use the full tree, including paged nodes.
+        turn_failure=turn.get('status') or turn.get('phase')
+        if last_groups[group['turnId']][1]==group['id'] and turn_failure in {'error','failed','cancelled','interrupted'}:
+            failure=turn_failure
+            running=False
+            if isinstance(turn.get('endedAt'),(int,float)):ends.append(turn['endedAt'])
         group.update(startedAt=min(starts) if starts else turn.get('startedAt'),
                      endedAt=None if running else max(ends) if ends else turn.get('endedAt'),phase='running' if running else failure or ('completed' if ends or turn.get('endedAt') else 'recorded'),
                      nodeCounts={'tools':sum(row.get('kind')=='tool' for row in nodes),'models':sum(row.get('kind')=='llm' for row in nodes)},

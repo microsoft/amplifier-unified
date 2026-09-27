@@ -106,3 +106,41 @@ def test_group_summary_keeps_failures_visible_and_unknown_completion_honest():
     assert project(session)['execution']['segments'][0]['phase']=='error'
     node=session['execution']['nodes'][0];node.update(phase='recorded');node.pop('endedAt')
     assert project(session)['execution']['segments'][0]['phase']=='recorded'
+
+
+@pytest.mark.parametrize('phase', ['error', 'failed', 'cancelled', 'interrupted'])
+def test_manager_failure_after_successful_goal_check_marks_only_final_segment(phase):
+    session={'id':'chat','messages':[{'id':'question','createdAt':1}, {'id':'answer','createdAt':10}],
+             'execution':{'turns':[{'id':'turn','phase':phase,'endedAt':15}],
+              # Arrival order is not necessarily time order.
+              'nodes':[{'id':'goal-check','turnId':'turn','kind':'llm','startedAt':11,'endedAt':13,'phase':'completed',
+                        'usage':{'inputTokens':909,'outputTokens':62,'totalTokens':971}},
+                       {'id':'main-call','turnId':'turn','kind':'llm','startedAt':2,'endedAt':9,'phase':'completed'}]}}
+    original=copy.deepcopy(session)
+    view=project(session)
+    groups={row['anchorMessageId']:row for row in view['execution']['segments']}
+    assert groups['question']['phase']=='completed'
+    assert groups['question']['endedAt']==9
+    assert groups['answer']['phase']==phase
+    assert groups['answer']['endedAt']==15
+    assert groups['answer']['aggregateUsage']['totalTokens']==971
+    assert all(row['phase']=='completed' for row in view['execution']['nodes'])
+    assert session==original
+
+
+def test_paging_does_not_move_manager_failure_to_earlier_successful_work():
+    session={'id':'chat','messages':[{'id':'question','createdAt':1}, {'id':'answer','createdAt':150}],
+             'execution':{'turns':[{'id':'turn','phase':'error','endedAt':250}],
+              'nodes':[{'id':str(i),'turnId':'turn','kind':'llm','startedAt':i+2,'endedAt':i+3,'phase':'completed'} for i in range(200)]}}
+    earlier=page(session,'nodes','100')
+    assert [group['phase'] for group in earlier['segments']]==['completed']
+    latest=page(session,'nodes')
+    assert [group['phase'] for group in latest['segments']]==['completed','error']
+
+
+def test_terminal_manager_status_does_not_relabel_unsettled_child_work():
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn','phase':'error','endedAt':5}],
+             'nodes':[{'id':'worker','turnId':'turn','kind':'worker','startedAt':1,'phase':'running'}]}}
+    view=project(session)
+    assert view['execution']['segments'][0]['phase']=='error'
+    assert view['execution']['nodes'][0]['phase']=='running'

@@ -109,6 +109,7 @@ export function splitWork(messages,data){
  const turns=[],nodes=[];
  for(const turn of data.turns){
   const source=data.nodes.filter(node=>node.turnId===turn.id),groups=new Map();
+  let lastGroup,lastAt=-Infinity;
   for(const node of source){
    const at=Number.isFinite(node.startedAt)?node.startedAt:Number.isFinite(node.endedAt)?node.endedAt:turn.startedAt;
    let anchor=turn.anchorMessageId??null;
@@ -118,14 +119,18 @@ export function splitWork(messages,data){
    const id=`${turn.id}@${anchor||'start'}`;
    if(!groups.has(id))groups.set(id,{id,anchor,nodes:[]});
    groups.get(id).nodes.push({...node,turnId:id});
+   const order=Number.isFinite(at)?at:-Infinity;
+   if(lastGroup===undefined||order>=lastAt){lastAt=order;lastGroup=id}
   }
   if(!source.length&&isRunning(turn))groups.set(`${turn.id}@${turn.anchorMessageId||'start'}`,{id:`${turn.id}@${turn.anchorMessageId||'start'}`,anchor:turn.anchorMessageId,nodes:[]});
   for(const group of groups.values()){
    const starts=group.nodes.map(node=>node.startedAt).filter(Number.isFinite),ends=group.nodes.map(node=>node.endedAt).filter(Number.isFinite);
-   const running=group.nodes.some(isRunning)||(!starts.length&&!ends.length&&isRunning(turn));
+   const turnFailure=group.id===lastGroup&&['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase)?turn.status||turn.phase:null;
+   const running=!turnFailure&&(group.nodes.some(isRunning)||(!starts.length&&!ends.length&&isRunning(turn)));
    const failure=group.nodes.find(node=>['error','failed','cancelled','interrupted'].includes(node.status||node.phase));
+   if(turnFailure&&Number.isFinite(turn.endedAt))ends.push(turn.endedAt);
    turns.push({...turn,id:group.id,originalTurnId:turn.id,anchorMessageId:group.anchor,startedAt:starts.length?Math.min(...starts):turn.startedAt,
-    endedAt:running?undefined:ends.length?Math.max(...ends):turn.endedAt,phase:running?'running':failure?(failure.status||failure.phase):ends.length||turn.endedAt?'completed':'recorded',status:undefined,
+    endedAt:running?undefined:ends.length?Math.max(...ends):turn.endedAt,phase:running?'running':turnFailure||(failure?(failure.status||failure.phase):ends.length||turn.endedAt?'completed':'recorded'),status:undefined,
     aggregateUsage:segmentUsage(group.nodes),nodeCounts:{tools:group.nodes.filter(n=>n.kind==='tool').length,models:group.nodes.filter(n=>n.kind==='llm').length},
     ...(data.segments||[]).find(segment=>segment.id===group.id)});
    nodes.push(...group.nodes);
