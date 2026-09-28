@@ -28,7 +28,8 @@ try{
  await expect(page.getByRole('button',{name:'Conversation details',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Copy session ID',exact:true})).toHaveCount(0);
  await page.screenshot({path:output+'compact-error.png'});
- await page.getByRole('button',{name:'Chat details',exact:true}).click();
+ if(contextLimit)await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ else await page.getByRole('button',{name:'View error details',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Chat details',exact:true});
  await expect(dialog.getByRole('button',{name:'Hide details',exact:true})).toHaveCount(0);
  if(moduleFailure){

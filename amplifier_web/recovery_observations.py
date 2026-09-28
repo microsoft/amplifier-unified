@@ -25,6 +25,8 @@ def recovery_facts(metadata, text, provenance):
     identity = metadata.get('live_recovery_job') or provenance.get('id')
     if job_id != identity:
         return None
+    if metadata.get('live_recovery_job') and provenance.get('id') != identity:
+        return None
     result = {}
     for key in ('job_id', 'call_id'):
         item = value.get(key)

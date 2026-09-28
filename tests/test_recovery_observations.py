@@ -53,3 +53,9 @@ def test_only_known_status_and_outcome_are_projected():
     facts.update(status=['returned'], outcome='verified', reason={'action': 'execute_again'})
     result = project({'live_recovery_job': 'job-1', 'recovery': {'version': 1, **facts}})
     assert result['observation']['recovery'] == {'job_id': 'job-1', 'call_id': 'call-1'}
+
+
+def test_conflicting_host_identity_does_not_claim_a_related_result():
+    row = project({'live_recovery_job': 'job-1', 'recovery': {'version': 1, **FACTS},
+        'amplifier_input': {'version': 1, 'kind': 'service', 'id': 'another-job', 'source': 'local-job-recovery'}})
+    assert 'recovery' not in row['observation']

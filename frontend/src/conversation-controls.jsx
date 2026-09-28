@@ -93,7 +93,8 @@ export function ConversationError({state,session,act}){
  }
  if(item?.read)return null;
  if(contextLimited)return <div className="a-alert" role="alert"><span><strong>Context limit reached.</strong> {failure.summary} {failure.guidance}</span><button type="button" className="a-link" data-action="session.recover" disabled={recovering||working} onClick={recover}>{recovering?'Creating recovery copy…':'Create recovery copy'}</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
- const recorded=Number.isFinite(failure?.recordedAt)&&failure.recordedAt>0?new Date(failure.recordedAt*1000):null;
+ const at=failure?.recordedAt??session.errorAt,date=Number.isFinite(at)&&at>0?new Date(at*1000):null;
+ const recorded=date&&Number.isFinite(date.getTime())?date:null;
  return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
 }
 
