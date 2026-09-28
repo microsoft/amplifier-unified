@@ -12,7 +12,7 @@ def manager(tmp_path,monkeypatch):
     def config(workspace):
         value={}
         for scope in ('global','project','local'):value=merge(value,manager.store.read(workspace,scope))
-        return SimpleNamespace(resolve_source=lambda reference:None,settings=value,providers=value.get('config',{}).get('providers',[]))
+        return SimpleNamespace(resolve_source=lambda reference:None,module_sources={},settings=value,providers=value.get('config',{}).get('providers',[]))
     monkeypatch.setattr(manager,'config',config)
     async def cached_catalog(workspace):pass
     monkeypatch.setattr(manager,'ensure_routing_catalog',cached_catalog)

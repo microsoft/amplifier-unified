@@ -20,6 +20,10 @@ class Runtime:
         await emit("runtime.status", {"sessionId": session["id"], "status": "ready"})
 
     async def send(self, session, text, input_id, emit):
+        if '--startup-failure' in sys.argv and not self.sent:
+            from amplifier_web.runtime import RuntimeStartupError
+            await self.start_gate.wait()
+            raise RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
         self.sent.append({"sessionId": session["id"], "text": text})
         if '--chat-controls' in sys.argv:
             self.sent[-1].update(workspace=session['workspace'], bundle=session['bundle'],
@@ -56,6 +60,7 @@ async def main(home):
     workspace = home / "workspace"
     workspace.mkdir()
     runtime = Runtime()
+    runtime.start_gate = asyncio.Event()
     if '--chat-controls' in sys.argv:
         preferred_model = ['first']
         from amplifier_web.setup import SetupManager
@@ -86,6 +91,18 @@ async def main(home):
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 
     app.router.add_get("/fixture", inspect)
+    if '--startup-failure' in sys.argv:
+        async def fail_startup(request):
+            runtime.start_gate.set()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/fail-startup', fail_startup)
+        async def report_selection(request):
+            data = await request.json()
+            await app['service'].on_runtime_event('runtime.status', {
+                'sessionId': data['sessionId'], 'status': 'ready',
+                'report': {'effective_selection': {'instance': 'test-provider', 'model': 'reported-model'}}})
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/report-selection', report_selection)
     if '--chat-controls' in sys.argv:
         async def provider_preference(request):
             preferred_model[0] = (await request.json())['model']

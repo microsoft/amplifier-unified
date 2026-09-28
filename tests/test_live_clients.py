@@ -31,6 +31,23 @@ def snapshot(service, client):
         return service.browser_state()
 
 
+@pytest.mark.parametrize('pinned', [False, True])
+async def test_new_web_document_collapses_only_unpinned_canvas_controls(live, pinned):
+    service, first, _ = live
+    await command(service, 'browser-a', 'view.update', {'patch': {
+        'canvasControlsExpanded': True, 'canvasControlsPinned': pinned, 'draft': 'Keep draft'}})
+    # A transport reattachment is not a page reload.
+    service.clients.attach('browser-a')
+    assert snapshot(service, 'browser-a')['view']['canvasControlsExpanded']
+    service.clients.attach('reloaded-web', resume='browser-a')
+    state = snapshot(service, 'reloaded-web')
+    assert state['view']['canvasControlsExpanded'] is pinned
+    assert state['view']['draft'] == 'Keep draft'
+    assert snapshot(service, 'browser-a')['view']['canvasControlsExpanded']
+    service.clients.attach('resumed-api', resume='browser-a', kind='api')
+    assert snapshot(service, 'resumed-api')['view']['canvasControlsExpanded']
+
+
 async def test_reconcile_observes_unsaved_catalog_changes_without_losing_other_client_state(live):
     from copy import deepcopy
     service, first, second = live
