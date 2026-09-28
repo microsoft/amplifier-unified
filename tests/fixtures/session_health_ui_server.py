@@ -26,7 +26,8 @@ async def main(home):
         failure = persist_failures(home / 'runtime-reports' / source['id'], [
             {'module': 'hook-fixture', 'type': 'hook', 'reason_code': 'invalid_module_metadata'}])
         await service.on_runtime_event('runtime.error', {
-            'sessionId': source['id'], 'error': str(failure), 'moduleFailures': failure.failures})
+            'sessionId': source['id'], 'error': str(failure),
+            'errorType': 'RuntimeStartupError', 'moduleFailures': failure.failures})
     elif os.environ.get('CONTEXT_LIMIT_FIXTURE'):
         await service.on_runtime_event('runtime.error', {
             'sessionId': source['id'], 'errorType': 'ContextLengthError',
