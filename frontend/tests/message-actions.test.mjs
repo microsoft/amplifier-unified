@@ -46,7 +46,7 @@ test('consecutive recovered records share one disclosure and preserve each origi
  const original=JSON.stringify(rows),groups=groupRecoveryMessages(rows);
  assert.equal(groups.length,1);assert.deepEqual(groups[0],rows);
  const html=renderToStaticMarkup(React.createElement(RecoveryGroup,{messages:groups[0],session:{id:'chat'},state:{view:{}},act:()=>{}}));
- assert.match(html,/35 recovered work updates/);assert.equal((html.match(/<details/g)||[]).length,1);
+ assert.match(html,/Saved work notices \(35\)/);assert.equal((html.match(/<details/g)||[]).length,36);
  for(const row of rows)assert.ok(html.includes(`data-message-id="${row.id}"`));
  assert.equal(JSON.stringify(rows),original);
 });

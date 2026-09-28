@@ -22,8 +22,8 @@ try{
   await expect(page.getByRole('button',{name:'Create recovery copy',exact:true})).toBeVisible();
   if(activeWorker) await expect(page.getByRole('alert').getByRole('button',{name:'Create recovery copy',exact:true})).toBeDisabled();
  }else{
-  await expect(page.getByText('Conversation stopped.',{exact:true})).toBeVisible();
-  assert.ok((await page.getByRole('alert').filter({hasText:'Conversation stopped.'}).boundingBox()).height<120);
+  await expect(page.getByText(moduleFailure?'Chat could not start.':'A turn stopped.',{exact:true})).toBeVisible();
+  assert.ok((await page.getByRole('alert').filter({hasText:moduleFailure?'Chat could not start.':'A turn stopped.'}).boundingBox()).height<120);
  }
  await expect(page.getByRole('button',{name:'Conversation details',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Copy session ID',exact:true})).toHaveCount(0);

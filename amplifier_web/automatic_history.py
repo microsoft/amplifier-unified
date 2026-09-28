@@ -83,6 +83,10 @@ def display_message(row, index, session, *, include_internal=False):
         input_identity = {'nativeInputId': provenance['id']}
     if isinstance(provenance,dict) and provenance.get('version')==1 and provenance.get('kind')=='service' and all(isinstance(provenance.get(key),str) and 0<len(provenance[key])<=128 for key in ('id','source')):
         observation={'observation':{key:provenance[key] for key in ('id','source','call_id') if key in provenance}}
+        from .recovery_observations import recovery_facts
+        facts = recovery_facts(metadata, text, provenance)
+        if facts:
+            observation['observation']['recovery'] = facts
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
             'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,

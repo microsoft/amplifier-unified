@@ -33,9 +33,12 @@ test('dismissal does not remove settings details; active work cannot be recovere
  await renderAct(async()=>root.unmount());
 });
 
-test('error banner has no details or copy buttons',async()=>{
- let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async()=>({accepted:true})}))});
- assert.equal(root.root.findAllByType('button').length,0);assert.equal(root.toJSON().props.className,'a-alert');
+test('error banner opens recorded details through a shared action without retrying work',async()=>{
+ const calls=[];
+ let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
+ assert.equal(root.root.findAllByType('button').length,1);assert.equal(root.toJSON().props.className,'a-alert');
+ await renderAct(async()=>root.root.findByProps({'data-action':'view.update'}).props.onClick());
+ assert.deepEqual(calls,[{name:'view.update',args:{patch:{panel:'session-details'}}}]);
  await renderAct(async()=>root.unmount());
 });
 
