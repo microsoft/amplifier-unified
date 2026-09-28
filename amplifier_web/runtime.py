@@ -397,7 +397,17 @@ class RuntimeManager:
                                 failure=data.get("error") or str(failure))
                         from .module_failures import ConfiguredModuleError
                         if not isinstance(failure, ConfiguredModuleError):
-                            failure = RuntimeStartupError("The conversation worker could not start.")
+                            from .session_health import failure_details
+                            detail = failure_details(data.get("error"), data.get("errorType"))
+                            labels = {'authentication': 'AuthenticationError', 'rate_limit': 'RateLimitError',
+                                      'context_limit': 'ContextLengthError', 'invalid_image': 'InvalidImageError',
+                                      'tool_configuration': 'ToolConfigurationError'}
+                            label = labels.get(detail['category'])
+                            # Publish only our bounded classification and guidance,
+                            # never the original provider payload or exception text.
+                            public = (f"{label}: {detail['summary']} {detail['guidance']}" if label
+                                      else "The conversation worker could not start.")
+                            failure = RuntimeStartupError(public)
                         if diagnostic:
                             failure.diagnostic_path = diagnostic
                     error = str(failure)

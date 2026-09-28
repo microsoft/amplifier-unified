@@ -72,8 +72,16 @@ async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(t
         await app.close()
 
 
-async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path):
-    event = {'type': 'runtime.error', 'error': 'AuthenticationError: provider authentication failed'}
+@pytest.mark.parametrize('detail, category, label', [
+    ('AuthenticationError: provider authentication failed', 'authentication', 'AuthenticationError'),
+    ('RateLimitError: provider limit reached', 'rate_limit', 'RateLimitError'),
+    ('ContextLengthError: too many tokens', 'context_limit', 'ContextLengthError'),
+    ('Invalid image_url: invalid base64 value', 'invalid_image', 'InvalidImageError'),
+    ('tools.0 input_schema: extra inputs are not permitted', 'tool_configuration', 'ToolConfigurationError'),
+])
+async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path, monkeypatch, detail, category, label):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    event = {'type': 'runtime.error', 'error': detail + ' private-provider-payload'}
     fixture = 'import sys,json; sys.stdin.readline(); print(' + repr(json.dumps(event)) + ',flush=True)'
     runtime = RuntimeManager(command=[sys.executable, '-c', fixture],
                              retention={'prewarm_on_select': False})
@@ -83,10 +91,17 @@ async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path):
         with pytest.raises(AppError) as rejected:
             await app.dispatch('conversation.send', {'text': 'Saved input'}, command_id='auth-start')
         session = app._session()
-        assert session['failure']['category'] == 'authentication'
-        assert 'Settings' in session['failure']['guidance']
-        assert 'AuthenticationError' in session['error']
-        assert 'AuthenticationError' in str(rejected.value)
+        assert session['failure']['category'] == category
+        from amplifier_web.session_health import failure_details
+        assert session['failure']['guidance'] == failure_details(detail)['guidance']
+        if category != 'context_limit':
+            assert label in session['error']
+            assert label in str(rejected.value)
+        else:
+            assert 'model context limit' in str(rejected.value)
+        assert 'private-provider-payload' not in json.dumps(app.get_state())
+        assert 'private-provider-payload' not in str(rejected.value)
+        assert 'private-provider-payload' in (tmp_path / 'logs/workers' / session['diagnosticReceipt']).read_text()
         assert session['messages'][0]['delivery']['status'] == 'failed'
         assert not runtime.workers
     finally:
