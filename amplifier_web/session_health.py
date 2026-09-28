@@ -53,12 +53,12 @@ def failure_details(error, error_type=None):
     kind = error_type or type(error).__name__
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
     category, summary, guidance = 'unknown', 'The turn failed. The cause is not available in the recorded details.', 'Inspect the details before sending more work. A recovery copy can help if saved context is invalid.'
-    if ('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing')):
+    if 'invalidimageerror:' in text or (('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing'))):
         category, summary = 'invalid_image', 'The provider rejected an image or computer-tool result in the conversation context.'
         guidance = 'Restarting may leave the same invalid history. Create a recovery copy to continue with readable history and without old tool or image payloads.'
     elif kind.rsplit('.', 1)[-1] == 'ContextLengthError' or any(value in text for value in ('contextlengtherror', 'context_length', 'context window', 'maximum context', 'input allowance before dispatch')):
         category, summary, guidance = 'context_limit', 'The conversation exceeded the model context limit.', 'Choose a model with more context or start a new conversation with a summary.'
-    elif re.search(r'tools\.\d+', text) and any(value in text for value in ('input tag', 'extra inputs are not permitted', 'input_schema')):
+    elif 'toolconfigurationerror:' in text or (re.search(r'tools\.\d+', text) and any(value in text for value in ('input tag', 'extra inputs are not permitted', 'input_schema'))):
         category, summary, guidance = 'tool_configuration', 'The provider rejected a tool definition for the selected model.', 'The provider/tool integration needs correction. Your conversation is saved; changing API keys will not repair a tool-format error.'
     elif 'authentication' in text or 'invalid_api_key' in text or 'unauthorized' in text:
         category, summary, guidance = 'authentication', 'The provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'
@@ -87,7 +87,7 @@ def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (
         'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
-        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy')),
+        'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt')),
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
@@ -99,6 +99,10 @@ def inspect_session(home, session):
               'bundle': session.get('bundle', ''), 'status': session.get('status', ''),
               'selection': session.get('selection', {}), 'workReplayed': False,
               'capturedAt': time.time()}
+    from .worker_diagnostics import receipt_path
+    diagnostic = receipt_path(session.get('diagnosticReceipt'), home=home)
+    if diagnostic:
+        report['diagnosticReceipt'] = diagnostic.name
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
     current = Path(home) / 'runtime-reports' / identity

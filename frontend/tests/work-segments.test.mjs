@@ -31,6 +31,26 @@ test('undated native transcript anchors take precedence over fallback timestamps
  const grouped=splitWork(messages.map(m=>({...m,createdAt:0,timestampKnown:false})),{...data,nodes:[{...data.nodes[0],anchorMessageId:'interim'}]});
  assert.equal(grouped.turns[0].anchorMessageId,'interim');
 });
+for(const phase of ['error','failed','cancelled','interrupted'])test(`manager ${phase} survives a successful final model call`,()=>{
+ const source={...data,turns:[{...data.turns[0],phase,endedAt:22}],nodes:[...data.nodes].reverse()};
+ const before=JSON.stringify(source),grouped=splitWork(messages,source);
+ const byAnchor=new Map(grouped.turns.map(turn=>[turn.anchorMessageId,turn]));
+ assert.equal(byAnchor.get('user').phase,'completed');assert.equal(byAnchor.get('user').endedAt,5);
+ assert.equal(byAnchor.get('interim').phase,phase);assert.equal(byAnchor.get('interim').endedAt,22);
+ assert.equal(byAnchor.get('interim').aggregateUsage.totalTokens,23);
+ assert.ok(grouped.nodes.every(node=>node.phase==='completed'));
+ assert.equal(JSON.stringify(source),before);
+});
+test('earlier paged work uses canonical success even when the manager later failed',()=>{
+ const grouped=splitWork(messages,{...data,turns:[{...data.turns[0],phase:'error'}],nodes:[data.nodes[0]],
+  segments:[{id:'turn@user',phase:'completed',endedAt:5}]});
+ assert.equal(grouped.turns[0].phase,'completed');assert.equal(grouped.turns[0].endedAt,5);
+});
+test('failed manager summary leaves independently running children intact',()=>{
+ const grouped=splitWork(messages,{turns:[{id:'turn',phase:'error',endedAt:22}],
+  nodes:[{id:'worker',turnId:'turn',kind:'worker',startedAt:21,phase:'running'}]});
+ assert.equal(grouped.turns[0].phase,'error');assert.equal(grouped.nodes[0].phase,'running');
+});
 test('summary tokens include cache writes once while preserving raw counters',async()=>{
  const {usageLabel}=await import('../src/timeline-data.js');
  const usage={inputTokens:4,outputTokens:2,totalTokens:6,cacheReadTokens:3,cacheWriteTokens:100,costUsd:.001,costType:'reported'};

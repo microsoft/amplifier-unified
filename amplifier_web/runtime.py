@@ -300,7 +300,8 @@ class RuntimeManager:
         while line := await row["process"].stderr.readline():
             # Keep diagnostics local and bounded; never stream arbitrary SDK logs
             # (which can contain prompts/credentials) into browser state.
-            row["stderr"].append(line.decode(errors="replace")[-2000:])
+            from .worker_diagnostics import redact_diagnostic
+            row["stderr"].append(redact_diagnostic(line.decode(errors="replace"))[-2000:])
             row["stderr"] = row["stderr"][-30:]
 
     async def _write(self, row, data):
@@ -380,6 +381,35 @@ class RuntimeManager:
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
                     failure = _worker_error(data)
+                    diagnostic = None
+                    if not row["ready"].done() and not isinstance(failure, SessionInUseError):
+                        from .worker_diagnostics import receipt_path, save_startup_failure
+                        diagnostic = receipt_path(data.get("diagnosticReceipt"))
+                        if diagnostic is None:
+                            # A handled worker error can race the final stderr.
+                            # Wait only briefly; failure must not hang on a worker
+                            # that reports an error without closing its streams.
+                            try:
+                                await asyncio.wait_for(asyncio.shield(row["stderr_task"]), 0.2)
+                            except Exception:
+                                pass
+                            diagnostic = await asyncio.to_thread(save_startup_failure, row, None,
+                                failure=data.get("error") or str(failure))
+                        from .module_failures import ConfiguredModuleError
+                        if not isinstance(failure, ConfiguredModuleError):
+                            from .session_health import failure_details
+                            detail = failure_details(data.get("error"), data.get("errorType"))
+                            labels = {'authentication': 'AuthenticationError', 'rate_limit': 'RateLimitError',
+                                      'context_limit': 'ContextLengthError', 'invalid_image': 'InvalidImageError',
+                                      'tool_configuration': 'ToolConfigurationError'}
+                            label = labels.get(detail['category'])
+                            # Publish only our bounded classification and guidance,
+                            # never the original provider payload or exception text.
+                            public = (f"{label}: {detail['summary']} {detail['guidance']}" if label
+                                      else "The conversation worker could not start.")
+                            failure = RuntimeStartupError(public)
+                        if diagnostic:
+                            failure.diagnostic_path = diagnostic
                     error = str(failure)
                     reported_error = error
                     if not row["ready"].done():
@@ -389,6 +419,7 @@ class RuntimeManager:
                     else:
                         from .module_failures import ConfiguredModuleError
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                            **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
                 elif data.get("type") == "history.revised":
                     await row["emit"]("history.revised", {**data, "sessionId": sid})
@@ -415,6 +446,7 @@ class RuntimeManager:
                         await row["emit"](*normalized)
             code = await row["process"].wait()
             if not row["closing"] and not reported_error:
+                diagnostic = None
                 error = f"Amplifier worker exited (code {code}). Work was not replayed."
                 if not row["ready"].done():
                     # stdout can reach EOF before the separate stderr reader.
@@ -426,9 +458,13 @@ class RuntimeManager:
                     diagnostic = await asyncio.to_thread(save_startup_failure, row, code)
                     if diagnostic:
                         error += f" Startup details were saved locally to {diagnostic}."
-                await row["emit"]("runtime.error", {"sessionId": sid, "error": error})
+                await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                    **({"diagnosticReceipt": diagnostic.name} if diagnostic else {})})
                 if not row["ready"].done():
-                    row["ready"].set_exception(RuntimeError(error))
+                    failure = RuntimeError(error)
+                    if diagnostic:
+                        failure.diagnostic_path = diagnostic
+                    row["ready"].set_exception(failure)
             await self._execution_ended(sid, row, "stopped" if row["closing"] else "interrupted")
         except asyncio.CancelledError:
             raise
@@ -556,7 +592,10 @@ class RuntimeManager:
         except SessionInUseError:
             raise
         except Exception as exc:
-            raise RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.') from exc
+            failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
+            if getattr(exc, 'diagnostic_path', None) is not None:
+                failure.diagnostic_path = exc.diagnostic_path
+            raise failure from exc
 
     async def delivery(self, session, input_id):
         """Inspect existing evidence; never start a worker or submit an input."""

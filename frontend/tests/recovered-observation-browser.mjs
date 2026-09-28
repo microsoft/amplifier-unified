@@ -26,13 +26,15 @@ try {
  });
  await page.goto(vite.resolvedUrls.local[0]);
  const recovery=page.locator('[data-message-id="service"]'),typed=page.locator('[data-message-id="typed"]');
- await recovery.getByText('Recovered work update · Details',{exact:true}).waitFor();
- assert.equal(await recovery.locator('details').getAttribute('open'),null);
+ await recovery.getByText('Saved work notice',{exact:true}).waitFor();
+ assert.equal(await recovery.locator(':scope > details').getAttribute('open'),null);
  assert.equal(await recovery.getByText(text,{exact:true}).isVisible(),false);
  assert.equal(await typed.getByText(text,{exact:true}).isVisible(),true);
  assert.equal(await typed.getByRole('button',{name:'Edit message',exact:true}).count(),1);
  assert.equal(await recovery.getByRole('button',{name:'Edit message',exact:true}).count(),0);
- await recovery.locator('summary').click();assert.equal(await recovery.getByText(text,{exact:true}).isVisible(),true);
+ await recovery.locator(':scope > details > summary').click();
+ assert.equal(await recovery.getByText(text,{exact:true}).isVisible(),false);
+ await recovery.getByText('Technical details',{exact:true}).click();assert.equal(await recovery.getByText(text,{exact:true}).isVisible(),true);
  assert.equal(calls.some(({action})=>['runtime.control','conversation.send'].includes(action)),false);
  assert.deepEqual(errors,[]);
  console.log('Recovered work is collapsed and labelled as a service update; identical typed text remains an editable user message. No runtime started.');

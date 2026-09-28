@@ -47,3 +47,25 @@ def test_unknown_failure_vocabulary_does_not_copy_arbitrary_data():
     assert generation_failure({'error_category': 'private secret'}) is None
     result = generation_failure({'error_category': 'unknown', 'error_stage': 'private stage', 'error_type': 'a\nsecret'})
     assert result['stage'] == 'manager_turn' and result['errorType'] == 'Error'
+
+
+async def test_correctable_tool_error_does_not_become_a_conversation_failure(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        sid = session['id']
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'event': 'generation.started', 'generation_id': 'turn-1'})
+        for phase in ('pre', 'error'):
+            await app.on_runtime_event('runtime.tool', {
+                'sessionId': sid, 'tool': 'bash', 'callId': 'failed-script', 'phase': phase,
+                'error': "TypeError: string indices must be integers, not 'str'"})
+        await app.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'Corrected the script.'})
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'event': 'generation.finished', 'generation_id': 'turn-1'})
+        assert not session.get('error') and not session.get('failure')
+        assert any(row.get('phase') == 'error' for row in session['runtimeEvents'])
+        assert not [row for row in app.get_state()['attention']['items'] if row['id'] == 'session:' + sid and row.get('severity') == 'error']
+    finally:
+        await app.close()

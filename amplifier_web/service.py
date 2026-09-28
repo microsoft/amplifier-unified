@@ -2221,7 +2221,8 @@ class AppService:
             if isinstance(exc, SessionInUseError):
                 await self.on_runtime_event('runtime.ownership', {'sessionId': sid, 'status': 'blocked', 'owner': exc.owner})
                 return
-            await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc)})
+            from .worker_diagnostics import diagnostic_reference
+            await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc), **diagnostic_reference(exc)})
 
     async def history_page(self, session_id, before, limit):
         await self.history.load(session_id, before=before, limit=limit)
@@ -2370,8 +2371,10 @@ class AppService:
                              'error': message, 'receipt': receipt, **receipt}
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish()
+            from .worker_diagnostics import diagnostic_reference
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
+                **diagnostic_reference(exc),
             })
             raise AppError(message, 503, code='worker_startup_failed', receipt=receipt) from exc
         except SessionInUseError as exc:
@@ -2594,6 +2597,10 @@ class AppService:
                 if status in {"idle", "stopped"} and session.get("status") == "error" and session.get("error"):
                     return
                 session["status"] = status
+                if status in {"starting", "ready"}:
+                    session.pop("diagnosticReceipt", None)
+                    if isinstance(session.get("health"), dict):
+                        session["health"].pop("diagnosticReceipt", None)
                 if session["status"] == "idle":
                     self.schedules.idle(session)
                     self.recall.personalization.idle(session)
@@ -2633,6 +2640,10 @@ class AppService:
                 session["status"] = "error"
                 finish_execution(session,"error")
                 session["errorAt"] = time.time()
+                from .worker_diagnostics import receipt_path
+                diagnostic = receipt_path(payload.get("diagnosticReceipt"), home=self.data_dir)
+                if diagnostic:
+                    session["diagnosticReceipt"] = diagnostic.name
                 detail = str(payload.get("error") or payload.get("message") or "Runtime failed")
                 if payload.get('moduleFailures'):
                     from .module_failures import ConfiguredModuleError

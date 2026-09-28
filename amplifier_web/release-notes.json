@@ -2,6 +2,27 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.33",
+      "title": "Quieter recovery and clearer conversation failures",
+      "changes": [
+        "Keep the chosen model visible through chat startup, failed startup, and reload. Preserve existing ChatGPT sign-in paths when editing a connection.",
+        "Collapse temporary canvas controls on page reload while retaining pinned controls and saved content.",
+        "Reconcile completed background work silently when its saved result is already in the conversation. Restore missing evidence without replaying the work, and report uncertain outcomes clearly.",
+        "Show readable saved-work notices with recorded status, available result and worker links, and optional technical details.",
+        "Identify when a conversation turn failed and link to its recorded details. Preserve a failed manager outcome even when its final model call succeeded.",
+        "Handle goals created or revised during an active turn in both Work and Anchors conversations.",
+        "Keep private startup diagnostic receipts and allow conversations to start when an operational computer-backend readiness failure leaves that tool unavailable."
+      ],
+      "notices": [
+        {
+          "id": "recovery-goal-component-update",
+          "title": "Finish component updates",
+          "detail": "The recovery, goal lifecycle and computer startup fixes include updated runtime components. Existing workers retain their loaded code.",
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker."
+        }
+      ]
+    },
+    {
       "version": "0.20.32",
       "title": "Faster settings saves and shared image tools",
       "changes": [
@@ -16,7 +37,7 @@
           "id": "shared-imagegen-component-update",
           "title": "Finish component updates",
           "detail": "Shared image generation and editing also require the updated Work bundle and the imagegen component. Existing workers retain their loaded code.",
-          "action": "Let Settings → Updates finish installing components, then use a fresh worker."
+          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker."
         }
       ]
     },
@@ -36,7 +57,7 @@
           "id": "charlie-runtime-adoption",
           "title": "Finish component updates",
           "detail": "Instruction, image-context and native-provider fixes span the application and its Foundation, loop, context and OpenAI provider components. Existing workers retain their loaded code.",
-          "action": "Let Settings → Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged."
+          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged."
         },
         {
           "id": "charlie-validation-scope",
@@ -183,7 +204,7 @@
       "title": "Simpler Canvas and clearer provider checks",
       "changes": [
         "Use one Canvas viewer per browser, removing the split-view controls while keeping saved artifacts and tabs.",
-        "Copy an opened file’s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
+        "Copy an opened file\u2019s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
         "Explain common provider-check runtime failures, including dependency builds, imports, network trust, DNS, permissions and disk space, without exposing private subprocess logs."
       ],
       "notices": []
@@ -395,7 +416,7 @@
           "id": "update-compaction-components",
           "title": "Update companion components for compaction recovery",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
         }
       ]
     },
@@ -423,7 +444,7 @@
           "id": "refresh-anthropic-tool-routing",
           "title": "Update companion modules for Anthropic computer tools",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings → Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
         }
       ]
     },
@@ -483,7 +504,7 @@
           "id": "retry-component-updates",
           "title": "Retry a previously failed component update",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings → Updates, choose Check now, then Install available."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
         }
       ]
     },
@@ -795,8 +816,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
         }
       ]
     },
@@ -816,7 +837,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
       ],
       "notices": []
     },
@@ -835,7 +856,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

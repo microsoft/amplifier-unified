@@ -4,6 +4,7 @@ import {DetailText,readDetail} from './conversation-detail';
 import React,{useEffect,useRef,useState} from 'react';
 import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} from 'lucide-react';
 import {AttachmentStrip} from './chat-controls';
+import {RecoveryNotice} from './recovery-notice';
 
 export function completedTurnEnds(session){
  const messages=session?.messages||[],ends=new Map();let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
@@ -30,7 +31,7 @@ export function groupRecoveryMessages(messages,after=new Map()){
 }
 
 export function RecoveryGroup({messages,renderArtifacts,...props}){
- return <details className="a-recovery-group"><summary>{messages.length} recovered work updates</summary>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
+ return <details className="a-recovery-group"><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
 }
 
 export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false}){
@@ -43,6 +44,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const submit=async e=>{e.preventDefault();if(saving||blocked||!text.trim())return;setSaving(true);try{if(localDelivery)await retry(m,text);else await dispatch('message.edit',{sessionId:session.id,messageId:m.id,text,mode:edit?.fork?'fork':'current'})}catch(error){setDetailError(error.message)}finally{setSaving(false)}};
  if(m.observation){
+  if(m.observation.source==='local-job-recovery')return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?<RecoveryNotice message={m} session={session} state={state} act={act}/>:<details><summary>Saved work notice</summary><RecoveryNotice message={m} session={session} state={state} act={act}/></details>}</article>;
   const content=<><DetailText text={m.text} reference={m.textDetail} markdown/><button type="button" className="a-link" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>Copy observation</button></>;
   return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?content:<details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary>{content}</details>}</article>;
  }
