@@ -41,6 +41,10 @@ try{
  await action('canvas.versions.revise',{id,expectedRevision:1,content:'# Second version'});
  await panel.getByRole('button',{name:'Choose artifact version'}).click();
  await expect(panel.getByRole('combobox',{name:'Artifact version',exact:true})).toBeVisible();
+ await page.reload();
+ await expect(page.getByRole('heading',{name:'Second version',exact:true})).toBeVisible();
+ await expect(page.locator('#canvas-options')).toBeHidden();
+ await panel.getByRole('button',{name:'Canvas options',exact:true}).click();
  await panel.getByRole('button',{name:'Canvas options',exact:true}).click();
  await expect(page.locator('#canvas-options')).toBeHidden();
  await panel.getByRole('button',{name:'Chat overview',exact:true}).click();

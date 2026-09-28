@@ -1,5 +1,6 @@
 """Client-local setup for a chat that does not exist until its first submission."""
 import copy
+import json
 
 from jsonschema import validate
 from .managed_chats import LOCATION, is_managed
@@ -66,4 +67,28 @@ def selection(value):
     result = {key: item.strip() for key, item in value.items() if item.strip()}
     if value and (not result.get('instance') or not result.get('model')):
         raise ValueError('Choose a provider and model, or use the bundle default.')
+    return result
+
+
+def initial_model(state, args, workspace, bundle):
+    """Keep the resolved draft label until the first runtime report arrives.
+
+    This is presentation evidence, not a model pin or proof of worker readiness.
+    Only the matching draft context may contribute; configuration changes clear
+    this cache before another conversation can inherit it.
+    """
+    key = json.dumps(['' if is_managed(args) else workspace, args.get('bundle') or '']
+                     + (['managed'] if is_managed(args) else []),
+                     separators=(',', ':'), ensure_ascii=False)
+    defaults = state.get('draftDefaults', {}).get(key, {})
+    if defaults.get('phase') != 'ready' or defaults.get('bundle') != bundle:
+        return {}
+    effective = args.get('selection') or defaults.get('effective') or {}
+    result = {key: effective[key] for key in ('instance', 'model', 'effort')
+              if isinstance(effective.get(key), str) and effective[key]}
+    if not result.get('instance') or not result.get('model'):
+        return {}
+    provider = next((row for row in defaults.get('providers', [])
+                     if row.get('id') == result['instance']), {})
+    result['providerLabel'] = provider.get('info', {}).get('display_name') or result['instance']
     return result

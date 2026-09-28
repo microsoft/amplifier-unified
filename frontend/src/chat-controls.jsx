@@ -45,7 +45,8 @@ export function ModelControl({state,session,act,working}){
  const controls=state.runtimeControl?.[sessionId]||{},catalog=controls['configuration.providers'];
  const providers=isDraft?(resolvedDefaults.providers||cachedProviders):(catalog?.providers||session?.runtimeReport?.provider_choices?.map(row=>({id:row.id,info:{id:row.provider,display_name:row.display_name,defaults:{model:row.model,reasoning_effort:row.effort}}}))||[]);
  const pinned=isDraft?!!setup.selection?.model:(catalog?.pinned??!!(session?.runtimeReport?.selection||session?.selection));
- const effective=isDraft?(pinned?setup.selection:resolvedDefaults.effective||{}):(catalog?.effective||session?.runtimeReport?.effective_selection||session?.selection||{});
+ const initial=!catalog&&!session?.runtimeReport?session?.initialModel:undefined;
+ const effective=isDraft?(pinned?setup.selection:resolvedDefaults.effective||{}):(catalog?.effective||session?.runtimeReport?.effective_selection||session?.selection||initial||{});
  const lastCall=[...(session?.execution?.nodes||[])].reverse().find(n=>n.kind==='llm'&&(n.sessionId===sessionId||(!n.sessionId&&!n.parentId)));
  const noProviders=(isDraft?defaults.phase==='ready':Array.isArray(catalog?.providers))&&!providers.length;
  const model=effective.model||(!isDraft?lastCall?.model:'')||(noProviders?'Set up a model':defaults.phase==='error'?'Model unavailable':!isDraft?'Choose a model':'Loading model…');
@@ -53,7 +54,7 @@ export function ModelControl({state,session,act,working}){
  const effectiveProvider=providers.find(row=>row.id===provider),effectiveEffort=effective.effort||configuredEffort(effectiveProvider,model);
  const configuredProvider=(state.setup?.providers||[]).find(row=>row.id===provider);
  const providerMetadata={...state.setup?.metadata?.[configuredProvider?.module]?.info,...state.setup?.providerCatalogs?.[provider]?.metadata?.info,...effectiveProvider?.info};
- const providerLabel=providerMetadata?.display_name||providerMetadata?.id||provider;
+ const providerLabel=providerMetadata?.display_name||providerMetadata?.id||(initial?.instance===provider?initial.providerLabel:'')||provider;
  const modelAndEffort=effectiveEffort?`${model} (${effectiveEffort})`:model;
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
  const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),position=useComposerPopover(open,popover);

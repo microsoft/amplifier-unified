@@ -95,6 +95,11 @@ class ClientViews:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
+            # Opening options is temporary. A new browser document restores
+            # content and drafts, but only an explicit pin keeps controls open.
+            # Reattaching the same client (transport recovery) leaves it alone.
+            if kind == "web" and not record["view"].get("canvasControlsPinned"):
+                record["view"]["canvasControlsExpanded"] = False
             record["canvasTabs"] = record.get("canvasTabs") or {}
             self.records[identity] = record
             self.dirty.add(identity)
