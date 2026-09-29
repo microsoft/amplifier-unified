@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.34",
+      "title": "More reliable conversation startup and recovery",
+      "changes": [
+        "Keep ordinary chat available when the configured remote computer reports no active display. Computer access remains unavailable until that target is ready; no other computer is selected.",
+        "Prevent startup conflicts when bundled context managers use identical installed and cached copies of the same context module. Custom or differing sources retain their normal validation.",
+        "Keep messages saved and clearly mark them as not sent when a worker reload fails before accepting them, including when the rejection arrives after a timeout. Earlier uncertain delivery remains uncertain, and no work is replayed automatically.",
+        "Show the current startup failure and its private diagnostic reference instead of reusing an older manager error or unrelated provider timeout."
+      ],
+      "notices": [
+        {
+          "id": "startup-recovery-component-update",
+          "title": "Finish component updates",
+          "detail": "The remote-display repair includes an updated computer-use component. Existing workers retain their loaded code.",
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+        }
+      ]
+    },
+    {
       "version": "0.20.33",
       "title": "Quieter recovery and clearer conversation failures",
       "changes": [
