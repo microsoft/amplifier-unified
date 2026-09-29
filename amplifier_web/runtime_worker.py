@@ -315,9 +315,17 @@ class Worker:
             # adapter marks interrupted jobs as evidence, never replays them.
             report_directory = self.home / "runtime-reports" / config["id"]
             progress = asyncio.create_task(self.preparation_progress(report_directory))
+            # Saved controls are the resume authority, including an explicit
+            # reset. Only a user/agent selection action may replace that choice.
+            selection = config.get('selection')
+            controls_path = self.home / 'sessions' / config['id'] / 'control-state.json'
+            if config.get('replaceSavedSelection') is not True and controls_path.exists():
+                saved_controls = json.loads(controls_path.read_text())
+                if 'selection' in saved_controls:
+                    selection = saved_controls['selection']
             self.session, self.runtime, report = await prepare_manager(workspace,
                 runtime=self.runtime, bundle=config.get("bundle") or None, ask=self.ask,
-                resume=True, application_host="Amplifier Web", selection=config.get("selection") or None,
+                resume=True, application_host="Amplifier Web", selection=selection or None,
                 report_dir=report_directory, shared_handle=self.shared_handle,
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
@@ -333,7 +341,11 @@ class Worker:
             # Preserve app controls on native mounts. A legacy common snapshot
             # retains its previous restoration policy during one-time recovery.
             if report.get("history_source") != "legacy-checkpoint":
-                await self.controls.restore()
+                if config.get('replaceSavedSelection') is True:
+                    await self.controls.restore(selection_override=config['selection'])
+                else:
+                    await self.controls.restore()
+            self.start_config.pop('replaceSavedSelection', None)
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
@@ -535,6 +547,11 @@ class Worker:
             except Exception as exc:
                 from amplifier_web.runtime import RuntimeStartupError
                 failure = RuntimeStartupError('The conversation worker could not reload before accepting the message.')
+                from amplifier_web.host.model_selection import ProviderSelectionError
+                if isinstance(exc, ProviderSelectionError):
+                    from amplifier_web.session_health import failure_details
+                    detail = failure_details(exc)
+                    failure.args = (f"ProviderSelectionError: {detail['summary']} {detail['guidance']}",)
                 failure.diagnostic_path = getattr(exc, 'diagnostic_path', None)
                 failure.failures = getattr(exc, 'failures', [])
                 raise failure from exc

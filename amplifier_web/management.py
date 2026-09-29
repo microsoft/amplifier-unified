@@ -385,7 +385,7 @@ class Management:
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
-    async def ensure_runtime(self,session):
+    async def ensure_runtime(self,session,*,selection_override=None):
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 raise ValueError(session['historyReadOnlyReason'])
@@ -401,7 +401,43 @@ class Management:
             current = self.service._session(session['id'])
             current['historyManaged'] = False
             session.update(copy.deepcopy(current))
+        if selection_override is not None:
+            # Only an explicit model-control action may replace a saved pin.
+            # This transient startup request is not an input or an automatic retry.
+            session['selection'] = copy.deepcopy(selection_override)
+            session['replaceSavedSelection'] = True
         await self.service.runtime.start(session,self.service.on_runtime_event)
+
+    async def recover_provider_catalog(self, session, operation, args):
+        if operation not in {'configuration.providers', 'configuration.providerModels'}:
+            return False
+        from .provider_recovery import catalog
+        recovery = catalog(self.service.data_dir, session)
+        if recovery is None:
+            return False
+        result = recovery
+        if operation == 'configuration.providerModels':
+            identity = args.get('instance') or args.get('provider')
+            row = next((row for row in recovery['providers'] if row['id'] == identity), None)
+            if row is None:
+                raise ValueError('Choose an available replacement connection')
+            # Only the actual mounted connection can discover its models. The
+            # recovery view retains its last default until explicit selection
+            # repairs startup; never probe a similarly named settings entry.
+            model = row['info']['defaults']['model']
+            result = {'provider': identity, 'models': [model] if model else [], 'supported': False}
+        async with self.service.lock:
+            current = self.service._session(session['id'])
+            if current.get('status') != 'error' or catalog(self.service.data_dir, current) != recovery:
+                return True
+            controls = self.service.state.setdefault('runtimeControl', {}).setdefault(session['id'], {})
+            controls['configuration.providers'] = recovery
+            controls[operation] = result
+            if operation == 'configuration.providerModels':
+                controls.setdefault('modelCatalogs', {})[result['provider']] = {
+                    'phase': 'ready', 'models': result.get('models', []), 'supported': result.get('supported', True)}
+            self.service._publish_progress()
+        return True
 
     async def invalidate_configuration(self,*,publish=True,warm=True):
         from .setup import SetupManager
@@ -611,6 +647,8 @@ class Management:
             if args['operation'].startswith('bundle.'):
                 raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             session=self.session(args)
+            if await self.recover_provider_catalog(session, args['operation'], args.get('args', {})):
+                return
             mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
             if mutating:
                 async with self.service.lock:
@@ -620,7 +658,18 @@ class Management:
                     current['configurationBusy']=True
                     self.service._publish()
             try:
-                await self.ensure_runtime(session)
+                if args['operation'] == 'provider.select':
+                    from .new_chat import selection
+                    requested = dict(args.get('args', {}))
+                    legacy = requested.pop('provider', None)
+                    if legacy and not requested.get('instance'):
+                        requested['instance'] = legacy
+                    selected = selection(requested)
+                    if not selected:
+                        raise ValueError('Choose a provider and model')
+                    await self.ensure_runtime(session, selection_override=selected)
+                else:
+                    await self.ensure_runtime(session)
                 if args['operation']=='configuration.providerModels':
                     provider_id=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
                     mounted=await self.service.runtime.control(session['id'],'configuration.providers',{})
@@ -645,6 +694,8 @@ class Management:
                 async with self.service.lock:
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{}).update(refreshed)
                     self.service.state.setdefault('runtimeControl',{}).setdefault(session['id'],{})[args['operation']]=result
+                    if args['operation'] in {'provider.select', 'provider.reset'}:
+                        self.service._session(session['id'])['selection'] = copy.deepcopy(result['selection'])
                     if args['operation'] in {'configuration.inspect','configuration.apply','configuration.toggle'}:
                         configuration=result.get('configuration',result)
                         self.service._session(session['id'])['configuration']=configuration

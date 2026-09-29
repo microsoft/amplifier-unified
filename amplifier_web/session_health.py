@@ -53,7 +53,10 @@ def failure_details(error, error_type=None):
     kind = error_type or type(error).__name__
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
     category, summary, guidance = 'unknown', 'The turn failed. The cause is not available in the recorded details.', 'Inspect the details before sending more work. A recovery copy can help if saved context is invalid.'
-    if 'invalidimageerror:' in text or (('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing'))):
+    if kind == 'ProviderSelectionError' or 'providerselectionerror:' in text:
+        category, summary = 'provider_selection', 'Choose a replacement AI connection for this chat.'
+        guidance = 'Its saved provider connection is no longer available. Open the model selector to choose a connection, model, and reasoning effort. Your history and saved message are kept; choosing does not send it.'
+    elif 'invalidimageerror:' in text or (('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing'))):
         category, summary = 'invalid_image', 'The provider rejected an image or computer-tool result in the conversation context.'
         guidance = 'Restarting may leave the same invalid history. Create a recovery copy to continue with readable history and without old tool or image payloads.'
     elif kind.rsplit('.', 1)[-1] == 'ContextLengthError' or any(value in text for value in ('contextlengtherror', 'context_length', 'context window', 'maximum context', 'input allowance before dispatch')):

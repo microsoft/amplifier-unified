@@ -134,7 +134,7 @@ class RuntimeControls:
     def state_path(self):
         return override_path(self.session.session_id).with_name("control-state.json")
 
-    async def restore(self):
+    async def restore(self, *, selection_override=None):
         if not self.state_path().exists():
             return
         saved = json.loads(self.state_path().read_text())
@@ -157,32 +157,14 @@ class RuntimeControls:
         budget={key:value for key,value in saved.get("budget",{}).items() if value is not None}
         if budget:
             await self._perform("budget.set", budget)
-        if saved.get("selection"):
-            await self._perform("provider.select", await self.restore_selection(saved["selection"]))
+        if selection_override is not None:
+            await self._perform("provider.select", selection_override)
+        elif saved.get("selection"):
+            await self._perform("provider.select", saved["selection"])
         elif "selection" in saved:
             await self._perform("provider.reset", {})
         if saved.get("mode"):
             await self.mode("mode.set", {"name":saved["mode"]})
-
-    async def restore_selection(self, selection):
-        """Resolve old provider-family IDs only when the same model is unambiguous."""
-        providers = self.coordinator.get("providers") or {}
-        instance = selection.get("instance") or selection.get("provider")
-        if instance in providers:
-            return selection
-        candidates = []
-        for name, provider in providers.items():
-            info = provider.get_info()
-            if inspect.isawaitable(info):
-                info = await info
-            family = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
-            defaults = (info.get("defaults", {}) if isinstance(info, dict) else getattr(info, "defaults", {})) or {}
-            if family == instance and selection.get("model") == (defaults.get("model") or defaults.get("default_model")):
-                candidates.append(name)
-        if len(candidates) == 1:
-            return {**selection, "instance": candidates[0]}
-        # Do not silently move an old pin to another model, account or backend.
-        return selection
 
     def persist(self, *, task_only=False):
         snapshot = self.configurator.snapshot() if self.configurator else {}
@@ -460,7 +442,8 @@ class RuntimeControls:
             providers = self.coordinator.get("providers") or {}
             args = {**args,"instance":args.get("instance") or args.get("provider")}
             if args.get("instance") not in providers or not isinstance(args.get("model"), str) or not args["model"].strip():
-                raise ValueError("Select an available provider instance and model")
+                from .host.model_selection import ProviderSelectionError
+                raise ProviderSelectionError("Select an available provider instance and model")
             selected = {key:args[key] for key in ("instance","model","effort") if key in args}
             effective = {**selected, **({"max_output_tokens":self.max_output_tokens} if self.max_output_tokens else {})}
             self.coordinator.get("orchestrator").root_provider = SelectedProvider(providers[args["instance"]], effective,self.coordinator.get_capability('web.provider_transform'))

@@ -9,7 +9,7 @@ from amplifier_web.runtime_controls import public_config, restore_redactions, va
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('case', ['unique', 'ambiguous', 'different-model', 'different-family', 'existing'])
-async def test_saved_provider_family_migration_preserves_model_and_effort(tmp_path, monkeypatch, case):
+async def test_saved_selection_requires_exact_connection_id(tmp_path, monkeypatch, case):
     import json
     from types import SimpleNamespace
     from amplifier_web.runtime_controls import RuntimeControls
@@ -36,14 +36,14 @@ async def test_saved_provider_family_migration_preserves_model_and_effort(tmp_pa
     selection = {'instance':'openai', 'model':'saved-model', 'effort':'high'}
     controls.state_path().parent.mkdir(parents=True)
     controls.state_path().write_text(json.dumps({'selection':selection}))
-    if case in {'unique', 'existing'}:
+    if case == 'existing':
         await controls.restore()
-        expected = {**selection, 'instance':'terra' if case == 'unique' else 'openai'}
+        expected = selection
         assert controls.selection == expected
         assert loop.root_provider.original is providers[expected['instance']]
         assert loop.root_provider.selection == expected
         assert json.loads(controls.state_path().read_text())['selection'] == expected
-        # Restart uses the now stable instance ID without another migration.
+        # Restart keeps the exact connection even when its default model differs.
         await controls.restore()
         assert controls.selection == expected
     else:

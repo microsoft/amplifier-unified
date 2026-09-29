@@ -5,17 +5,11 @@ import {ChevronDown,X,Paperclip} from 'lucide-react';
 import {providerFields,modelOptions} from './setup-data';
 import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
+import {providerOptions} from './provider-options';
 const EMPTY={};
 export function AttachmentStrip({items=[],remove}){
  if(!items.length)return null;
  return <div className="a-attachments">{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.name}<small>{Math.ceil(file.size/1024)} KB</small></a>{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}</div>;
-}
-export function providerGroups(providers){
- const groups=new Map();
- for(const row of providers){const key=row.info?.id||row.module||row.id;
-  if(!groups.has(key))groups.set(key,{id:key,label:row.info?.display_name||key,rows:[]});groups.get(key).rows.push(row);
- }
- return [...groups.values()].sort((a,b)=>a.label.localeCompare(b.label,undefined,{sensitivity:'base'}));
 }
 function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');
@@ -54,24 +48,21 @@ export function ModelControl({state,session,act,working}){
  const effectiveProvider=providers.find(row=>row.id===provider),effectiveEffort=effective.effort||configuredEffort(effectiveProvider,model);
  const configuredProvider=(state.setup?.providers||[]).find(row=>row.id===provider);
  const providerMetadata={...state.setup?.metadata?.[configuredProvider?.module]?.info,...state.setup?.providerCatalogs?.[provider]?.metadata?.info,...effectiveProvider?.info};
- const providerLabel=providerMetadata?.display_name||providerMetadata?.id||(initial?.instance===provider?initial.providerLabel:'')||provider;
+ const options=providerOptions(providers);
+ const providerLabel=options.find(row=>row.id===provider)?.label||providerMetadata?.display_name||providerMetadata?.id||(initial?.instance===provider?initial.providerLabel:'')||provider;
  const modelAndEffort=effectiveEffort?`${model} (${effectiveEffort})`:model;
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
  const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),position=useComposerPopover(open,popover);
  useOutsideDismiss(open,popover,()=>edit({open:false}));
- const groups=providerGroups(providers),group=groups.find(g=>g.rows.some(row=>row.id===draft.instance));
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map());let models=modelOptions(entry?.models||[]);
  if(models.length)lastModels.current.set((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance,models);
  else models=lastModels.current.get((isDraft?draftDefaultsKey(setup):sessionId)+'|'+draft.instance)||[];
- // Routing aliases contribute their configured models to one provider family.
+ // Model catalogs belong to a connection, even when several use the same type.
  const available=new Map(models.map(row=>[row.id,row]));
- for(const row of group?.rows||[]){
-  const sibling=isDraft?draftCatalog.providerCatalogs?.[row.id]:controls.modelCatalogs?.[row.id];
-  for(const model of modelOptions(sibling?.models||[]))available.set(model.id,model);
-  const model=row.info?.defaults?.model;if(model&&!available.has(model))available.set(model,{id:model,name:model});
- }
+ const defaultModel=selected?.info?.defaults?.model;
+ if(defaultModel&&!available.has(defaultModel))available.set(defaultModel,{id:defaultModel,name:defaultModel});
  models=[...available.values()];
  const metadata=entry?.metadata||selected||{};
  const choices=providerFields(metadata,{model:draft.model,default_model:draft.model}).find(field=>field.id==='reasoning_effort')?.choices||[];
@@ -88,15 +79,15 @@ export function ModelControl({state,session,act,working}){
   },250);return()=>clearTimeout(timer);
  },[isDraft,setup.workspace,setup.bundle,managed,configurationRevision]);
  useEffect(()=>{
-  if(open&&!touched.current&&providers.length){const row=providers.find(p=>p.id===(effective.instance||effective.id))||providers[0];edit({instance:row.id,model:effective.model||row.info?.defaults?.model||'',effort:effectiveEffort||''})}
- },[open,sessionId,providers.map(row=>row.id).join('|'),effective.model,effectiveEffort]);
+  if(open&&!touched.current){const instance=effective.instance||effective.id||draft.instance||'',row=providers.find(p=>p.id===instance);edit({instance,model:effective.model||draft.model||row?.info?.defaults?.model||'',effort:effectiveEffort||draft.effort||''})}
+ },[open,sessionId,providers.map(row=>row.id).join('|'),effective.instance,effective.id,effective.model,effectiveEffort]);
  function show(){touched.current=false;setError('');if(open){edit({open:false});return}
   edit({open:true,sessionId,instance:provider,model:effective.model||'',effort:effectiveEffort||''});
   if(session)act('runtime.control',{sessionId,operation:'configuration.providers',args:{}});
  }
  async function apply(patch){
   touched.current=true;const next={...draft,...patch};edit(patch);setError('');
-  if(!next.instance||!next.model)return;
+  if(!providers.some(row=>row.id===next.instance)||!next.model)return;
   const selection={instance:next.instance,model:next.model,...(next.effort?{effort:next.effort}:{})};
   try{if(isDraft)await act('view.update',{patch:{newSessionDraft:{...setup,selection}}});
    else await act('runtime.control',{sessionId,operation:'provider.select',args:selection});
@@ -104,8 +95,8 @@ export function ModelControl({state,session,act,working}){
  }
  function chooseProvider(value){
   if(!value)return;
-  const family=groups.find(g=>g.id===value),row=family?.rows.find(p=>p.id===draft.instance)||family?.rows[0];
-  value=row?.id;if(!value)return;apply({instance:value,model:row.info?.defaults?.model||'',effort:''});
+  const row=providers.find(row=>row.id===value);
+  if(!row)return;apply({instance:value,model:catalog?.selectionIssue?(draft.model||catalog.selection?.model||''):(row.info?.defaults?.model||''),effort:catalog?.selectionIssue?(draft.effort||catalog.selection?.effort||''):''});
   if(isDraft&&!draftCatalog.providerCatalogs?.[value])act('providers.models',{id:value,workspace:setup.workspace,...location});
   else if(!isDraft&&!controls.modelCatalogs?.[value])act('runtime.control',{sessionId,operation:'configuration.providerModels',args:{instance:value}});
  }
@@ -117,10 +108,11 @@ export function ModelControl({state,session,act,working}){
   <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{modelLabel}</span><ChevronDown/></button>
   {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
    <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
-   <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={group?.id||draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
-    {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':noProviders?'No providers configured':'Loading providers…'}</option>}{draft.instance&&!providers.some(p=>p.id===draft.instance)&&<option value={draft.instance}>{draft.instance}</option>}{groups.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
+   {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
+   <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
+    {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':noProviders?'No providers configured':'Loading providers…'}</option>}{draft.instance&&!selected&&<option value={draft.instance} disabled>{draft.instance} (unavailable)</option>}{options.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
    </select>
-   <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={working||!draft.instance} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>{const value=e.target.value,row=group?.rows.find(p=>p.id===draft.instance&&p.info?.defaults?.model===value)||group?.rows.find(p=>p.info?.defaults?.model===value);apply({instance:row?.id||draft.instance,model:value,effort:''})}}>
+   <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={working||!selected} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>apply({model:e.target.value,effort:''})}>
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
    {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={working||!draft.model} data-action={isDraft?'view.update':'runtime.control'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>Reasoning effort is not configurable for this model.</small>}

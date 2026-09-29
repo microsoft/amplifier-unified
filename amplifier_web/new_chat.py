@@ -90,5 +90,10 @@ def initial_model(state, args, workspace, bundle):
         return {}
     provider = next((row for row in defaults.get('providers', [])
                      if row.get('id') == result['instance']), {})
-    result['providerLabel'] = provider.get('info', {}).get('display_name') or result['instance']
+    def provider_type(row):
+        return row.get('info', {}).get('id') or row.get('module') or row.get('id')
+    label = provider.get('info', {}).get('display_name') or provider_type(provider) or result['instance']
+    if provider and sum(provider_type(row) == provider_type(provider) for row in defaults.get('providers', [])) > 1:
+        label += f" ({result['instance']})"
+    result['providerLabel'] = label
     return result
