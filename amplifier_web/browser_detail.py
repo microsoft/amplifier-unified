@@ -45,6 +45,7 @@ def work_segments(session):
     turns={row['id']:row for row in session.get('execution',{}).get('turns',[])}
     groups={};anchors={};last_groups={}
     for node in session.get('execution',{}).get('nodes',[]):
+        if node.get('lifecycle')=='background' and node.get('label')=='Session naming':continue
         turn=turns.get(node.get('turnId'),{})
         anchor=turn.get('anchorMessageId')
         at=next((node[key] for key in ('startedAt','endedAt') if isinstance(node.get(key),(int,float))),turn.get('startedAt'))

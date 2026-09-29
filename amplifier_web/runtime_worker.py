@@ -579,6 +579,7 @@ class Worker:
 
         op = data.get("op")
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
+        naming_control = op == 'control' and data.get('operation') == 'session.naming'
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
             # Auxiliary personalization must never delay foreground admission.
             # Cancellation cannot retract an already accepted provider request;
@@ -616,7 +617,7 @@ class Worker:
                     self.memory_task.cancel()
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
-                detached_cancel = memory_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
+                detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
                     self.operation_controls += 1
                     if memory_control:
@@ -738,7 +739,6 @@ class Worker:
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("observation.admit", value))
                 elif data["operation"] == "session.naming":
-                    self.controls.require_idle()
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')
                     result = await self.naming.suggest()
