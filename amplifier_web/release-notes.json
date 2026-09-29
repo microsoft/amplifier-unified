@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.35",
+      "title": "Clear provider choices and recovery after connection changes",
+      "changes": [
+        "Show the provider type and connection ID when multiple connections use the same provider, such as Anthropic (opus) and Anthropic (fable). A single connection keeps its simple provider name.",
+        "Use the exact selected connection for each model choice. Changing models never silently switches to another connection of the same provider.",
+        "Let chats saved with a removed or renamed connection show the available replacements and accept an explicit selection, even when their conversation worker cannot start.",
+        "Keep saved messages, conversation history and uncertain delivery intact during connection repair. Selecting a replacement does not resend work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.34",
       "title": "More reliable conversation startup and recovery",
       "changes": [
