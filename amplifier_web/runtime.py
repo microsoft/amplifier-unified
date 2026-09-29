@@ -30,7 +30,7 @@ class RuntimeOperationPending(RuntimeError):
 
 
 class RuntimeStartupError(RuntimeError):
-    """This attempt failed before any send/retry command was written."""
+    """This attempt failed preparation before the worker submitted its input."""
 
 
 class SessionInUseError(RuntimeError):
@@ -51,6 +51,17 @@ def _worker_error(data):
     if data.get("code") == "module_load_failed":
         from .module_failures import ConfiguredModuleError
         return ConfiguredModuleError(data.get("moduleFailures", []))
+    if data.get("code") == "worker_preparation_failed":
+        from .module_failures import ConfiguredModuleError
+        from .worker_diagnostics import receipt_path
+        error = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
+        error.failures = ConfiguredModuleError(data.get('moduleFailures', [])).failures
+        if error.failures:
+            error.args = (str(error) + '\n\n' + str(ConfiguredModuleError(error.failures)),)
+        diagnostic = receipt_path(data.get('diagnosticReceipt'))
+        if diagnostic:
+            error.diagnostic_path = diagnostic
+        return error
     return RuntimeError(data.get("error", "Amplifier runtime failed"))
 
 
@@ -244,6 +255,8 @@ class RuntimeManager:
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
+            if current.get('preparation_error'):
+                raise current['preparation_error']
             current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
                 'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
@@ -344,9 +357,23 @@ class RuntimeManager:
                     row["inflight"].discard(data.get("id"))
                     input_id = row.get('sendInputs', {}).pop(data.get('id'), None)
                     future = row["pending"].get(data.get("id"))
+                    error = _worker_error(data) if data.get('error') else None
+                    if isinstance(error, RuntimeStartupError):
+                        row['preparation_error'] = error
+                        reported_error = str(error)
+                        from .worker_diagnostics import diagnostic_reference
+                        await row['emit']('runtime.error', {'sessionId': sid,
+                            'error': str(error), 'errorType': 'RuntimeStartupError',
+                            'phase': 'worker_startup', 'moduleFailures': error.failures,
+                            **diagnostic_reference(error)})
+                        if input_id:
+                            # Only first sends are tracked here. A rejected
+                            # retry cannot settle its earlier uncertain attempt.
+                            await row['emit']('runtime.delivery', {'sessionId': sid,
+                                'inputId': input_id, 'delivery': 'failed'})
                     if future and not future.done():
-                        if data.get("error"):
-                            future.set_exception(_worker_error(data))
+                        if error:
+                            future.set_exception(error)
                         else:
                             future.set_result(data.get("result"))
                     result = data.get('result')
@@ -382,7 +409,8 @@ class RuntimeManager:
                 elif data.get("type") == "runtime.error":
                     failure = _worker_error(data)
                     diagnostic = None
-                    if not row["ready"].done() and not isinstance(failure, SessionInUseError):
+                    startup = not row['ready'].done()
+                    if startup and not isinstance(failure, SessionInUseError):
                         from .worker_diagnostics import receipt_path, save_startup_failure
                         diagnostic = receipt_path(data.get("diagnosticReceipt"))
                         if diagnostic is None:
@@ -419,6 +447,7 @@ class RuntimeManager:
                     else:
                         from .module_failures import ConfiguredModuleError
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                            **({'phase': 'worker_startup'} if startup else {}),
                             **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
                 elif data.get("type") == "history.revised":
@@ -459,6 +488,7 @@ class RuntimeManager:
                     if diagnostic:
                         error += f" Startup details were saved locally to {diagnostic}."
                 await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                    **({'phase': 'worker_startup'} if not row['ready'].done() else {}),
                     **({"diagnosticReceipt": diagnostic.name} if diagnostic else {})})
                 if not row["ready"].done():
                     failure = RuntimeError(error)
@@ -471,7 +501,8 @@ class RuntimeManager:
         except Exception as exc:
             error = f'Amplifier worker communication failed ({type(exc).__name__}). Work was not replayed.'
             if not row['closing']:
-                await row['emit']('runtime.error', {'sessionId':sid,'error':error})
+                await row['emit']('runtime.error', {'sessionId':sid,'error':error,
+                    **({'phase': 'worker_startup'} if not row['ready'].done() else {})})
             if not row["ready"].done():
                 row["ready"].set_exception(RuntimeError(error))
         finally:
@@ -521,6 +552,8 @@ class RuntimeManager:
         row = self.workers.get(sid)
         if not row or row["process"].returncode is not None:
             raise RuntimeError("Session is not running")
+        if row.get('preparation_error') and op in {'send', 'retry', 'resume', 'control'}:
+            raise row['preparation_error']
         identity = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         row["pending"][identity] = future
@@ -589,7 +622,7 @@ class RuntimeManager:
     async def _start_for_input(self, session, emit):
         try:
             await self.start(session, emit)
-        except SessionInUseError:
+        except (SessionInUseError, RuntimeStartupError):
             raise
         except Exception as exc:
             failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')

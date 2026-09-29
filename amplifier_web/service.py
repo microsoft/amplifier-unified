@@ -2326,6 +2326,9 @@ class AppService:
         if status in {'unknown', 'failed'} and (receipt.get('delivery') == 'accepted' or
                 message_bound and message['delivery'].get('status') == 'accepted'):
             return
+        if status == 'unknown' and (receipt.get('delivery') == 'failed' or
+                message_bound and message['delivery'].get('status') == 'failed'):
+            return  # A racing timeout cannot erase an explicit pre-input rejection.
         if message_bound:
             message['delivery'] = {'status':status}
         if row:
@@ -2374,6 +2377,8 @@ class AppService:
             from .worker_diagnostics import diagnostic_reference
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
+                'phase': 'worker_startup',
+                **({'moduleFailures': exc.failures} if getattr(exc, 'failures', None) else {}),
                 **diagnostic_reference(exc),
             })
             raise AppError(message, 503, code='worker_startup_failed', receipt=receipt) from exc
@@ -2557,7 +2562,7 @@ class AppService:
                     session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
                     session.pop('health', None)
             elif kind == 'runtime.delivery':
-                self._delivery(session, payload['inputId'], 'accepted')
+                self._delivery(session, payload['inputId'], 'failed' if payload.get('delivery') == 'failed' else 'accepted')
             elif kind == "runtime.ended":
                 self.operations.interrupted(session["id"])
                 self.schedules.runtime_ended(session)
@@ -2650,21 +2655,31 @@ class AppService:
                     failure=ConfiguredModuleError(payload['moduleFailures'])
                     session['moduleFailures']=failure.failures
                     detail=str(failure)
-                error_type = payload.get('errorType') or session.get('turnErrorType')
+                startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
+                error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
                 from .session_health import failure_details
                 projected = failure_details(detail, error_type)
                 existing = session.get('failure')
-                if isinstance(existing, dict) and existing.get('stage'):
+                if startup and projected['category'] == 'unknown':
+                    error_type = 'RuntimeStartupError'
+                    projected = failure_details(detail, error_type)
+                current_input = session.get('execution', {}).get('currentTurnId')
+                failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
+                same_input = not current_input or not any(failure_inputs) or current_input in failure_inputs
+                if (not startup and same_input and isinstance(existing, dict)
+                        and (existing.get('stage') or projected['category'] == 'unknown'
+                             and existing.get('category') != 'unknown')):
                     # A later generic process-exit error must not replace the
                     # structured cause published at the manager boundary.
                     projected = existing
+                    error_type = projected.get('errorType', error_type)
                     detail = projected['summary'] + ' ' + projected['guidance']
+                    session['errorAt'] = existing.get('recordedAt', session['errorAt'])
                 session['errorType'] = error_type
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
-                if not isinstance(existing, dict) or existing.get('category') == 'unknown':
-                    session['failure'] = {**projected, 'recordedAt': session['errorAt']}
+                session['failure'] = {**projected, 'recordedAt': session['errorAt']}
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
@@ -2675,6 +2690,7 @@ class AppService:
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and payload.get('event') == 'generation.started':
+                    session.pop('diagnosticReceipt', None)
                     session.pop('turnErrorType', None)
                     session.pop('errorType', None)
                     session.pop('error', None)

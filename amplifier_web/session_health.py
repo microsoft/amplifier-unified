@@ -91,6 +91,36 @@ def inspection_stamp(session):
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
+def _event_time(value):
+    from datetime import datetime
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        try:
+            return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+
+
+def _belongs_to_failure(event, data, session):
+    """Legacy fallback must not attach an unrelated old provider error."""
+    failure = session.get('failure') or {}
+    generation = failure.get('generationId')
+    observed = event.get('generation_id') or data.get('generation_id')
+    if generation and observed:
+        return generation == observed
+    if generation:
+        start = next((_event_time(row.get('at')) for row in reversed(session.get('generations', []))
+            if row.get('generation_id') == generation and row.get('event') == 'generation.started'
+            and row.get('sessionId', session['id']) == session['id']), None)
+        end = _event_time(failure.get('recordedAt'))
+        at = _event_time(event.get('timestamp', event.get('ts')))
+        return all(value is not None for value in (start, end, at)) and start <= at <= end
+    # Truly old imports have neither an attempt timestamp nor generation data.
+    # Preserve their legacy inspection while requiring correlation for newer errors.
+    return not session.get('errorAt') and not failure.get('recordedAt')
+
+
 def inspect_session(home, session):
     from .host.storage import SessionStore
     identity = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
@@ -111,7 +141,7 @@ def inspect_session(home, session):
     report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
     if session.get('failure') or session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
-    if session.get('error'):
+    if session.get('error') and report['failure']['category'] == 'unknown':
         # Older versions discarded the cause at the manager boundary. Read a
         # bounded tail of this session's own native event log, only on request.
         directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
@@ -134,6 +164,8 @@ def inspect_session(home, session):
                         continue
                     data = event.get('data', {})
                     if not isinstance(data, dict) or any(value is not None and value != identity for value in (event.get('session_id'), event.get('sessionId'), data.get('session_id'), data.get('sessionId'))):
+                        continue
+                    if not _belongs_to_failure(event, data, session):
                         continue
                     error = data.get('error', data.get('message', ''))
                     kind = error.get('type', 'ProviderError') if isinstance(error, dict) else data.get('error_type', 'ProviderError')

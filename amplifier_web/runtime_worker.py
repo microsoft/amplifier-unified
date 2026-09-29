@@ -393,6 +393,8 @@ class Worker:
         except Exception as exc:
             diagnostic = startup_capture.save(exc, config.get("id")) if startup_capture else None
             if raise_errors:
+                if diagnostic:
+                    exc.diagnostic_path = diagnostic
                 raise
             error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
             if diagnostic:
@@ -528,7 +530,14 @@ class Worker:
             if self.session:
                 await self.session.cleanup()
             self.session = self.controls = self.naming = self.execution = None
-            await self.start(self.start_config)
+            try:
+                await self.start(self.start_config, raise_errors=True)
+            except Exception as exc:
+                from amplifier_web.runtime import RuntimeStartupError
+                failure = RuntimeStartupError('The conversation worker could not reload before accepting the message.')
+                failure.diagnostic_path = getattr(exc, 'diagnostic_path', None)
+                failure.failures = getattr(exc, 'failures', [])
+                raise failure from exc
         finally:
             self.remounting = False
 
@@ -619,10 +628,18 @@ class Worker:
         except Exception as exc:
             reply = {"op": "reply", "id": data.get("id"),
                      "error": f"{type(exc).__name__}: {exc}"}
+            from amplifier_web.runtime import RuntimeStartupError
+            preparation_failed = isinstance(exc, RuntimeStartupError)
+            if preparation_failed:
+                from amplifier_web.worker_diagnostics import diagnostic_reference
+                reply.update(code='worker_preparation_failed',
+                    moduleFailures=getattr(exc, 'failures', []), **diagnostic_reference(exc))
             if type(exc).__name__ == "SessionBusyError":
                 reply["code"] = "session_busy"
                 reply["owner"] = getattr(exc, "owner", None)
             publish(reply)
+            if preparation_failed:
+                self.shutdown.set()
         finally:
             if memory_control and self.memory_task is asyncio.current_task():
                 self.memory_task = None

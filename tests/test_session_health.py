@@ -201,6 +201,44 @@ async def test_inspection_reads_legacy_root_error_and_exposes_identity_to_agent(
     await app.close()
 
 
+@pytest.mark.parametrize('timestamp, event_generation, expected', [
+    (99, None, 'unknown'), (105, None, 'authentication'), (111, None, 'unknown'),
+    (105, 'other-generation', 'unknown'), (None, 'current-generation', 'authentication'),
+])
+async def test_provider_fallback_is_bound_to_failed_generation(tmp_path, timestamp, event_generation, expected):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        source = app._session()
+        source.update(status='error', error='Manager failed', errorAt=110,
+            failure={**failure_details('Manager failed'), 'generationId': 'current-generation', 'recordedAt': 110},
+            generations=[{'event': 'generation.started', 'generation_id': 'current-generation', 'at': 100}])
+        folder = SessionStore.for_app(tmp_path, tmp_path).directory(source['id']) / 'context-intelligence'
+        folder.mkdir(parents=True, exist_ok=True)
+        event = {'event': 'provider:error', 'timestamp': timestamp, 'data': {
+            'session_id': source['id'], 'generation_id': event_generation, 'error': 'AuthenticationError'}}
+        (folder / 'events.jsonl').write_text(json.dumps(event))
+        assert inspect_session(tmp_path, source)['failure']['category'] == expected
+    finally:
+        await app.close()
+
+
+async def test_new_uncorrelated_failure_does_not_borrow_legacy_provider_error(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        source = app._session()
+        source.update(status='error', error='Current unknown failure', errorAt=110)
+        folder = SessionStore.for_app(tmp_path, tmp_path).directory(source['id']) / 'context-intelligence'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'events.jsonl').write_text(json.dumps({'event': 'provider:error', 'timestamp': 5,
+            'data': {'session_id': source['id'], 'error': 'TimeoutError'}}))
+        failure = inspect_session(tmp_path, source)['failure']
+        assert failure['category'] == 'unknown' and 'source' not in failure
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('message,error_class,category', [
     (BAD_IMAGE, ValueError, 'invalid_image'),
     ('OpenAI request exceeds the local input allowance before dispatch.',
