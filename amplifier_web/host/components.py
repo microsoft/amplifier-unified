@@ -236,8 +236,14 @@ class ComponentResolver:
 
     def resolve(self, module_id, source_hint=None, profile_hint=None):
         hint = profile_hint if profile_hint is not None else source_hint
-        return self.resolver.resolve(module_id, self.components.source(module_id, hint, installed=True))
+        selected = self.components.source(module_id, hint, installed=True)
+        source = self.resolver.resolve(module_id, selected)
+        from .context_source import equivalent_context_source
+        return equivalent_context_source(module_id, selected, source)
 
     async def async_resolve(self, module_id, source_hint=None, profile_hint=None):
         hint = profile_hint if profile_hint is not None else source_hint
-        return await self.resolver.async_resolve(module_id, self.components.source(module_id, hint, installed=True))
+        selected = self.components.source(module_id, hint, installed=True)
+        source = await self.resolver.async_resolve(module_id, selected)
+        from .context_source import equivalent_context_source
+        return equivalent_context_source(module_id, selected, source)
