@@ -55,6 +55,10 @@ def _worker_error(data):
         from .module_failures import ConfiguredModuleError
         from .worker_diagnostics import receipt_path
         error = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
+        from .session_health import failure_details
+        detail = failure_details(data.get('error', ''))
+        if detail['category'] == 'provider_selection':
+            error.args = (f"ProviderSelectionError: {detail['summary']} {detail['guidance']}",)
         error.failures = ConfiguredModuleError(data.get('moduleFailures', [])).failures
         if error.failures:
             error.args = (str(error) + '\n\n' + str(ConfiguredModuleError(error.failures)),)
@@ -279,10 +283,11 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
+        row['start_session'].pop('replaceSavedSelection', None)
         row['parked'] = False
         self.retention.wake()
         if session.get('forkContext'):
@@ -429,7 +434,7 @@ class RuntimeManager:
                             detail = failure_details(data.get("error"), data.get("errorType"))
                             labels = {'authentication': 'AuthenticationError', 'rate_limit': 'RateLimitError',
                                       'context_limit': 'ContextLengthError', 'invalid_image': 'InvalidImageError',
-                                      'tool_configuration': 'ToolConfigurationError'}
+                                      'tool_configuration': 'ToolConfigurationError', 'provider_selection': 'ProviderSelectionError'}
                             label = labels.get(detail['category'])
                             # Publish only our bounded classification and guidance,
                             # never the original provider payload or exception text.

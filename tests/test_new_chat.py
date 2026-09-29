@@ -23,7 +23,8 @@ async def app(tmp_path):
 
 
 @pytest.mark.parametrize('explicit', [False, True])
-async def test_creation_preserves_draft_model_label_without_pinning_default(app, tmp_path, explicit):
+@pytest.mark.parametrize('multiple', [False, True])
+async def test_creation_preserves_draft_model_label_without_pinning_default(app, tmp_path, explicit, multiple):
     import json
     setup = {'workspace': str(tmp_path), 'bundle': 'chosen-bundle'}
     if explicit:
@@ -31,11 +32,12 @@ async def test_creation_preserves_draft_model_label_without_pinning_default(app,
     app._state['draftDefaults'] = {json.dumps([str(tmp_path), 'chosen-bundle'], separators=(',', ':')): {
         'phase': 'ready', 'bundle': 'chosen-bundle',
         'effective': {'instance': 'test', 'model': 'default-model', 'effort': 'high'},
-        'providers': [{'id': 'test', 'info': {'display_name': 'Test provider'}, 'config': {'api_key': 'never-copy'}}]}}
+        'providers': [{'id': 'test', 'info': {'id': 'fixture', 'display_name': 'Test provider'}, 'config': {'api_key': 'never-copy'}}]
+            + ([{'id': 'other', 'info': {'id': 'fixture', 'display_name': 'Test provider'}}] if multiple else [])}}
     result = await command(app, 'web', 'session.create', setup)
     session = app._session(result['sessionId'])
     assert session['initialModel']['model'] == ('explicit-model' if explicit else 'default-model')
-    assert session['initialModel']['providerLabel'] == 'Test provider'
+    assert session['initialModel']['providerLabel'] == ('Test provider (test)' if multiple else 'Test provider')
     assert session.get('selection') == setup.get('selection')
     assert 'never-copy' not in json.dumps(session)
     assert not app.runtime.started and not app.runtime.sent

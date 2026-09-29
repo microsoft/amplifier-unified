@@ -151,6 +151,25 @@ async def test_module_preparation_uses_active_registry_cache_not_shared_history_
     assert os.environ["AMPLIFIER_HOME"] == shared
 
 
+async def test_missing_saved_connection_publishes_choices_without_changing_history(mounted_host):
+    from amplifier_web.host.model_selection import ProviderSelectionError
+    from amplifier_web.provider_recovery import catalog
+    h = mounted_host
+    messages = [{'role': 'user', 'content': 'Already accepted work'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    before = h.path.read_bytes()
+    wanted = {'instance': 'deleted', 'model': 'saved-model', 'effort': 'high'}
+    with pytest.raises(ProviderSelectionError):
+        await h.prepare(selection=wanted)
+    result = catalog(h.home, {'id': 'native-root', 'workspace': str(h.config.workspace),
+                             'status': 'error', 'failure': {'category': 'provider_selection'}})
+    assert result['selection'] == wanted
+    assert [row['id'] for row in result['providers']] == ['fixture']
+    assert h.path.read_bytes() == before
+    h.session.execute.assert_not_called()
+    h.session.cleanup.assert_awaited_once()
+
+
 async def test_native_only_resume_keeps_complete_history_and_repairs_receipt_without_replay(mounted_host):
     h = mounted_host
     rows = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "answer"},

@@ -2,6 +2,10 @@
 import copy
 
 
+class ProviderSelectionError(ValueError):
+    """A saved or requested connection needs an explicit user replacement."""
+
+
 def inherited_selection(parent, overlay, preferences, saved=None):
     """Snapshot an opted-in parent's UI model choice unless a specialist wins."""
     if preferences or overlay.get("providers") or overlay.get("model_role"):

@@ -764,13 +764,6 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         providers = coordinator.get("providers") or {}
         if not providers:
             raise RuntimeError("No provider is configured. Add config.providers to the shared Amplifier settings.yaml.")
-        loop = coordinator.get("orchestrator")
-        if selection:
-            identity = selection.get("instance")
-            if identity not in providers or not selection.get("model"):
-                raise ValueError("Root selection needs an available provider instance and model")
-            loop.root_provider = SelectedProvider(providers[identity], selection)
-        selected = loop._select_provider(providers)
         choices = []
         for identity, provider in providers.items():
             info = provider.get_info()
@@ -780,6 +773,19 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
                 "display_name": getattr(info, "display_name", None),
                 "model": defaults.get("model"), "effort": defaults.get("reasoning_effort"), "models": []})
+        # Keep public connection choices available even when a saved ID prevents
+        # startup. Reading this receipt never chooses a connection or runs work.
+        write_private(directory / "provider-choices.json", json.dumps({
+            "session_id": runtime.session_id, "workspace": str(config.workspace),
+            "provider_choices": choices, "selection": selection}, default=str))
+        loop = coordinator.get("orchestrator")
+        if selection:
+            identity = selection.get("instance")
+            if identity not in providers or not selection.get("model"):
+                from .model_selection import ProviderSelectionError
+                raise ProviderSelectionError("Root selection needs an available provider instance and model")
+            loop.root_provider = SelectedProvider(providers[identity], selection)
+        selected = loop._select_provider(providers)
         effective = selection or next((row for row in choices if providers[row["id"]] is selected), None)
         metadata = {**({key:saved[1][key] for key in ("fork","preserve_system") if key in saved[1]} if saved else {}),
             "session_id": runtime.session_id, "parent_id": None,

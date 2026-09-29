@@ -75,13 +75,13 @@ test('draft model controls discover without creating a session and save choices 
  await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
  await renderAct(async()=>{await new Promise(r=>setTimeout(r,300))});
  assert.deepEqual(calls.find(c=>c.name==='providers.list').args,{workspace:'/future'});
- state={...state,setup:{providersRequestedWorkspace:'/future',providers:[{id:'one',module:'provider-test',config:{model:'first'}}],providerCatalogs:{one:{phase:'ready',models:['first','chosen']}}}};
+ state={...state,draftDefaults:{'["/future","work"]':{phase:'ready',effective:{instance:'one',model:'first'}}},setup:{providersRequestedWorkspace:'/future',providers:[{id:'one',module:'provider-test',config:{model:'first'}}],providerCatalogs:{one:{phase:'ready',models:['first','chosen']}}}};
  await renderAct(async()=>root.update(render()));
  const picker=()=>root.root.findAllByProps({id:'chat-model'}).find(n=>typeof n.type==='string');
  await renderAct(async()=>picker().props.onChange({target:{value:'chosen'}}));
  assert.deepEqual(state.view.newSessionDraft.selection,{instance:'one',model:'chosen'});
  await renderAct(async()=>root.update(render()));
- assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('one · chosen')));
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('provider-test · chosen')));
  assert.equal(root.root.findByProps({id:'chat-provider'}).findAllByType('option').some(n=>n.children.includes('Use bundle default')),false);
  assert.equal(calls.some(c=>['session.create','runtime.control'].includes(c.name)),false);
  assert.equal(state.view.newSessionDraft.bundle,'work');await renderAct(async()=>root.unmount());
@@ -104,13 +104,43 @@ test('inherited choices are displayed without pinning and the popup opens before
  await renderAct(async()=>root.unmount());
 });
 
-test('provider aliases share one choice and model selection retains the correct instance',async()=>{
- const calls=[],providers=[{id:'terra',info:{id:'openai',display_name:'OpenAI',defaults:{model:'terra-model'}}},{id:'astra',info:{id:'openai',display_name:'OpenAI',defaults:{model:'astra-model'}}},{id:'claude',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'claude-model'}}}];
- const state={view:{composerModel:{open:true,sessionId:'chat',instance:'terra',model:'terra-model'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:{instance:'terra',model:'terra-model'}}}}};
+test('same-type connections stay separate and changing models never changes the connection',async()=>{
+ const calls=[],providers=[{id:'opus',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'opus-model'}}},{id:'fable',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'fable-model'}}},{id:'openai',info:{id:'openai',display_name:'OpenAI',defaults:{model:'openai-model'}}}];
+ const state={view:{composerModel:{open:true,sessionId:'chat',instance:'fable',model:'fable-model'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:{instance:'fable',model:'fable-model'}},modelCatalogs:{fable:{phase:'ready',models:['fable-model','opus-model']},opus:{phase:'ready',models:['opus-only']}}}}};
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args}),working:false}))});
- const choices=root.root.findByProps({id:'chat-provider'}).findAllByType('option');assert.deepEqual(choices.map(n=>n.children.join('')),['Anthropic','OpenAI']);
- await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'astra-model'}}));
- assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{instance:'astra',model:'astra-model'});
+ const choices=root.root.findByProps({id:'chat-provider'}).findAllByType('option');
+ assert.deepEqual(choices.map(n=>[n.props.value,n.children.join('')]),[['fable','Anthropic (fable)'],['opus','Anthropic (opus)'],['openai','OpenAI']]);
+ assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'fable');
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/Anthropic \(fable\)/);
+ assert.equal(root.root.findByProps({id:'chat-model'}).findAllByType('option').some(n=>n.props.value==='opus-only'),false);
+ await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'opus-model'}}));
+ assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{instance:'fable',model:'opus-model'});
+ await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'opus'}}));
+ assert.deepEqual(calls.filter(c=>c.args.operation==='provider.select').at(-1).args.args,{instance:'opus',model:'opus-model'});
+ await renderAct(async()=>root.unmount());
+});
+
+test('deleted connection remains unavailable until an explicit replacement is selected',async()=>{
+ const calls=[],wanted={instance:'removed',model:'saved-model',effort:'high'},providers=[{id:'remaining',info:{id:'anthropic',display_name:'Anthropic',defaults:{model:'different-model'}}}];
+ const state={view:{composerModel:{open:true,sessionId:'chat'}},runtimeControl:{chat:{'configuration.providers':{providers,effective:wanted,selection:wanted,selectionIssue:'Choose a replacement.'}}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args})}))});
+ assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'removed');
+ assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved-model');
+ assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
+ assert.ok(root.root.findByProps({id:'chat-provider'}).findAllByType('option').some(n=>n.children.join('')==='removed (unavailable)'));
+ assert.equal(calls.some(c=>c.args.operation==='provider.select'),false);
+ await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'remaining'}}));
+ assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{...wanted,instance:'remaining'});
+ assert.equal(calls.some(c=>c.name==='session.send'),false);
+ await renderAct(async()=>root.unmount());
+});
+
+test('catalog order does not select a connection when no effective connection is known',async()=>{
+ const calls=[],state={view:{composerModel:{open:true,sessionId:'chat'}},runtimeControl:{chat:{'configuration.providers':{providers:[{id:'first',info:{defaults:{model:'first-model'}}}],effective:{}}}}};
+ let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args})}))});
+ assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'');
+ assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
+ assert.equal(calls.some(c=>c.args.operation==='provider.select'),false);
  await renderAct(async()=>root.unmount());
 });
 

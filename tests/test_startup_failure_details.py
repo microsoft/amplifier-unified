@@ -78,6 +78,7 @@ async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(t
     ('ContextLengthError: too many tokens', 'context_limit', 'ContextLengthError'),
     ('Invalid image_url: invalid base64 value', 'invalid_image', 'InvalidImageError'),
     ('tools.0 input_schema: extra inputs are not permitted', 'tool_configuration', 'ToolConfigurationError'),
+    ('ProviderSelectionError: Select an available provider instance and model', 'provider_selection', 'ProviderSelectionError'),
 ])
 async def test_specific_classified_startup_error_keeps_its_guidance(tmp_path, monkeypatch, detail, category, label):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
