@@ -69,3 +69,36 @@ async def test_correctable_tool_error_does_not_become_a_conversation_failure(tmp
         assert not [row for row in app.get_state()['attention']['items'] if row['id'] == 'session:' + sid and row.get('severity') == 'error']
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('old_type', ['TimeoutError', 'ContextLengthError'])
+@pytest.mark.parametrize('identity', [{'errorType': 'RuntimeStartupError'}, {'phase': 'worker_startup'}])
+async def test_new_startup_failure_replaces_old_manager_cause_and_time(tmp_path, old_type, identity):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        session.update(failure={**generation_failure({'error_category': 'unknown'}),
+            'generationId': 'old', 'inputIds': ['old-input'], 'recordedAt': 100}, errorAt=100,
+            turnErrorType=old_type)
+        await app.on_runtime_event('runtime.error', {'sessionId': session['id'],
+            **identity, 'error': 'The conversation worker could not start.'})
+        assert session['failure']['category'] == 'worker_startup'
+        assert session['errorType'] == 'RuntimeStartupError'
+        assert 'generationId' not in session['failure']
+        assert session['errorAt'] > 100
+        assert 'manager turn failed' not in session['error'].lower()
+    finally:
+        await app.close()
+
+
+async def test_generic_exit_does_not_redate_the_same_manager_failure(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        session['failure'] = {**generation_failure({'error_category': 'unknown'}), 'recordedAt': 100}
+        await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Worker exited'})
+        assert session['errorAt'] == session['failure']['recordedAt'] == 100
+    finally:
+        await app.close()
