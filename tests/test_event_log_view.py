@@ -596,6 +596,17 @@ def test_raw_request_reference_detects_replaced_log(source):
         read_text(session,{**reference,'complete':'true'})
 
 
+def test_litellm_provider_emitted_request_is_available_without_reconstruction(source):
+    session, path = source
+    recorded = '{"model":"fixture","messages":["recorded input"]}...[truncated]'
+    append(path, 'llm:request', {'request_id':'lite', 'provider':'litellm', 'model':'fixture',
+        'raw_request':recorded, 'request_capture':{'redacted':True,'truncated':True}}, 10)
+    session['execution'] = EventLogView(None).read(session)
+    node, = session['execution']['nodes']
+    assert node['requestCapture'] == {'redacted':True,'truncated':True}
+    assert read_text(session, {**node['requestDetail'], 'complete':'true'})['value'] == recorded
+
+
 def test_matching_model_names_on_different_providers_keep_own_request(source):
     _, path = source
     append(path,'provider:request',{'kind':'llm','id':'app','sessionId':'native','provider':'other','model':'shared','startedAt':10,'endedAt':12,'phase':'completed'},12)

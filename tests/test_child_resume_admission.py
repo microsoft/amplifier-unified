@@ -151,6 +151,25 @@ async def test_empty_saved_history_is_restored_before_admission(admission):
     assert h.store.load(h.identity)[0] == []
 
 
+async def test_child_preparation_applies_recording_policy_to_provider_overrides(admission, monkeypatch, tmp_path):
+    h = admission
+    path = tmp_path / 'app' / 'diagnostics' / 'config.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{"providerRequests":true}')
+    seen = []
+    async def create(prepared, **kwargs):
+        seen.append(prepared.mount_plan)
+        return h.child
+    monkeypatch.setattr(Prepared, 'create_session', create)
+    await h.children.spawn('worker', 'New instruction', h.parent,
+        agent_configs={'worker':{'providers':[
+            {'module':'provider-litellm'},
+            {'module':'provider-openai','config':{'raw':False}}]}})
+    assert seen[0]['providers'][0]['config']['raw_debug'] is True
+    assert seen[0]['providers'][1]['config']['raw'] is False
+    assert h.capabilities['web.provider_request_redaction'] is True
+
+
 def pending_job(h):
     from amplifier_module_loop_live.job_store import JobStore
     ledger = JobStore(h.path / "live-jobs")

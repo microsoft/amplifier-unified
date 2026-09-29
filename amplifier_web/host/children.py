@@ -313,6 +313,8 @@ class Children:
         selection = inherited_selection(parent, overlay, preferences, session_metadata)
         if preferences:
             plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
+        from ..provider_recording import apply_provider_recording, install_request_redaction
+        apply_provider_recording(plan)
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")
         effective = compose_bundles(prepared.bundle, overlay_bundle)
@@ -362,6 +364,7 @@ class Children:
                 approval_system=self.approvals, display_system=getattr(parent.coordinator, "display_system", None),
                 session_cwd=cwd, is_resumed=resumed)
             coordinator = child.coordinator
+            install_request_redaction(coordinator)
             if selection:
                 from .session import SelectedProvider
                 providers = coordinator.get("providers") or {}

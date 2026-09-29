@@ -681,6 +681,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         from .mentions import include_instruction_files
         loaded = include_instruction_files(loaded)
     baseline = loaded.to_mount_plan()
+    from ..provider_recording import apply_provider_recording
+    apply_provider_recording(baseline, home=config.home)
+    loaded.providers = baseline.get('providers', [])
+    loaded.agents = baseline.get('agents', {})
     adapted, replacements = live_plan(baseline, background_delegate)
     # Modify the public Bundle fields before prepare(): loop-live and every
     # agent-specific source go through Foundation's normal activation mechanism.
@@ -737,6 +741,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        from ..provider_recording import install_request_redaction
+        install_request_redaction(coordinator)
         coordinator.register_capability('web.history_workspace', str(config.workspace))
         # Freeze credential/file/source/generation identity before provider
         # construction. A later rotation cannot relabel an old mounted result.

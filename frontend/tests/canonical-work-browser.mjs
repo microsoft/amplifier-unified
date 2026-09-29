@@ -54,7 +54,7 @@ try{
  assert.equal(copied.input.length,100);assert.equal(copied.instructions,'Owner-recorded instructions');assert.equal(requestReads.length,2);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await model.getByRole('button',{name:'Hide raw request',exact:true}).click();
- const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No recorded raw request is available/);
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
  await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  const finalGroup=page.locator('[data-group-id$="@final"]'),finalToggle=finalGroup.locator('button.a-execution-turn-line');
