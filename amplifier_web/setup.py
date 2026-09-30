@@ -618,7 +618,7 @@ class SetupManager:
         row={'providerId':identity,'loginId':login_id,'authMode':mode,'status':'starting','instructions':[]}
         self.logins[identity]=row
         async def run():
-            process=None;completed=False
+            process=None;completed=False;activated=False
             try:
                 if self.auth_command:command=list(self.auth_command)
                 else:
@@ -664,6 +664,7 @@ class SetupManager:
                             # successful exit and a current configuration check.
                             # Existing workers/shared custom files stay intact.
                             result=self._provider_mutation({**args,'module':provider['module'],'config':config},workspace,scope)
+                            activated=True
                             row.update(status='completed',account=account,showPlanWelcome=account['planEnabled'] and not before['planEnabled'])
                             await self.publish_login(identity,providers=result['providers'],providersWorkspace=workspace,providersLoadedAt=time.time(),loginConfigurationChanged=True)
             except asyncio.CancelledError:row['status']='cancelled';raise
@@ -680,6 +681,24 @@ class SetupManager:
                         try:os.killpg(process.pid,signal.SIGKILL)
                         except ProcessLookupError:pass
                         await process.wait()
+                if not activated:
+                    try:
+                        # Inspect effective and persisted rows, including
+                        # disabled/shadowed connections. Only unlink this
+                        # attempt-owned candidate after the worker has stopped.
+                        # Source, registration, host and lock files stay intact;
+                        # copied credentials are never remotely revoked here.
+                        providers=list(self.config(workspace).providers)
+                        for location in ('global','project','local'):
+                            providers.extend(self.store.read(workspace,location).get('config',{}).get('providers',[]))
+                        referenced=any(
+                            Path(value['config']['token_file_path']).expanduser().resolve()==path.resolve()
+                            for value in providers if value.get('config',{}).get('token_file_path')
+                        )
+                        if not referenced and path.resolve()!=source_path.resolve():
+                            path.unlink(missing_ok=True)
+                    except Exception:
+                        row['cleanupWarning']='An abandoned sign-in file could not be safely removed.'
                 await self.publish_login(identity)
         row['task']=asyncio.create_task(run())
         return await self.publish_login(identity)

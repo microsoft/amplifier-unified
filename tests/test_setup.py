@@ -468,14 +468,17 @@ def test_chatgpt_authorization_url_never_exposes_identity_hints_or_tokens():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('outcome',['success','failure','removed','edited','permission-missing','exit-failure','cancel'])
+@pytest.mark.parametrize('outcome',['success','failure','removed','edited','permission-missing','exit-failure','cancel','timeout','adopted','adopted-disabled'])
 @pytest.mark.parametrize('existing_mode',['legacy_codex','chatgpt_plan'])
-async def test_plan_login_commits_only_successful_unchanged_connection(manager,tmp_path,outcome,existing_mode):
+async def test_plan_login_commits_only_successful_unchanged_connection(manager,tmp_path,outcome,existing_mode,monkeypatch):
     import asyncio,json,sys
     original=tmp_path/'original-custom-tokens.json'
     original_tokens={'access_token':'legacy-private','refresh_token':'legacy-refresh'}
     if existing_mode=='chatgpt_plan':original_tokens.update(auth_mode='chatgpt_plan',subject='subject',client_id='client',scopes=['chatgpt.tokens.use.direct'])
     original.write_text(json.dumps(original_tokens))
+    if outcome=='timeout':
+        real_timeout=asyncio.timeout
+        monkeypatch.setattr(asyncio,'timeout',lambda delay:real_timeout(.2 if delay==900 else delay))
     args={'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','scope':'local',
         'config':{'auth_mode':existing_mode,'token_file_path':str(original),'default_model':'kept'}}
     if existing_mode=='chatgpt_plan':args['config']['host_file_path']=str(tmp_path/'import-host.json')
@@ -485,6 +488,10 @@ async def test_plan_login_commits_only_successful_unchanged_connection(manager,t
     script.write_text('''import sys,json,time,pathlib
 r=json.loads(sys.stdin.readline())
 assert r['authMode']=='chatgpt_plan'
+p=pathlib.Path(r['tokenFile']);p.parent.mkdir(parents=True,exist_ok=True)
+p.write_text(pathlib.Path(r['sourceTokenFile']).read_text() if r.get('sourceTokenFile') else '{}')
+for key in ('registrationFile','hostFile'):
+ f=pathlib.Path(r[key]);f.parent.mkdir(parents=True,exist_ok=True);f.write_text('{"client_id":"stable-registration"}')
 print(json.dumps({'status':'waiting','instruction':'Open https://auth.openai.com/api/accounts/authorize?state=s&code_challenge=c'}),flush=True)
 print(json.dumps({'status':'waiting','instruction':'identity private-jwt https://auth.openai.com/api/accounts/authorize?id_token_hint=private-jwt'}),flush=True)
 while not pathlib.Path(%r).exists():time.sleep(.01)
@@ -504,13 +511,22 @@ else:
         if manager.login_state('chatgpt').get('url'):break
         await asyncio.sleep(.01)
     assert manager.store.read(tmp_path,'local')==before
+    candidate=manager.home/'config'/'chatgpt-sign-in'/'chatgpt'/(manager.login_state('chatgpt')['loginId']+'.json')
+    assert candidate.exists()
     assert 'private' not in str(updates)
     assert 'id_token_hint' not in str(updates)
     if outcome=='removed':await manager.perform('providers.remove',{'id':'chatgpt','workspace':str(tmp_path),'scope':'local'})
     if outcome=='edited':await manager.perform('providers.save',{**args,'config':{**args['config'],'default_model':'changed'}})
+    if outcome=='adopted':await manager.perform('providers.save',{**args,'config':{**args['config'],'token_file_path':str(candidate)}})
+    if outcome=='adopted-disabled':
+        # Disabled persisted rows still own their referenced credentials and
+        # can be re-enabled later. They must prevent abandoned-file cleanup.
+        await manager.perform('providers.save',{**args,'id':'another','scope':'global','config':{**args['config'],'token_file_path':str(candidate)}})
+        await manager.perform('providers.remove',{**args,'id':'another'})
+        await manager.perform('providers.save',{**args,'config':{**args['config'],'default_model':'changed'}})
     if outcome=='cancel':await manager.cancel_login('chatgpt')
     else:
-        gate.touch()
+        if outcome!='timeout':gate.touch()
         await asyncio.wait_for(manager.logins['chatgpt']['task'],3)
     login=manager.login_state('chatgpt')
     saved=manager.store.read(tmp_path,'local')['config']['providers'][0]
@@ -524,10 +540,16 @@ else:
         assert login['showPlanWelcome'] is (outcome=='success' and existing_mode=='legacy_codex')
         assert any(row.get('loginConfigurationChanged') for row in updates)
     else:
-        assert login['status']==('cancelled' if outcome=='cancel' else 'failed')
-        if outcome!='removed':assert saved['config']['token_file_path']==str(original)
+        assert login['status']==('cancelled' if outcome=='cancel' else 'expired' if outcome=='timeout' else 'failed')
+        if outcome not in {'removed','adopted'}:assert saved['config']['token_file_path']==str(original)
         if outcome=='failure':assert manager.store.read(tmp_path,'local')==before
         if outcome=='edited':assert saved['config']['default_model']=='changed'
         if outcome=='removed':assert 'chatgpt' in manager.store.read(tmp_path,'local')['configurator']['disabled']['providers']
-    assert not manager.store.read(tmp_path,'global').get('config',{}).get('providers')
+    assert candidate.exists() is (outcome in {'success','permission-missing','adopted','adopted-disabled'})
+    assert list(candidate.parent.glob('registration-*.json'))
+    assert (tmp_path/'import-host.json' if existing_mode=='chatgpt_plan' else manager.home/'config'/'chatgpt-host.json').exists()
+    assert json.loads(original.read_text())==original_tokens
+    global_providers=manager.store.read(tmp_path,'global').get('config',{}).get('providers',[])
+    if outcome=='adopted-disabled':assert global_providers[0]['config']['token_file_path']==str(candidate)
+    else:assert not global_providers
     await manager.close()
