@@ -311,6 +311,9 @@ for theme_action in ('theme.apply', 'theme.preview'):
 
 
 
+from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
+ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
+
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
@@ -962,6 +965,11 @@ class AppService:
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        if action.startswith("profiling."):
+            host = getattr(self, "profiling_host", None)
+            if host is None:
+                raise AppError("Profiling requires the running host adapter.", 503)
+            return await host.dispatch(action, args, command_id)
         transfer_sid = None
         if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
@@ -3021,6 +3029,12 @@ class AppService:
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
             compact_smart_tool = args['action'].startswith('smartTools.')
+            if args['action'].startswith('profiling.'):
+                # Profiling must not flush progress or build an unrelated
+                # full-catalog agent snapshot merely to inspect host timings.
+                return await self.dispatch(args['action'], action_args, origin='agent',
+                                           command_id=args.get('id'), include_state=False,
+                                           caller_session_id=session_id)
             canvas_client = None
             if args['action'].startswith('observation.'):
                 token = self.observations.input_bindings.set(args.get('_inputBindings', []))
@@ -3187,6 +3201,8 @@ class AppService:
         if self.closed:
             return
         self.closed = True
+        if getattr(self, "profiling_host", None):
+            await self.profiling_host.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]
         for task in lifecycle_tasks:

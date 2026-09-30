@@ -78,3 +78,39 @@ agent and `amplifier-unified service logs` to read its recent output.
 Unified owns its own HTTPS listener and authentication. It does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.
 
 The public bootstrap endpoints are limited to `/login`, `/setup`, `/api/ca`, `/ca.crt`, and `/api/health`.
+
+## Debug-only profiling
+
+The optional `amplifier-profiling` library must be installed in the serving host's
+Python environment. Normal installations do not require it. An operator can
+enable it through `amplifier-unified config set debug.profiling true`; no app
+action, bundle or tool configuration can enable this setting.
+
+`profiling.status`, `profiling.targets`, `profiling.start`, `profiling.read`,
+`profiling.stop` and `profiling.release` are authenticated shared actions.
+Mutations require a stable command ID. Start accepts only the process-local target
+returned by targets, 0.1–60 seconds, and 1–50 Hz. Results are memory-bounded and
+process-local, not retained across restart; small admission receipts prevent an
+exact retry from starting another capture. An unsettled receipt after restart is
+reported unavailable, never replayed. Download settled captures from the returned
+authenticated URL before explicitly releasing their retention slot.
+
+Disable through `amplifier-unified config set debug.profiling false`. While a
+capture is active, the host rechecks config every 250 ms (subject to event-loop and
+filesystem delays); malformed, missing or unreadable config fails closed.
+Download authorization is rechecked before returning bytes; already-returned
+bytes cannot be recalled. Shutdown stops the sampler.
+
+This is cooperative sampling of all Python threads in **the serving host
+process**, not arbitrary PID attachment. It records symbol metadata, not locals,
+arguments, source text, prompts or event bodies. GIL delays, missed samples and
+backend limitations remain visible. Function observations are wall-stack counts,
+not per-function CPU percentages. Do not infer native-thread/C-stack coverage.
+Profiles never enter canonical Context Intelligence capture or ordinary app-state
+publication. The native event JSONL and resume transcript remain authoritative.
+
+Enabling this setting grants the authenticated owner and its agents access to
+process-wide symbol metadata. Unified is currently single-owner; do not enable
+this adapter in a multi-tenant shared process without separate operator-only
+authorization and tenant-isolated targets. Hosted containers need no ptrace or
+root privileges for self-sampling. External/native sampling is not supplied.

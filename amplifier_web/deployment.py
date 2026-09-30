@@ -19,6 +19,7 @@ DEFAULT_SERVER = {
     "session_ttl_seconds": 604800,
     "tls": {"method": "none", "cert": "", "key": ""},
     "runtime": DEFAULT_RETENTION,
+    "debug": {"profiling": False},
 }
 
 
@@ -112,6 +113,10 @@ def validate_server(value: dict) -> dict:
     config = copy.deepcopy(DEFAULT_SERVER)
     config.update(value)
     config["runtime"] = validate_retention(config["runtime"])
+    debug = config["debug"]
+    if not isinstance(debug, dict) or set(debug) - {"profiling"} or type(debug.get("profiling", False)) is not bool:
+        raise ValueError("debug must contain only a boolean profiling setting.")
+    config["debug"] = {"profiling": debug.get("profiling", False)}
     if config["schema_version"] != 1:
         raise ValueError("Unsupported server configuration schema.")
     binds = config["bind"]
