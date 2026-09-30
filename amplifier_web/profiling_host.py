@@ -37,11 +37,16 @@ DEFINITIONS = {
                           "required": ["id"]}),
 }
 
+def profiling_enabled(config):
+    """Opaque config extensions cannot grant capture by truthiness."""
+    debug = config.get("debug")
+    return isinstance(debug, dict) and debug.get("profiling") is True
+
 
 class ProfilingHost:
     def __init__(self, service, config):
         self.service = service
-        self.settings = config["debug"]["profiling"]
+        self.settings = profiling_enabled(config)
         self.controller = None
         self.backend = None
         self.lock = asyncio.Lock()
@@ -56,7 +61,7 @@ class ProfilingHost:
         def enabled():
             if not path.exists():
                 return False
-            return validate_server(yaml.safe_load(path.read_text()) or {})["debug"]["profiling"]
+            return profiling_enabled(validate_server(yaml.safe_load(path.read_text()) or {}))
         try:
             self.settings = await asyncio.to_thread(enabled)
         except (OSError, ValueError, TypeError, yaml.YAMLError):

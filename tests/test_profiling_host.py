@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from amplifier_web.deployment import load_server_config, save_server_config, validate_server
-from amplifier_web.profiling_host import ProfilingHost
+from amplifier_web.profiling_host import ProfilingHost, profiling_enabled
 from amplifier_web.server import create_app
 from amplifier_web.service import AppError
 from test_service import Runtime
@@ -43,10 +43,18 @@ async def host(tmp_path, enabled=True):
     return app
 
 
-@pytest.mark.parametrize("value", [True, "yes", [], {"profiling": 1}, {"profiling": True, "pid": 1}])
-def test_debug_config_validated(value):
-    with pytest.raises(ValueError, match="debug"):
-        validate_server({"debug": value})
+@pytest.mark.parametrize("value", [True, "yes", [], {"profiling": 1}, {"profiling": "true"},
+                                 {"profiling": {"enabled": True}}])
+def test_debug_extension_preserved_but_malformed_capture_fails_closed(value):
+    config = validate_server({"debug": value})
+    assert config["debug"] == value
+    assert profiling_enabled(config) is False
+
+
+def test_profiling_consumes_only_its_boolean_preserving_other_extension_keys():
+    config = validate_server({"debug": {"profiling": True, "labels": ["cpu"]}})
+    assert profiling_enabled(config) is True
+    assert config["debug"] == {"profiling": True, "labels": ["cpu"]}
 
 
 def test_debug_default_off():
