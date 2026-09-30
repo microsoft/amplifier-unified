@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.39",
+      "title": "Let long conversations finish compaction",
+      "changes": [
+        "Allow healthy conversation summaries and native compaction calls to finish without a two-minute or whole-pass deadline. Older inherited deadline settings are ignored so they cannot restart the same summary repeatedly.",
+        "Remove the Work bundle's inherited compaction timer and document why elapsed time must not cancel healthy model work. Real provider errors and user cancellation still end a call.",
+        "Require an OpenAI SDK with native Responses compaction support when updating the OpenAI provider. Older retained SDKs no longer silently disable that route.",
+        "Preserve original conversation history, completed summary fragments and pending work during compaction and recovery. No work is automatically replayed."
+      ],
+      "notices": [
+        {
+          "id": "compaction-completion-components",
+          "title": "Let compaction finish without repeated cancellation",
+          "detail": "These repairs include updated context-management, Work and OpenAI provider components. An app-only update does not replace code already loaded by a conversation worker.",
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+        }
+      ]
+    },
+    {
       "version": "0.20.38",
       "title": "Recover updates after a newer release is installed",
       "changes": [
