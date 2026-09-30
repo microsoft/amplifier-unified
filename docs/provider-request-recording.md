@@ -87,9 +87,10 @@ is required for the other audited capture paths.
   redaction failures do not leak the original payload.
 - Event-log tests prove LiteLLM's existing recorded field survives lazy readback
   exactly, without reconstructed history, and retain redaction/truncation status.
-- Frontend interaction testing covers default-off, explicit save, disabling
-  again, and independence from app forwarding.
+- Frontend interaction tests cover default-off, explicit save, disabling again,
+  and independence from app forwarding. A browser test verifies save/reload on
+  desktop and mobile, with no horizontal overflow.
 - No paid inference or live account calls were used. Adapter coverage here is
   source-contract coverage plus host tests, not a claim that every current
-  account/endpoint was exercised. Release/installed-worker/browser acceptance
-  must be verified separately after integration.
+  account/endpoint was exercised. Release and installed-worker
+  acceptance must be verified separately after integration.

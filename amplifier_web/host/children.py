@@ -68,8 +68,15 @@ def child_plan(parent, overlay, *, tool_inheritance=None, hook_inheritance=None,
     """Compose immutable agent settings and honor explicit inheritance policies."""
     from amplifier_foundation import deep_merge
     parent, overlay = copy.deepcopy(parent), copy.deepcopy(overlay)
-    agents = parent.get("agents", {})
     agent_filter = overlay.pop("agents", None)
+    from ..provider_recording import apply_provider_recording
+    # Compose explicit child choices before reapplying host defaults. Otherwise
+    # an inherited provenance marker can wrongly claim a child's raw:true.
+    apply_provider_recording(parent, enabled=False)
+    apply_provider_recording(overlay, enabled=False)
+    if isinstance(agent_filter, dict):
+        apply_provider_recording({'agents': agent_filter}, enabled=False)
+    agents = parent.get("agents", {})
     spawn = parent.get("spawn") or {}
     image_policies = []
     if retained_image_tools is not None and not isinstance(retained_image_tools, list):
@@ -311,9 +318,10 @@ class Children:
             orchestrator.setdefault("config", {}).update(copy.deepcopy(orchestrator_config))
         preferences = [ProviderPreference.from_dict(p) if isinstance(p, dict) else p for p in provider_preferences or []]
         selection = inherited_selection(parent, overlay, preferences, session_metadata)
-        if preferences:
-            plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
         from ..provider_recording import apply_provider_recording, install_request_redaction
+        if preferences:
+            apply_provider_recording(plan, enabled=False)
+            plan = await apply_provider_preferences_with_resolution(plan, preferences, parent.coordinator)
         apply_provider_recording(plan)
         overlay_bundle = Bundle.from_dict({key: value for key, value in overlay.items() if key != "agents"}, base_path=prepared.bundle.base_path)
         overlay_bundle.instruction = overlay.get("instruction") or (overlay.get("system") or {}).get("instruction")

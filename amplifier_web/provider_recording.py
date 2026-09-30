@@ -15,7 +15,10 @@ RAW_MODULES = frozenset('provider-' + name for name in (
 ))
 MAX_CAPTURE_CHARS = 1_000_000
 _DEFAULT_MARKER = '_unified_request_recording_default'
-_SECRET_KEY = re.compile(r'(?i)(api.?key|password|secret|authorization|cookie|credential|access.?token|refresh.?token|id.?token)')
+_SECRET_KEY = re.compile(r'(?i)(api.?key|password|secret|authorization|cookie|credential|access.?token|refresh.?token|id.?token|(?:^|[-_])token$)')
+_TOKEN_ASSIGNMENT = re.compile(
+    r'''(?ix)(["']?(?:token|[\w-]+[-_]token)["']?\s*[:=]\s*)
+    (?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)''')
 
 
 def recording_enabled(home=None):
@@ -73,6 +76,7 @@ def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
             # spanning the cutoff. Never copy an unbounded inline image/audio.
             window = item[:max(0, remaining) + 512]
             safe = redact_diagnostic(window)
+            safe = _TOKEN_ASSIGNMENT.sub(r'\1"[REDACTED]"', safe)
             if len(item) > remaining or len(safe) > remaining:
                 truncated = True
                 safe = safe[:max(0, remaining)] + '[capture limit]'

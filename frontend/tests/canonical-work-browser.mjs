@@ -67,10 +67,10 @@ try{
  const small=page.locator('[data-group-id$="@final"] [data-kind="llm"]');await small.locator('button.a-execution-action-line').click();
  await expect(small.locator('pre')).toContainText('Small recorded request');assert.equal(await small.getByRole('button',{name:/Load raw request|Show all/}).count(),0);assert.equal(requestReads.length,3);
  await openSettingsPage(page,'appearance');
- const detail=page.getByLabel('Work summary detail');await expect(detail).toHaveValue('standard');
- await detail.selectOption('minimal');await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');
+ await expect(page.getByRole('radio',{name:/^Balanced /})).toBeChecked();
+ await page.getByRole('radio',{name:/^Focused /}).check();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');
  assert.equal(await before.locator('.a-execution-turn-line .a-execution-usage').isVisible(),false);
- await detail.selectOption('detailed');await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
+ await page.getByRole('radio',{name:/^Everything /}).check();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
  assert.match(await before.locator('.a-execution-call-counts').innerText(),/1 tool call · 1 model call/);
  assert.match(await interim.locator('.a-execution-call-counts').innerText(),/3 tool calls · 1 model call/);
  assert.equal(await interim.locator('.a-execution-call-counts').isVisible(),true);

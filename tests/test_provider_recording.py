@@ -85,6 +85,43 @@ def test_capture_scrubs_nested_and_known_credentials_without_mutating_request(mo
     assert safe['messages'][0]['content'] == 'prefix [REDACTED]'
 
 
+def test_capture_scrubs_generic_token_fields_in_structured_and_litellm_string_forms():
+    original = {'extra_headers':{'Authorization':'Bearer opaque-bearer',
+        'Cookie':'sid=opaque-cookie', 'token':'opaque-token', 'x-auth-token':'opaque-auth'},
+        'input_tokens':123, 'max_output_tokens':456, 'token_file':'/private/oauth/tokens.json'}
+    safe, _ = redact_request(original)
+    assert all(value == '[REDACTED]' for value in safe['extra_headers'].values())
+    assert safe['input_tokens'] == 123 and safe['max_output_tokens'] == 456
+    assert safe['token_file'] == original['token_file']
+    serialized, _ = redact_request(json.dumps(original))
+    assert 'opaque-' not in serialized
+    assert '"input_tokens": 123' in serialized and '"max_output_tokens": 456' in serialized
+    assert '/private/oauth/tokens.json' in serialized
+
+
+def test_child_explicit_true_survives_parent_default_and_later_disabling():
+    from amplifier_web.host.children import child_plan
+    parent = {'providers':[{'module':'provider-openai','id':'one'}]}
+    apply_provider_recording(parent, enabled=True)
+    child = child_plan(parent, {'providers':[
+        {'module':'provider-openai','id':'one','config':{'raw':True}}]})
+    apply_provider_recording(child, enabled=False)
+    assert child['providers'][0]['config']['raw'] is True
+    inherited = child_plan(parent, {})
+    apply_provider_recording(inherited, enabled=False)
+    assert 'raw' not in inherited['providers'][0]['config']
+    assert parent['providers'][0]['config']['raw'] is True
+
+
+@pytest.mark.parametrize('selection, expected', [('none', []), (['named'], ['named'])])
+def test_recording_defaults_do_not_change_child_agent_inheritance_filters(selection, expected):
+    from amplifier_web.host.children import child_plan
+    parent = {'providers':[{'module':'provider-openai'}], 'agents':{'named':{},'other':{}}}
+    apply_provider_recording(parent, enabled=True)
+    result = child_plan(parent, {'agents':selection})
+    assert list(result['agents']) == expected
+
+
 def test_capture_bounds_wide_deep_and_large_payloads():
     for original in ({'input': 'huge' * 50000}, [{'input': 'data'}] * 10000):
         safe, truncated = redact_request(original, limit=200)
