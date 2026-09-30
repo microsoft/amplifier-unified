@@ -83,6 +83,10 @@ The public bootstrap endpoints are limited to `/login`, `/setup`, `/api/ca`, `/c
 
 ## Debug-only profiling
 
+Opaque server extensions remain unchanged on load and save. The profiling
+consumer accepts only a literal boolean `true`; other extension values do not
+enable capture or prevent startup.
+
 The optional `amplifier-profiling` library must be installed in the serving host's
 Python environment. Normal installations do not require it. An operator can
 enable it through `amplifier-unified config set debug.profiling true`; no app
@@ -116,3 +120,13 @@ process-wide symbol metadata. Unified is currently single-owner; do not enable
 this adapter in a multi-tenant shared process without separate operator-only
 authorization and tenant-isolated targets. Hosted containers need no ptrace or
 root privileges for self-sampling. External/native sampling is not supplied.
+
+## Rebuildable history metadata
+
+The app's `native-catalog.sqlite3` stores derived metadata, not canonical
+transcripts or context-intelligence event bodies. Cache loading validates
+workspace path and availability types before discovery consumes them. An invalid
+cache is reported as unavailable and bypassed on ordinary and forced refreshes;
+original history and the rejected cache are preserved. This fallback is not
+permission to delete or repair canonical history. Resume admission continues to
+read native metadata rather than trusting cached classification.
