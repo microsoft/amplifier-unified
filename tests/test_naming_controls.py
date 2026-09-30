@@ -242,3 +242,33 @@ async def test_manual_auto_name_during_work_preserves_foreground_and_newer_edit(
     assert session['status'] == status and session['messages'] == before
     assert session['title'] == 'My title while working'
     assert session['naming']['status'] == 'conflict'
+
+
+async def test_failed_suggestion_explains_the_naming_hooks_last_warning(monkeypatch, tmp_path):
+    import logging
+    import sys
+    from types import SimpleNamespace
+    from amplifier_web.host.naming import LiveSessionNaming
+    class Config:
+        initial_trigger_turn = 1
+        update_interval_turns = 5
+        def __init__(self, **kwargs): pass
+    class Hook:
+        def __init__(self, coordinator, config): self.config = config
+        async def _generate_name(self, sid, directory, is_update):
+            log = logging.getLogger('amplifier_module_hooks_session_naming')
+            log.warning('First problem')
+            log.warning('Naming provider rejected Bearer abcdefghijklmnop: model not found')
+    monkeypatch.setitem(sys.modules, 'amplifier_module_hooks_session_naming',
+        SimpleNamespace(SessionNamingHook=Hook, SessionNamingConfig=Config))
+    coordinator = SimpleNamespace(session_id='chat', config={'project_dir': str(tmp_path), 'hooks': [{'module': 'hooks-session-naming'}]},
+        hooks=SimpleNamespace(register=lambda *args, **kwargs: None), register_cleanup=lambda *args: None)
+    naming = LiveSessionNaming(coordinator, tmp_path, lambda event: None)
+    naming.store.save('chat', [{'role': 'user', 'content': 'Context'}], {})
+    with pytest.raises(ValueError) as error:
+        await naming.suggest()
+    message = str(error.value)
+    assert message.startswith('No new name was returned.')
+    assert 'model not found' in message and 'First problem' not in message
+    assert 'abcdefghijklmnop' not in message and '[REDACTED]' in message
+    assert not logging.getLogger('amplifier_module_hooks_session_naming').handlers
