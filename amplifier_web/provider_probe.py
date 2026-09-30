@@ -64,6 +64,10 @@ async def query(request):
     try:
         info=public(await invoke('get_info'))
         result={'info':info,'configSchema':public(schema)}
+        if request['action'] == 'naming.complete':
+            from amplifier_web.provider_test import naming_completion
+            result['naming'] = await naming_completion(provider, config, request.get('model'), request['prompt'])
+            return result
         if request['action'] == 'providers.testMessage':
             from amplifier_web.provider_test import test_message
             result['messageTest'] = await test_message(provider, config, request.get('model'), info)

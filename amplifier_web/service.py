@@ -90,6 +90,7 @@ ACTION_DEFINITIONS = {
             "prewarm_on_select": {"type": "boolean"}}, "additionalProperties": False}}, ["patch"])),
     "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
+    "session.naming.backfill": ("Name existing chats that still have a fallback or placeholder title and Auto naming on, without starting a conversation worker or replaying work: one naming call per chat with the default provider, at most two at a time. Manual and generated names, Auto=false, busy chats and worker/internal sessions are skipped. Omit ids to take the most recent eligible chats up to limit (default 20, max 200). Progress is each chat's naming.status; the summary (named, skipped and failed with reasons) is /namingBackfill.", schema({"ids": {"type": "array", "items": string(100), "maxItems": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [])),
     "session.naming": ("Enable or disable future automatic naming, or generate a name once without sending a chat turn. Regeneration preserves the Auto preference and rejects late results after a newer edit.", schema({"id": string(100), "automatic": {"type": "boolean"}, "regenerate": {"const": True}}, ["id"])),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.deletePreview": ("Review permanent deletion of an idle managed chat and its owned files/history. Show the returned scope to the user before confirmation. Workspace chats can only be archived.", schema({"id": string(100)})),
@@ -1535,7 +1536,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen"} or (action == 'session.naming' and args.get('regenerate')) or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen"} or (action == 'session.naming' and args.get('regenerate')) or action == 'session.naming.backfill' or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -1794,6 +1795,17 @@ class AppService:
                 self.runtime.configure_retention(policy)
                 self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
                 self.state['runtime']['retention'] = dict(policy)
+            elif action == "session.naming.backfill":
+                backfill = getattr(self, 'naming_backfill', None)
+                if backfill is None:
+                    from .naming_backfill import NamingBackfill
+                    backfill = self.naming_backfill = NamingBackfill(self)
+                try:
+                    diagnostic_result, identities = backfill.start(args, command_id)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if identities:
+                    pending.append((backfill.run, (identities,)))
             elif action == "session.naming":
                 from .naming import set_automatic
                 session = self._session(args['id'])
