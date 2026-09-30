@@ -141,7 +141,7 @@ async def test_login_progress_and_cancel_preserve_owned_path(manager,tmp_path):
     import asyncio,sys
     await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','config':{}})
     script=tmp_path/'auth-fixture.py'
-    script.write_text('import sys,json,time\nr=json.loads(sys.stdin.readline())\nassert "/config/openai-chatgpt-chatgpt-oauth.json" in r["tokenFile"]\nprint(json.dumps({"status":"waiting","instruction":"Open https://auth.openai.com/codex/device and enter TEST-CODE"}),flush=True)\ntime.sleep(30)\n')
+    script.write_text('import sys,json,time\nr=json.loads(sys.stdin.readline())\nassert "/config/chatgpt-sign-in/chatgpt/" in r["tokenFile"]\nprint(json.dumps({"status":"waiting","instruction":"Open https://auth.openai.com/codex/device and enter TEST-CODE"}),flush=True)\ntime.sleep(30)\n')
     manager.auth_command=[sys.executable,str(script)]
     updates=[]
     async def progress(value):updates.append(value)
@@ -419,3 +419,97 @@ async def test_probe_drains_large_stderr_and_reports_safe_build_evidence(manager
     assert 'requires Rust 1.92.0' in message
     assert 'secret-do-not-copy' not in message and 'private-dependency' not in message
     assert len(message) < 500
+
+@pytest.mark.parametrize('mode,stored_mode,scopes,ready',[
+    ('chatgpt_plan','chatgpt_plan',['chatgpt.tokens.use.direct'],True),
+    ('chatgpt_plan','chatgpt_plan',[],False),
+    ('chatgpt_plan','legacy_codex',['chatgpt.tokens.use.direct'],False),
+    ('legacy_codex','chatgpt_plan',['chatgpt.tokens.use.direct'],False),
+])
+def test_chatgpt_account_distinguishes_identity_from_plan_permission(tmp_path,mode,stored_mode,scopes,ready):
+    import json,time
+    from amplifier_web.setup import account_status
+    path=tmp_path/'profile.json'
+    path.write_text(json.dumps({'auth_mode':stored_mode,'access_token':'private-access','refresh_token':'private-refresh',
+        'id_token':'private-jwt','subject':'subject','client_id':'client','email':'account@example.test',
+        'expires_at':time.time()+300,'scopes':scopes}))
+    status=account_status({'auth_mode':mode,'token_file_path':str(path)})
+    assert status['planEnabled'] is ready
+    if mode==stored_mode=='chatgpt_plan':assert status['connected']
+    else:assert not status['connected']
+    assert 'private-' not in str(status)
+    assert 'subject' not in status and 'client_id' not in status
+
+
+def test_chatgpt_authorization_url_never_exposes_identity_hints_or_tokens():
+    from amplifier_web.setup import login_url
+    allowed='https://auth.openai.com/api/accounts/authorize?state=s&code_challenge=c'
+    assert login_url(allowed)==allowed
+    for suffix in ('&id_token_hint=private','&access_token=private','&code=private','#token','&ID_TOKEN=private'):
+        assert login_url(allowed+suffix) is None
+    for url in ('https://auth.openai.com.evil.test/','https://name:private@auth.openai.com/','http://auth.openai.com/'):
+        assert login_url(url) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome',['success','failure','removed','edited','permission-missing','exit-failure','cancel'])
+@pytest.mark.parametrize('existing_mode',['legacy_codex','chatgpt_plan'])
+async def test_plan_login_commits_only_successful_unchanged_connection(manager,tmp_path,outcome,existing_mode):
+    import asyncio,json,sys
+    original=tmp_path/'original-custom-tokens.json'
+    original_tokens={'access_token':'legacy-private','refresh_token':'legacy-refresh'}
+    if existing_mode=='chatgpt_plan':original_tokens.update(auth_mode='chatgpt_plan',subject='subject',client_id='client',scopes=['chatgpt.tokens.use.direct'])
+    original.write_text(json.dumps(original_tokens))
+    args={'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','scope':'local',
+        'config':{'auth_mode':existing_mode,'token_file_path':str(original),'default_model':'kept'}}
+    await manager.perform('providers.save',args)
+    before=manager.store.read(tmp_path,'local')
+    script=tmp_path/'plan-fixture.py';gate=tmp_path/'continue'
+    script.write_text('''import sys,json,time,pathlib
+r=json.loads(sys.stdin.readline())
+assert r['authMode']=='chatgpt_plan'
+print(json.dumps({'status':'waiting','instruction':'Open https://auth.openai.com/api/accounts/authorize?state=s&code_challenge=c'}),flush=True)
+print(json.dumps({'status':'waiting','instruction':'identity private-jwt https://auth.openai.com/api/accounts/authorize?id_token_hint=private-jwt'}),flush=True)
+while not pathlib.Path(%r).exists():time.sleep(.01)
+if %r=='failure':print(json.dumps({'status':'failed','error':'private failure body'}),flush=True)
+else:
+ p=pathlib.Path(r['tokenFile']);p.parent.mkdir(parents=True,exist_ok=True)
+ p.write_text(json.dumps({'auth_mode':'chatgpt_plan','access_token':'private-plan','refresh_token':'private-refresh','subject':'subject','client_id':'client','scopes':[] if %r=='permission-missing' else ['chatgpt.tokens.use.direct']}))
+ print(json.dumps({'status':'completed'}),flush=True)
+ if %r=='exit-failure':sys.exit(1)
+'''%(str(gate),outcome,outcome,outcome))
+    manager.auth_command=[sys.executable,str(script)]
+    updates=[]
+    async def progress(value):updates.append(value)
+    manager.progress=progress
+    await manager.perform('providers.login',{'id':'chatgpt','workspace':str(tmp_path),'scope':'local','authMode':'chatgpt_plan'})
+    for _ in range(100):
+        if manager.login_state('chatgpt').get('url'):break
+        await asyncio.sleep(.01)
+    assert manager.store.read(tmp_path,'local')==before
+    assert 'private' not in str(updates)
+    assert 'id_token_hint' not in str(updates)
+    if outcome=='removed':await manager.perform('providers.remove',{'id':'chatgpt','workspace':str(tmp_path),'scope':'local'})
+    if outcome=='edited':await manager.perform('providers.save',{**args,'config':{**args['config'],'default_model':'changed'}})
+    if outcome=='cancel':await manager.cancel_login('chatgpt')
+    else:
+        gate.touch()
+        await asyncio.wait_for(manager.logins['chatgpt']['task'],3)
+    login=manager.login_state('chatgpt')
+    saved=manager.store.read(tmp_path,'local')['config']['providers'][0]
+    assert json.loads(original.read_text())['access_token']=='legacy-private'
+    if outcome in {'success','permission-missing'}:
+        assert login['status']=='completed'
+        assert saved['config']['auth_mode']=='chatgpt_plan'
+        assert saved['config']['default_model']=='kept'
+        assert login['account']['planEnabled'] is (outcome=='success')
+        assert login['showPlanWelcome'] is (outcome=='success' and existing_mode=='legacy_codex')
+        assert any(row.get('loginConfigurationChanged') for row in updates)
+    else:
+        assert login['status']==('cancelled' if outcome=='cancel' else 'failed')
+        if outcome!='removed':assert saved['config']['token_file_path']==str(original)
+        if outcome=='failure':assert manager.store.read(tmp_path,'local')==before
+        if outcome=='edited':assert saved['config']['default_model']=='changed'
+        if outcome=='removed':assert 'chatgpt' in manager.store.read(tmp_path,'local')['configurator']['disabled']['providers']
+    assert not manager.store.read(tmp_path,'global').get('config',{}).get('providers')
+    await manager.close()

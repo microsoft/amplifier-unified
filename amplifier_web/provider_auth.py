@@ -17,9 +17,17 @@ async def main():
     path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     # Restrict every file created by the provider before it saves OAuth tokens.
     os.umask(0o077)
-    from amplifier_module_provider_openai_chatgpt.oauth import login
     try:
-        tokens=await login(token_file_path=str(path),print_fn=lambda text:emit(status='waiting',instruction=str(text)))
+        mode=request.get('authMode','legacy_codex')
+        if mode=='chatgpt_plan':
+            from amplifier_module_provider_openai_chatgpt.plan_auth import login
+            tokens=await login(token_file_path=str(path),host_file_path=request['hostFile'],app_name='Amplifier Unified',
+                source_token_file_path=request.get('sourceTokenFile'),registration_file_path=request.get('registrationFile'),
+                request_plan_permission=bool(request.get('enablePlan')),print_fn=lambda text:emit(status='waiting',instruction=str(text)))
+        elif mode=='legacy_codex':
+            from amplifier_module_provider_openai_chatgpt.oauth import login
+            tokens=await login(token_file_path=str(path),print_fn=lambda text:emit(status='waiting',instruction=str(text)))
+        else:raise ValueError('Unsupported sign-in method')
         if not isinstance(tokens,dict) or not tokens.get('access_token'):
             emit(status='failed',error='The provider returned no authenticated session.');return
         path.chmod(0o600)
@@ -27,6 +35,6 @@ async def main():
     except asyncio.CancelledError:raise
     except Exception as exc:
         # Provider exception strings may include HTTP bodies or credentials.
-        emit(status='failed',error='Provider login failed ('+type(exc).__name__+'). Retry the device login.')
+        emit(status='failed',error='Provider login failed ('+type(exc).__name__+'). Retry sign-in.')
 
 if __name__=='__main__':asyncio.run(main())

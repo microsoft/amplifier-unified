@@ -535,9 +535,15 @@ class Management:
                 await self.ensure_runtime(current)
                 return await self.service.runtime.control(current['id'],operation,values)
             async def progress(values):
+                values=dict(values)
+                changed=values.pop('loginConfigurationChanged',False)
                 async with self.service.lock:
-                    self.service.state.setdefault('setup',{}).update(values)
+                    setup=self.service.state.setdefault('setup',{})
+                    if 'providersWorkspace' in values and setup.get('providersWorkspace') not in {None,values['providersWorkspace']}:
+                        values={key:value for key,value in values.items() if key not in {'providers','providersWorkspace','providersLoadedAt'}}
+                    setup.update(values)
                     self.service._publish()
+                if changed:await self.invalidate_configuration(warm=False)
             if self.setup_manager is None:
                 self.setup_manager=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress,catalog=self.provider_catalog)
             else:
