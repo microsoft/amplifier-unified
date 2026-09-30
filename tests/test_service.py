@@ -642,3 +642,17 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         assert not runtime.workers
     finally:
         await app.close()
+
+
+async def test_first_message_fallback_title_is_clean_and_stays_automatic(tmp_path):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch("session.create", {}, command_id="create")
+        await app.dispatch("conversation.send", {"text": "## Use the bash tool to run git status here, then tell me in one sentence"},
+                           command_id="send")
+        await asyncio.gather(*app.tasks)
+        session = app.get_state()["sessions"][0]
+        assert session["title"] == "Use the bash tool to run git status here, then tell me in one…"
+        assert session["titleSource"] != "manual"
+    finally:
+        await app.close()

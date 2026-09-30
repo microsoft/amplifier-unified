@@ -2002,7 +2002,8 @@ class AppService:
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
-                    session["title"] = text[:64]
+                    from .naming import fallback_title
+                    session["title"] = fallback_title(text) or text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
                 self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
