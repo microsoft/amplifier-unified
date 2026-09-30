@@ -702,10 +702,13 @@ class AutomaticHistory:
     async def ensure_loaded(self, session_id):
         session = self.service._session(session_id)
         if session.get('nativeProject'):
+            if session.get('historyReadOnlyReason'):
+                # A retained negative display classification can refuse work;
+                # it cannot admit it. Keep the specific historical explanation,
+                # then require fresh canonical evidence for every positive case.
+                raise ValueError(session['historyReadOnlyReason'])
             if session.get('historyManaged'):
                 await asyncio.to_thread(self.index.validate_resume, copy.deepcopy(session))
-            if session.get('historyReadOnlyReason'):
-                raise ValueError(session['historyReadOnlyReason'])
             if session.get('workspaceAvailable') is False or not session.get('workspace'):
                 raise ValueError('This project folder is unavailable. Its saved chats can be read, but the folder must be restored before continuing work.')
             current_revision = await asyncio.to_thread(revision, copy.deepcopy(session))
