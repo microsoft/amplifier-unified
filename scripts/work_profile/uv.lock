@@ -173,6 +173,11 @@ version = "1.0.0"
 source = { git = "https://github.com/microsoft/amplifier-module-context-simple?rev=2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6#2bc8b15770f4ecb49bd6216a8b5336e9c36adfc6" }
 
 [[package]]
+name = "amplifier-module-hooks-session-naming"
+version = "0.2.0"
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#3796a32351d32a93ccbb5e230c9ffe02964db42e" }
+
+[[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
 source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=main#d2217dabb6a79fe63e3f001ac512e6fa8451008e" }
@@ -209,7 +214,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-context-managed?
 
 [[package]]
 name = "amplifier-unified"
-version = "0.20.15"
+version = "0.20.36"
 source = { directory = "../../" }
 dependencies = [
     { name = "aiohttp" },
@@ -217,6 +222,7 @@ dependencies = [
     { name = "amplifier-core" },
     { name = "amplifier-foundation" },
     { name = "amplifier-memory" },
+    { name = "amplifier-module-hooks-session-naming" },
     { name = "cryptography" },
     { name = "filelock" },
     { name = "httpx" },
@@ -238,6 +244,7 @@ requires-dist = [
     { name = "amplifier-core", specifier = ">=2.0.1" },
     { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
     { name = "amplifier-memory", git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main" },
+    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main" },
     { name = "amplifier-module-tool-computer-use", marker = "extra == 'native-desktop'", git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main" },
     { name = "cryptography", specifier = ">=44,<51" },
     { name = "filelock", specifier = ">=3.20,<4" },
@@ -1444,11 +1451,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.14.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/af/c3/8a3b59c25070cc61dc517fbdfa5dc0904670c96f605cc69759dc09166b99/pyjwt-2.14.0.tar.gz", hash = "sha256:77283c83fb56ecf566a886c757a714bc83668e38156de2cce8263302f42e0b86", size = 113177, upload-time = "2026-09-11T13:11:54.638Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/a5/5197bfd06417837ac079921c66fa6393f1dea3557272a263cebfef69e432/pyjwt-2.15.0.tar.gz", hash = "sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4", size = 120513, upload-time = "2026-09-23T16:56:00.689Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/97/672cb32ce0dfea44b740cb7b4f97038463b9cf7c0ead1aacf595572851d6/pyjwt-2.14.0-py3-none-any.whl", hash = "sha256:ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc", size = 32896, upload-time = "2026-09-11T13:11:53.409Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/55/40e45bf052ee8ee12a4dfd785519660f8effa7b065442b91646ec6828619/pyjwt-2.15.0-py3-none-any.whl", hash = "sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8", size = 33680, upload-time = "2026-09-23T16:55:59.241Z" },
 ]
 
 [package.optional-dependencies]
