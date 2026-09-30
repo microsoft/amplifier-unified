@@ -80,7 +80,7 @@ ACTION_DEFINITIONS = {
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "location": LOCATION}, [])),
-    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -1025,7 +1025,17 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+
+    def _reusable_internal(self, candidate):
+        """An idle internal session for the same purpose, folder and bundle."""
+        for row in self.state['sessions']:
+            if (row.get('sessionKind') == 'internal' and row.get('sessionPurpose') == candidate['sessionPurpose']
+                    and row.get('workspace') == candidate['workspace'] and row.get('bundle') == candidate['bundle']
+                    and row.get('status', 'idle') in {'idle', 'ready'} and not row.get('configurationBusy')
+                    and not any(a.get('status') == 'pending' for a in row.get('approvals', []))):
+                return row
+        return None
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -1721,20 +1731,28 @@ class AppService:
                     inherited = prepare(self, args, origin, caller_session_id)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
-                    apply(self, session, inherited)
-                    from .new_chat import initial_model
-                    initial = initial_model(self.state, args, session['workspace'], session['bundle'])
-                    if initial:
-                        session['initialModel'] = initial
+                    reused = (self._reusable_internal(session) if args.get('purpose') and not args.get('id')
+                              and not prepared_identity and not args.get('inheritConfiguration') and not args.get('selection') else None)
+                    if reused is None:
+                        apply(self, session, inherited)
+                        from .new_chat import initial_model
+                        initial = initial_model(self.state, args, session['workspace'], session['bundle'])
+                        if initial:
+                            session['initialModel'] = initial
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-                if args.get('fromDraft') and command_id:
-                    session['creationCommandId'] = command_id
-                from .naming import persist
-                persist(self.data_dir,session,shared_rename=True)
-                self.state["sessions"].insert(0, session)
+                if reused is not None:
+                    session = reused
+                else:
+                    if args.get('fromDraft') and command_id:
+                        session['creationCommandId'] = command_id
+                    from .naming import persist
+                    persist(self.data_dir,session,shared_rename=True)
+                    self.state["sessions"].insert(0, session)
                 diagnostic_result = {"sessionId": session['id']}
-                if args.get('select', True):
+                # Internal work is never an ordinary chat and never changes
+                # the shared selection.
+                if args.get('select', True) and not args.get('purpose'):
                     from .workspace_canvas import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
