@@ -51,9 +51,17 @@ class NativeCatalog:
         with self.connect() as db:
             for project, raw in db.execute('SELECT project,value FROM native_projects WHERE namespace=?', (self.namespace,)):
                 value = json.loads(raw)
-                if not isinstance(value, dict) or value.get('workspace', {}).get('nativeProject') != project:
+                workspace = value.get('workspace') if isinstance(value, dict) else None
+                if (not isinstance(workspace, dict)
+                        or workspace.get('nativeProject') != project
+                        or type(workspace.get('available')) is not bool
+                        or (workspace.get('path') is not None
+                            and (not isinstance(workspace['path'], str)
+                                 or not Path(workspace['path']).is_absolute()))):
                     raise ValueError('Invalid native metadata cache')
-                projects[project] = {'workspace': value['workspace'], 'sessions': []}
+                # Reject the whole cache before handing any project to discovery.
+                # A malformed rebuildable view must not poison repeated refreshes.
+                projects[project] = {'workspace': workspace, 'sessions': []}
             for project, identity, raw in db.execute('SELECT project,identity,value FROM native_rows WHERE namespace=?', (self.namespace,)):
                 value = json.loads(raw)
                 if (project not in projects or not isinstance(value, dict)

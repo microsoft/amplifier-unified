@@ -77,6 +77,35 @@ def test_corrupt_cache_is_reported_without_replacing_source_or_cache(tmp_path):
     assert cache.read_bytes() == b'not a database'
     assert (path / 'transcript.jsonl').read_text() == 'private conversation body\n'
 
+@pytest.mark.parametrize('workspace_value', [
+    {'path': 123}, {'path': []}, {'path': 'relative/path'}, {'available': 'yes'},
+])
+def test_malformed_cached_workspace_recovers_on_repeated_refresh(tmp_path, workspace_value):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    canonical = {path: path.read_bytes() for path in saved.iterdir() if path.is_file()}
+    cache = tmp_path / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    first.scan_changes()
+    first.close()
+    with sqlite3.connect(cache) as db:
+        name, raw = db.execute('SELECT project,value FROM native_projects').fetchone()
+        value = json.loads(raw)
+        value['workspace'].update(workspace_value)
+        db.execute('UPDATE native_projects SET value=? WHERE project=?', (json.dumps(value), name))
+    rejected = cache.read_bytes()
+    restarted = NativeHistory(home, cache_path=cache)
+    try:
+        for force in (False, True):
+            _, delta = restarted.scan_changes(force=force)
+            assert [row['nativeIdentity'] for row in delta['sessions']] == ['saved']
+            assert {'kind': 'unavailable-catalog-cache'} in delta['issues']
+            assert cache.read_bytes() == rejected
+            assert all(path.read_bytes() == data for path, data in canonical.items())
+    finally:
+        restarted.close()
+
 def test_transcript_notifications_probe_only_affected_session_on_repeated_changes(tmp_path, monkeypatch):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
