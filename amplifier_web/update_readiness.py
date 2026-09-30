@@ -12,6 +12,7 @@ import json
 from importlib import metadata
 from pathlib import Path
 import re
+import sys
 import time
 import uuid
 
@@ -109,25 +110,87 @@ def same_target(first, second):
                 for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification')))
 
 
-async def confirm_readiness(manager, health, expected=None, command_id=None):
+async def qualify_successor(manager, target):
+    """Independently qualify a published install that supersedes an old restart.
+
+    Never accept a version comparison as installation proof or turn the old
+    restart command into a success. Keep uncertain replacements and additive
+    feature requests behind their existing exact qualification boundaries.
+    """
+    from . import app_updates
+    from .app_features import running_application
+    from .app_replacement import pending, qualified, matches_running
+    from .update_diagnostics import probe_record
+    identity = manager.running_identity
+    if (pending(manager.service.state['updates']) or not qualified(target)
+            or target.get('featureSelection') or target.get('legacy')
+            or target.get('sourceInstanceId') == identity['instanceId']
+            or not app_updates.version_tuple(identity['version'])
+            or app_updates.version_tuple(identity['version']) <= app_updates.version_tuple(target['version'])):
+        return None
+    try:
+        app = running_application(manager)
+        extras = app_updates.installed_extras()
+        if not set(target['qualification']['extras']) <= set(extras):
+            return None
+        tag = 'v' + identity['version']
+        release = json.loads(await app_updates.process('gh', 'api',
+            f'repos/{app_updates.REPOSITORY}/releases/tags/{tag}', timeout=15))
+        if (release.get('tag_name') != tag or release.get('draft') is not False
+                or release.get('prerelease') is not False):
+            return None
+        output = await app_updates.process('git', 'ls-remote', app_updates.SOURCE,
+            'refs/tags/' + tag, 'refs/tags/' + tag + '^{}', env=app_updates.git_environment(), timeout=15)
+        rows = [line.split() for line in output.splitlines()]
+        revision = next((row[0] for row in rows if len(row) == 2 and row[1] == 'refs/tags/' + tag + '^{}'),
+                        next((row[0] for row in rows if len(row) == 2 and row[1] == 'refs/tags/' + tag), None))
+        if revision != identity['revision'] or revision == target['revision']:
+            return None
+        candidate = {**target, 'version': identity['version'], 'revision': revision,
+            'qualification': {'app': app, 'extras': extras,
+                'dependencyDigest': app_updates.components.digest(app_updates.components.installed_graph())}}
+        if not matches_running(manager, candidate):
+            return None
+        output = await manager.diagnostics.run('restart-current-installation-probe', app_updates.process,
+            sys.executable, '-I', '-c', app_updates.PROBE, *extras, timeout=30)
+        report = probe_record(output)
+        if (not report or report.get('ok') is not True or report.get('isolated') is not True
+                or report.get('stage') != 'complete' or report.get('version') != identity['version']
+                or not matches_running(manager, candidate)):
+            return None
+        return candidate
+    except (AttributeError, ValueError, OSError, RuntimeError, TimeoutError, metadata.PackageNotFoundError):
+        return None
+
+
+async def confirm_readiness(manager, health, expected=None, command_id=None, *, successor=None):
     """Consume an authenticated HTTP probe of this exact running host."""
     from .auth import data_identity
     async with manager.lock:
         target = recovery_candidate(manager)
+        installed = successor or target
         identity = manager.running_identity
         if (not target or (expected is not None and not same_target(target, expected))
                 or not isinstance(health, dict) or health.get('ok') is not True
                 or health.get('app') != 'amplifier-unified'
                 or health.get('dataIdentity') != data_identity(manager.home)
                 or any(health.get(key) != identity[key] for key in ('version', 'revision', 'instanceId'))
-                or any(identity[key] != target[key] for key in ('version', 'revision'))
+                or any(identity[key] != installed[key] for key in ('version', 'revision'))
                 or target.get('sourceInstanceId') == identity['instanceId']):
             return False
+        if successor:
+            from .app_updates import version_tuple
+            from .app_replacement import pending
+            if (target.get('featureSelection') or target.get('legacy') or pending(manager.service.state['updates'])
+                    or not same_target({**successor, 'version': target['version'], 'revision': target['revision'],
+                        'qualification': target.get('qualification')}, target)
+                    or version_tuple(successor['version']) <= version_tuple(target['version'])):
+                return False
         selected = target.get('featureSelection')
-        if 'qualification' in target:
+        if 'qualification' in installed:
             from .app_replacement import matches_running
             try:
-                if not matches_running(manager, target):
+                if not matches_running(manager, installed):
                     return False
             except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
                 return False
@@ -156,6 +219,12 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
             if (not same_target(recovery_candidate(manager), target)
                     or replacement_pending(state) != uncertain):
                 return False
+            if successor:
+                try:
+                    if not matches_running(manager, successor):
+                        return False
+                except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
+                    return False
             if uncertain:
                 try:
                     if not matches_running(manager, target):
@@ -163,7 +232,14 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                 except (AttributeError, ValueError, OSError, metadata.PackageNotFoundError):
                     return False
             manager.diagnostics.begin('application', target['revision'], target['attemptId'])
-            if target.get('legacy'):
+            if successor:
+                state['reconciliation'] = {'attemptId': target['attemptId'],
+                    **{key: identity[key] for key in ('version', 'revision')}}
+                state['reconciliation'].update(verifiedAt=time.time(),
+                    supersedes={key: target[key] for key in ('version', 'revision')})
+                detail = 'The running published release has been verified. The older pending restart was superseded; its original outcome remains in update history.'
+                phase = 'restart-superseded'
+            elif target.get('legacy'):
                 # Keep the historical failure in the receipt; this is current
                 # health reconciliation, not a fabricated historical restart-ack.
                 state['reconciliation'] = {key: target[key] for key in ('attemptId', 'version', 'revision')}
@@ -179,6 +255,9 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
             if not selected:
                 application.pop('componentUpdates', None)
                 application.update(status='current', current=identity['version'])
+                if successor:
+                    application.update(latest='v'+identity['version'], revision=identity['revision'],
+                        releaseBehind=False, detail='The current published installation is verified.')
             state['items'] = [application if row.get('id') == 'application' else row for row in state.get('items', [])]
             state['available'] = sum(row.get('status') == 'update' for row in state['items'])
             state.update(phase='installed', pendingRestart=None, pendingReplacement=None, pendingApp=None, appAvailable=application.get('status')=='update' if selected else False,
@@ -197,7 +276,7 @@ async def confirm_readiness(manager, health, expected=None, command_id=None):
                            updatedAt=time.time(), detail='The restarted host is healthy and the exact qualified feature components are installed.')
                 state['detail'] = row['detail']
             if command_id:
-                manager.diagnostics.record('restart-readiness', 'succeeded', commandId=command_id,
+                manager.diagnostics.record('restart-readiness', 'superseded' if successor else 'succeeded', commandId=command_id,
                                            observedVersion=identity['version'], observedRevision=identity['revision'])
             manager.diagnostics.record(phase, 'succeeded', observedVersion=identity['version'],
                                        observedRevision=identity['revision'])
@@ -242,6 +321,7 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
                        expectedVersion=target['version'], expectedRevision=target['revision'])
     issue = None
     try:
+        successor = await qualify_successor(manager, target)
         urls, pin = probe_targets(manager)
         deadline = asyncio.get_running_loop().time() + timeout
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2), trust_env=False) as client:
@@ -250,7 +330,7 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
                     try:
                         async with client.get(url, ssl=pin, allow_redirects=False, headers={
                                 'Authorization': 'Bearer ' + token, 'Host': f'localhost:{manager.service.port}'}) as response:
-                            if response.status == 200 and await confirm_readiness(manager, await response.json(), expected=target, command_id=command_id):
+                            if response.status == 200 and await confirm_readiness(manager, await response.json(), expected=target, command_id=command_id, successor=successor):
                                 return
                     except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                         pass
