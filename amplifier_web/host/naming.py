@@ -27,8 +27,8 @@ class _LastWarning(logging.Handler):
         try:
             from ..worker_diagnostics import redact_diagnostic
             self.message=' '.join(redact_diagnostic(record.getMessage()).split())[:500]
-        except Exception:  # A diagnostic must never break naming.
-            pass
+        except Exception:  # noqa: BLE001 - a diagnostic must never break naming.
+            self.handleError(record)
 
 
 def claim_root_lifecycle(coordinator):

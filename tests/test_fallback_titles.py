@@ -1,8 +1,8 @@
 """Unnamed conversations get a readable fallback title from their first request."""
 import json
 
-from amplifier_web.native_history import NativeHistory
 from amplifier_web.naming import fallback_title, first_user_title
+from amplifier_web.native_history import NativeHistory
 from amplifier_web.session_files import project_slug
 
 

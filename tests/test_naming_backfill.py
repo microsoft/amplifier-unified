@@ -4,12 +4,12 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from test_service import Runtime
 
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.naming import directory_for, read
 from amplifier_web.naming_backfill import NamingBackfill
 from amplifier_web.service import AppError, AppService
-from test_service import Runtime
 
 
 def reply(name='Incident summary', action='set'):
@@ -40,6 +40,7 @@ async def chat(app, text='Summarize the incident report', **metadata):
     SessionStore.for_app(app.data_dir, app.data_dir).save(session['id'], rows, {})
     if metadata:
         from amplifier_foundation.session.metadata import SessionMetadataStore
+
         from amplifier_web.naming import refresh
         SessionMetadataStore(directory_for(app.data_dir, session)).set_name(metadata['name'], source=metadata['name_source'])
         refresh(app.data_dir, session)
