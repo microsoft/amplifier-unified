@@ -14,14 +14,17 @@ class StateProjections:
         self.values = {}
         self.previous_navigation = None
 
-    def invalidate(self):
+    def invalidate(self, *, state=None, session_ids=None):
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:
             retained = {key: value for key, value in self.values.items()
                         if key[0] in {'workspace-index', 'workspaces', 'chat-registry', 'chat-index', 'chats'}}
             self.previous_navigation = (self.values.get(('shell-data-key',)), retained)
+        index = self.values.get(('session-index',))
         self.values = {}
+        if index is not None and session_ids is not None and index.patch(state, session_ids):
+            self.values[('session-index',)] = index
 
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
@@ -46,7 +49,9 @@ class StateProjections:
 
     def attention(self, state):
         from .attention import snapshot
-        return self.get(('attention',), lambda: snapshot(state))
+        index = self.sessions(state)
+        return self.get(('attention',), lambda: snapshot({
+            **state, 'sessions': [index.by_id[key] for key in index.attention_ids]}))
 
     @staticmethod
     def view_scope(state, keys):

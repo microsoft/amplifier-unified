@@ -45,10 +45,15 @@ class SessionIndex:
         self.notifications = []
         self.first_root = None
         self.roots = []
+        self.attention_ids = set()
+        self._membership = {}
         for position, row in enumerate(state.get('sessions', [])):
             identity = row['id']
             self.by_id[identity] = row
             self.positions[identity] = position
+            self._membership[identity] = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
+            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+                self.attention_ids.add(identity)
             if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
                 self.active.add(identity)
             if is_top_level(row):
@@ -67,6 +72,62 @@ class SessionIndex:
         self.notifications.extend(state.get('scheduleNotifications', []))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
+
+    def patch(self, state, identities):
+        """Update admitted rows without walking the complete session library."""
+        rows = state.get('sessions', [])
+        if len(rows) < len(self.positions):
+            return False  # Unscoped removals require rebuilding the index.
+        appended = rows[len(self.positions):]
+        identities = set(identities) | {row['id'] for row in appended}
+        roots_changed = False
+        for row in appended:
+            self.positions[row['id']] = len(self.positions)
+            self.by_id[row['id']] = row
+        for identity in identities:
+            position = self.positions.get(identity)
+            if position is None or position >= len(rows) or rows[position]['id'] != identity:
+                return False
+            row = rows[position]
+            old = self._membership.get(identity)
+            current = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
+            if old != current:
+                roots_changed = roots_changed or bool(current[2] or (old and old[2]))
+                if old:
+                    self.parents.get(old[0], set()).discard(identity)
+                    self.native_parents.get(old[1], set()).discard(identity)
+                    if old[2]:
+                        self.roots = [item for item in self.roots if item['id'] != identity]
+                if current[2]:
+                    self.roots.append(row)
+                else:
+                    self.parents.setdefault(current[0], set()).add(identity)
+                    self.native_parents.setdefault(current[1], set()).add(identity)
+                self._membership[identity] = current
+            self.by_id[identity] = row
+            self.active.discard(identity)
+            if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
+                self.active.add(identity)
+            self.attention_ids.discard(identity)
+            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+                self.attention_ids.add(identity)
+        if roots_changed:
+            self.roots.sort(key=lambda row: self.positions[row['id']])
+        self.first_root = self.roots[0] if self.roots else None
+        # Notifications are bounded presentation facts; only changed rows can
+        # contribute new assistant messages. Preserve independent schedule rows.
+        self.notifications = [row for row in self.notifications if row.get('sessionId') not in identities]
+        for identity in identities:
+            row = self.by_id[identity]
+            if row.get('sessionKind') != 'internal':
+                self.notifications.extend(
+                    {**{key: message[key] for key in ('id', 'role', 'via', 'createdAt') if key in message},
+                     'sessionId': identity, 'text': message.get('text', '')[:500]}
+                    for message in row.get('messages', [])
+                    if message.get('role') == 'assistant' and message.get('via') == 'text')
+        self.notifications.sort(key=lambda row: row.get('createdAt', 0))
+        self.notifications = self.notifications[-100:]
+        return True
 
     def children(self, parent):
         if not parent:

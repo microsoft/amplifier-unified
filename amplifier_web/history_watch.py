@@ -41,8 +41,17 @@ class HistoryWatch:
                         # Cover the interval before the OS watches were ready.
                         self.dirty.add('*')
                     self.ready = True
-                    self.dirty.update(project for _, path in changes
-                                      if (project := self._project(path)) is not None)
+                    for _, path in changes:
+                        project = self._project(path)
+                        if project is None:
+                            continue
+                        parts = Path(path).relative_to(self.root).parts
+                        if len(parts) == 4 and parts[3] in {'transcript.jsonl', 'transcript.jsonl.backup'}:
+                            self.dirty.add((project, parts[2], 'transcript'))
+                        else:
+                            # Metadata, membership and root uncertainty still
+                            # require the conservative project/recovery path.
+                            self.dirty.add(project)
         except Exception:
             # Missing roots, unsupported watches, permissions or exhausted OS
             # resources must fall back to the ordinary stat reconciliation.

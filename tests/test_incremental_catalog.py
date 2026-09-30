@@ -1,0 +1,284 @@
+"""Changed native metadata stays scoped through durable publication."""
+import json
+import sqlite3
+import time
+
+import pytest
+
+from amplifier_web.native_history import NativeHistory
+from amplifier_web.session_files import project_slug
+from test_native_history import session, write_json
+from test_automatic_history import app_factory, native_session
+
+
+def test_persistent_cache_reuses_compact_metadata_without_reading_bodies(tmp_path):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, 'saved-' + str(n),
+                     {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Saved ' + str(n)})
+             for n in range(80)]
+    before = {(path / 'transcript.jsonl'): (path / 'transcript.jsonl').read_bytes() for path in paths}
+    cache = tmp_path / 'app' / 'native-catalog.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    token, initial = first.scan_changes()
+    assert initial['reset'] and len(initial['sessions']) == 80
+    first.close()
+    second = NativeHistory(home, cache_path=cache)
+    _, restarted = second.scan_changes()
+    assert len(restarted['sessions']) == 80 and restarted['metadataReads'] == 0
+    assert not restarted['issues']
+    # Changed while stopped: only the changed compact source is reparsed.
+    write_json(paths[9] / 'metadata.json', {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Changed'})
+    third = NativeHistory(home, cache_path=cache)
+    _, changed = third.scan_changes()
+    assert changed['metadataReads'] == 1
+    assert next(row for row in changed['sessions'] if row['nativeIdentity'] == 'saved-9')['title'] == 'Changed'
+    assert all(path.read_bytes() == body for path, body in before.items())
+    assert cache.stat().st_mode & 0o777 == 0o600
+
+
+def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, 'saved-' + str(n), {'working_dir': str(workspace), 'bundle': 'anchors'})
+             for n in range(80)]
+    index = NativeHistory(home)
+    index.scan_changes()  # Learn the workspace before measuring a change.
+    base, initial = index.scan_changes()
+    with (paths[7] / 'transcript.jsonl').open('a') as file:
+        file.write('one external append\n')
+    token, delta = index.scan_changes(since=base)
+    assert not delta['reset'] and delta['base'] is base
+    assert [row['nativeIdentity'] for row in delta['sessions']] == ['saved-7']
+    delta['sessions'][0]['transcriptRevision'][0] = -1
+    same_token, retry = index.scan_changes(since=base)
+    assert same_token is token and len(retry['sessions']) == 1
+    assert retry['sessions'][0]['transcriptRevision'][0] != -1
+    _, quiet = index.scan_changes(since=token)
+    assert quiet['sessions'] == [] and quiet['workspaces'] == []
+    _, reset = index.scan_changes(since=object())
+    assert reset['reset'] and len(reset['sessions']) == 80
+    public = index.scan()
+    assert len(public['sessions']) == 80
+    public['sessions'][0]['title'] = 'Detached'
+    assert index.scan()['sessions'][0]['title'] != 'Detached'
+
+
+def test_corrupt_cache_is_reported_without_replacing_source_or_cache(tmp_path):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    cache = tmp_path / 'broken.sqlite3'
+    cache.write_bytes(b'not a database')
+    index = NativeHistory(home, cache_path=cache)
+    _, delta = index.scan_changes()
+    assert len(delta['sessions']) == 1
+    assert {'kind': 'unavailable-catalog-cache'} in delta['issues']
+    assert cache.read_bytes() == b'not a database'
+    assert (path / 'transcript.jsonl').read_text() == 'private conversation body\n'
+
+def test_transcript_notifications_probe_only_affected_session_on_repeated_changes(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, 'saved-' + str(n), {'working_dir': str(workspace), 'bundle': 'anchors'})
+             for n in range(80)]
+    index = NativeHistory(home)
+    index.scan_changes()
+    token, _ = index.scan_changes()
+    slug = project_slug(workspace)
+    index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, {(slug, 'saved-7', 'transcript')}))
+    reads = []
+    original = index._native_metadata
+
+    def read(directory, *args):
+        reads.append(directory.name)
+        return original(directory, *args)
+
+    monkeypatch.setattr(index, '_native_metadata', read)
+    for number in range(2):
+        with (paths[7] / 'transcript.jsonl').open('a') as file:
+            file.write('append ' + str(number) + '\n')
+        token, delta = index.scan_changes(since=token)
+        assert [row['nativeIdentity'] for row in delta['sessions']] == ['saved-7']
+    assert reads == ['saved-7', 'saved-7']
+
+
+async def test_single_native_change_does_not_serialize_unrelated_app_views(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'saved-root')
+    child = native_session(workspace, 'saved-child', metadata={'parent_id': 'saved-root'})
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    app.projections.sessions(app.state)
+    child_row = next(row for row in app.state['sessions'] if row.get('nativeIdentity') == 'saved-child')
+    original_save = app._save
+    scopes = []
+
+    def save(*, session_ids=None):
+        scopes.append(session_ids if session_ids is not None else app._publish_save_scope)
+        return original_save(session_ids=session_ids)
+
+    monkeypatch.setattr(app, '_save', save)
+    from amplifier_web.browser_state import SessionIndex
+    original_init = SessionIndex.__init__
+    builds = []
+
+    def build(self, state):
+        builds.append(len(state['sessions']))
+        original_init(self, state)
+
+    monkeypatch.setattr(SessionIndex, '__init__', build)
+    from amplifier_web.session_projection import view_path
+    own = next(row for row in app.state['sessions'] if not row.get('historyManaged'))
+    own_view = view_path(app.data_dir, own)
+    before = own_view.read_bytes(), own_view.stat().st_mtime_ns
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
+    with (child / 'transcript.jsonl').open('a') as file:
+        file.write(json.dumps({'role': 'assistant', 'content': 'One new answer'}) + '\n')
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['error'] is None
+    assert scopes == [{child_row['id']}]
+    assert builds == []
+    assert (own_view.read_bytes(), own_view.stat().st_mtime_ns) == before
+    assert child_row['nativeRevision'][1] == (child / 'transcript.jsonl').stat().st_size
+    assert len(app.history._catalog_rows) >= 2
+
+
+async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_path, app_factory, monkeypatch):
+    from amplifier_web.session_projection import view_path
+    workspace = tmp_path / 'cli'
+    saved = native_session(workspace, 'saved-root')
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    own = next(row for row in app.state['sessions'] if not row.get('historyManaged'))
+    own['draft'] = 'Unrelated progress must reach the durable view'
+    app._progress_dirty = True
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
+    with (saved / 'transcript.jsonl').open('a') as file:
+        file.write(json.dumps({'role': 'assistant', 'content': 'A new answer'}) + '\n')
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['error'] is None
+    assert json.loads(view_path(app.data_dir, own).read_text())['draft'] == own['draft']
+    assert app._progress_dirty is False
+
+
+@pytest.mark.parametrize('change', ['missing', 'corrupt', 'worker', 'internal'])
+def test_cached_root_cannot_authorize_resume_without_fresh_metadata(tmp_path, change):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    metadata = {'working_dir': str(workspace), 'bundle': 'anchors', 'parent_id': None}
+    saved = session(home, workspace, 'saved', metadata)
+    cache = tmp_path / 'app' / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    source = first.scan()['sessions'][0]
+    if change == 'missing':
+        (saved / 'metadata.json').unlink()
+    elif change == 'corrupt':
+        (saved / 'metadata.json').write_text('{broken')
+    else:
+        write_json(saved / 'metadata.json', {**metadata,
+                   'parent_id': 'other' if change == 'worker' else None,
+                   'session_visibility': 'internal' if change == 'internal' else 'chat'})
+    second = NativeHistory(home, cache_path=cache)
+    second.scan_changes()
+    before = {path: path.read_bytes() for path in saved.iterdir() if path.is_file()}
+    with pytest.raises(ValueError):
+        second.validate_resume(source)
+    assert all(path.read_bytes() == data for path, data in before.items())
+
+
+def test_transcript_only_notification_does_not_read_symlink_substitution(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home)
+    index.scan_changes()
+    token, _ = index.scan_changes()
+    saved.rename(saved.parent / '.original')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'metadata.json').write_text('{"name":"Outside"}')
+    saved.symlink_to(outside, target_is_directory=True)
+    index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, {(project_slug(workspace), 'saved', 'transcript')}))
+    opened = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata', lambda directory, *args:
+                        (opened.append(directory), original(directory, *args))[1])
+    _, delta = index.scan_changes(since=token)
+    assert saved not in opened
+    assert delta['sessions'] == []
+    assert delta['removed'] == [(project_slug(workspace), 'saved')]
+
+
+async def test_local_commit_during_marker_read_rebuilds_aliases(tmp_path, app_factory, monkeypatch):
+    import threading
+    import asyncio
+    import amplifier_web.automatic_history as module
+    workspace = tmp_path / 'cli'
+    saved = native_session(workspace, 'saved-root')
+    app = app_factory()
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
+    started, release = threading.Event(), threading.Event()
+    original = module.catalog_locations
+    calls = []
+
+    def paused(snapshot):
+        calls.append(len(snapshot['sessions']))
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(5)
+        return original(snapshot)
+
+    monkeypatch.setattr(module, 'catalog_locations', paused)
+    refresh = asyncio.create_task(app.history.refresh(force=False))
+    assert await asyncio.to_thread(started.wait, 5)
+    async with app.lock:
+        own = app._new_session({'workspace': str(workspace)})
+        own.update(runtimeSessionId='new-root', nativeIdentity='new-root',
+                   nativeProject=project_slug(workspace))
+        app.state['sessions'].append(own)
+        app._publish()
+    native_session(workspace, 'new-root')
+    release.set()
+    await refresh
+    await app.history.refresh(force=False)
+    records = [row for row in app.state['sessions'] if row.get('nativeIdentity') == 'new-root']
+    assert len(records) == 1 and records[0] is own
+    assert app.state['sharedHistory']['error'] is None
+
+
+async def test_tombstone_totals_are_complete_and_removal_is_published(tmp_path, app_factory, monkeypatch):
+    import shutil
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    saved = native_session(first, 'first-root')
+    native_session(second, 'second-root')
+    app = app_factory()
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    monkeypatch.setattr('amplifier_web.managed_deletion.tombstones',
+                        lambda db: [{'project': 'already-deleted'}])
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(first)}))
+    with (saved / 'transcript.jsonl').open('a') as stream:
+        stream.write(json.dumps({'role': 'assistant', 'content': 'increment'}) + '\n')
+    await app.history.refresh(force=False)
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['sessionCount'] == 2
+    revision = app.state['revision']
+    shutil.rmtree(saved.parent.parent)
+    await app.history.refresh(force=False)
+    assert app.state['sharedHistory']['sessionCount'] == 1
+    assert app.state['revision'] > revision
+    durable = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    assert durable['sharedHistory']['sessionCount'] == 1

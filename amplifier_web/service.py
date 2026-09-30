@@ -398,6 +398,8 @@ class AppService:
             SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
         self.state["sharedVoiceMigration"] = True
         self._view_cache = {}
+        self._session_projection_refs = {}
+        self._history_local_revision = 0
         from .session_projection import hydrate
         hydrate(self.data_dir, self.state, self.db)
         from .storage_migration import upgrade
@@ -642,7 +644,11 @@ class AppService:
     def get_actions(self):
         return [{"name": name, "description": desc, "inputSchema": copy.deepcopy(spec)} for name, (desc, spec) in ACTION_DEFINITIONS.items()]
 
-    def _save(self):
+    def _save(self, *, session_ids=None):
+        if session_ids is None:
+            session_ids = getattr(self, '_publish_save_scope', None)
+        if session_ids is None:
+            self._history_local_revision += 1
         self.questions.sync()
         self.schedules.sync()
         self.worktrees.sync()
@@ -655,30 +661,45 @@ class AppService:
         self._client_snapshots.clear()
         self._client_snapshot_preferences = {}
         if getattr(self, '_projections', None) is not None:
-            self._projections.invalidate()
+            self._projections.invalidate(state=self.state, session_ids=session_ids)
         from .state_storage import normalize_state
-        normalize_state(self.state, self.db)
+        index = self.projections.sessions(self.state) if session_ids is not None else None
+        normalized = self.state if index is None else {
+            **self.state, 'sessions': [index.by_id[key] for key in session_ids if key in index.by_id]}
+        normalize_state(normalized, self.db)
         from .session_projection import persist
-        saved = persist(self.data_dir, self._state, self._view_cache)
+        saved = persist(self.data_dir, self._state, self._view_cache,
+                        session_ids=session_ids, by_id=index.by_id if index else None,
+                        references=self._session_projection_refs)
         self.clients.save()
         self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(saved),))
         self.db.commit()
         from .storage_migration import maintenance
         maintenance(self)
 
-    def _publish(self):
+    def _publish(self, *, session_ids=None):
+        # Pending runtime progress is unscoped mutable state. Never let a native
+        # metadata-only publication cancel its durable commit or narrow it.
+        if getattr(self, '_progress_dirty', False):
+            session_ids = None
         task = getattr(self, '_progress_publish_task', None)
         if task and task is not asyncio.current_task():
             task.cancel()
             self._progress_publish_task = None
         previous = self.state["revision"]
         self.state["revision"] = previous + 1
+        self._publish_save_scope = session_ids
         try:
+            # Keep the original no-argument boundary for host save hooks and
+            # error-injection checks. The owned scope is visible only while
+            # this synchronous publication commits.
             self._save()
         except Exception:
             self.state["revision"] = previous
             self._browser_snapshot = None
             raise
+        finally:
+            self._publish_save_scope = None
         published = {}
         for queue in self.queues:
             key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
