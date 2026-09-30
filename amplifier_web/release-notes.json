@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.38",
+      "title": "Recover updates after a newer release is installed",
+      "changes": [
+        "Verify a newer published installation when an older update is still waiting for its restart, retire the obsolete pending check and continue included component updates.",
+        "Retain the original restart failure in update history while verifying the serving release, installed dependencies and actual listener before reopening work. Unverifiable installations keep their existing safeguards.",
+        "Restore descriptive high-impact headings throughout release history while preserving reviewed notices and their existing update instructions."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.37",
       "title": "Start successfully with additional server settings",
       "changes": [
