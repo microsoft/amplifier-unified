@@ -2,6 +2,24 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.36",
+      "title": "More reliable summaries in long conversations",
+      "changes": [
+        "Complete conversation summaries across several parts without restarting completed summary work after a retryable timeout.",
+        "Avoid repeated summary attempts when background results arrive for unchanged conversation history.",
+        "Use the complete model request to decide when summarization is needed, avoiding inflated counts from private or duplicate transcript fields.",
+        "Keep original history and pending work intact while summaries are prepared or interrupted."
+      ],
+      "notices": [
+        {
+          "id": "compaction-component-update",
+          "title": "Finish component updates",
+          "detail": "These improvements include an updated context-management component. Existing workers retain their loaded code.",
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+        }
+      ]
+    },
+    {
       "version": "0.20.35",
       "title": "Clear provider choices and recovery after connection changes",
       "changes": [
