@@ -79,7 +79,7 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
   adoptedLogin.current=login.loginId;
   try{
    const next={...providerConfig(configText)};
-   for(const key of ['auth_mode','token_file_path','login_on_mount'])if(key in (selected.config||{}))next[key]=selected.config[key];
+   for(const key of ['auth_mode','token_file_path','host_file_path','login_on_mount'])if(key in (selected.config||{}))next[key]=selected.config[key];
    const text=pretty(next);setConfigText(text);editDraft({config:text,authMode:selected.config?.auth_mode||'legacy_codex'});
   }catch{/* Preserve an unfinished JSON edit; saved credentials remain authoritative. */}
  },[login?.loginId,login?.status,selected?.config?.auth_mode]);

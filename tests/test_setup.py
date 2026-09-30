@@ -381,9 +381,25 @@ def test_account_status_checks_saved_provider_tokens_without_exposing_them(tmp_p
     assert not account_connected(config)
     path.write_text('{"access_token":"private","refresh_token":"private-refresh"}')
     assert account_connected(config)
+    path.write_text('{"auth_mode":"oauth","access_token":"private","refresh_token":"private-refresh"}')
+    assert account_connected(config)
+    assert not account_connected({**config,'auth_mode':'chatgpt_plan'})
     path.write_text('{"access_token":"expired","expires_at":"2000-01-01T00:00:00+00:00"}')
     assert not account_connected(config)
     path.write_text('[]');assert not account_connected(config)
+
+
+def test_plan_account_uses_provider_default_profile(tmp_path,monkeypatch):
+    from amplifier_web.setup import account_status,chatgpt_token_path
+    import json
+    monkeypatch.setenv('HOME',str(tmp_path))
+    path=tmp_path/'.amplifier/chatgpt-plan/default.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'auth_mode':'chatgpt_plan','access_token':'private','refresh_token':'private-refresh',
+        'subject':'subject','client_id':'client','scopes':['chatgpt.tokens.use.direct']}))
+    assert chatgpt_token_path({'auth_mode':'chatgpt_plan'})=='~/.amplifier/chatgpt-plan/default.json'
+    assert account_status({'auth_mode':'chatgpt_plan'})['planEnabled']
+    assert not account_status({})['connected']
 
 @pytest.mark.asyncio
 async def test_removed_connections_are_excluded_from_preference_order(manager,tmp_path):
@@ -462,6 +478,7 @@ async def test_plan_login_commits_only_successful_unchanged_connection(manager,t
     original.write_text(json.dumps(original_tokens))
     args={'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','scope':'local',
         'config':{'auth_mode':existing_mode,'token_file_path':str(original),'default_model':'kept'}}
+    if existing_mode=='chatgpt_plan':args['config']['host_file_path']=str(tmp_path/'import-host.json')
     await manager.perform('providers.save',args)
     before=manager.store.read(tmp_path,'local')
     script=tmp_path/'plan-fixture.py';gate=tmp_path/'continue'
@@ -502,6 +519,7 @@ else:
         assert login['status']=='completed'
         assert saved['config']['auth_mode']=='chatgpt_plan'
         assert saved['config']['default_model']=='kept'
+        assert saved['config']['host_file_path']==str(tmp_path/'import-host.json' if existing_mode=='chatgpt_plan' else manager.home/'config'/'chatgpt-host.json')
         assert login['account']['planEnabled'] is (outcome=='success')
         assert login['showPlanWelcome'] is (outcome=='success' and existing_mode=='legacy_codex')
         assert any(row.get('loginConfigurationChanged') for row in updates)

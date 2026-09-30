@@ -115,19 +115,25 @@ def github_cli_token():
     except (OSError,subprocess.TimeoutExpired):return None
 
 
+def chatgpt_token_path(config):
+    default='~/.amplifier/chatgpt-plan/default.json' if config.get('auth_mode')=='chatgpt_plan' else '~/.amplifier/openai-chatgpt-oauth.json'
+    return config.get('token_file_path') or default
+
+
 def account_status(config):
     # Match the provider's token-file contract, without starting a login or refresh.
     mode=config.get('auth_mode','legacy_codex')
     status={'authMode':mode,'connected':False,'planEnabled':False}
-    path=config.get('token_file_path')
-    if path is None:path='~/.amplifier/openai-chatgpt-oauth.json'
+    path=chatgpt_token_path(config)
     if not isinstance(path,str):return status
     try:
         file=Path(path).expanduser()
         if file.stat().st_size>1_000_000:return status
         tokens=json.loads(file.read_text())
         if not isinstance(tokens,dict) or not tokens.get('access_token'):return status
-        if tokens.get('auth_mode','legacy_codex')!=mode:return status
+        stored_mode=tokens.get('auth_mode','legacy_codex')
+        if stored_mode=='oauth':stored_mode='legacy_codex'
+        if stored_mode!=mode:return status
         if mode=='chatgpt_plan':
             if not tokens.get('subject') or not tokens.get('client_id'):return status
             connected=bool(tokens.get('refresh_token')) or float(tokens.get('expires_at',0))>time.time()
@@ -596,10 +602,12 @@ class SetupManager:
         login_id=uuid.uuid4().hex
         profile_dir=self.home/'config'/'chatgpt-sign-in'/safe_name(identity)
         path=profile_dir/(login_id+'.json')
-        source_path=Path(old.get('token_file_path') or '~/.amplifier/openai-chatgpt-oauth.json').expanduser()
+        source_path=Path(chatgpt_token_path(old)).expanduser()
+        host_path=Path(old.get('host_file_path') or (source_path.parent/'host.json' if old.get('auth_mode')=='chatgpt_plan' else self.home/'config'/'chatgpt-host.json')).expanduser()
         from .provider_catalog import fingerprint
         registration_path=profile_dir/('registration-'+fingerprint([workspace,mode,str(source_path)])[:24]+'.json')
         config={**old,'auth_mode':mode,'token_file_path':str(path),'login_on_mount':False}
+        if mode=='chatgpt_plan':config['host_file_path']=str(host_path)
         before=account_status(old)
         row={'providerId':identity,'loginId':login_id,'authMode':mode,'status':'starting','instructions':[]}
         self.logins[identity]=row
@@ -613,7 +621,7 @@ class SetupManager:
                 process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
                 row['process']=process
                 process.stdin.write((json.dumps({'module':provider['module'],'tokenFile':str(path),'authMode':mode,
-                    'hostFile':str(self.home/'config'/'chatgpt-host.json'),'registrationFile':str(registration_path),
+                    'hostFile':str(host_path),'registrationFile':str(registration_path),
                     'sourceTokenFile':str(source_path) if mode==old.get('auth_mode')=='chatgpt_plan' else None,'enablePlan':bool(args.get('enablePlan'))})+'\n').encode());await process.stdin.drain();process.stdin.close()
                 async with asyncio.timeout(900):
                     while line:=await process.stdout.readline():

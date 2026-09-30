@@ -12,8 +12,11 @@ loopback. For Spark or another remote server, follow the provider's
 This uses the standalone `amplifier-chatgpt-auth` utility, not amplifier-app-cli.
 The destination keeps its own host identity and owns token refresh after import.
 Never paste a credential file into chat or browser settings. Set the imported
-profile's `token_file_path` and `auth_mode: chatgpt_plan` in that connection's
-Advanced configuration. Preserve the legacy file until the replacement works.
+profile's `token_file_path`, `auth_mode: chatgpt_plan`, and the import command's
+`host_file_path` in that connection's Advanced configuration. When import uses
+its default host file, this is `host.json` beside the imported profile. Keeping
+the same path preserves the server's identity during later sign-ins. Preserve
+the legacy file until the replacement works.
 
 Signing in and granting plan usage are distinct. If plan permission was not
 granted, settings offer **Enable ChatGPT plan access**. The model picker shows
