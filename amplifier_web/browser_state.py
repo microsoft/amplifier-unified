@@ -44,6 +44,7 @@ class SessionIndex:
         self.active = set()
         self.notifications = []
         self.first_root = None
+        self.roots = []
         for position, row in enumerate(state.get('sessions', [])):
             identity = row['id']
             self.by_id[identity] = row
@@ -51,6 +52,7 @@ class SessionIndex:
             if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
                 self.active.add(identity)
             if is_top_level(row):
+                self.roots.append(row)
                 if self.first_root is None:
                     self.first_root = row
             else:
@@ -171,7 +173,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                      for row in index.notifications]
     selected_root = selected_row if selected_row and is_top_level(selected_row) else None
     continuation = selected_root or index.first_root
-    result['library'] = {'sessionCount': sum(is_top_level(row) for row in state.get('sessions', [])), 'workspaceCount': len(state.get('workspaces', [])),
+    result['library'] = {'sessionCount': len(index.roots), 'workspaceCount': len(state.get('workspaces', [])),
                          'continueSessionId': continuation['id'] if continuation else None,
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):

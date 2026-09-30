@@ -104,18 +104,17 @@ class StateProjections:
         def build():
             from .chat_navigation import navigation_activity
             from .navigation_summary import activity
-            from .session_navigation import is_top_level
             attention = self.attention(state)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
             rows = [([row.get(key) for key in fields], navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
-                    for row in state.get('sessions', []) if is_top_level(row)]
+                    for row in self.sessions(state).roots]
             facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
                      state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
-            return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+            return hashlib.sha256(json.dumps(facts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         return self.get(('shell-data-key',), build)
