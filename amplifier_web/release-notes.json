@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.37",
+      "title": "Start successfully with additional server settings",
+      "changes": [
+        "Keep startup working when the private server configuration includes additional top-level settings from local tooling or other versions.",
+        "Preserve those settings during ordinary configuration saves while continuing to validate supported server settings."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.36",
       "title": "More reliable summaries in long conversations",
       "changes": [
