@@ -45,3 +45,26 @@ async def test_unavailable_plan_support_fails_without_saving_credentials(tmp_pat
     finally:os.umask(previous)
     assert json.loads(capsys.readouterr().out)['status']=='failed'
     assert not path.exists()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode',[None,'chatgpt_codex','legacy_codex'])
+async def test_codex_worker_uses_device_login_for_default_and_compatibility_alias(tmp_path,monkeypatch,capsys,mode):
+    path=tmp_path/'codex.json';seen={}
+    async def login(**kwargs):
+        seen.update(kwargs)
+        tokens={'access_token':'fixture-secret','refresh_token':'fixture-refresh'}
+        path.write_text(json.dumps(tokens))
+        return tokens
+    parent=types.ModuleType('amplifier_module_provider_openai_chatgpt')
+    oauth=types.ModuleType(parent.__name__+'.oauth');oauth.login=login
+    monkeypatch.setitem(sys.modules,parent.__name__,parent)
+    monkeypatch.setitem(sys.modules,oauth.__name__,oauth)
+    request={'module':'provider-openai-chatgpt','tokenFile':str(path)}
+    if mode is not None:request['authMode']=mode
+    monkeypatch.setattr(sys,'stdin',io.StringIO(json.dumps(request)+'\n'))
+    previous=os.umask(0o077)
+    try:await provider_auth.main()
+    finally:os.umask(previous)
+    assert seen['token_file_path']==str(path)
+    assert 'app_name' not in seen
+    assert json.loads(capsys.readouterr().out)=={'status':'completed'}

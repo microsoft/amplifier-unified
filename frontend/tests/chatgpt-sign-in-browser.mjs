@@ -13,7 +13,8 @@ try{
  await page.goto(base);await openSettingsPage(page,'ai-connections');
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
  await page.getByRole('button',{name:/ChatGPT Subscription Sign in/}).click();
- await expect(page.getByLabel('Sign-in method',{exact:true})).toHaveValue('chatgpt_plan');
+ await expect(page.getByLabel('ChatGPT connection',{exact:true})).toHaveValue('chatgpt_codex');
+ await page.getByLabel('ChatGPT connection',{exact:true}).selectOption('chatgpt_plan');
  await page.getByText('Using a remote host, such as Spark?',{exact:true}).click();
  await expect(page.getByRole('link',{name:'Amplifier setup commands',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Continue with ChatGPT',exact:true}).click();
@@ -31,7 +32,7 @@ try{
  assert.ok(!JSON.stringify(state).includes('fixture-private'));
  await openSettingsPage(page,'providers');
  await page.locator(`[data-collection-id="${provider.id}"] button`).click();
- await expect(page.getByLabel('Sign-in method',{exact:true})).toHaveValue('chatgpt_plan');
+ await expect(page.getByLabel('ChatGPT connection',{exact:true})).toHaveValue('chatgpt_plan');
  await expect(page.getByRole('link',{name:'Manage usage',exact:true}).first()).toBeVisible();
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));

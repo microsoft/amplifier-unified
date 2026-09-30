@@ -25,7 +25,7 @@ try{
  assert.ok(await contrast(page.locator('.a-settings-sidebar button[aria-current=page]'))>=4.5);
  await page.screenshot({path:out+'/providers-dark.png'});
  await page.getByRole('button',{name:/ChatGPT Subscription Sign in/}).click();
- await page.getByLabel('Sign-in method',{exact:true}).selectOption('legacy_codex');
+ await page.getByLabel('ChatGPT connection',{exact:true}).selectOption('chatgpt_codex');
  await page.getByRole('button',{name:'Get sign-in code',exact:true}).click();
  await expect(page.getByLabel('1. Copy your sign-in code')).toHaveValue('TEST-1234');
  await expect(page.getByRole('button',{name:'Copy sign-in code'})).toHaveText('Copied');
@@ -44,7 +44,7 @@ try{
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('Clipboard blocked'))}}));
  await page.getByRole('button',{name:/ChatGPT Subscription Sign in/}).click();
- await page.getByLabel('Sign-in method',{exact:true}).selectOption('legacy_codex');
+ await page.getByLabel('ChatGPT connection',{exact:true}).selectOption('chatgpt_codex');
  await page.getByRole('button',{name:'Get sign-in code',exact:true}).click();
  await expect(page.getByText('Select the code to copy it, or use the Copy button.',{exact:true})).toBeVisible();
  await page.getByLabel('1. Copy your sign-in code').focus();

@@ -1,7 +1,7 @@
 import {ProviderMessageTest} from './provider-message-test';
 import {ProviderKeyPreview} from './provider-key-preview';
 import {DeviceSignIn} from './device-sign-in';
-import {ChatGPTSignInChoice,ChatGPTAccount} from './chatgpt-sign-in';
+import {ChatGPTSignInChoice,ChatGPTAccount,chatGPTMode} from './chatgpt-sign-in';
 import {knownProviders} from './ai-connections-data';
 import {SettingsActions} from './settings-layout';
 import {useSettingsDraft} from './settings-drafts';
@@ -51,7 +51,7 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
  useEffect(()=>{if(!/^provider-[A-Za-z0-9_.-]+$/.test(draft.module)||metadata)return;const timer=setTimeout(()=>run('providers.schema',{module:draft.module,...(draft.id?{id:draft.id}:{})}),250);return()=>clearTimeout(timer)},[draft.module,session?.workspace]);
  const models=modelOptions(setup.modelCatalogs?.[draft.id]||(((setup.modelsProviderId||setup.providerId)===draft.id)?setup.models:[]));const login=setup.login?.providerId===draft.id?setup.login:null,loginPhase=login?.status||login?.phase,loginUrl=safeLoginUrl(login?.url);let config,error='';try{config=providerConfig(configText)}catch(caught){error=caught.message}
  const [shownProviders,providerFilter]=useListFilter(state,act,'providers',providers,row=>[row.id,row.module,row.config?.default_model,row.config?.model],'Filter providers');
- const authMode=draft.authMode||selected?.config?.auth_mode||'legacy_codex';
+ const authMode=chatGPTMode(draft.authMode||selected?.config?.auth_mode);
  const active=session&&['working','starting','running','stopping','busy'].includes(session.status);
  const choose=provider=>{
   choosing.current=true;
@@ -61,7 +61,7 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
   const drafts={...connections,[oldKey]:snapshot};
   const key=provider?.id||'';
   const saved=drafts[key];
-  const next=saved|| (provider?{modelEntry:'catalog',dirty:false,authMode:provider.config?.auth_mode||'legacy_codex',credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',id:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||''}:{modelEntry:'catalog',dirty:false,id:'',module:'',source:'',config:'{}',model:'',effort:'',credentialMode:'environment',envVar:''});
+  const next=saved|| (provider?{modelEntry:'catalog',dirty:false,authMode:chatGPTMode(provider.config?.auth_mode),credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',id:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||''}:{modelEntry:'catalog',dirty:false,id:'',module:'',source:'',config:'{}',model:'',effort:'',credentialMode:'environment',envVar:''});
   setApiKey(privateDrafts.current[key]?.apiKey||'');setConfigText(privateDrafts.current[key]?.configText??next.config);
   editDraft({...next,connections:drafts,selectionKey:key,detailOpen:true,order:null});
  };
@@ -71,7 +71,7 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
   initialized.current=true;
   // Hydrate a persisted selection once, while preserving a deliberately unsaved draft.
   const provider=providers.find(row=>row.id===draft.id)||(!draft.id&&!draft.module?providers[0]:null);
-  if(provider&&!draft.dirty){editDraft({id:provider.id,selectionKey:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||'',authMode:provider.config?.auth_mode||'legacy_codex',credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',dirty:false});}
+  if(provider&&!draft.dirty){editDraft({id:provider.id,selectionKey:provider.id,module:provider.module,source:provider.source||'',config:pretty(provider.config||{}),model:provider.config?.default_model||provider.config?.model||'',effort:provider.config?.reasoning_effort||'',authMode:chatGPTMode(provider.config?.auth_mode),credentialMode:provider.credential?.hasStoredKey||(!provider.credential&&provider.credentialsConfigured)?'private':'environment',envVar:provider.credential?.envVar||'',dirty:false});}
  },[setup.providersLoadedAt]);
  const adoptedLogin=useRef('');
  useEffect(()=>{
@@ -80,7 +80,7 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
   try{
    const next={...providerConfig(configText)};
    for(const key of ['auth_mode','token_file_path','host_file_path','login_on_mount'])if(key in (selected.config||{}))next[key]=selected.config[key];
-   const text=pretty(next);setConfigText(text);editDraft({config:text,authMode:selected.config?.auth_mode||'legacy_codex'});
+   const text=pretty(next);setConfigText(text);editDraft({config:text,authMode:chatGPTMode(selected.config?.auth_mode)});
   }catch{/* Preserve an unfinished JSON edit; saved credentials remain authoritative. */}
  },[login?.loginId,login?.status,selected?.config?.auth_mode]);
  const removeOp=operation('providers.remove');
@@ -89,7 +89,8 @@ export function ProviderSettings({state,session,act,navigate=()=>{}}){
  useEffect(()=>{if(saveOp?.phase==='ready'&&saveOp.updatedAt>=loadStarted.current){setApiKey('');privateDrafts.current[draft.selectionKey??draft.id]={apiKey:'',configText};edit({dirty:false,connections:{...draft.connections,[draft.selectionKey??draft.id]:undefined}})}},[saveOp?.updatedAt]);
  useEffect(()=>{if(operation('providers.reorder','')?.phase==='ready'&&draft.order)editDraft({order:null})},[operation('providers.reorder','')?.updatedAt]);
  const perform=(action,args={})=>run(action,{id:draft.id,...args});
- const fields=providerFields(metadata,{...config,default_model:draft.model,model:draft.model});
+ // ChatGPT mode changes are login intent until the new account is verified.
+ const fields=providerFields(metadata,{...config,default_model:draft.model,model:draft.model}).filter(field=>draft.module!=='provider-openai-chatgpt'||field.id!=='auth_mode');
  const updateConfig=(field,value)=>{const next={...config};if(value==='')delete next[field];else next[field]=value;setConfigText(pretty(next));edit({config:pretty(next),dirty:true,...(field==='reasoning_effort'?{effort:value}: {})})};
  const save=async()=>{const result=await run('providers.save',{...(draft.id?{id:draft.id}:{}),module:draft.module.trim(),...(draft.source.trim()?{source:draft.source.trim()}:{}),config:{...config,...(draft.model?{default_model:draft.model}:{})},scope:draft.scope,...(usesKey&&keyMode==='environment'&&envVar?{apiKeyEnv:envVar}:apiKey&&keyMode==='private'?{apiKey}:{})});if(!result)return};
  const hasPrivateDraft=!!apiKey||configText!==draft.config||Object.values(privateDrafts.current).some(item=>item.apiKey);

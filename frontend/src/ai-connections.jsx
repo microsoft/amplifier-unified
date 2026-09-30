@@ -1,7 +1,7 @@
 import {ProviderMessageTest} from './provider-message-test';
 import {ProviderKeyPreview} from './provider-key-preview';
 import {DeviceSignIn} from './device-sign-in';
-import {ChatGPTSignInChoice,ChatGPTAccount} from './chatgpt-sign-in';
+import {ChatGPTSignInChoice,ChatGPTAccount,chatGPTMode} from './chatgpt-sign-in';
 import React,{useEffect,useRef,useState,useContext} from 'react';
 import {Plus,ArrowLeft,RefreshCw,Sparkles,ExternalLink,Trash2} from 'lucide-react';
 import {SettingsLink} from './settings-everyday';
@@ -18,7 +18,7 @@ export function AIConnections({state,session,act,navigate}){
  const setup=state.setup||{},providers=(setup.providers||[]).filter(p=>p.enabled!==false);
  const labels=new Map(providerOptions(providers.map(p=>({...p,info:{id:p.module,display_name:aiService(p.module).name}}))).map(row=>[row.id,row.label]));
  const d=state.view?.aiConnectionEditor||{},step=d.step||'list',service=aiService(d.module),selected=providers.find(p=>p.id===d.id);
- const authMode=d.authMode||selected?.config?.auth_mode||(selected?'legacy_codex':'chatgpt_plan');
+ const authMode=chatGPTMode(d.authMode||selected?.config?.auth_mode);
  const loginArgs={id:d.id,authMode,scope:d.scope||'global'};
  const [key,setKey]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[pending,setPending]=useState(null);
  const sending=useRef(false),context=useRef(session?.workspace),requestVersion=useRef(0),alive=useRef(true);
@@ -62,7 +62,7 @@ export function AIConnections({state,session,act,navigate}){
  const credential=setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
  const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
  const scanCredentials=module=>{if(aiService(module).auth!=='signin')run('providers.credentials',{module});};
- const choose=s=>{if(sending.current)return;setKey('');setError('');setNotice('');edit({step:'connect',module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope:'global',authMode:'chatgpt_plan',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
+ const choose=s=>{if(sending.current)return;setKey('');setError('');setNotice('');edit({step:'connect',module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope:'global',authMode:'chatgpt_codex',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:d.scope||'global',...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');
  const back=()=>{setError('');edit({step:step==='services'||step==='detail'?'list':step==='model'?'detail':'services'});};
  const advanced=()=>navigate('providers');
@@ -73,7 +73,7 @@ export function AIConnections({state,session,act,navigate}){
  return <section data-part="ai-connections" className="a-ai-form">
   {step==='list'?<>
    <p className="a-everyday-intro">Connect the AI services Amplifier can use for your work.</p>
-   {!providers.length?<div className="a-ai-welcome"><Sparkles aria-hidden="true"/><h4>Start with one connection</h4><p>Choose a service, connect your account, and choose a model. You can add more later.</p><button className="a-primary" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect AI</button></div>:<><div className="a-everyday-list">{providers.map(p=><SettingsLink key={p.id} disabled={busy} title={labels.get(p.id)} description={(p.config?.default_model||p.config?.model||'Choose a model')+' · '+(p.accountConnected?'Account connected':p.credentialsConfigured?'Credentials available':p.keySource==='provider-managed'?'Account sign-in':'Connection needs setup')+(p.credential?.preview?.masked?' · Key '+p.credential.preview.masked:'')} onClick={()=>{setError('');setNotice('');edit({step:'detail',id:p.id,module:p.module,authMode:p.config?.auth_mode||'legacy_codex',model:p.config?.default_model||p.config?.model||'',scope:'global',baseUrl:p.config?.base_url||'',previousLoginId:setup.login?.loginId,saved:true,initializeRouting:false})}}/>)}</div><button className="a-soft" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect another service</button></>}
+   {!providers.length?<div className="a-ai-welcome"><Sparkles aria-hidden="true"/><h4>Start with one connection</h4><p>Choose a service, connect your account, and choose a model. You can add more later.</p><button className="a-primary" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect AI</button></div>:<><div className="a-everyday-list">{providers.map(p=><SettingsLink key={p.id} disabled={busy} title={labels.get(p.id)} description={(p.config?.default_model||p.config?.model||'Choose a model')+' · '+(p.accountConnected?'Account connected':p.credentialsConfigured?'Credentials available':p.keySource==='provider-managed'?'Account sign-in':'Connection needs setup')+(p.credential?.preview?.masked?' · Key '+p.credential.preview.masked:'')} onClick={()=>{setError('');setNotice('');edit({step:'detail',id:p.id,module:p.module,authMode:chatGPTMode(p.config?.auth_mode),model:p.config?.default_model||p.config?.model||'',scope:'global',baseUrl:p.config?.base_url||'',previousLoginId:setup.login?.loginId,saved:true,initializeRouting:false})}}/>)}</div><button className="a-soft" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect another service</button></>}
    {setup.active&&providers.length>0&&<div className="a-ai-hint">Your model rules are saved. <button className="a-link" data-action="view.update" onClick={()=>navigate('routing')}>Advanced model rules</button></div>}
    <div className="a-everyday-footer"><p className="a-caption">Connections are stored on the Amplifier host. Existing conversations keep their settings.</p><button className="a-link" data-action="view.update" onClick={advanced}>Advanced connection settings<ExternalLink/></button></div>
   </>:<>

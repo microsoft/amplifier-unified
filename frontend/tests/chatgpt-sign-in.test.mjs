@@ -44,14 +44,14 @@ test('first plan welcome is dismissible and carries a real usage link',async()=>
  await act(async()=>root.unmount());
 });
 
-test('remote-host limitations and explicit legacy choice stay visible',async()=>{
+test('remote-host limitations and explicit Codex choice stay visible',async()=>{
  let root,mode='';
  await act(async()=>{root=create(React.createElement(ChatGPTSignInChoice,{mode:'chatgpt_plan',onChange:value=>{mode=value}}))});
  assert.ok(text(root).includes('transfer the credentials over SSH'));
  assert.equal(root.root.findAllByType('option').length,2);
- await act(async()=>root.root.findByType('select').props.onChange({target:{value:'legacy_codex'}}));assert.equal(mode,'legacy_codex');
+ await act(async()=>root.root.findByType('select').props.onChange({target:{value:'chatgpt_codex'}}));assert.equal(mode,'chatgpt_codex');
  await act(async()=>root.update(React.createElement(ChatGPTAccount,{account:{authMode:'legacy_codex',connected:true,planEnabled:false}})));
- assert.ok(text(root).includes('existing ChatGPT device sign-in'));
+ assert.ok(text(root).includes('ChatGPT Codex with device sign-in'));
  assert.equal(root.root.findAllByType('a').length,0);
  await act(async()=>root.unmount());
 });
@@ -79,5 +79,49 @@ test('identity-only everyday login does not fetch models or advance beyond conse
  await act(async()=>{root=create(React.createElement(AIConnections,{state,session:{id:'chat',workspace:'/work'},navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
  assert.ok(text(root).includes('Enable ChatGPT plan access'));
  assert.ok(!calls.some(call=>call.name==='providers.models'));
+ await act(async()=>root.unmount());
+});
+
+test('new everyday ChatGPT setup defaults to Codex and retains the explicit plan choice',async()=>{
+ const {AIConnections}=await server.ssrLoadModule('/src/ai-connections.jsx');
+ let root;const calls=[];
+ const state={view:{aiConnectionEditor:{step:'services'}},setup:{providers:[]}};
+ await act(async()=>{root=create(React.createElement(AIConnections,{state,navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
+ const button=root.root.findAllByType('button').find(button=>button.findAllByType('strong').some(label=>label.children.join('').includes('ChatGPT')));
+ await act(async()=>button.props.onClick());
+ const draft=calls.find(call=>call.args?.patch?.aiConnectionEditor?.step==='connect').args.patch.aiConnectionEditor;
+ assert.equal(draft.authMode,'chatgpt_codex');
+ await act(async()=>root.update(React.createElement(AIConnections,{state:{...state,view:{aiConnectionEditor:draft}},navigate:()=>{},act:async()=>({accepted:true,operationId:'request'})})));
+ const select=root.root.findAllByType('select').find(select=>select.props.value==='chatgpt_codex');
+ assert.ok(select);
+ assert.deepEqual(select.findAllByType('option').map(option=>option.props.value),['chatgpt_codex','chatgpt_plan']);
+ await act(async()=>root.unmount());
+});
+
+for(const oldMode of [undefined,'legacy_codex','chatgpt_codex'])test(`Codex reconnect keeps the account and normalizes ${oldMode}`,async()=>{
+ const {AIConnections}=await server.ssrLoadModule('/src/ai-connections.jsx');
+ let root;const calls=[];
+ const state={view:{aiConnectionEditor:{step:'connect',id:'account',module:'provider-openai-chatgpt',authMode:oldMode,saved:true}},setup:{providers:[{id:'account',module:'provider-openai-chatgpt',config:{auth_mode:oldMode,token_file_path:'/private/kept.json'}}]}};
+ await act(async()=>{root=create(React.createElement(AIConnections,{state,navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
+ await act(async()=>root.root.findAllByType('button').find(button=>button.props['data-action']==='providers.login').props.onClick());
+ assert.equal(calls.find(call=>call.name==='providers.login').args.authMode,'chatgpt_codex');
+ assert.ok(!calls.some(call=>call.name==='providers.save'));
+ await act(async()=>root.unmount());
+});
+
+test('advanced provider metadata cannot create a second conflicting ChatGPT mode control',async()=>{
+ const {ProviderSettings}=await server.ssrLoadModule('/src/setup.jsx');
+ let root;const calls=[];
+ const provider={id:'account',module:'provider-openai-chatgpt',config:{auth_mode:'chatgpt_codex',token_file_path:'/private/kept.json'}};
+ const state={view:{providerEditor:{id:'account',selectionKey:'account',module:provider.module,config:JSON.stringify(provider.config),detailOpen:true}},setup:{providers:[provider],metadata:{[provider.module]:{info:{config_fields:[{id:'auth_mode',display_name:'ChatGPT connection',field_type:'choice',choices:['chatgpt_codex','chatgpt_plan'],default:'chatgpt_codex'},{id:'app_name',display_name:'Application name',field_type:'text'}]}}}}};
+ await act(async()=>{root=create(React.createElement(ProviderSettings,{state,navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
+ const modeControls=()=>root.root.findAllByType('select').filter(select=>select.findAllByType('option').some(option=>option.props.value==='chatgpt_plan'));
+ assert.equal(modeControls().length,1);
+ await act(async()=>modeControls()[0].props.onChange({target:{value:'chatgpt_plan'}}));
+ const loginButton=root.root.findAllByType('button').find(button=>button.props['data-action']==='providers.login');
+ await act(async()=>loginButton.props.onClick());
+ assert.equal(calls.find(call=>call.name==='providers.login').args.authMode,'chatgpt_plan');
+ assert.ok(!calls.some(call=>call.name==='providers.save'));
+ assert.equal(state.setup.providers[0].config.auth_mode,'chatgpt_codex');
  await act(async()=>root.unmount());
 });

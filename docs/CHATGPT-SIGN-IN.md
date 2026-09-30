@@ -1,10 +1,17 @@
 # ChatGPT connections
 
 AI connections and Advanced → Provider configuration use the same sign-in action.
-Choose **ChatGPT plan · browser sign-in** to authorize Amplifier Unified using
-OpenAI's public ChatGPT-plan flow. Existing configured connections retain their
-existing device sign-in until the user explicitly changes the method. API-key
-OpenAI connections remain separate.
+New connections default to **ChatGPT Codex · device sign-in**
+(`auth_mode: chatgpt_codex`). Existing device credentials and the previous
+`legacy_codex` configuration spelling remain compatible. Unified keeps this
+default while the capability differences, including voice, are investigated.
+
+Users can explicitly choose **ChatGPT plan · browser sign-in**
+(`auth_mode: chatgpt_plan`) to authorize Amplifier Unified using OpenAI's public
+ChatGPT-plan flow. No existing connection is migrated automatically. These are
+two provider contracts, not interchangeable login screens; their endpoints,
+model lists and supported features can differ. API-key OpenAI connections and
+Unified's existing voice authentication remain separate.
 
 The browser for the new flow must run on the Amplifier host: its callback uses
 loopback. For Spark or another remote server, follow the provider's

@@ -18,13 +18,13 @@ async def main():
     # Restrict every file created by the provider before it saves OAuth tokens.
     os.umask(0o077)
     try:
-        mode=request.get('authMode','legacy_codex')
+        mode=request.get('authMode','chatgpt_codex')
         if mode=='chatgpt_plan':
             from amplifier_module_provider_openai_chatgpt.plan_auth import login
             tokens=await login(token_file_path=str(path),host_file_path=request['hostFile'],app_name='Amplifier Unified',
                 source_token_file_path=request.get('sourceTokenFile'),registration_file_path=request.get('registrationFile'),
                 request_plan_permission=bool(request.get('enablePlan')),print_fn=lambda text:emit(status='waiting',instruction=str(text)))
-        elif mode=='legacy_codex':
+        elif mode in {'chatgpt_codex','legacy_codex'}:
             from amplifier_module_provider_openai_chatgpt.oauth import login
             tokens=await login(token_file_path=str(path),print_fn=lambda text:emit(status='waiting',instruction=str(text)))
         else:raise ValueError('Unsupported sign-in method')

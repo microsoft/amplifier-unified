@@ -115,14 +115,20 @@ def github_cli_token():
     except (OSError,subprocess.TimeoutExpired):return None
 
 
+def chatgpt_auth_mode(value=None):
+    # The previous public spelling remains a read alias; new choices use Codex.
+    return 'chatgpt_codex' if value in (None, 'legacy_codex') else value
+
+
 def chatgpt_token_path(config):
     default='~/.amplifier/chatgpt-plan/default.json' if config.get('auth_mode')=='chatgpt_plan' else '~/.amplifier/openai-chatgpt-oauth.json'
-    return config.get('token_file_path') or default
+    value=config.get('token_file_path')
+    return default if value is None else value
 
 
 def account_status(config):
     # Match the provider's token-file contract, without starting a login or refresh.
-    mode=config.get('auth_mode','legacy_codex')
+    mode=chatgpt_auth_mode(config.get('auth_mode'))
     status={'authMode':mode,'connected':False,'planEnabled':False}
     path=chatgpt_token_path(config)
     if not isinstance(path,str):return status
@@ -131,9 +137,9 @@ def account_status(config):
         if file.stat().st_size>1_000_000:return status
         tokens=json.loads(file.read_text())
         if not isinstance(tokens,dict) or not tokens.get('access_token'):return status
-        stored_mode=tokens.get('auth_mode','legacy_codex')
-        if stored_mode=='oauth':stored_mode='legacy_codex'
-        if stored_mode!=mode:return status
+        stored_mode=chatgpt_auth_mode(tokens.get('auth_mode'))
+        if stored_mode=='oauth':stored_mode='chatgpt_codex'
+        if mode not in {'chatgpt_codex','chatgpt_plan'} or stored_mode!=mode:return status
         if mode=='chatgpt_plan':
             if not tokens.get('subject') or not tokens.get('client_id'):return status
             connected=bool(tokens.get('refresh_token')) or float(tokens.get('expires_at',0))>time.time()
@@ -597,8 +603,8 @@ class SetupManager:
         if previous and not previous['task'].done():return await self.publish_login(identity)
         original=copy.deepcopy(provider)
         old=original.get('config',{})
-        mode=args.get('authMode') or old.get('auth_mode','legacy_codex')
-        if mode not in {'legacy_codex','chatgpt_plan'}:raise ValueError('Choose a supported ChatGPT sign-in method.')
+        mode=chatgpt_auth_mode(args.get('authMode') or old.get('auth_mode'))
+        if mode not in {'chatgpt_codex','chatgpt_plan'}:raise ValueError('Choose a supported ChatGPT sign-in method.')
         login_id=uuid.uuid4().hex
         profile_dir=self.home/'config'/'chatgpt-sign-in'/safe_name(identity)
         path=profile_dir/(login_id+'.json')
