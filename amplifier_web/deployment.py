@@ -106,11 +106,10 @@ def validate_origin(value: str) -> str:
 def validate_server(value: dict) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Server configuration must be a mapping.")
-    unknown = set(value) - set(DEFAULT_SERVER)
-    if unknown:
-        raise ValueError("Unknown server configuration setting: " + ", ".join(sorted(unknown)))
+    # Preserve top-level extensions from other versions or local tooling.
+    # Validate the settings this version consumes without rejecting those it does not.
     config = copy.deepcopy(DEFAULT_SERVER)
-    config.update(value)
+    config.update(copy.deepcopy(value))
     config["runtime"] = validate_retention(config["runtime"])
     if config["schema_version"] != 1:
         raise ValueError("Unsupported server configuration schema.")
