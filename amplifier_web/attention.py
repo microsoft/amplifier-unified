@@ -26,9 +26,10 @@ def connection_failure_key(operation):
 def snapshot(state):
     items=[]
     read=state.get('attentionRead',{})
-    def add(key,title,section,page,detail='',version=None,**target):
-        fingerprint=hashlib.sha256(json.dumps([key,title,detail,version],sort_keys=True,default=str).encode()).hexdigest()[:24]
-        items.append({'id':key,'title':title,'detail':detail,'section':section,'page':page,'fingerprint':fingerprint,'read':read.get(key)==fingerprint,**target})
+    def add(key,title,section,page,detail='',version=None,previous_titles=(),**target):
+        fingerprints=[hashlib.sha256(json.dumps([key,label,detail,version],sort_keys=True,default=str).encode()).hexdigest()[:24]
+                      for label in (title,*previous_titles)]
+        items.append({'id':key,'title':title,'detail':detail,'section':section,'page':page,'fingerprint':fingerprints[0],'read':read.get(key) in fingerprints,**target})
     for receipt in state.get('feedback',{}).get('requests',[]):
         status=receipt.get('status')
         if status in {'submitted','failed','unknown'}:
@@ -39,7 +40,8 @@ def snapshot(state):
     for release in updates.get('application',{}).get('releaseNotes',[]):
         for notice in release.get('notices',[]):
             add(notice_id(release,notice),notice['title'],'maintenance','updates',
-                notice['detail']+' '+notice['action'],release['version'],releaseVersion=release['version'])
+                notice['detail']+' '+notice['action'],release['version'],
+                previous_titles=notice.get('previousTitles',()),releaseVersion=release['version'])
     for row in updates.get('items',[]):
         if row.get('status') in {'update','check_failed','local_changes'}:
             status=row['status'];label={'update':'Update available','check_failed':'Could not check','local_changes':'Local edits preserved'}[status]
