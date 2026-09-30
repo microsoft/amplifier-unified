@@ -16,6 +16,41 @@ def test_actionable_states_are_distinct_from_unread_and_background_lifecycle():
     assert activity({'status': 'idle'}) == {'kind': 'idle', 'label': 'Idle'}
 
 
+def test_reviewed_failure_does_not_hide_current_obligations_or_active_work():
+    failed = {'status': 'error', 'error': 'Reviewed historical failure'}
+    assert activity(failed, error_reviewed=True) == {'kind': 'idle', 'label': 'Idle'}
+    assert activity(failed, True, error_reviewed=True)['kind'] == 'unread'
+    assert activity({**failed, 'status': 'working'}, error_reviewed=True)['kind'] == 'working'
+    assert activity({**failed, 'approvals': [{'status': 'pending'}]}, error_reviewed=True)['label'] == 'Approval requested'
+    assert activity({**failed, 'questions': [{'status': 'pending', 'required': True}]}, error_reviewed=True)['label'] == 'Answer requested'
+    assert activity({**failed, 'questions': [{'status': 'answered', 'delivery': {'status': 'unknown'}}]}, error_reviewed=True)['label'] == 'Check answer delivery'
+
+
+def test_chat_filter_and_workspace_rollup_use_the_same_reviewed_error_receipt():
+    from amplifier_web.attention import snapshot as attention_snapshot
+    state = state_fixture()
+    state['sessions'] = [{**chat('failed', status='error', error='Historical failure', errorAt=1),
+                          'workspace': '/projects/one/shared'}]
+    state['attention'] = attention_snapshot(state)
+    item = state['attention']['items'][0]
+    assert snapshot(state)['activityCounts']['attention'] == 1
+    assert workspaces(state)['rows'][0]['activityCounts']['attention'] == 1
+    state['attentionRead'] = {item['id']: item['fingerprint']}
+    state['attention'] = attention_snapshot(state)
+    before = deepcopy(state)
+    assert snapshot(state)['items'][0]['activity']['kind'] == 'idle'
+    assert workspaces(state)['rows'][0]['activityCounts']['attention'] == 0
+    state['view']['navStatusFilter'] = 'attention'
+    assert snapshot(state)['items'] == []
+    state['view'].pop('navStatusFilter')
+    assert state == before
+    # A distinct occurrence of the same message has a different fingerprint.
+    state['sessions'][0]['errorAt'] = 2
+    state['attention'] = attention_snapshot(state)
+    assert snapshot(state)['items'][0]['activity']['kind'] == 'attention'
+    assert workspaces(state)['rows'][0]['activityCounts']['attention'] == 1
+
+
 def test_unique_path_suffixes_include_ancestors_only_when_needed():
     labels = path_labels(['/work/team/app', '/personal/team/app', '/work/other', '/app', 'C:\\dev\\other'])
     assert labels['/work/team/app'] == 'work/team/app'
