@@ -25,6 +25,8 @@ amplifier-unified doctor
 
 The private server configuration is stored at `config/server.yaml` under Unified's data directory, normally `~/.amplifier-unified`. Non-loopback binds do not start until TLS and at least one exact HTTPS public origin are configured.
 
+Additional top-level settings from local tooling or other versions do not prevent startup. Unified preserves them when saving ordinary configuration changes and does not activate features it does not implement. Known settings, including TLS, public origins and worker retention, retain their validation. Loading an existing configuration does not rewrite its file; an explicit `config reset all` resets the complete configuration.
+
 `setup-tls` creates Unified's local CA and a leaf certificate. Run `setup-tls force` only after changing an address that must appear in the certificate; it keeps the CA and replaces the leaf certificate.
 
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.

@@ -5,7 +5,7 @@ import pytest
 
 from amplifier_web import cli
 from amplifier_web.cli import _config, _parse, _server_overrides
-from amplifier_web.deployment import load_server_config, save_server_config
+from amplifier_web.deployment import config_path, load_server_config, save_server_config
 
 
 def test_config_cli_sets_and_resets_server_setting(tmp_path, capsys):
@@ -53,6 +53,32 @@ def test_tls_option_overlay_preserves_unmentioned_nested_values(tmp_path):
     save_server_config(tmp_path, {**config, "tls": {"method": "ca", "cert": "old.crt", "key": "old.key"}})
     overlaid = load_server_config(tmp_path, overrides={"tls": {"cert": "new.crt"}})
     assert overlaid["tls"] == {"method": "ca", "cert": "new.crt", "key": "old.key"}
+
+
+def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
+    from amplifier_web import server
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    original = "port: 9321\ndebug:\n  profiling: true\n"
+    path.write_text(original)
+    monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path),
+                                     "--workspace", str(tmp_path), "--no-open"])
+    monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a, **kw: None)
+    monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a, **kw: None)
+    configurations = []
+    app = object()
+    def create_app(*args, server_config, **kwargs):
+        configurations.append(server_config)
+        return app
+    monkeypatch.setattr(server, "create_app", create_app)
+    launches = []
+    monkeypatch.setattr(cli.web, "run_app", lambda app, **kwargs: launches.append((app, kwargs)))
+
+    cli.main()
+    assert configurations[0]["debug"] == {"profiling": True}
+    assert launches[0][0] is app
+    assert launches[0][1]["port"] == 9321
+    assert path.read_text() == original
 
 
 def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypatch):

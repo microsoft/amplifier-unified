@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.38",
+      "title": "Recover updates after a newer release is installed",
+      "changes": [
+        "Verify a newer published installation when an older update is still waiting for its restart, retire the obsolete pending check and continue included component updates.",
+        "Retain the original restart failure in update history while verifying the serving release, installed dependencies and actual listener before reopening work. Unverifiable installations keep their existing safeguards.",
+        "Restore descriptive high-impact headings throughout release history while preserving reviewed notices and their existing update instructions."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.37",
+      "title": "Start successfully with additional server settings",
+      "changes": [
+        "Keep startup working when the private server configuration includes additional top-level settings from local tooling or other versions.",
+        "Preserve those settings during ordinary configuration saves while continuing to validate supported server settings."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.36",
       "title": "More reliable summaries in long conversations",
       "changes": [
@@ -13,9 +32,12 @@
       "notices": [
         {
           "id": "compaction-component-update",
-          "title": "Finish component updates",
+          "title": "More reliable summaries in long conversations",
           "detail": "These improvements include an updated context-management component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
+          "previousTitles": [
+            "Finish component updates"
+          ]
         }
       ]
     },
@@ -42,9 +64,12 @@
       "notices": [
         {
           "id": "startup-recovery-component-update",
-          "title": "Finish component updates",
+          "title": "Chat startup when a remote display is unavailable",
           "detail": "The remote-display repair includes an updated computer-use component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
+          "previousTitles": [
+            "Finish component updates"
+          ]
         }
       ]
     },
@@ -63,9 +88,12 @@
       "notices": [
         {
           "id": "recovery-goal-component-update",
-          "title": "Finish component updates",
+          "title": "Saved-work recovery and goal handling",
           "detail": "The recovery, goal lifecycle and computer startup fixes include updated runtime components. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker."
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker.",
+          "previousTitles": [
+            "Finish component updates"
+          ]
         }
       ]
     },
@@ -82,9 +110,12 @@
       "notices": [
         {
           "id": "shared-imagegen-component-update",
-          "title": "Finish component updates",
+          "title": "Shared image generation and editing",
           "detail": "Shared image generation and editing also require the updated Work bundle and the imagegen component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker."
+          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker.",
+          "previousTitles": [
+            "Finish component updates"
+          ]
         }
       ]
     },
@@ -102,15 +133,21 @@
       "notices": [
         {
           "id": "charlie-runtime-adoption",
-          "title": "Finish component updates",
+          "title": "Instruction, image-context and provider repairs",
           "detail": "Instruction, image-context and native-provider fixes span the application and its Foundation, loop, context and OpenAI provider components. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged."
+          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged.",
+          "previousTitles": [
+            "Finish component updates"
+          ]
         },
         {
           "id": "charlie-validation-scope",
-          "title": "Some follow-ups remain open",
+          "title": "Delegation routing and remaining compatibility limits",
           "detail": "Delegation routing visibility does not enforce cross-provider consent. Ordinary tool-read recursive references, provider-aware image preparation, and physical device or Windows/WSL acceptance remain separate work.",
-          "action": "Review connection and routing choices before delegated work. Verify your device and provider with the intended workflow."
+          "action": "Review connection and routing choices before delegated work. Verify your device and provider with the intended workflow.",
+          "previousTitles": [
+            "Some follow-ups remain open"
+          ]
         }
       ]
     },
@@ -128,9 +165,12 @@
       "notices": [
         {
           "id": "complete-provider-update",
-          "title": "Finish the component update",
+          "title": "Compatible API credential refresh",
           "detail": "The Compatible API credential repair is delivered in the provider component. Existing workers keep the credentials and code they already loaded.",
-          "action": "Let Updates finish checking and installing components, then start a fresh conversation worker to use the updated provider."
+          "action": "Let Updates finish checking and installing components, then start a fresh conversation worker to use the updated provider.",
+          "previousTitles": [
+            "Finish the component update"
+          ]
         },
         {
           "id": "mobile-call-validation",
@@ -161,9 +201,12 @@
       "notices": [
         {
           "id": "included-naming-component",
-          "title": "Complete the included-components update",
+          "title": "Automatic naming independent of the chat bundle",
           "detail": "Automatic naming now includes the shared naming component. Existing conversation workers keep the code they already loaded.",
-          "action": "Let Updates finish the included-components stage. The naming repair takes effect when a fresh conversation worker starts."
+          "action": "Let Updates finish the included-components stage. The naming repair takes effect when a fresh conversation worker starts.",
+          "previousTitles": [
+            "Complete the included-components update"
+          ]
         }
       ]
     },
@@ -198,9 +241,12 @@
       "notices": [
         {
           "id": "review-feedback-excerpts",
-          "title": "Review before sharing",
+          "title": "Feedback excerpts and privacy",
           "detail": "Automatic redaction can miss sensitive information. Submitted excerpts may remain in GitHub history; structured tool logs are not included.",
-          "action": "Review every line and the destination visibility before approving and sending."
+          "action": "Review every line and the destination visibility before approving and sending.",
+          "previousTitles": [
+            "Review before sharing"
+          ]
         }
       ]
     },
@@ -240,9 +286,12 @@
       "notices": [
         {
           "id": "openai-component-update",
-          "title": "Image fix requires the provider update",
+          "title": "OpenAI image attachment repair",
           "detail": "The OpenAI image-attachment fix is delivered by the provider component. Updating only the application does not update every conversation worker. Some older compacted computer-use histories still need separate recovery.",
-          "action": "Let Updates finish the included-components stage before trying attachments again."
+          "action": "Let Updates finish the included-components stage before trying attachments again.",
+          "previousTitles": [
+            "Image fix requires the provider update"
+          ]
         }
       ]
     },
@@ -389,9 +438,12 @@
       "notices": [
         {
           "id": "terminal-resume-client-02010",
-          "title": "Terminal resume also needs a current client",
+          "title": "Resuming chats from the terminal",
           "detail": "The Unified launcher and terminal client are separate components. Startup resume behavior requires the corresponding client update as well as this app release.",
-          "action": "Use a current qualified terminal client and check available component updates after updating the app."
+          "action": "Use a current qualified terminal client and check available component updates after updating the app.",
+          "previousTitles": [
+            "Terminal resume also needs a current client"
+          ]
         }
       ]
     },
@@ -411,9 +463,12 @@
       "notices": [
         {
           "id": "compaction-checkpoint-components-0209",
-          "title": "Update companion components for compaction improvements",
+          "title": "Compaction checkpoints and summary recovery",
           "detail": "Provider and context-manager fixes are separate from the app package. Updated components remove default provider response deadlines, try text-summary recovery before last-resort trimming, and preserve valid compaction checkpoints when later background results arrive.",
-          "action": "After updating the app, check and install available component updates, then verify the versions loaded by a fresh conversation worker. Updating the app alone does not replace every companion component."
+          "action": "After updating the app, check and install available component updates, then verify the versions loaded by a fresh conversation worker. Updating the app alone does not replace every companion component.",
+          "previousTitles": [
+            "Update companion components for compaction improvements"
+          ]
         }
       ]
     },
@@ -449,21 +504,30 @@
       "notices": [
         {
           "id": "work-companion-components",
-          "title": "Update Work components and review optional setup",
+          "title": "Work skills and optional capability setup",
           "detail": "Work skill and runtime improvements include separately published bundle and module changes. Memory remains opt-in. Microsoft 365, live Excel, image generation and native desktop features require their own configured services, dependencies or permissions; selecting Work does not connect accounts or grant access.",
-          "action": "After updating the app, check available component updates and review the setup guidance for the optional capabilities you want to use. Deliberate source pins remain in effect."
+          "action": "After updating the app, check available component updates and review the setup guidance for the optional capabilities you want to use. Deliberate source pins remain in effect.",
+          "previousTitles": [
+            "Update Work components and review optional setup"
+          ]
         },
         {
           "id": "publishing-transfer-ownership",
-          "title": "Choose publishing and transfer targets deliberately",
+          "title": "Publishing access and task-transfer ownership",
           "detail": "Publishing requires a configured target and an explicit access policy. Tasks retaining managed publishing state, including stopped sites or receipts, cannot transfer. Transfer requires compatible writers on both hosts and does not migrate credentials or install the destination runtime. Older session writers do not respect its ownership fence.",
-          "action": "Before transferring, update both hosts and upgrade or disable every CLI, TUI and runtime that can write the session, then pair the hosts and verify destination setup. Keep the source available until handoff is confirmed. Inspect saved operation state before retrying an uncertain action."
+          "action": "Before transferring, update both hosts and upgrade or disable every CLI, TUI and runtime that can write the session, then pair the hosts and verify destination setup. Keep the source available until handoff is confirmed. Inspect saved operation state before retrying an uncertain action.",
+          "previousTitles": [
+            "Choose publishing and transfer targets deliberately"
+          ]
         },
         {
           "id": "update-compaction-components",
-          "title": "Update companion components for compaction recovery",
+          "title": "Recovery from oversized or interrupted summaries",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect.",
+          "previousTitles": [
+            "Update companion components for compaction recovery"
+          ]
         }
       ]
     },
@@ -489,9 +553,12 @@
       "notices": [
         {
           "id": "refresh-anthropic-tool-routing",
-          "title": "Update companion modules for Anthropic computer tools",
+          "title": "Anthropic computer-tool routing",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect."
+          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect.",
+          "previousTitles": [
+            "Update companion modules for Anthropic computer tools"
+          ]
         }
       ]
     },
@@ -549,9 +616,12 @@
       "notices": [
         {
           "id": "retry-component-updates",
-          "title": "Retry a previously failed component update",
+          "title": "Recovery from failed component updates",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available."
+          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available.",
+          "previousTitles": [
+            "Retry a previously failed component update"
+          ]
         }
       ]
     },
@@ -569,27 +639,39 @@
       "notices": [
         {
           "id": "work-module-requirements",
-          "title": "Review Work modules and execution settings",
+          "title": "Work capabilities and trusted execution",
           "detail": "Work features require their corresponding updated modules. Persistent computation requires a trusted execution configuration; creating a runtime does not relax tool permissions.",
-          "action": "Update the corresponding Work modules and review trusted execution settings before using these features."
+          "action": "Update the corresponding Work modules and review trusted execution settings before using these features.",
+          "previousTitles": [
+            "Review Work modules and execution settings"
+          ]
         },
         {
           "id": "schedule-and-budget-limits",
-          "title": "Keep scheduling and budget limits in view",
+          "title": "Scheduling availability and budget coverage",
           "detail": "Schedules require an available capable host. Budgets cover recorded supported model-call boundaries, not all account spending or already-started work.",
-          "action": "Keep the host available for scheduled work and inspect recorded usage alongside account usage."
+          "action": "Keep the host available for scheduled work and inspect recorded usage alongside account usage.",
+          "previousTitles": [
+            "Keep scheduling and budget limits in view"
+          ]
         },
         {
           "id": "provider-and-visual-support",
-          "title": "Check provider and visual-context support",
+          "title": "Provider features and visual-context permissions",
           "detail": "Native provider features depend on model and account support. Foreground desktop capture requires the optional native desktop component and an explicit active voice grant for that host.",
-          "action": "Check model support and choose the intended browser screen or desktop host before granting visual access."
+          "action": "Check model support and choose the intended browser screen or desktop host before granting visual access.",
+          "previousTitles": [
+            "Check provider and visual-context support"
+          ]
         },
         {
           "id": "interrupted-work-results",
-          "title": "Inspect interrupted work before retrying",
+          "title": "Interrupted work and uncertain results",
           "detail": "Interrupted work with an unknown result is retained for inspection. Restart does not automatically rerun commands or computation cells.",
-          "action": "Inspect the saved operation state and any external effects before deciding whether to retry."
+          "action": "Inspect the saved operation state and any external effects before deciding whether to retry.",
+          "previousTitles": [
+            "Inspect interrupted work before retrying"
+          ]
         }
       ]
     },
@@ -1038,9 +1120,12 @@
       "notices": [
         {
           "id": "canvas-resource-retention",
-          "title": "Update to protect saved canvas content",
+          "title": "Protection for saved Canvas content",
           "detail": "Earlier releases could delete resource files still referenced by saved canvas views during cleanup. This release prevents that deletion; it cannot reconstruct content already lost.",
-          "action": "Install this update. If a saved view reports unavailable content, recover it from an exact retained source or reopen the read-only view. Do not replay a tool action that changes data just to restore its display."
+          "action": "Install this update. If a saved view reports unavailable content, recover it from an exact retained source or reopen the read-only view. Do not replay a tool action that changes data just to restore its display.",
+          "previousTitles": [
+            "Update to protect saved canvas content"
+          ]
         }
       ]
     },
