@@ -24,7 +24,11 @@ try{
  await page.getByRole('button',{name:'Save capture settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().diagnostics.config.providerRequests===true);
  assert.deepEqual(await page.evaluate(()=>window.amplifier.getState().diagnostics.config.destinations),[]);
- await page.reload();await openSettingsPage(page,'diagnostics');
+ await page.reload();
+ // The saved Settings panel can restore after the initial shell state.
+ // Wait for that restored overlay before trying to navigate through it.
+ await page.locator('.a-settings-experience').waitFor({state:'visible'});
+ await openSettingsPage(page,'diagnostics');
  await expect(recording).toBeChecked();
  await page.screenshot({path:'/tmp/unified-provider-recording-desktop.png'});
  await page.setViewportSize({width:390,height:844});
@@ -33,7 +37,9 @@ try{
  await recording.uncheck();
  await page.getByRole('button',{name:'Save capture settings',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().diagnostics.config.providerRequests===false);
- await page.reload();await openSettingsPage(page,'diagnostics');
+ await page.reload();
+ await page.locator('.a-settings-experience').waitFor({state:'visible'});
+ await openSettingsPage(page,'diagnostics');
  await expect(recording).not.toBeChecked();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await recording.scrollIntoViewIfNeeded();

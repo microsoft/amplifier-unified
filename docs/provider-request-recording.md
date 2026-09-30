@@ -45,12 +45,12 @@ native session logs.
 
 ## Adapter audit
 
-Audited all eleven provider entries in the current upstream
+Audited all eleven Microsoft provider entries in the current upstream
 [`amplifier/docs/MODULES.md`](https://github.com/microsoft/amplifier/blob/main/docs/MODULES.md)
 on September 29, 2026, as well as the app's configured/provider-environment
-composition paths. A read-only Spark-1 inspection found no raw/debug capture
-setting on any of its nine configured connections and no app diagnostics
-configuration. No host state or credentials were changed.
+composition paths. A read-only configuration inspection confirmed that raw/debug
+capture was not enabled and no app diagnostics configuration existed. No runtime
+state or credentials were changed.
 
 The revisions below are the source evidence for this implementation, not pins
 to apply to user installations.
@@ -69,13 +69,26 @@ to apply to user installations.
 | provider-litellm | `92f2ac5d627c28311eb7a096bca5d651934666d0` | `raw_debug` | JSON string in **`data.raw_request`**, already limited by the adapter to 16,384 characters. Unified now indexes this alternate field. This is LiteLLM input, not necessarily the downstream provider's final HTTP body. |
 | provider-mock | `a90821f6b3767f8e52df5e754a96c20352684b43` | None | Debug emits a separate `llm:request:raw` count summary. No actual network request exists; Unified does not pretend that enabling debug creates one. |
 
-The setting covers every audited real-provider adapter. Unknown/custom adapters
+The setting covers every audited Microsoft real-provider adapter. Unknown/custom adapters
 keep their own declared policy until their contract is known; Unified does not
 invent unsupported flags or reconstruct missing payloads. Provider-emitted
 `raw` or `raw_request` fields are still available for these adapters when
 recorded. An upstream Copilot SDK/adapter feature would be needed for true full
 wire capture; this Unified change cannot recover it. No upstream adapter change
 is required for the other audited capture paths.
+
+The catalog also lists three community providers. Their current contracts were
+checked on September 30, 2026; they are not silently given Microsoft adapter
+flags or included in the capture claim above.
+
+| Community module | Audited revision | Current boundary |
+| --- | --- | --- |
+| provider-bedrock | `61ef9ca84e9877c425258aaae7ded0c20ddf3281` | Requires both `debug` and `raw_debug`, and emits a separate `llm:request:raw` event with `params`. Supporting it requires an explicit event normalization and redaction path; the app does not enable this alternate logging path. |
+| provider-perplexity | `768fa6c1ca0371af660e1dbb0c6806943c579d79` | Emits request counts, with no raw request capture flag or payload. Provider support is needed before the app can display an actual recorded request. |
+| provider-openai-realtime | `6a27a86183d62d5122f09065cc1ff9144becdeab` | Uses `provider:request` and `provider:response` events and an older response contract. These are not `llm:request` capture and require separate compatibility work. |
+
+These community paths remain unchanged. Their own configured logging behavior
+is not covered by the app's `llm:request` and `llm:response` redaction hook.
 
 ## Verification and acceptance boundary
 
