@@ -1,6 +1,7 @@
 """Shared, acknowledgeable attention state derived from currently actionable facts."""
 import hashlib
 import json
+from collections import Counter
 
 
 def connection_failure_key(operation):
@@ -93,9 +94,12 @@ def snapshot(state):
         for approval in session.get('approvals',[]):
             if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'setup','conversation',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
     unread=[item for item in items if not item['read']]
+    # Count once: many saved workspaces and unread outcomes must not produce
+    # a workspaces × unread-items scan on every streamed publication.
+    workspace_counts = Counter(i.get('workspace') for i in unread if i.get('sessionId'))
     return {'items':items,'unread':len(unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
             'sessions':{i['sessionId']:1 for i in unread if i.get('sessionId')},
-            'workspaces':{w['id']:sum(i.get('workspace')==w['path'] for i in unread if i.get('sessionId')) for w in state.get('workspaces',[])},
+            'workspaces':{w['id']:workspace_counts.get(w['path'], 0) for w in state.get('workspaces',[])},
             'sections':{key:sum(i['section']==key or (key=='setup' and i['page']=='loaded-modules') for i in unread) for key in {'setup','capabilities','maintenance','chats','feedback'}},'pages':{key:sum(i['page']==key for i in unread) for key in {i['page'] for i in items}}}
 
 

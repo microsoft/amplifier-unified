@@ -19,6 +19,7 @@ DEFAULT_SERVER = {
     "session_ttl_seconds": 604800,
     "tls": {"method": "none", "cert": "", "key": ""},
     "runtime": DEFAULT_RETENTION,
+    "debug": {"profiling": False},
 }
 
 
@@ -111,6 +112,9 @@ def validate_server(value: dict) -> dict:
     config = copy.deepcopy(DEFAULT_SERVER)
     config.update(copy.deepcopy(value))
     config["runtime"] = validate_retention(config["runtime"])
+    # debug is a versioned extension, not part of the serving/security schema.
+    # Preserve it exactly as .38 does. The optional profiling consumer admits
+    # only an explicit boolean True and fails closed for other values.
     if config["schema_version"] != 1:
         raise ValueError("Unsupported server configuration schema.")
     binds = config["bind"]

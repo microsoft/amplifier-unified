@@ -106,7 +106,7 @@ def accounting_projection(tree):
     return list(saved.values())
 
 
-def persist(home, state, cache):
+def persist(home, state, cache, *, session_ids=None, by_id=None, references=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -121,7 +121,12 @@ def persist(home, state, cache):
     library = state.get('conversationOrganization', {})
     retained.update(library.get('archived', {}))
     retained.update(sid for row in library.get('collections', []) for sid in row['sessionIds'])
-    for session in state.get('sessions', []):
+    if references is not None:
+        if session_ids is None:
+            references.clear()
+    sessions = (state.get('sessions', []) if session_ids is None else
+                (by_id[identity] for identity in session_ids if identity in by_id))
+    for session in sessions:
         if session.get('historyManaged'):
             # Rebuild native catalog rows from their source. Persist only local
             # presentation overrides and startup selection/pin references.
@@ -152,4 +157,11 @@ def persist(home, state, cache):
             SessionStore._atomic(path, text)
             cache[str(path)] = text
         result['sessions'].append({**{key: session[key] for key in ('id', 'workspace', 'runtimeSessionId') if key in session}, '$view': 1})
+    if references is not None:
+        if session_ids is not None:
+            retained_ids = {row['id'] for row in result['sessions']}
+            for identity in session_ids - retained_ids:
+                references.pop(identity, None)
+        references.update((row['id'], row) for row in result['sessions'])
+        result['sessions'] = list(references.values())
     return result

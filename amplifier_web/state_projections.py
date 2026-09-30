@@ -14,14 +14,17 @@ class StateProjections:
         self.values = {}
         self.previous_navigation = None
 
-    def invalidate(self):
+    def invalidate(self, *, state=None, session_ids=None):
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:
             retained = {key: value for key, value in self.values.items()
                         if key[0] in {'workspace-index', 'workspaces', 'chat-registry', 'chat-index', 'chats'}}
             self.previous_navigation = (self.values.get(('shell-data-key',)), retained)
+        index = self.values.get(('session-index',))
         self.values = {}
+        if index is not None and session_ids is not None and index.patch(state, session_ids):
+            self.values[('session-index',)] = index
 
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
@@ -46,7 +49,9 @@ class StateProjections:
 
     def attention(self, state):
         from .attention import snapshot
-        return self.get(('attention',), lambda: snapshot(state))
+        index = self.sessions(state)
+        return self.get(('attention',), lambda: snapshot({
+            **state, 'sessions': [index.by_id[key] for key in index.attention_ids]}))
 
     @staticmethod
     def view_scope(state, keys):
@@ -104,18 +109,17 @@ class StateProjections:
         def build():
             from .chat_navigation import navigation_activity
             from .navigation_summary import activity
-            from .session_navigation import is_top_level
             attention = self.attention(state)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
             rows = [([row.get(key) for key in fields], navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id']))))
-                    for row in state.get('sessions', []) if is_top_level(row)]
+                    for row in self.sessions(state).roots]
             facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
                      state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
-            return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+            return hashlib.sha256(json.dumps(facts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         return self.get(('shell-data-key',), build)

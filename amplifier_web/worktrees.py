@@ -106,11 +106,26 @@ class Worktrees:
     def sync(self):
         records = self.git.records()
         handoffs = [json.loads(path.read_text()) for path in sorted(self.receipt_dir.glob('*.json'))]
+        by_session, by_handoff, unresolved = {}, {}, set()
+        for record in records:
+            by_session.setdefault(record.get('sessionId'), []).append(record)
+        for receipt in handoffs:
+            sid = receipt['sessionId']
+            by_handoff.setdefault(sid, []).append(receipt)
+            if receipt['phase'] in {'pending', 'unknown'}:
+                unresolved.add(sid)
+        groups = (('worktrees', by_session), ('worktreeHandoffs', by_handoff))
         for session in self.app.state['sessions']:
-            receipts = [record for record in handoffs if record['sessionId'] == session['id']]
-            session['worktrees'] = [record for record in records if record.get('sessionId') == session['id']]
-            session['worktreeHandoffs'] = receipts
-            if any(row['phase'] in {'pending', 'unknown'} for row in receipts): session['configurationBusy'] = True
+            sid = session['id']
+            for field, grouped in groups:
+                if sid in grouped:
+                    session[field] = list(grouped[sid])
+                elif not isinstance(session.get(field), list) or session[field]:
+                    session[field] = []
+            # Only assert this fence: another configuration owner may still
+            # be busy after a handoff resolves. Never clear its state here.
+            if sid in unresolved:
+                session['configurationBusy'] = True
 
     def changed(self):
         self.sync(); self.app._publish()

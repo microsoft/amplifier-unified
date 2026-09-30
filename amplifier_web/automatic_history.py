@@ -23,6 +23,11 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
                 'messageAnnotations', 'messageQuotes')
 
+def workspace_inputs(state):
+    # Discovery needs identity/availability, not arbitrary presentation bodies.
+    return [{key: row.get(key) for key in ('id', 'path', 'nativeProject', 'available')}
+            for row in state['workspaces']]
+
 
 def identity(project, session):
     return uuid.uuid5(uuid.NAMESPACE_URL, f'amplifier-native:{project}/{session}').hex
@@ -294,13 +299,20 @@ class AutomaticHistory:
     def __init__(self, service):
         from .native_history import NativeHistory
         self.service = service
-        self.index = NativeHistory(watch=True)
+        self.index = NativeHistory(watch=True, cache_path=(
+            service.data_dir / 'native-catalog.sqlite3' if hasattr(service, 'data_dir') else None))
         self.lock = asyncio.Lock()
         self.loads = {}
         self.task = None
         self.last_scan = None
         self._native_snapshot = None
         self._native_revision = None
+        self._catalog_rows = {}
+        self._catalog_workspaces = {}
+        self._catalog_counts = None
+        self._existing = None
+        self._public_ids = set()
+        self._local_revision = None
         service.state.setdefault('sharedHistory', {}).update(loading=True, error=None)
 
     def start(self):
@@ -314,7 +326,7 @@ class AutomaticHistory:
 
     async def loop(self):
         while not self.service.closed:
-            known = copy.deepcopy(self.service.state['workspaces'])
+            known = workspace_inputs(self.service.state)
             if await asyncio.to_thread(self.index.needs_scan, known):
                 await self.refresh(force=False)
             await asyncio.sleep(15)
@@ -334,24 +346,67 @@ class AutomaticHistory:
     async def refresh(self, *, force=True):
         async with self.lock:
             try:
-                known = copy.deepcopy(self.service.state['workspaces'])
+                known = workspace_inputs(self.service.state)
                 from .workspace_canvas import refresh_workspace_availability
                 await asyncio.to_thread(refresh_workspace_availability, known)
-                revision_token, incoming = await asyncio.to_thread(self.index.scan_if_changed,
-                    known_workspaces=known, force=force, since=self._native_revision)
-                if incoming is not None:
-                    self._native_snapshot = incoming
-                    self._native_revision = revision_token
+                delta_mode = (hasattr(self.service, '_history_local_revision')
+                          and 'scan_if_changed' not in self.index.__dict__)
+                if delta_mode:
+                    revision_token, incoming = await asyncio.to_thread(self.index.scan_changes,
+                        known_workspaces=known, force=force, since=self._native_revision)
+                    from collections import Counter
+                    if incoming['reset']:
+                        self._catalog_rows.clear()
+                        self._catalog_workspaces.clear()
+                        self._catalog_counts = Counter()
+                    for key in incoming['removed']:
+                        old = self._catalog_rows.pop(tuple(key), None)
+                        if old is not None:
+                            self._catalog_counts[old['nativeIdentity']] -= 1
+                    for row in incoming['sessions']:
+                        key = (row['nativeProject'], row['nativeIdentity'])
+                        if key not in self._catalog_rows:
+                            self._catalog_counts[row['nativeIdentity']] += 1
+                        self._catalog_rows[key] = row
+                    for row in incoming['workspaces']:
+                        self._catalog_workspaces[row['nativeProject']] = row
+                    for project in incoming['removedProjects']:
+                        self._catalog_workspaces.pop(project, None)
+                    self._native_snapshot = {**incoming, 'sessions': self._catalog_rows.values(),
+                                             'workspaces': self._catalog_workspaces.values()}
+                    full_merge = (incoming['reset'] or incoming['reconciled'] or force
+                                  or bool(incoming['workspaces'] or incoming['removed']
+                                          or incoming['removedProjects'])
+                                  or self._local_revision != self.service._history_local_revision)
+                    # Local overlays are independently invalidated by unscoped
+                    # commits. A full recovery/manual pass retains their checks.
+                    if full_merge:
+                        self._existing = None
+                    snapshot = dict(self._native_snapshot if full_merge else incoming)
+                else:
+                    revision_token, incoming = await asyncio.to_thread(self.index.scan_if_changed,
+                        known_workspaces=known, force=force, since=self._native_revision)
+                    if incoming is not None:
+                        self._native_snapshot = incoming
+                        self._native_revision = revision_token
+                    snapshot = dict(self._native_snapshot)
                 # Reconcile local changes even when native files are unchanged:
                 # hidden rows, tombstones, managed markers and selected views
                 # have independent invalidation. Filtering must not alter the
                 # retained unfiltered catalog.
-                snapshot = dict(self._native_snapshot)
                 managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                 if self.service.closed:
                     return
                 async with self.service.lock:
                     state = self.service.state
+                    touched = set()
+                    if delta_mode and self._local_revision != self.service._history_local_revision and not full_merge:
+                        # Local actions can commit during the detached marker
+                        # read above. Do not acknowledge an epoch we did not merge.
+                        snapshot = dict(self._native_snapshot)
+                        full_merge = True
+                        self._existing = None
+                        managed_paths = await asyncio.to_thread(catalog_locations, snapshot)
                     from .managed_deletion import tombstones
                     deleted_projects = {row['project'] for row in tombstones(self.service.db)}
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
@@ -425,11 +480,17 @@ class AutomaticHistory:
                             workspaces.pop(old['id'], None)
                             unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
                             changed = True
-                    existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
-                                 s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
+                    if not delta_mode or self._existing is None:
+                        existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
+                                     s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
+                        if delta_mode:
+                            self._existing = existing
+                            self._public_ids = {row['id'] for row in state['sessions']}
+                    else:
+                        existing = self._existing
                     from collections import Counter
-                    native_counts = Counter(row['nativeIdentity'] for row in snapshot['sessions'])
-                    catalog_ids = {row['id'] for row in state['sessions']}
+                    native_counts = self._catalog_counts if delta_mode else Counter(row['nativeIdentity'] for row in snapshot['sessions'])
+                    catalog_ids = self._public_ids if delta_mode else {row['id'] for row in state['sessions']}
                     hidden = set(state.get('hiddenNativeSessions', []))
                     for row in snapshot['sessions']:
                         managed = row.get('workspace') in managed_paths
@@ -508,6 +569,7 @@ class AutomaticHistory:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
                         previous['_catalogId'] = row['nativeIdentity'] if native_counts[row['nativeIdentity']] == 1 else row['id']
+                        touched.add(previous['id'])
                     # Parent identities belong to their native project. UI IDs
                     # are aliases and can differ even when a web root predated
                     # automatic discovery or another project reused the ID.
@@ -524,14 +586,35 @@ class AutomaticHistory:
                     if (state['sharedHistory'].get('issues', []) != issues[:100]
                             or state['sharedHistory'].get('issueCount', 0) != len(issues)):
                         changed = True
-                    state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]), issueCount=len(issues), error=None,
-                        projectCount=len(snapshot['workspaces']),
-                        sessionCount=sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
-                        workerSessionCount=sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']),
-                        internalSessionCount=sum(row['sessionKind'] == 'internal' for row in snapshot['sessions']))
+                    counts = ({key: incoming[key] for key in ('projectCount', 'sessionCount', 'workerSessionCount', 'internalSessionCount')}
+                              if delta_mode else {
+                                  'projectCount': len(snapshot['workspaces']),
+                                  'sessionCount': sum(row['sessionKind'] == 'root' for row in snapshot['sessions']),
+                                  'workerSessionCount': sum(row['sessionKind'] == 'worker' for row in snapshot['sessions']),
+                                  'internalSessionCount': sum(row['sessionKind'] == 'internal' for row in snapshot['sessions'])})
+                    if delta_mode:
+                        # Subtract only tombstoned project aggregates, not the
+                        # length of a one-row delta or a library-wide row scan.
+                        for project in deleted_projects:
+                            summary = self._catalog_workspaces.get(project)
+                            if summary is not None:
+                                counts['projectCount'] -= 1
+                                for key in ('sessionCount', 'workerSessionCount', 'internalSessionCount'):
+                                    counts[key] -= summary.get(key, 0)
+                    if delta_mode and any(state['sharedHistory'].get(key) != value for key, value in counts.items()):
+                        changed = True
+                    state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]),
+                        issueCount=len(issues), error=None, **counts)
                     self.last_scan = snapshot
                     if changed:
-                        self.service._publish()
+                        if delta_mode and not full_merge:
+                            self.service._publish(session_ids=touched)
+                        else:
+                            self.service._publish()
+                    if delta_mode:
+                        # Advance only after the durable publication succeeded.
+                        self._native_revision = revision_token
+                        self._local_revision = self.service._history_local_revision
                 # Browsers have independent selections. Refresh only connected
                 # views, not every historical client record retained on disk.
                 from .history_demand import subscribed_sessions
@@ -620,7 +703,12 @@ class AutomaticHistory:
         session = self.service._session(session_id)
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
+                # A retained negative display classification can refuse work;
+                # it cannot admit it. Keep the specific historical explanation,
+                # then require fresh canonical evidence for every positive case.
                 raise ValueError(session['historyReadOnlyReason'])
+            if session.get('historyManaged'):
+                await asyncio.to_thread(self.index.validate_resume, copy.deepcopy(session))
             if session.get('workspaceAvailable') is False or not session.get('workspace'):
                 raise ValueError('This project folder is unavailable. Its saved chats can be read, but the folder must be restored before continuing work.')
             current_revision = await asyncio.to_thread(revision, copy.deepcopy(session))
