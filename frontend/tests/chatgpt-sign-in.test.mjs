@@ -11,6 +11,23 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const text=root=>JSON.stringify(root.toJSON());
 
+test('Plan disables the capped message test while Codex keeps it available',async()=>{
+ const {ProviderMessageTest}=await server.ssrLoadModule('/src/provider-message-test.jsx');
+ let root;const calls=[];
+ const props={id:'account',act:async(...args)=>{calls.push(args);return {accepted:true,operationId:'test'}}};
+ const state=mode=>({setup:{providers:[{id:'account',module:'provider-openai-chatgpt',config:{auth_mode:mode},account:{authMode:mode}}]}});
+ await act(async()=>{root=create(React.createElement(ProviderMessageTest,{...props,state:state('chatgpt_plan')}))});
+ assert.equal(root.root.findByType('button').props.disabled,true);
+ assert.ok(text(root).includes('model catalog'));
+ await act(async()=>root.root.findByType('button').props.onClick());
+ assert.equal(calls.length,0);
+ for(const mode of ['chatgpt_codex','legacy_codex']){
+  await act(async()=>root.update(React.createElement(ProviderMessageTest,{...props,state:state(mode)})));
+  assert.equal(root.root.findByType('button').props.disabled,false);
+ }
+ await act(async()=>root.unmount());
+});
+
 test('plan browser sign-in is usable without a device code and does not expose token hints',async()=>{
  let root,cancelled=false;
  await act(async()=>{root=create(React.createElement(DeviceSignIn,{login:{authMode:'chatgpt_plan',status:'waiting',url:'https://auth.openai.com/api/accounts/authorize?state=s&code_challenge=c'},onCancel:()=>{cancelled=true}}))});

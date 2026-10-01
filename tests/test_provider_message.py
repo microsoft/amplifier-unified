@@ -40,3 +40,23 @@ def test_error_redacts_nested_tokens_environment_and_urls(monkeypatch):
     text=safe_text('error secret-56789 nested-secret https://host/path?token=abc sk-abcdef123', {'nested':{'token':'nested-secret'}})
     assert all(value not in text for value in ('secret-56789','nested-secret','host/path','sk-abcdef123'))
     assert 'error' in text
+
+
+async def test_plan_connection_catalog_works_but_capped_message_is_unavailable(monkeypatch):
+    calls=[]
+    class Provider:
+        def __init__(self,config=None):pass
+        def get_info(self):return {'config_fields':[],'defaults':{'auth_mode':'chatgpt_plan'}}
+        async def list_models(self):calls.append('catalog');return [{'id':'account-model'}]
+        async def complete(self,request):raise AssertionError('Never send an uncapped Plan message')
+        async def close(self):pass
+    monkeypatch.setattr(provider_probe,'provider_class',lambda _:Provider)
+    request={'module':'provider-openai-chatgpt','config':{'auth_mode':'chatgpt_plan','default_model':'account-model'}}
+    check=await provider_probe.query({**request,'action':'providers.test'})
+    assert check['test']['reachable'] and check['test']['modelCount']==1
+    assert check['test']['method']=='provider.list_models'
+    message=await provider_probe.query({**request,'action':'providers.testMessage'})
+    assert message['messageTest']['supported'] is False
+    assert message['messageTest']['errorType']=='UnsupportedMessageTest'
+    assert 'no test message was sent' in message['messageTest']['error']
+    assert calls==['catalog']

@@ -66,7 +66,7 @@ async def query(request):
         result={'info':info,'configSchema':public(schema)}
         if request['action'] == 'providers.testMessage':
             from amplifier_web.provider_test import test_message
-            result['messageTest'] = await test_message(provider, config, request.get('model'))
+            result['messageTest'] = await test_message(provider, config, request.get('model'), info)
             return result
         supported=callable(getattr(provider,'list_models',None))
         result['modelsSupported']=supported
