@@ -135,6 +135,22 @@ do not block chat or the update page while settings are inspected.
 
 Each application update now has an attempt ID and a separate receipt for candidate installation, candidate probe, installed-tool discovery, runtime shutdown, tool replacement, installed-package probe/version comparison, and restart. Ecosystem copying, fetching, checkout, compatibility probes and activation use the same receipt format. Failed phases remain visible in `updates.diagnostics.lastFailure`; successful staging or restart clears the current failure while retaining recent history. The user and agent read the same state.
 
+The main update card identifies the current component batch and shows successful
+configuration checks out of the total admitted for that attempt. Preparation and
+compatibility have separate counters; failed checks do not count as completed.
+Progress from another attempt is not displayed as current. A ready batch shows
+the idle wait rather than continuing to say it is preparing.
+
+Recently installed batches remain visible while a subsequent batch is prepared,
+including when a new source revision was published during the previous batch.
+This bounded history is recorded only after activation succeeds, not when
+staging or validation finishes, and survives event-list eviction and reload.
+Partial Smart Tool activation names only the tools that actually activated.
+Rollback is a distinct operation, not installation of a failed candidate.
+Cleanup cancellations retain the primary failure receipt; an independent
+interruption still has its own receipt. These display changes do not alter
+eligibility, installer concurrency, idle admission or automatic-update policy.
+
 Receipts contain only a fixed set of operational facts: phase/status, correlation IDs, elapsed time, exit status, output byte counts, fixed error classifications and allowlisted probe results. Subprocess text, command arguments, workspace paths, source URLs, exception messages and environment variables are never included. Python probes return framed JSON, so unrelated startup messages cannot be mistaken for the package version. Missing imports, missing assets, package location checks, version mismatches, command failures and timeouts remain distinguishable.
 
 When the app diagnostic collector is available it owns durable storage and configured routing of these events. Otherwise the updater writes a private `updates/diagnostics.jsonl` fallback (0600), rotated at approximately 1MB with one previous file. App state retains the latest 50 events. There is no automatic replay after an interrupted install, paid call, or uncertain result. Historical failures without command receipts cannot be reconstructed from successful later probes; a successful retry does not establish the original cause.
