@@ -1,4 +1,6 @@
 .a-app-update{margin-bottom:20px;padding:14px;border:1px solid var(--a-line,#dce3ef);border-radius:12px;min-width:0}
+.a-app-update [data-part="update-batch"],.a-app-update [data-part="update-completed-batches"]{overflow-wrap:anywhere}
+.a-app-update [data-part="update-completed-batches"] li{margin:6px 0}
 .a-app-update-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 #amp-one .a-app-update-heading h4{margin:0}
 .a-app-update-status{display:inline-flex;align-items:center;gap:5px;color:var(--a-muted,#5c6475);font-size:var(--a-text-base,14px)}
