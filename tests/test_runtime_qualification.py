@@ -24,6 +24,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         assert project == first
         calls.append('freeze')
         (receipt / 'runtime-installed.json').write_text('[]')
+        (frozen / '.venv').mkdir(parents=True)
         return frozen
     async def overrides(project, target):
         calls.append(('overrides', project))
@@ -48,7 +49,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', ('overrides', frozen), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):

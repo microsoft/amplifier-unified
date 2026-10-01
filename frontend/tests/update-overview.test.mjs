@@ -46,3 +46,6 @@ test('stale, invalid and terminal progress never masquerades as current preparat
  const result=updateOverview({phase:'staged',pendingRelease:'candidate',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',phase:'prepare',completed:37,total:37}});
  assert.equal(result.currentProgress,null);assert.equal(result.title,'Waiting for your work to finish');
 });
+test('app preparation is never mislabeled as other components',()=>{
+ assert.equal(updateOverview({phase:'staging',sequence:{stage:'application'}}).title,'Updating Amplifier');
+});
