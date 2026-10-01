@@ -108,7 +108,7 @@ export function segmentUsage(nodes){
 export function splitWork(messages,data){
  const turns=[],nodes=[];
  for(const turn of data.turns){
-  const source=data.nodes.filter(node=>node.turnId===turn.id),groups=new Map();
+  const source=data.nodes.filter(node=>node.turnId===turn.id&&!(node.lifecycle==='background'&&node.label==='Session naming')),groups=new Map();
   let lastGroup,lastAt=-Infinity;
   for(const node of source){
    const at=Number.isFinite(node.startedAt)?node.startedAt:Number.isFinite(node.endedAt)?node.endedAt:turn.startedAt;

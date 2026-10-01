@@ -261,12 +261,14 @@ class EventIndex:
         if name not in {'llm:request', 'llm:response', 'llm:error'}:
             return
         request = data.get('request_id') or data.get('call_id')
-        scope = (sid, data.get('provider'), data.get('model'))
+        naming = data.get('purpose') == 'session-naming' or data.get('origin_module') == 'hooks-session-naming'
+        scope = (sid, data.get('provider'), data.get('model'), naming)
         if name == 'llm:request':
             key = f'llm:{sid}:{request or reference["offset"]}'
             node = {'id': key, 'kind': 'llm', 'sessionId': sid, 'label': 'Model call',
                 'provider': data.get('provider'), 'model': data.get('model'), 'startedAt': at,
                 'phase': 'running', 'canonicalHistory': True, 'eventOrder': reference['offset']}
+            if naming:node.update(label='Session naming', lifecycle='background')
             raw = data.get('raw')
             options = raw if isinstance(raw, dict) else {}
             keys = ('message_count', 'has_instructions', 'has_system', 'reasoning_enabled', 'thinking_enabled',
@@ -302,6 +304,7 @@ class EventIndex:
             pending.clear()
         node = self.nodes.setdefault(key, {'id': key, 'kind': 'llm', 'sessionId': sid,
             'label': 'Model call', 'canonicalHistory': True, 'eventOrder': reference['offset']})
+        if naming:node.update(label='Session naming', lifecycle='background')
         duration = data.get('duration_ms')
         if 'startedAt' not in node and at is not None and isinstance(duration, (int, float)):
             node['startedAt'] = at - duration / 1000
@@ -504,6 +507,8 @@ class EventLogView:
                 old = node['id'];node['id'] = previous['id'];remap[old] = node['id']
                 for key in ('turnId', 'parentId', 'lifecycle'):
                     if previous.get(key):node[key] = previous[key]
+                if previous.get('lifecycle') == 'background' and previous.get('label') == 'Session naming':
+                    node['label'] = 'Session naming'
                 if node['kind'] == 'tool' and previous.get('liveObservation'):
                     node['liveObservation'] = True
                 if node['kind'] == 'llm' and previous.get('usage'):

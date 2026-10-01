@@ -1621,8 +1621,8 @@ class AppService:
                         raise AppError('The naming runtime is unavailable.', 503)
                     if session.get('naming', {}).get('status') == 'working':
                         raise AppError('A chat name is already being generated.', 409)
-                    if session.get('status') in {'starting', 'working', 'running', 'stopping'} or session.get('configurationBusy'):
-                        raise AppError('Wait for the current work to finish before regenerating its name.', 409)
+                    if session.get('configurationBusy'):
+                        raise AppError('Finish changing the conversation configuration before regenerating its name.', 409)
                     if not session.get('messages'):
                         raise AppError('Send a message before generating a chat name.')
                 if 'automatic' in args:
@@ -2265,7 +2265,7 @@ class AppService:
                 return
             await self.on_runtime_event(kind, payload)
         try:
-            await self.runtime.start(source, emit)
+            await self.runtime.start(source, emit, preserve_emit=True)
             candidate = await self.runtime.control(identity, 'session.naming', {})
             async with self.lock:
                 session = self._session(identity)
