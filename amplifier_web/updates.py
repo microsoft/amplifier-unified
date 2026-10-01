@@ -759,7 +759,8 @@ class UpdateManager:
                 await self.publish(detail='Check for updates before installing. No eligible updates are available.')
                 return
             release=uuid.uuid4().hex
-            self.diagnostics.begin('ecosystem',release)
+            self.diagnostics.begin('ecosystem',release,tier=state.get('sequence',{}).get('stage'),
+                                   components=[safe_label(row.get('url','')).rsplit('/',1)[-1] for row in candidates])
             stage_id=uuid.uuid4().hex
             self.diagnostics.record('ecosystem-stage','started',commandId=stage_id)
             stage=self.directory/'releases'/release
@@ -872,10 +873,18 @@ class UpdateManager:
             command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
             if refresh:flags.append('--refresh-dependencies')
+            completed=0
+            progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
+                      'phase':'prepare' if refresh else 'compatibility','total':len(configs),
+                      'completed':0,'startedAt':time.time()}
+            await self.publish(probeProgress=progress)
             async def run_one(workspace, bundle):
+                nonlocal completed
                 async with semaphore:
                     await self.diagnostics.run('ecosystem-prepare' if refresh else 'ecosystem-compatibility',process,*command,workspace,bundle,*flags,
                         env={**env,'UV_OVERRIDE':str(overrides)},timeout=900)
+                    completed+=1
+                    await self.publish(probeProgress={**progress,'completed':completed,'lastCompletedAt':time.time()})
             # Installers remain serial. After freezing, mount isolated workers
             # without uv sync or Foundation dependency installation.
             if not refresh:
@@ -894,7 +903,7 @@ class UpdateManager:
             # Capture after dynamic module installation, then recreate an
             # ordinary resolver against the frozen graph before activation.
             await probe(project,refresh=True)
-            await self.publish(detail='Recording and verifying the exact worker dependencies…')
+            await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
             verify_recorded(project,receipt)
@@ -1014,7 +1023,8 @@ class UpdateManager:
             smart = self.service.smart_tools
             pending = self.service.state['updates'].get('pendingSmartTools', [])
             if not pending:
-                self.diagnostics.begin('smart-tools')
+                self.diagnostics.begin('smart-tools',tier='other',
+                                       components=[row.get('label','') for row in self.inventory if row.get('kind')=='smart tool' and row.get('status')=='update' and row.get('eligible')])
                 await self.publish(phase='staging', error=None, detail='Preparing Smart Tool updates…')
                 for source in self.inventory:
                     if source.get('kind') != 'smart tool' or source.get('status') != 'update' or not source.get('eligible'): continue
@@ -1041,6 +1051,7 @@ class UpdateManager:
                         pending = pending[1:]
                         await self.publish(pendingSmartTools=pending)
                     sequence = {**self.service.state['updates'].get('sequence', {}), 'nextStage': 'other'}
+                    self.diagnostics.record('smart-tools-complete','succeeded')
                     await self.publish(phase='installed', sequence=sequence, detail='Smart Tools updated. Previous versions are retained for rollback.')
                     self.inventory = []
                 except BaseException:

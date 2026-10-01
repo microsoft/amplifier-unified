@@ -219,3 +219,36 @@ def test_recognized_prepare_failure_keeps_class_and_guidance_without_exception_t
     assert result == {'ok': False, 'stage': 'prepare', 'errorType': name, 'reason': reason}
     assert 'secret' not in frame
     assert 'reason' not in probe_failure(error, 'cleanup')
+
+
+async def test_installed_batch_survives_new_attempt_event_eviction_and_restart(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    first=manager.diagnostics.begin('ecosystem','a'*32,tier='included',
+                                    components=['foundation','foundation','https://user:secret@host/repo','/private/workspace'])
+    manager.diagnostics.record('ecosystem-stage','succeeded')
+    assert not manager.diagnostics.state.get('completedBatches')
+    manager.diagnostics.record('ecosystem-activation','succeeded')
+    manager.diagnostics.begin('ecosystem','b'*32,tier='other',components=['approval'])
+    for _ in range(60):manager.diagnostics.record('ecosystem-prepare','succeeded')
+    recent=manager.diagnostics.state['completedBatches']
+    assert len(recent)==1 and recent[0]['attemptId']==first and recent[0]['components']==['foundation']
+    assert 'secret' not in json.dumps(manager.diagnostics.state) and '/private/' not in json.dumps(manager.diagnostics.state)
+    restored=UpdateManager(service)
+    assert restored.diagnostics.state['completedBatches']==recent
+    assert restored.diagnostics.state['batch']['components']==['approval']
+    await service.close()
+
+
+async def test_cleanup_cancellation_keeps_primary_failure_but_real_interruption_is_recorded(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    manager.diagnostics.begin('ecosystem','a'*32)
+    primary=manager.diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
+    cleanup=manager.diagnostics.record('ecosystem-prepare','interrupted',errorType='CancelledError')
+    assert manager.diagnostics.state['lastFailure']==primary
+    assert cleanup in manager.diagnostics.state['events']
+    manager.diagnostics.begin('ecosystem','b'*32)
+    interruption=manager.diagnostics.record('ecosystem-prepare','interrupted',errorType='CancelledError')
+    assert manager.diagnostics.state['lastFailure']==interruption
+    await service.close()
