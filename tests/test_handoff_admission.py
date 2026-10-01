@@ -33,13 +33,13 @@ class BarrierRuntime(RuntimeManager):
         self.start_requested = asyncio.Event()
         self.admitting = asyncio.Event()
 
-    async def start(self, session, emit):
+    async def start(self, session, emit, **kwargs):
         self.start_requested.set()
-        return await super().start(session, emit)
+        return await super().start(session, emit, **kwargs)
 
-    async def _start_locked(self, session, emit):
+    async def _start_locked(self, session, emit, **kwargs):
         self.admitting.set()
-        return await super()._start_locked(session, emit)
+        return await super()._start_locked(session, emit, **kwargs)
 
     async def quiesce_for_handoff(self, session, request_id):
         # The Foundation release handshake has separate real-store tests. This
