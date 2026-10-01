@@ -25,6 +25,7 @@ try{
  assert.ok(await contrast(page.locator('.a-settings-sidebar button[aria-current=page]'))>=4.5);
  await page.screenshot({path:out+'/providers-dark.png'});
  await page.getByRole('button',{name:/ChatGPT Subscription Sign in/}).click();
+ await page.getByLabel('ChatGPT connection',{exact:true}).selectOption('chatgpt_codex');
  await page.getByRole('button',{name:'Get sign-in code',exact:true}).click();
  await expect(page.getByLabel('1. Copy your sign-in code')).toHaveValue('TEST-1234');
  await expect(page.getByRole('button',{name:'Copy sign-in code'})).toHaveText('Copied');
@@ -43,6 +44,7 @@ try{
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>Promise.reject(new Error('Clipboard blocked'))}}));
  await page.getByRole('button',{name:/ChatGPT Subscription Sign in/}).click();
+ await page.getByLabel('ChatGPT connection',{exact:true}).selectOption('chatgpt_codex');
  await page.getByRole('button',{name:'Get sign-in code',exact:true}).click();
  await expect(page.getByText('Select the code to copy it, or use the Copy button.',{exact:true})).toBeVisible();
  await page.getByLabel('1. Copy your sign-in code').focus();
@@ -65,7 +67,7 @@ try{
  if(!await page.locator('#provider-preset').isVisible())await page.locator('.a-provider-access summary').click();
  const choices=await page.locator('#provider-preset option').allTextContents();
  assert.equal(choices.length,10); // nine known modules plus custom
- await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Browse',exact:true}).click();
+ await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();
  assert.equal(await page.locator('.a-tool-catalog-row').count(),40);
  const bounds=await page.locator('.a-tool-catalog-row').first().boundingBox();assert.ok(bounds.width>700&&bounds.height<120,JSON.stringify(bounds));
@@ -83,8 +85,8 @@ try{
    await page.setViewportSize({width,height:940});
    for(const id of screens){
     await openSettingsPage(page,id);
-    if(id==='smart-tools')await page.getByRole('button',{name:'Browse',exact:true}).click();
-    if(id==='appearance')await expect(page.getByRole('button',{name:'Preview Amplifier',exact:true})).toBeVisible();
+    if(id==='smart-tools')await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
+    if(id==='appearance')await expect(page.getByRole('button',{name:'Use Amplifier',exact:true})).toBeVisible();
     if(id==='notifications')await page.waitForFunction(()=>window.amplifier.getState().actionStatus?.['notifications.get']?.phase==='ready');
     await expect(page.locator('.a-settings-page-content:not([hidden]) [data-region-pending]')).toHaveCount(0);
     assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1),id+' overflow');

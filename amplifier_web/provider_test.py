@@ -26,9 +26,17 @@ def safe_text(value, config):
     return ''.join(c for c in text if c.isprintable() or c in '\n\t')[:1000]
 
 
-async def test_message(provider, config, model):
+async def test_message(provider, config, model, info=None):
     from amplifier_core.message_models import ChatRequest, Message
     model = model or config.get('default_model') or config.get('model')
+    mode = ((info or {}).get('defaults') or {}).get('auth_mode') or config.get('auth_mode')
+    if mode == 'chatgpt_plan':
+        # This explicit test promises an output cap. Do not silently remove
+        # that spending constraint to accommodate a different transport.
+        return {'method': 'provider.complete', 'model': safe_text(model or '', config),
+                'reachable': False, 'supported': False, 'elapsedMs': 0,
+                'errorType': 'UnsupportedMessageTest',
+                'error': 'ChatGPT plan does not support this test\'s output limit. Use Test connection to check the model catalog; no test message was sent.'}
     if not isinstance(model, str) or not model.strip():
         raise ValueError('Choose and save a model before sending a test message.')
     started = time.monotonic()

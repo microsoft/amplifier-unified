@@ -54,7 +54,7 @@ try{
  assert.equal(copied.input.length,100);assert.equal(copied.instructions,'Owner-recorded instructions');assert.equal(requestReads.length,2);
  await model.locator('button.a-execution-action-line').click();await model.locator('button.a-execution-action-line').click();assert.equal(requestReads.length,2);
  await model.getByRole('button',{name:'Hide raw request',exact:true}).click();
- const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No recorded raw request is available/);
+ const noRequest=interim.locator('[data-kind="llm"]');await noRequest.locator('button.a-execution-action-line').click();assert.match(await noRequest.innerText(),/No provider request was recorded/);
  await control({op:'canonical-append'});await expect(groups).toHaveCount(3);
  assert.deepEqual(await order(),['before','before','interim','interim','final','final']);
  const finalGroup=page.locator('[data-group-id$="@final"]'),finalToggle=finalGroup.locator('button.a-execution-turn-line');
@@ -67,10 +67,10 @@ try{
  const small=page.locator('[data-group-id$="@final"] [data-kind="llm"]');await small.locator('button.a-execution-action-line').click();
  await expect(small.locator('pre')).toContainText('Small recorded request');assert.equal(await small.getByRole('button',{name:/Load raw request|Show all/}).count(),0);assert.equal(requestReads.length,3);
  await openSettingsPage(page,'appearance');
- const detail=page.getByLabel('Work summary detail');await expect(detail).toHaveValue('standard');
- await detail.selectOption('minimal');await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');
+ await expect(page.getByRole('radio',{name:/^Balanced /})).toBeChecked();
+ await page.getByRole('radio',{name:/^Focused /}).check();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','minimal');
  assert.equal(await before.locator('.a-execution-turn-line .a-execution-usage').isVisible(),false);
- await detail.selectOption('detailed');await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
+ await page.getByRole('radio',{name:/^Everything /}).check();await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail','detailed');
  assert.match(await before.locator('.a-execution-call-counts').innerText(),/1 tool call · 1 model call/);
  assert.match(await interim.locator('.a-execution-call-counts').innerText(),/3 tool calls · 1 model call/);
  assert.equal(await interim.locator('.a-execution-call-counts').isVisible(),true);

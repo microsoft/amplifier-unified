@@ -263,7 +263,9 @@ def test_watch_invalidates_changed_project_and_reconciles_missed_notifications(t
             time.sleep(.02)
         assert history.needs_scan([])
         assert history.scan()['sessions'][0]['title'] == 'Changed'
-        assert probes == [project_slug(workspace)]
+        # A file-level metadata notification now probes only the affected
+        # session, not every source stamp in the project.
+        assert probes == []
         # Runtime event traffic must not invalidate the native catalog.
         (directory / 'events.jsonl').write_text('many events')
         time.sleep(.4)

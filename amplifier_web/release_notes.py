@@ -56,8 +56,16 @@ def parse(raw, expected=None):
             if notice['id'] in ids:
                 raise ValueError('Duplicate release notice')
             ids.add(notice['id'])
-            clean['notices'].append({'id': notice['id'], 'title': text(notice.get('title'), 160),
-                                     'detail': text(notice.get('detail'), 2000), 'action': text(notice.get('action'), 1500)})
+            item = {'id': notice['id'], 'title': text(notice.get('title'), 160),
+                    'detail': text(notice.get('detail'), 2000), 'action': text(notice.get('action'), 1500)}
+            # Explicit title aliases preserve reviews of editorial corrections.
+            # Detail or action changes still require a new acknowledgement.
+            previous = notice.get('previousTitles', [])
+            if not isinstance(previous, list) or len(previous) > 5:
+                raise ValueError('Invalid previous release notice titles')
+            if previous:
+                item['previousTitles'] = [text(title, 160) for title in previous]
+            clean['notices'].append(item)
         result.append(clean)
     if expected and (expected not in seen or any(version(row['version']) > version(expected) for row in result)):
         raise ValueError('Release notes must include the published version and no future versions')

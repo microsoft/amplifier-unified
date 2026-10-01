@@ -49,6 +49,50 @@ def foundation_home(home):
     return home / 'updates' / 'releases' / identity / 'foundation' if identity else home / 'foundation'
 
 
+async def merge_shared_registry(stage, shared, cache, selections):
+    """Import missing shared registrations without exposing the live cache."""
+    registry_path = stage / 'foundation' / 'registry.json'
+    shared_registry = shared / 'registry.json'
+    if not shared_registry.is_file():
+        return
+    staged = json.loads(registry_path.read_text()) if registry_path.exists() else {'version': 1, 'bundles': {}}
+    incoming = json.loads(shared_registry.read_text())
+    if not isinstance(staged, dict) or not isinstance(incoming, dict):
+        raise ValueError('Invalid staged bundle registry')
+    bundles = staged.setdefault('bundles', {})
+    shared_bundles = incoming.get('bundles', {})
+    if not isinstance(bundles, dict) or not isinstance(shared_bundles, dict):
+        raise ValueError('Invalid staged bundle registry')
+    shared_cache = Path(cache).resolve()
+    staged_cache = stage / 'foundation' / 'cache'
+    for name, entry in shared_bundles.items():
+        if name in bundles or not isinstance(entry, dict):
+            continue
+        imported = dict(entry)
+        local = imported.get('local_path')
+        if isinstance(local, str):
+            try:
+                relative = Path(local).expanduser().resolve().relative_to(shared_cache)
+            except ValueError:
+                imported.pop('local_path')
+            else:
+                selected = name in selections or imported.get('uri') in selections
+                if selected and relative.parts:
+                    source = shared_cache / relative.parts[0]
+                    target = staged_cache / relative.parts[0]
+                    if source.is_dir() and not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        await asyncio.to_thread(shutil.copytree, source, target, symlinks=True)
+                    if target.exists():
+                        imported['local_path'] = str(staged_cache / relative)
+                    else:
+                        imported.pop('local_path')
+                else:
+                    imported.pop('local_path')
+        bundles[name] = imported
+    write_private(registry_path, json.dumps(staged, indent=2))
+
+
 def safe_label(url):
     parsed = urlsplit(url)
     return (parsed.hostname or 'Git source') + '/' + parsed.path.strip('/').removesuffix('.git')
@@ -730,16 +774,27 @@ class UpdateManager:
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await asyncio.to_thread(shutil.copytree,self.home/name,stage/name)
                 from .session_files import amplifier_home
+                shared_home=amplifier_home()
                 shared_stage=stage/'shared-config'
                 shared_stage.mkdir(mode=0o700)
-                for name in ('settings.yaml','keys.env','routing'):
-                    original=amplifier_home()/name
+                for name in ('settings.yaml','keys.env','routing','registry.json'):
+                    original=shared_home/name
                     if original.is_dir():await asyncio.to_thread(shutil.copytree,original,shared_stage/name)
                     elif original.is_file():await asyncio.to_thread(shutil.copy2,original,shared_stage/name)
                 for config_file in (stage/'config').rglob('*.yaml'):
                     config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
+                state=self.service.state
+                selections={bundle for session in state['sessions'] if not session.get('historyManaged')
+                            if isinstance(bundle:=session.get('bundle'),str)}
+                if isinstance(bundle:=state['settings'].get('bundle'),str): selections.add(bundle)
+                from .shared_settings import read_yaml
+                shared_settings=read_yaml(shared_stage/'settings.yaml') if (shared_stage/'settings.yaml').exists() else {}
+                if not isinstance(shared_settings,dict): raise ValueError('Invalid shared settings')
+                if isinstance(shared_settings.get('bundle'),dict):
+                    if isinstance(bundle:=shared_settings['bundle'].get('active'),str): selections.add(bundle)
+                await merge_shared_registry(stage, shared_stage, shared_home/'cache', selections)
                 for row in candidates:
                     if row.get('kind') == 'included source':
                         from .update_sequence import stage_missing

@@ -7,21 +7,44 @@ projections. The full agent state path remains an uncached read of live state.
 """
 import hashlib
 import json
+from collections import OrderedDict
+from copy import deepcopy
 
 
 class StateProjections:
     def __init__(self):
         self.values = {}
         self.previous_navigation = None
+        self.detail_bodies = OrderedDict()
 
-    def invalidate(self):
+    def invalidate(self, *, state=None, session_ids=None, detail_only=False):
+        if session_ids is None:
+            self.detail_bodies.clear()
+        else:
+            for identity in session_ids:
+                self.detail_bodies.pop(identity, None)
+        if detail_only and session_ids is not None:
+            index = self.values.get(('session-index',))
+            if index is not None and index.patch(state, session_ids):
+                parents = {index.by_id[key].get('parentId') for key in session_ids
+                           if key in index.by_id and not index._membership[key][2]} - {None}
+                for key in list(self.values):
+                    if key[0] == 'browser-navigation' and (key[1] in parents
+                            or any(parent in str(key[-1]) for parent in parents)):
+                        self.values.pop(key, None)
+                # Streaming text does not alter navigation, attention or shell
+                # evidence. Keep those immutable facts; detail is built anew.
+                return
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:
             retained = {key: value for key, value in self.values.items()
                         if key[0] in {'workspace-index', 'workspaces', 'chat-registry', 'chat-index', 'chats'}}
             self.previous_navigation = (self.values.get(('shell-data-key',)), retained)
+        index = self.values.get(('session-index',))
         self.values = {}
+        if index is not None and session_ids is not None and index.patch(state, session_ids):
+            self.values[('session-index',)] = index
 
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
@@ -44,9 +67,32 @@ class StateProjections:
         from .browser_state import SessionIndex
         return self.get(('session-index',), lambda: SessionIndex(state))
 
+    def detail(self, row):
+        """Reuse only unchanged bounded bodies; current scalar facts stay live.
+
+        A scoped commit evicts its identities; an unknown save evicts all.
+        No client draft/selection is retained in this shared body cache.
+        """
+        fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
+                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity')
+        body = self.detail_bodies.pop(row['id'], None)
+        if body is None:
+            from .browser_state import project
+            projected = project(row)
+            body = deepcopy({key: projected[key] for key in fields if key in projected})
+        self.detail_bodies[row['id']] = body
+        while len(self.detail_bodies) > 32:
+            self.detail_bodies.popitem(last=False)
+        result = {key: value for key, value in row.items()
+                  if key not in fields and key != 'messageQuotes'}
+        result.update(body)
+        return result
+
     def attention(self, state):
         from .attention import snapshot
-        return self.get(('attention',), lambda: snapshot(state))
+        index = self.sessions(state)
+        return self.get(('attention',), lambda: snapshot({
+            **state, 'sessions': [index.by_id[key] for key in index.attention_ids]}))
 
     @staticmethod
     def view_scope(state, keys):
@@ -105,7 +151,6 @@ class StateProjections:
             from .attention import reviewed_session_errors
             from .chat_navigation import navigation_activity
             from .navigation_summary import activity, task_blocked
-            from .session_navigation import is_top_level
             attention = self.attention(state)
             reviewed_errors = reviewed_session_errors(attention)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
@@ -115,7 +160,7 @@ class StateProjections:
                      activity(row, bool(attention['sessions'].get(row['id'])),
                               error_reviewed=row['id'] in reviewed_errors,
                               blocked=task_blocked(state, row['id'])))
-                    for row in state.get('sessions', []) if is_top_level(row)]
+                    for row in self.sessions(state).roots]
             facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
@@ -123,5 +168,5 @@ class StateProjections:
                       if item.get('sessionId') and item['id'] == 'session:' + item['sessionId']],
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
                      state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
-            return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+            return hashlib.sha256(json.dumps(facts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         return self.get(('shell-data-key',), build)

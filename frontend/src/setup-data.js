@@ -28,7 +28,7 @@ export function blankRouting(name='my-routing'){
  return {name,roles:{general:{description:'General conversation and work',candidates:[{provider:'',model:''}]},fast:{description:'Quick and lightweight work',candidates:[{provider:'',model:''}]}}};
 }
 export function safeLoginUrl(value){
- try{const url=new URL(value);return url.protocol==='https:'?url.href:null}catch{return null}
+ try{const url=new URL(value);if(url.protocol!=='https:'||url.username||url.password||url.hash)return null;for(const key of url.searchParams.keys())if(/^(id_token_hint|access_token|refresh_token|id_token|code|client_secret)$/i.test(key))return null;return url.href}catch{return null}
 }
 
 export function providerFields(metadata,config={}){

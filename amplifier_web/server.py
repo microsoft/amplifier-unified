@@ -81,6 +81,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service = AppService(data_dir, runtime=runtime, workspace=workspace)
     service.port = config["port"]
     service.server_config = config
+    from .profiling_host import ProfilingHost
+    service.profiling_host = ProfilingHost(service, config)
     if runtime is None:
         from .runtime import RuntimeManager
         runtime = RuntimeManager(app_bridge=service.app_bridge, retention=config["runtime"])
@@ -201,6 +203,14 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
                 result['stateRevision'] = result.get('revision', service._state['revision'])
             result['hostInstanceId'] = service.instance_id
         return web.json_response(result)
+
+    async def profiling_content(request):
+        content = await service.profiling_host.content(request.match_info["identity"])
+        return web.Response(text=content, content_type="application/json", headers={
+            "Content-Disposition": 'attachment; filename="profile.json"',
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; sandbox"})
+
+    app.router.add_get("/api/debug/profiles/{identity}", profiling_content, allow_head=False)
 
     async def view(request):
         await service.update_device(await request.json())

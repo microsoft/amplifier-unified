@@ -126,3 +126,20 @@ def test_status_uses_provider_default_only_when_path_is_unspecified(accounts):
     assert not account_connected({'token_file_path': str(tokens.parent / 'missing.json')})
     assert not account_connected({'token_file_path': ''})
     assert not account_connected({'token_file_path': 42})
+
+
+@pytest.mark.parametrize('mode',[None,'chatgpt_codex','legacy_codex'])
+@pytest.mark.parametrize('stored_mode',[None,'oauth','chatgpt_codex','legacy_codex'])
+def test_codex_spelling_preserves_saved_accounts(accounts,mode,stored_mode):
+    from amplifier_web.setup import account_status
+    _,tokens=accounts
+    saved=json.loads(tokens.read_text())
+    if stored_mode is not None:saved['auth_mode']=stored_mode
+    tokens.write_text(json.dumps(saved));before=tokens.read_bytes()
+    config={'token_file_path':str(tokens)}
+    if mode is not None:config['auth_mode']=mode
+    status=account_status(config)
+    assert status['connected'] and status['authMode']=='chatgpt_codex'
+    assert tokens.read_bytes()==before
+    assert not account_status({**config,'auth_mode':'chatgpt_plan'})['connected']
+    assert not account_status({**config,'auth_mode':'typo'})['connected']

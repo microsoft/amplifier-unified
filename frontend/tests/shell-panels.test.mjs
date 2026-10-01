@@ -373,7 +373,7 @@ test('inline automatic name reflects completed results and recoverable errors',a
  const render=()=>React.createElement(ChatRename,{chat,act:async()=>({accepted:false,error:'Retry later'}),cancel:()=>{}});
  await renderAct(async()=>{root=create(render())});
  const generate=()=>root.root.findByProps({'data-action':'session.naming'});
- assert.equal(generate().props.disabled,true);
+ assert.equal(!!generate().props.disabled,false);
  chat={...chat,status:'idle'};
  await renderAct(async()=>root.update(render()));
  await renderAct(async()=>generate().props.onClick());

@@ -18,7 +18,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const submitting=useRef(false),dirty=useRef(false);
  const naming=chat.naming?.status==='working';
- const busy=['starting','working','running','stopping'].includes(chat.status)||chat.configurationBusy;
+ const busy=chat.configurationBusy;
  const automatic=chat.autoName??(chat.titleSource!=='manual'&&chat.nativeNameSource!=='manual');
  useEffect(()=>{if(!dirty.current)setName(chat.title||'')},[chat.title]);
  const submit=async e=>{
@@ -46,7 +46,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
   <button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button>
   <button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>
   <button type="button" className="a-link" data-action="session.naming" disabled={saving||naming||busy||name!==(chat.title||'')} onClick={generate}><RefreshCw/>{naming?'Naming…':'Auto name now'}</button>
-  <small className="a-nav-name-help">Generate one name. Future automatic naming stays {automatic?'on':'off'}.{busy?' Wait for current work to finish.':name!==(chat.title||'')?' Save or cancel your edit first.':''}</small>
+  <small className="a-nav-name-help">Generate one name. Future automatic naming stays {automatic?'on':'off'}.{busy?' Finish changing the conversation configuration first.':name!==(chat.title||'')?' Save or cancel your edit first.':''}</small>
   {naming&&<small role="status">Generating chat name…</small>}
   {(error||chat.naming?.error)&&<small role="alert" className="a-danger">{error||chat.naming.error}</small>}
  </form>;

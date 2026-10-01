@@ -1,6 +1,7 @@
 """Shared, acknowledgeable attention state derived from currently actionable facts."""
 import hashlib
 import json
+from collections import Counter
 
 
 def connection_failure_key(operation):
@@ -26,9 +27,10 @@ def connection_failure_key(operation):
 def snapshot(state):
     items=[]
     read=state.get('attentionRead',{})
-    def add(key,title,section,page,detail='',version=None,**target):
-        fingerprint=hashlib.sha256(json.dumps([key,title,detail,version],sort_keys=True,default=str).encode()).hexdigest()[:24]
-        items.append({'id':key,'title':title,'detail':detail,'section':section,'page':page,'fingerprint':fingerprint,'read':read.get(key)==fingerprint,**target})
+    def add(key,title,section,page,detail='',version=None,previous_titles=(),**target):
+        fingerprints=[hashlib.sha256(json.dumps([key,label,detail,version],sort_keys=True,default=str).encode()).hexdigest()[:24]
+                      for label in (title,*previous_titles)]
+        items.append({'id':key,'title':title,'detail':detail,'section':section,'page':page,'fingerprint':fingerprints[0],'read':read.get(key) in fingerprints,**target})
     for receipt in state.get('feedback',{}).get('requests',[]):
         status=receipt.get('status')
         if status in {'submitted','failed','unknown'}:
@@ -39,7 +41,8 @@ def snapshot(state):
     for release in updates.get('application',{}).get('releaseNotes',[]):
         for notice in release.get('notices',[]):
             add(notice_id(release,notice),notice['title'],'maintenance','updates',
-                notice['detail']+' '+notice['action'],release['version'],releaseVersion=release['version'])
+                notice['detail']+' '+notice['action'],release['version'],
+                previous_titles=notice.get('previousTitles',()),releaseVersion=release['version'])
     for row in updates.get('items',[]):
         if row.get('status') in {'update','check_failed','local_changes'}:
             status=row['status'];label={'update':'Update available','check_failed':'Could not check','local_changes':'Local edits preserved'}[status]
@@ -91,9 +94,12 @@ def snapshot(state):
         for approval in session.get('approvals',[]):
             if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'setup','conversation',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
     unread=[item for item in items if not item['read']]
+    # Count once: many saved workspaces and unread outcomes must not produce
+    # a workspaces × unread-items scan on every streamed publication.
+    workspace_counts = Counter(i.get('workspace') for i in unread if i.get('sessionId'))
     return {'items':items,'unread':len(unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
             'sessions':{i['sessionId']:1 for i in unread if i.get('sessionId')},
-            'workspaces':{w['id']:sum(i.get('workspace')==w['path'] for i in unread if i.get('sessionId')) for w in state.get('workspaces',[])},
+            'workspaces':{w['id']:workspace_counts.get(w['path'], 0) for w in state.get('workspaces',[])},
             'sections':{key:sum(i['section']==key or (key=='setup' and i['page']=='loaded-modules') for i in unread) for key in {'setup','capabilities','maintenance','chats','feedback'}},'pages':{key:sum(i['page']==key for i in unread) for key in {i['page'] for i in items}}}
 
 

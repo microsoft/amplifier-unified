@@ -32,7 +32,7 @@ STREAMS = {
     'conversation': 'Conversation text (content)',
 }
 METADATA = [key for key in STREAMS if key != 'conversation']
-DEFAULT = {'enabled': True, 'streams': METADATA, 'retentionDays': 30, 'maxRecords': 25000, 'destinations': []}
+DEFAULT = {'enabled': True, 'streams': METADATA, 'retentionDays': 30, 'maxRecords': 25000, 'destinations': [], 'providerRequests': False}
 # Content is never inferred from arbitrary args, exceptions, HTML, results or prompts.
 META_KEYS = {'id','sessionId','rootSessionId','parentId','turnId','inputId','messageId','toolCallId','callId',
              'tool_name','tool_call_id','input_tokens','output_tokens','total_tokens','cache_read_input_tokens','cache_creation_input_tokens','cost_usd',
@@ -74,6 +74,7 @@ def validate_config(value):
     if not isinstance(value,dict) or set(value)-set(DEFAULT): raise ValueError('Unknown diagnostics setting.')
     cfg={**copy.deepcopy(DEFAULT),**copy.deepcopy(value)}
     if type(cfg['enabled']) is not bool: raise ValueError('Capture enabled must be true or false.')
+    if type(cfg['providerRequests']) is not bool: raise ValueError('Provider request recording must be true or false.')
     for key,minimum,maximum in [('retentionDays',1,365),('maxRecords',100,100000)]:
         if type(cfg[key]) is not int or not minimum<=cfg[key]<=maximum: raise ValueError(f'{key} must be between {minimum} and {maximum}.')
     def streams(items):
