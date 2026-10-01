@@ -60,7 +60,8 @@ def overview(state, session_id):
         if devices:
             device_id,device=max(devices,key=lambda pair:pair[1].get('updatedAt',0))
             core['visibleUI']={**_preview(device,_pointer('/devices',device_id),4000), 'clientId':device_id}
-    core['conversations'] = [{'id':s['id'],'title':s.get('title'),'status':s.get('status'),'messageCount':s.get('sharedHistoryTotal',len(s.get('messages',[])) if s.get('historyLoaded',True) else None),'historyLoaded':s.get('historyLoaded',True),'workspaceId':s.get('workspaceId'),'$statePath':f'/sessions/{i}'} for i,s in enumerate(state.get('sessions',[])) if is_top_level(s)][:50]
+    from .cold_display import message_count
+    core['conversations'] = [{'id':s['id'],'title':s.get('title'),'status':s.get('status'),'messageCount':s.get('sharedHistoryTotal',message_count(s) if s.get('historyLoaded',True) else None),'historyLoaded':s.get('historyLoaded',True),'workspaceId':s.get('workspaceId'),'$statePath':f'/sessions/{i}'} for i,s in enumerate(state.get('sessions',[])) if is_top_level(s)][:50]
     children = [(i,s) for i,s in enumerate(state.get('sessions',[])) if not is_top_level(s) and s.get('parentId') == selected]
     core['subagentChats'] = {'total':len(children), 'items':[{'id':s['id'],'title':s.get('title'),'$statePath':f'/sessions/{i}'} for i,s in children[:20]]}
     core['_stateAccess'] = {'note':'This overview is scoped to the calling session. Other app state and detailed resources are available by JSON Pointer; pass path, offset, limit and optional revision. Follow nextOffset. Text previews and $resource references are not the complete value.',

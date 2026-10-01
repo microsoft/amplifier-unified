@@ -66,12 +66,9 @@ class SessionIndex:
             else:
                 self.parents.setdefault(row.get('parentId'), set()).add(identity)
                 self.native_parents.setdefault(row.get('nativeParentId'), set()).add(identity)
-            if row.get('messages') and row.get('sessionKind') != 'internal':
-                self.notifications.extend(
-                    {**{key: message[key] for key in ('id', 'role', 'via', 'createdAt') if key in message},
-                     'sessionId': identity, 'text': message.get('text', '')[:500]}
-                    for message in row.get('messages', [])
-                    if message.get('role') == 'assistant' and message.get('via') == 'text')
+            if row.get('sessionKind') != 'internal':
+                from .cold_display import notifications
+                self.notifications.extend(notifications(row))
         self.notifications.extend(state.get('scheduleNotifications', []))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
@@ -127,11 +124,8 @@ class SessionIndex:
         for identity in identities:
             row = self.by_id[identity]
             if row.get('sessionKind') != 'internal':
-                self.notifications.extend(
-                    {**{key: message[key] for key in ('id', 'role', 'via', 'createdAt') if key in message},
-                     'sessionId': identity, 'text': message.get('text', '')[:500]}
-                    for message in row.get('messages', [])
-                    if message.get('role') == 'assistant' and message.get('via') == 'text')
+                from .cold_display import notifications
+                self.notifications.extend(notifications(row))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
         return True

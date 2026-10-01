@@ -88,11 +88,18 @@ class UpdateDiagnostics:
         self.state.setdefault('events',[])
         self.path=manager.directory/'diagnostics.jsonl'
 
-    def begin(self,kind,revision=None,attempt_id=None):
+    def begin(self,kind,revision=None,attempt_id=None,*,tier=None,components=()):
         identity=attempt_id if isinstance(attempt_id,str) and re.fullmatch(r'[a-f0-9]{32}',attempt_id) else uuid.uuid4().hex
         self.state.update(attemptId=identity,kind=kind)
         if revision and re.fullmatch(r'[a-f0-9]{32,40}',revision):self.state['revision']=revision
         else:self.state.pop('revision',None)
+        # Public batch names are repository/package slugs, never arguments,
+        # workspaces, credential-bearing URLs or exception messages.
+        names=sorted({name for name in components if isinstance(name,str) and
+                      re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',name)})
+        self.state['batch']={'attemptId':identity,'kind':kind,'tier':tier if tier in {'included','other'} else kind,
+                             'startedAt':time.time(),'components':names[:5],'componentCount':len(names)}
+        self.manager.service.state['updates'].pop('probeProgress',None)
         return identity
 
     def record(self,phase,status,*,preserve_last_failure=False,**facts):
@@ -117,7 +124,19 @@ class UpdateDiagnostics:
             if probe:event['probe']=probe
         self.state['events']=(self.state['events']+[event])[-50:]
         self.state['latest']=event
+        if status=='succeeded' and phase in {'ecosystem-activation','smart-tools-complete','restart-ack'}:
+            batch=self.state.get('batch',{})
+            if batch.get('attemptId')==event['attemptId']:
+                completed={**batch,'completedAt':event['at'],'phase':phase}
+                if phase=='smart-tools-complete':
+                    activated=batch.get('activatedComponents',[])
+                    completed.update(components=activated[:5],componentCount=len(activated))
+                # Smart Tools may activate separately within one attempt.
+                prior=[row for row in self.state.get('completedBatches',[]) if row.get('attemptId')!=event['attemptId']]
+                self.state['completedBatches']=(prior+[completed])[-8:]
         if status in {'failed','interrupted'}:
+            if status=='interrupted' and self.state.get('lastFailure',{}).get('attemptId')==event['attemptId'] and self.state['lastFailure'].get('status')=='failed':
+                prior_failure=self.state['lastFailure']
             self.state['lastFailure']=prior_failure if prior_failure is not None else event
         collector=getattr(self.manager.service,'diagnostics',None)
         delivered=False

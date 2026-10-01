@@ -37,6 +37,11 @@ def resolve(db, identity, value):
 
 def references(value):
     if isinstance(value, Mapping):
+        from .cold_display import ColdRecord
+        if isinstance(value, ColdRecord):
+            # Its manifest is a durable root; do not load payloads during GC.
+            yield from references(dict(dict.items(value)))
+            return
         if isinstance(value.get('$resource'), str):
             yield value['$resource']
         for item in value.values():
@@ -49,6 +54,14 @@ def references(value):
 def retained_references(db, state):
     """References from complete state and durable client/operation records."""
     pending = list(references(state))
+    # A hydrated mutable field can drop its in-memory cold reference before its
+    # next save. The last committed global manifest still owns that exact blob.
+    saved_rows = (db.execute('SELECT value FROM state') if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else ())
+    for (text,) in saved_rows:
+        saved = json.loads(text)
+        for row in [*saved.get('sessions', []), *saved.get('runtimeControl', {}).values()]:
+            pending.extend(references(row.get('_coldFields', {})))
     # Persisted client records remain roots even before ClientViews is loaded
     # at startup, and when their browser is disconnected or another is bound.
     for table in ('smart_tool_operations', 'client_views', 'conversation_shares', 'output_records'):

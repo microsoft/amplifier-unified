@@ -16,6 +16,20 @@ const component={id:'bundle',label:'Community bundle',status:'update',current:'a
 function state(updates={}){return {view:{},settings:{updates:{}},updates:{application,items:[],...updates}};}
 function render(updates={},view={}){return renderToStaticMarkup(React.createElement(UpdateSettings,{state:{...state(updates),view},act:()=>{}}));}
 
+test('current batch names progress and completed batches remain visible without claiming the new batch installed',()=>{
+ const html=render({phase:'validating',sequence:{stage:'other',install:true},
+  diagnostics:{attemptId:'new',batch:{attemptId:'new',kind:'ecosystem',tier:'other',components:['amplifier-hooks-approval'],componentCount:1,startedAt:1},
+   completedBatches:[{attemptId:'old',kind:'ecosystem',tier:'included',components:['foundation'],completedAt:2}]},
+  probeProgress:{attemptId:'new',phase:'prepare',completed:24,total:37}});
+ assert.match(html,/24 of 37 completed/);assert.match(html,/Current batch: amplifier-hooks-approval/);
+ assert.match(html,/Recently installed/);assert.match(html,/Included components installed at/);
+ assert.doesNotMatch(html,/Other components installed at/);
+});
+test('prior failure is labeled historical while a different attempt is progressing',()=>{
+ const html=render({phase:'validating',diagnostics:{attemptId:'new',lastFailure:{attemptId:'old',phase:'ecosystem-prepare',status:'failed'}}});
+ assert.match(html,/This is a different update attempt/);assert.doesNotMatch(html,/Last update did not finish:/);
+});
+
 test('update frequency defaults to four hours and submits each supported interval through settings',async()=>{
  const calls=[];let root;
  await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state(),act:(name,args)=>calls.push({name,args})}))});

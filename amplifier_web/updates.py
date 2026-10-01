@@ -759,7 +759,8 @@ class UpdateManager:
                 await self.publish(detail='Check for updates before installing. No eligible updates are available.')
                 return
             release=uuid.uuid4().hex
-            self.diagnostics.begin('ecosystem',release)
+            self.diagnostics.begin('ecosystem',release,tier=state.get('sequence',{}).get('stage'),
+                                   components=[safe_label(row.get('url','')).rsplit('/',1)[-1] for row in candidates])
             stage_id=uuid.uuid4().hex
             self.diagnostics.record('ecosystem-stage','started',commandId=stage_id)
             stage=self.directory/'releases'/release
@@ -830,8 +831,8 @@ class UpdateManager:
                 from .update_diagnostics import exception_type
                 interrupted=isinstance(error,asyncio.CancelledError)
                 status='interrupted' if interrupted else 'failed'
-                last=self.diagnostics.state.get('latest',{})
-                if last.get('status') not in {'failed','interrupted'}:
+                failure=self.diagnostics.state.get('lastFailure',{})
+                if failure.get('attemptId')!=self.diagnostics.state.get('attemptId'):
                     self.diagnostics.record(phase,status,**{'errorType':exception_type(error),**getattr(error,'diagnostic_facts',{})})
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
@@ -872,10 +873,18 @@ class UpdateManager:
             command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
             if refresh:flags.append('--refresh-dependencies')
+            completed=0
+            progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
+                      'phase':'prepare' if refresh else 'compatibility','total':len(configs),
+                      'completed':0,'startedAt':time.time()}
+            await self.publish(probeProgress=progress)
             async def run_one(workspace, bundle):
+                nonlocal completed
                 async with semaphore:
                     await self.diagnostics.run('ecosystem-prepare' if refresh else 'ecosystem-compatibility',process,*command,workspace,bundle,*flags,
                         env={**env,'UV_OVERRIDE':str(overrides)},timeout=900)
+                    completed+=1
+                    await self.publish(probeProgress={**progress,'completed':completed,'lastCompletedAt':time.time()})
             # Installers remain serial. After freezing, mount isolated workers
             # without uv sync or Foundation dependency installation.
             if not refresh:
@@ -894,7 +903,7 @@ class UpdateManager:
             # Capture after dynamic module installation, then recreate an
             # ordinary resolver against the frozen graph before activation.
             await probe(project,refresh=True)
-            await self.publish(detail='Recording and verifying the exact worker dependencies…')
+            await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
             verify_recorded(project,receipt)
@@ -918,6 +927,8 @@ class UpdateManager:
                 raise ValueError('Invalid ecosystem release identity')
             if rollback and not retrying_rollback and 'previous' not in pointer: return
             if not rollback and not target: return
+            if rollback and (not retrying_rollback or self.diagnostics.state.get('kind')!='rollback'):
+                self.diagnostics.begin('rollback',target)
             if target and not (self.directory/'releases'/target/'validated.json').exists():
                 raise ValueError('This ecosystem release has not passed validation')
             if target:
@@ -988,7 +999,7 @@ class UpdateManager:
                         self.service.state['updates'].pop('pendingRollback', None)
                         self.service._publish()
                 self.diagnostics.clear_failure()
-                self.diagnostics.record('ecosystem-activation','succeeded')
+                self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
@@ -1014,12 +1025,16 @@ class UpdateManager:
             smart = self.service.smart_tools
             pending = self.service.state['updates'].get('pendingSmartTools', [])
             if not pending:
-                self.diagnostics.begin('smart-tools')
+                self.diagnostics.begin('smart-tools',tier='other',
+                                       components=[row.get('label','') for row in self.inventory if row.get('kind')=='smart tool' and row.get('status')=='update' and row.get('eligible')])
                 await self.publish(phase='staging', error=None, detail='Preparing Smart Tool updates…')
                 for source in self.inventory:
                     if source.get('kind') != 'smart tool' or source.get('status') != 'update' or not source.get('eligible'): continue
                     target = await self.diagnostics.run('smart-tool-stage', smart.stage_update, source)
-                    pending = [*pending, {'previous': source['installationId'], 'target': target['id']}]
+                    name=source.get('label','')
+                    component=name if isinstance(name,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',name) else None
+                    pending = [*pending, {'previous': source['installationId'], 'target': target['id'],
+                                         **({'component':component} if component else {})}]
                     await self.publish(pendingSmartTools=pending)
             await self.publish(phase='staged', detail='Smart Tools prepared; waiting for work to finish.')
         await self.activateSmartTools()
@@ -1038,9 +1053,16 @@ class UpdateManager:
                         item = pending[0]
                         await self.diagnostics.run('smart-tool-activate', self.service.smart_tools.activate_update,
                                                    item['previous'], item['target'])
+                        batch=self.diagnostics.state.get('batch',{})
+                        if batch.get('attemptId')==self.diagnostics.state.get('attemptId'):
+                            activated=batch.setdefault('activatedComponents',[])
+                            component=item.get('component')
+                            if isinstance(component,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',component) and component not in activated:
+                                activated.append(component)
                         pending = pending[1:]
                         await self.publish(pendingSmartTools=pending)
                     sequence = {**self.service.state['updates'].get('sequence', {}), 'nextStage': 'other'}
+                    self.diagnostics.record('smart-tools-complete','succeeded')
                     await self.publish(phase='installed', sequence=sequence, detail='Smart Tools updated. Previous versions are retained for rollback.')
                     self.inventory = []
                 except BaseException:

@@ -43,6 +43,8 @@ function facts(event){
 export function UpdateIssueSummary({state}){
  const updates=state.updates||{},failure=updates.diagnostics?.lastFailure;
  if(!failure||reconciledFailure(updates))return null;
+ const prior=failure.attemptId&&updates.diagnostics?.attemptId&&failure.attemptId!==updates.diagnostics.attemptId;
+ if(prior&&!updates.error&&['checking','staging','validating','staged','activating'].includes(updates.phase))return <p className="a-caption" role="status">A previous attempt failed. This is a different update attempt; its progress is shown above. The earlier failure remains in update details.</p>;
  return <div className="a-update-failure" role="alert"><AlertCircle aria-hidden="true"/><div><strong>Last update did not finish: {label(failure.phase)}</strong><p>{failure.phase==='target-discovery'?'This installation cannot be replaced by the in-app updater. Ask the person who runs Amplifier to update this installation.':facts(failure)||'Open Component updates & details for the failure receipt.'}</p></div></div>;
 }
 export function UpdateDiagnostics({state,act}){

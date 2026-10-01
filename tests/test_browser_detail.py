@@ -9,6 +9,17 @@ def heavy(identity='chat'):
     return {'id':identity,'title':identity,'status':'working','sessionKind':'root','messages':[{'id':f'm{i}','role':'user' if i%2==0 else 'assistant','text':f'{i} '+('paragraph '*800)} for i in range(520)],'workers':[],'approvals':[],
       'execution':{'nodes':[{'id':f'n{i}','turnId':'turn','kind':'tool','label':'Tool','summary':f'{i} '+('result '*2000)} for i in range(400)],'turns':[{'id':'turn','aggregateUsage':{'totalTokens':10000,'costUsd':2}}],'aggregateUsage':{'totalTokens':10000,'costUsd':2}}}
 
+
+def test_provider_capture_warnings_survive_bounded_browser_projection():
+    capture={'truncated':True,'redacted':True,'bytes':120000,'limitBytes':65536}
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn'}],
+        'nodes':[{'id':'model','turnId':'turn','kind':'llm','requestCapture':capture,
+                  '_eventFields':{'request':True},
+                  'requestDetail':{'sessionId':'chat','part':'events','field':'request','digest':'exact'}}]}}
+    projected=project(session)['execution']['nodes'][0]
+    assert projected['requestCapture']==capture
+    assert projected['requestDetail']==session['execution']['nodes'][0]['requestDetail']
+
 async def test_selected_and_active_histories_are_bounded_with_complete_on_demand_access(app_factory):
     app=app_factory();await app.dispatch('session.create',{})
     first=app._session();first.update(heavy(first['id']))

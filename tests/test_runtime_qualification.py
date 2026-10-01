@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -23,6 +24,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         assert project == first
         calls.append('freeze')
         (receipt / 'runtime-installed.json').write_text('[]')
+        (frozen / '.venv').mkdir(parents=True)
         return frozen
     async def overrides(project, target):
         calls.append(('overrides', project))
@@ -34,16 +36,20 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         async def run(self, phase, function, *command, **kwargs):
             if phase == 'ecosystem-runtime-policy':
                 return await function(*command, **kwargs)
+            if phase == 'ecosystem-runtime-prepare':
+                assert command[1:3]==('sync','--locked')
+                calls.append('runtime-sync')
+                return
             assert command[command.index('--project') + 1] in {str(first), str(frozen)}
             calls.append(('probe', '--refresh-dependencies' in command))
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
     monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
     monkeypatch.setattr(runtime_qualification, 'verify_recorded', verify)
-    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),
+    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', ('overrides', first), ('probe', True), 'freeze', ('overrides', frozen), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -62,7 +68,7 @@ async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments
         raise AssertionError('A historical generation was refreshed')
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', unexpected)
-    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),
+    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
     assert (receipt / 'runtime.lock').read_bytes() == b'recorded'
@@ -227,9 +233,13 @@ async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path,
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
             if phase == 'ecosystem-runtime-policy': return await function(*command, **kwargs)
+            if phase == 'ecosystem-runtime-prepare':
+                assert command[1:3]==('sync','--locked')
+                completed.append('sync')
+                return
             key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
             assert ('--read-only' in command) == (key == 'check')
-            assert ('--no-sync' in command) == (key == 'check')
+            assert '--no-sync' in command  # Both probes reuse the one-time sync.
             assert ('--refresh-dependencies' in command) == (key == 'prepare')
             counts[key] += 1
             peaks[key] = max(peaks[key], counts[key])
@@ -244,11 +254,20 @@ async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path,
     monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda *args: None)
     settings = {'workspace': str(tmp_path), 'bundle': 'work'}
     state = {'sessions': [dict(settings, bundle=f'bundle-{i}') for i in range(7)] + [dict(settings, bundle='historical', historyManaged=True)], 'settings': settings}
-    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(), service=SimpleNamespace(get_state=lambda: state))
+    published=[]
+    async def publish(**values):published.append(values)
+    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=publish,service=SimpleNamespace(get_state=lambda: state))
     if fail:
         with pytest.raises(ValueError, match='incompatible'): await UpdateManager.validate(manager, receipt, release)
     else:
         await UpdateManager.validate(manager, receipt, release)
         assert completed.count('check') == 8 and peaks['check'] == 4
     assert completed.count('prepare') == 8 and peaks['prepare'] == 1
+    assert completed.count('sync')==1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
+    preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']
+    checks=[row['probeProgress'] for row in published if row.get('probeProgress',{}) is not None and row.get('probeProgress',{}).get('phase')=='compatibility']
+    assert [row['completed'] for row in preparation]==list(range(9))
+    assert all(row['total']==8 for row in preparation+checks)
+    assert checks[-1]['completed']==(0 if fail else 8)
+    assert str(tmp_path) not in json.dumps(preparation+checks)

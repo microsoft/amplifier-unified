@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.44",
+      "title": "Explain update progress and retire inactive display payloads",
+      "changes": [
+        "Show the current update batch, its component names, successful configuration checks out of the admitted total, and recently installed batches. New component changes detected between batches no longer look like the same stalled preparation.",
+        "Keep earlier failed attempts distinct from current progress and preserve the original failure when cleanup cancels sibling checks. Validation, waiting for idle, and successful activation remain separate.",
+        "Bound the retained event-index working set by count and measured payload bytes. Reuse unchanged indexes without changing event parsing, execution reconstruction or canonical history.",
+        "Move eligible inactive conversation display payloads and inspection catalogs into verified app-owned resources after durable persistence. Keep connected and active work, drafts, approvals, provider configuration and receipts available; reload exact payloads on demand.",
+        "Preserve inactive payload ownership through restart, resource cleanup and reviewed deletion. Retain borrowed mutable objects conservatively and refuse missing or altered resources rather than presenting empty history.",
+        "Retain provider request-capture warnings in bounded browser details and align runtime test fixtures with the current admission and one-time environment preparation contracts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.43",
       "title": "Resume compaction and speed up component updates",
       "changes": [

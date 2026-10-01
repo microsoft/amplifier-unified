@@ -219,3 +219,83 @@ def test_recognized_prepare_failure_keeps_class_and_guidance_without_exception_t
     assert result == {'ok': False, 'stage': 'prepare', 'errorType': name, 'reason': reason}
     assert 'secret' not in frame
     assert 'reason' not in probe_failure(error, 'cleanup')
+
+
+async def test_installed_batch_survives_new_attempt_event_eviction_and_restart(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    first=manager.diagnostics.begin('ecosystem','a'*32,tier='included',
+                                    components=['foundation','foundation','https://user:secret@host/repo','/private/workspace'])
+    manager.diagnostics.record('ecosystem-stage','succeeded')
+    assert not manager.diagnostics.state.get('completedBatches')
+    manager.diagnostics.record('ecosystem-activation','succeeded')
+    manager.diagnostics.begin('ecosystem','b'*32,tier='other',components=['approval'])
+    for _ in range(60):manager.diagnostics.record('ecosystem-prepare','succeeded')
+    recent=manager.diagnostics.state['completedBatches']
+    assert len(recent)==1 and recent[0]['attemptId']==first and recent[0]['components']==['foundation']
+    assert 'secret' not in json.dumps(manager.diagnostics.state) and '/private/' not in json.dumps(manager.diagnostics.state)
+    restored=UpdateManager(service)
+    assert restored.diagnostics.state['completedBatches']==recent
+    assert restored.diagnostics.state['batch']['components']==['approval']
+    await service.close()
+
+
+async def test_cleanup_cancellation_keeps_primary_failure_but_real_interruption_is_recorded(tmp_path):
+    service=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    manager=UpdateManager(service);service.update_manager=manager
+    manager.diagnostics.begin('ecosystem','a'*32)
+    primary=manager.diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
+    cleanup=manager.diagnostics.record('ecosystem-prepare','interrupted',errorType='CancelledError')
+    assert manager.diagnostics.state['lastFailure']==primary
+    assert cleanup in manager.diagnostics.state['events']
+    manager.diagnostics.begin('ecosystem','b'*32)
+    interruption=manager.diagnostics.record('ecosystem-prepare','interrupted',errorType='CancelledError')
+    assert manager.diagnostics.state['lastFailure']==interruption
+    await service.close()
+
+
+async def test_successful_peer_does_not_replace_the_receipt_for_failed_validation(app,repo):
+    manager,_=await prepare(app,repo)
+    primary=None
+    async def fail(*args):
+        nonlocal primary
+        primary=manager.diagnostics.record('ecosystem-compatibility','failed',commandId='c'*32,
+                                           errorType='BundleNotFoundError',exitCode=1)
+        manager.diagnostics.record('ecosystem-compatibility','succeeded',commandId='d'*32)
+        raise ValueError('validation failed')
+    manager.validate=fail
+    await manager.install()
+    assert manager.diagnostics.state['lastFailure']==primary
+
+
+async def test_rollback_does_not_mark_the_failed_new_batch_installed(app,repo):
+    manager,_=await prepare(app,repo)
+    async def validate(*args):pass
+    manager.validate=validate
+    await manager.install()
+    installed=list(manager.diagnostics.state['completedBatches'])
+    failed=manager.diagnostics.begin('ecosystem','f'*32,tier='other',components=['never-installed'])
+    manager.diagnostics.record('ecosystem-stage','failed')
+    await manager.rollback()
+    assert manager.diagnostics.state['completedBatches']==installed
+    assert manager.diagnostics.state['latest']['phase']=='ecosystem-rollback'
+    assert manager.diagnostics.state['attemptId']!=failed
+
+
+async def test_partial_tool_staging_lists_only_the_tools_that_activated(app,monkeypatch):
+    manager=app.update_manager
+    manager.inventory=[{'kind':'smart tool','status':'update','eligible':True,'label':name,'installationId':name}
+                       for name in ['tool-a','tool-b']]
+    async def stage(row):
+        if row['label']=='tool-b':raise ValueError('could not stage')
+        return {'id':'new-'+row['label']}
+    async def activate(previous,target):return {}
+    from amplifier_web.smart_tools import SmartToolsManager
+    app.smart_tools=SmartToolsManager(app)
+    monkeypatch.setattr(app.smart_tools,'stage_update',stage)
+    monkeypatch.setattr(app.smart_tools,'activate_update',activate)
+    with pytest.raises(ValueError):await manager.installSmartTools()
+    assert len(app.state['updates']['pendingSmartTools'])==1
+    await manager.activateSmartTools()
+    completed=manager.diagnostics.state['completedBatches'][-1]
+    assert completed['components']==['tool-a'] and completed['componentCount']==1
