@@ -87,7 +87,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
     return [row for row in rows if row['id'] not in omitted]
@@ -269,7 +269,7 @@ class EventIndex:
                 'provider': data.get('provider'), 'model': data.get('model'), 'startedAt': at,
                 'phase': 'running', 'canonicalHistory': True, 'eventOrder': reference['offset']}
             if naming:node.update(label='Session naming', lifecycle='background')
-            raw = data.get('raw')
+            raw = data.get('raw', data.get('raw_request'))
             options = raw if isinstance(raw, dict) else {}
             keys = ('message_count', 'has_instructions', 'has_system', 'reasoning_enabled', 'thinking_enabled',
                     'thinking_budget', 'background_mode', 'stream', 'max_tokens', 'max_output_tokens',
@@ -283,7 +283,11 @@ class EventIndex:
             if isinstance(options.get('reasoning'), dict) and isinstance(options['reasoning'].get('effort'), str):
                 node['requestInfo']['reasoning_effort'] = options['reasoning']['effort'][:100]
             if raw is not None:
-                self.field(node, 'request', data, ('raw',), reference, preview=False)
+                self.field(node, 'request', data, ('raw', 'raw_request'), reference, preview=False)
+                capture = data.get('request_capture', {})
+                if isinstance(capture, dict):
+                    node['requestCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
+                                              if type(capture.get(key)) is bool}
             self.pending.setdefault(scope, []).append(node)
             if request:
                 self.nodes[key] = node
