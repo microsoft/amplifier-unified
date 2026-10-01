@@ -195,7 +195,7 @@ def test_suspended_unreadable_leaf_keeps_revision_rows_immutable(tmp_path, monke
     assert initial['sessions'][0]['workspace'] is None
     original_row = dict(initial['sessions'][0])
     retained_row = index._projects[path.parent.parent.name]['sessions'][0]
-    index._recovery_budget = 3
+    index._recovery_budget = 5
     index._reconcile_at = 0
     index.scan_changes(since=base, known_workspaces=[str(workspace)])
     # Pause after the iterator selected this leaf, before its safety check.
@@ -218,6 +218,78 @@ def test_suspended_unreadable_leaf_keeps_revision_rows_immutable(tmp_path, monke
     retained.rename(path)
     _, restored = index.scan_changes(since=token, known_workspaces=[str(workspace)], force=True)
     assert restored['sessions'][0]['workspace'] == str(workspace)
+    index.close()
+
+
+def test_unchanged_recovery_probes_inputs_without_rebuilding_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    for number in range(80):
+        session(home, workspace, f'saved-{number:03d}',
+                {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    # The first pass learns the complete registered/workspace stamp.
+    index._reconcile_at = 0
+    for _ in range(60):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    builds, saves = [], []
+    original_build, original_save = index._scan_project_steps, index._catalog.save
+    def build(*args, **kwargs):
+        builds.append(True)
+        return original_build(*args, **kwargs)
+    def save(*args, **kwargs):
+        saves.append(True)
+        return original_save(*args, **kwargs)
+    monkeypatch.setattr(index, '_scan_project_steps', build)
+    monkeypatch.setattr(index._catalog, 'save', save)
+    index._reconcile_at = 0
+    index._recovery_budget = 12
+    for _ in range(60):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        assert delta['reconciliation']['steps'] <= 12
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('Unchanged bounded reconciliation did not complete')
+    assert not builds and not saves
+    assert delta['sessionCount'] == 80
+    index.close()
+
+
+def test_recovery_fastpath_rechecks_symlink_workspace_referent(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(workspace, target_is_directory=True)
+    path = session(home, workspace, 'saved-root', {'working_dir': str(alias), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    def recover(base):
+        index._reconcile_at = 0
+        observed = []
+        for _ in range(40):
+            base, delta = index.scan_changes(since=base, known_workspaces=[])
+            observed.extend(delta['sessions'])
+            if delta['reconciliation']['phase'] == 'complete':
+                return base, observed
+        pytest.fail('Workspace recovery did not complete')
+    base, _ = recover(base)
+    base, _ = recover(base)
+    workspace.rmdir()
+    base, observed = recover(base)
+    assert any(not row['canResume'] for row in observed)
+    assert not index._projects[path.parent.parent.name]['workspace']['available']
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert not stored['canResume']
+    workspace.mkdir()
+    _, observed = recover(base)
+    assert any(row['canResume'] for row in observed)
     index.close()
 
 

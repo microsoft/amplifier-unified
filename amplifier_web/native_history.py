@@ -159,6 +159,9 @@ class NativeHistory:
         self._recovery_queued = set()
         self._pending_invalidations = set()
         self._cached_start = False
+        self._scan_original_projects = None
+        self._recovery_modified = set()
+        self._recovery_issues_changed = False
 
     def _load_catalog(self):
         # Called only from the discovery worker, never in host construction.
@@ -423,6 +426,52 @@ class NativeHistory:
                 result.append((str(path), None))
         return tuple(result)
 
+    def _project_stamp_steps(self, project, known):
+        """Compare canonical inputs cooperatively before rebuilding summaries."""
+        paths = [project / 'metadata.json', project / 'sessions']
+        paths.extend(known.get(project.name, ()))
+        paths.extend(self._project_paths.get(project.name, ()))
+        result = [tuple(sorted(known.get(project.name, ())))]
+        result.append(tuple((path, str(Path(path).resolve()))
+                            for path in sorted(self._project_paths.get(project.name, ()))))
+        yield
+        for path in paths:
+            if not self._safe_project(project):
+                raise OSError('Native project changed during reconciliation')
+            try:
+                info = os.stat(path, follow_symlinks=False)
+                result.append((str(path), info.st_dev, info.st_ino, info.st_mode,
+                               info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+            except FileNotFoundError:
+                result.append((str(path), None))
+        leaves = {}
+        for number, directory in enumerate(self._recovery_directories(project / 'sessions')):
+            # At most two canonical session probes per step; a 64-step slice
+            # still admits no more than 128 distinct session probes.
+            if number % 2 == 0:
+                yield
+            if directory is None:
+                continue
+            # Suspended iterators are hints, never authority to follow a
+            # substituted ancestor or a session symlink.
+            if (not self._safe_project(project)
+                    or not stat.S_ISDIR(directory.stat(follow_symlinks=False).st_mode)):
+                raise OSError('Native session changed during reconciliation')
+            values = []
+            prefix = str(directory) + os.sep
+            for name in _STAMP_FILES:
+                path = prefix + name
+                try:
+                    info = os.stat(path, follow_symlinks=False)
+                    values.append((path, info.st_dev, info.st_ino, info.st_mode,
+                                   info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+                except FileNotFoundError:
+                    values.append((path, None))
+            leaves[directory.name] = values
+        for name in sorted(leaves):
+            result.extend(leaves[name])
+        return tuple(result)
+
     def _scan_project(self, project, known, issues, *, transcript_ids=None, target_only=False):
         steps = self._scan_project_steps(project, known, issues, transcript_ids=transcript_ids,
                                         target_only=target_only)
@@ -662,7 +711,7 @@ class NativeHistory:
                 # A new project may have been admitted by the watcher after
                 # directory iteration started. Check absence before retirement.
                 if not (root / name).exists():
-                    self._projects.pop(name, None)
+                    self._set_recovered_project(name, None)
                     self._project_inputs.pop(name, None)
                     self._project_paths.pop(name, None)
             self._recovery_status.update(phase='complete', completedAt=time.time())
@@ -673,14 +722,27 @@ class NativeHistory:
     def _recover_project(self, project, known):
         yield
         if not project.exists():
-            self._projects.pop(project.name, None)
+            self._set_recovered_project(project.name, None)
             self._project_inputs.pop(project.name, None)
             return
         if not self._safe_project(project):
-            self._project_inputs[project.name] = (None, [
-                {'kind': 'unreadable', 'nativeProject': project.name}])
+            value = (None, [{'kind': 'unreadable', 'nativeProject': project.name}])
+            self._recovery_issues_changed |= self._project_inputs.get(project.name, (None, []))[1] != value[1]
+            self._project_inputs[project.name] = value
             return
         before = self._projects.get(project.name)
+        cached = self._project_inputs.get(project.name)
+        try:
+            stamp = yield from self._project_stamp_steps(project, known)
+        except (OSError, RuntimeError):
+            stamp = None
+        if (before is not None and stamp is not None and cached
+                and cached[0] == stamp and not cached[1]
+                and before['workspace']['available'] ==
+                    bool(before['workspace'].get('path') and Path(before['workspace']['path']).is_dir())):
+            # No row interpretation changed. Preserve any newer hot update
+            # rather than replacing it with this pass's earlier reference.
+            return
         issues = []
         result = yield from self._scan_project_steps(project, known, issues, bounded=True)
         # Another invalidation owns newer published rows when its work completed
@@ -718,8 +780,23 @@ class NativeHistory:
                                                   ('internalSessionCount', 'internal'))})
             result = {'workspace': workspace, 'sessions': rows}
         if result is not None:
-            self._projects[project.name] = before if result == before else result
-            self._project_inputs[project.name] = ((tuple(sorted(known.get(project.name, ()))),), issues)
+            self._set_recovered_project(project.name, before if result == before else result)
+            self._recovery_issues_changed |= self._project_inputs.get(project.name, (None, []))[1] != issues
+            self._project_inputs[project.name] = (stamp, issues)
+
+    def _set_recovered_project(self, name, result):
+        """Copy live membership once only when recovery publishes a change."""
+        current = self._projects.get(name)
+        if result is current:
+            return
+        if self._projects is self._scan_original_projects:
+            self._projects = dict(self._projects)
+        if result is None:
+            self._projects.pop(name, None)
+        else:
+            self._projects[name] = result
+        self._recovery_modified.add(name)
+        self._recovery_issues_changed = True
 
     def _recovery_slice(self, known):
         if self._recovery is None:
@@ -807,6 +884,9 @@ class NativeHistory:
             if self._closing.is_set():
                 raise InterruptedError('Native discovery is closing')
             previous_projects = self._projects
+            self._scan_original_projects = previous_projects
+            self._recovery_modified = set()
+            self._recovery_issues_changed = False
             self._reads = 0
             self._working_dirs = {}
             self._working_dir_slugs = {}
@@ -836,7 +916,6 @@ class NativeHistory:
             if incremental:
                 # The previous detached journal retains old project objects.
                 # Discovery and missed-notification coverage advance separately.
-                self._projects = dict(self._projects)
                 dirty = set(dirty) | self._pending_invalidations
                 session_dirty = sorted(item for item in dirty if isinstance(item, tuple))
                 admitted = set(session_dirty[:64])
@@ -861,7 +940,7 @@ class NativeHistory:
             except OSError:
                 projects = None
                 issues.append({'kind': 'unreadable-root'})
-            if projects is not None:
+            if projects is not None and (projects or not incremental):
                 current = dict(self._projects) if incremental else {}
                 for project in projects:
                     if incremental and not project.exists():
@@ -933,10 +1012,17 @@ class NativeHistory:
                 self._recovery_slice(known)
                 reconcile = False  # A slice is not a completed full-library merge.
             if incremental:
-                issues = ([{'kind': 'unavailable-catalog-cache'}] if self._cache_error else [])
-                issues.extend(issue for _, project_issues in self._project_inputs.values()
-                              for issue in project_issues)
-            changed_projects = {key for key in self._projects.keys() | previous_projects.keys()
+                if projects or self._recovery_issues_changed:
+                    issues = ([{'kind': 'unavailable-catalog-cache'}] if self._cache_error else [])
+                    issues.extend(issue for _, project_issues in self._project_inputs.values()
+                                  for issue in project_issues)
+                else:
+                    issues = ([{'kind': 'unavailable-catalog-cache'}] if self._cache_error else [])
+                    issues.extend(issue for issue in self._snapshot_issues
+                                  if issue.get('kind') != 'unavailable-catalog-cache')
+            candidates = ((dirty_projects | self._recovery_modified) if incremental else
+                          self._projects.keys() | previous_projects.keys())
+            changed_projects = {key for key in candidates
                                 if self._projects.get(key) is not previous_projects.get(key)}
             count_fields = ('sessionCount', 'workerSessionCount', 'internalSessionCount')
             if self._totals is None:
@@ -949,7 +1035,7 @@ class NativeHistory:
                     after = self._projects.get(name, {}).get('workspace', {})
                     for field in count_fields:
                         self._totals[field] += after.get(field, 0) - before.get(field, 0)
-            if self._catalog is not None:
+            if self._catalog is not None and (changed_projects or self._dirty_files):
                 try:
                     self._catalog.save(
                         {key: self._projects[key] for key in changed_projects if key in self._projects},
@@ -964,12 +1050,10 @@ class NativeHistory:
                     self._cache_error = True
                     self._cache_retry_at = time.monotonic() + self._cache_retry_delay
                     issues.append({'kind': 'unavailable-catalog-cache'})
-            projects = tuple(self._projects.items())
+            projects = (tuple(self._projects.items()) if changed_projects or self._snapshot_revision is None
+                        else self._snapshot_projects)
             if (self._snapshot_revision is None
-                    or len(projects) != len(self._snapshot_projects)
-                    or any(name != old_name or project is not old_project
-                           for (name, project), (old_name, old_project)
-                           in zip(projects, self._snapshot_projects))
+                    or changed_projects
                     or issues != self._snapshot_issues):
                 # Hold the project references, not only their ids: rebuilt rows
                 # must never compare unchanged after an old object is collected.
@@ -982,9 +1066,10 @@ class NativeHistory:
                 self._snapshot_revision = object()
             if _changes:
                 reset = force or (since is not self._snapshot_revision and since not in self._change_bases)
-                old = {} if reset else dict(self._change_bases.get(since, projects))
+                unchanged = since is self._snapshot_revision and not force
+                old = {} if reset or unchanged else dict(self._change_bases.get(since, projects))
                 upserts, workspaces, removed = [], [], []
-                for name, project in projects:
+                for name, project in (() if unchanged else projects):
                     prior = old.get(name)
                     if project is prior:
                         continue
