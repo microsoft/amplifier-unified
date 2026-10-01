@@ -831,8 +831,8 @@ class UpdateManager:
                 from .update_diagnostics import exception_type
                 interrupted=isinstance(error,asyncio.CancelledError)
                 status='interrupted' if interrupted else 'failed'
-                last=self.diagnostics.state.get('latest',{})
-                if last.get('status') not in {'failed','interrupted'}:
+                failure=self.diagnostics.state.get('lastFailure',{})
+                if failure.get('attemptId')!=self.diagnostics.state.get('attemptId'):
                     self.diagnostics.record(phase,status,**{'errorType':exception_type(error),**getattr(error,'diagnostic_facts',{})})
                 failure=self.diagnostics.state['lastFailure']
                 self.diagnostics.record('ecosystem-stage',status,commandId=stage_id,preserve_last_failure=True)
@@ -927,6 +927,8 @@ class UpdateManager:
                 raise ValueError('Invalid ecosystem release identity')
             if rollback and not retrying_rollback and 'previous' not in pointer: return
             if not rollback and not target: return
+            if rollback and (not retrying_rollback or self.diagnostics.state.get('kind')!='rollback'):
+                self.diagnostics.begin('rollback',target)
             if target and not (self.directory/'releases'/target/'validated.json').exists():
                 raise ValueError('This ecosystem release has not passed validation')
             if target:
@@ -997,7 +999,7 @@ class UpdateManager:
                         self.service.state['updates'].pop('pendingRollback', None)
                         self.service._publish()
                 self.diagnostics.clear_failure()
-                self.diagnostics.record('ecosystem-activation','succeeded')
+                self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 self.inventory=[]
                 if self.cleanup_task is None or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
@@ -1029,7 +1031,10 @@ class UpdateManager:
                 for source in self.inventory:
                     if source.get('kind') != 'smart tool' or source.get('status') != 'update' or not source.get('eligible'): continue
                     target = await self.diagnostics.run('smart-tool-stage', smart.stage_update, source)
-                    pending = [*pending, {'previous': source['installationId'], 'target': target['id']}]
+                    name=source.get('label','')
+                    component=name if isinstance(name,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',name) else None
+                    pending = [*pending, {'previous': source['installationId'], 'target': target['id'],
+                                         **({'component':component} if component else {})}]
                     await self.publish(pendingSmartTools=pending)
             await self.publish(phase='staged', detail='Smart Tools prepared; waiting for work to finish.')
         await self.activateSmartTools()
@@ -1048,6 +1053,12 @@ class UpdateManager:
                         item = pending[0]
                         await self.diagnostics.run('smart-tool-activate', self.service.smart_tools.activate_update,
                                                    item['previous'], item['target'])
+                        batch=self.diagnostics.state.get('batch',{})
+                        if batch.get('attemptId')==self.diagnostics.state.get('attemptId'):
+                            activated=batch.setdefault('activatedComponents',[])
+                            component=item.get('component')
+                            if isinstance(component,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',component) and component not in activated:
+                                activated.append(component)
                         pending = pending[1:]
                         await self.publish(pendingSmartTools=pending)
                     sequence = {**self.service.state['updates'].get('sequence', {}), 'nextStage': 'other'}

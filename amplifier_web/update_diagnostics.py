@@ -128,6 +128,9 @@ class UpdateDiagnostics:
             batch=self.state.get('batch',{})
             if batch.get('attemptId')==event['attemptId']:
                 completed={**batch,'completedAt':event['at'],'phase':phase}
+                if phase=='smart-tools-complete':
+                    activated=batch.get('activatedComponents',[])
+                    completed.update(components=activated[:5],componentCount=len(activated))
                 # Smart Tools may activate separately within one attempt.
                 prior=[row for row in self.state.get('completedBatches',[]) if row.get('attemptId')!=event['attemptId']]
                 self.state['completedBatches']=(prior+[completed])[-8:]
