@@ -130,7 +130,7 @@ ACTION_DEFINITIONS = {
     "providers.testMessage": ("Send a small real inference request using a saved provider and model. May incur provider usage charges. Creates no conversation.",schema({"id":string(200),"sessionId":string(200),"workspace":string(4000),"model":string(200)},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
     "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"location": LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
-    "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
+    "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200),"scope":{"enum":["global","project","local"]},"authMode":{"enum":["chatgpt_codex","chatgpt_plan","legacy_codex"]},"enablePlan":{"type":"boolean"}},["id"])),
     "providers.loginStatus": ("Check provider sign-in progress",schema({"id":string(200)},["id"])),
     "providers.loginCancel": ("Cancel provider sign-in",schema({"id":string(200)},["id"])),
     "routing.list": ("List model routing presets",schema()),
