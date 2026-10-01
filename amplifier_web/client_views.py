@@ -50,11 +50,15 @@ class ClientViews:
         self.records = {}
         self.saved = {}
         self.dirty = set()
+        self.startup_selections = {}
         service.db.execute("CREATE TABLE IF NOT EXISTS client_views (id TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for identity, value in service.db.execute("SELECT id,value FROM client_views"):
             self.records[identity] = json.loads(value)
             self.records[identity]["canvasTabs"] = self.records[identity].get("canvasTabs") or {}
             self.saved[identity] = value
+            self.startup_selections[identity] = (
+                self.records[identity].get('selectedSessionId'),
+                self.records[identity].get('selectedWorkspaceId'))
 
     @staticmethod
     def validate(identity):
@@ -130,7 +134,12 @@ class ClientViews:
             index = None
         selected = (index.by_id.get(sid) if index is not None else
                     next((row for row in rows if row['id'] == sid), None))
-        if sid is not None and selected is None:
+        catalog_loading = self.service._state.get('sharedHistory', {}).get('loading', False)
+        startup = self.startup_selections.get(identity)
+        awaiting_catalog = bool(catalog_loading and startup and startup[0] == sid)
+        if not catalog_loading or selected is not None:
+            self.startup_selections.pop(identity, None)
+        if sid is not None and selected is None and not awaiting_catalog:
             record["selectedSessionId"] = None
             record["canvas"] = {}
         self.service.computer_visual.reconcile(identity)
@@ -148,7 +157,7 @@ class ClientViews:
                                  and position < len(workspaces) and workspaces[position] is index.workspaces.get(workspace)
                                  else None)
             available = indexed_workspace is not None or any(row['id'] == workspace for row in workspaces)
-            if not available:
+            if not available and not (awaiting_catalog and startup[1] == workspace):
                 record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
         if record.get('selectedSessionId') is None:
             # Older clients could persist an open Canvas without a chat. Hide
