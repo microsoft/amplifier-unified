@@ -16,6 +16,8 @@ import logging
 import math
 import os
 from pathlib import Path
+import sys
+import threading
 
 from .execution import LIVE_PHASES, refresh_usage
 from .execution_events import public_usage
@@ -352,15 +354,74 @@ class EventIndex:
         return merge_model_observations(rows) if coalesce else rows
 
 
+def retained_index_size(index):
+    """Charge built-in index payloads once, including association bodies.
+
+    This excludes Path internals, cache bookkeeping, RSS and allocator overhead.
+    Shared objects across indexes are charged separately (a conservative bound).
+    Only changed indexes are measured; an unchanged refresh reuses its charge.
+    """
+    seen, pending, total = set(), [vars(index), str(index.path)], 0
+    while pending:
+        value = pending.pop()
+        identity = id(value)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        total += sys.getsizeof(value)
+        if isinstance(value, dict):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            pending.extend(value)
+    return total + sys.getsizeof(index)
+
+
 class EventLogView:
+    # Shared recent working set, not a pin for every conversation ever visited.
+    # Either limit can retire an index; canonical files remain authoritative.
+    MAX_INDEXES = 256
+    MAX_INDEX_BYTES = 64 * 1024 * 1024
+
     def __init__(self, service):
         self.service = service
         self.indexes = OrderedDict()
+        self._index_sizes = {}
+        self.retained_index_bytes = 0
+        # Cancellation releases the async refresh lock before to_thread ends.
+        # Keep cache accounting serialized until the actual reader has exited.
+        self._read_lock = threading.RLock()
         self.task = None
         self.lock = asyncio.Lock()
         self.projected = OrderedDict()
         self.read_paths = {}
         self.read_revisions = {}
+
+    def _forget_index(self, key):
+        self.indexes.pop(key, None)
+        previous = self._index_sizes.pop(key, None)
+        if previous is not None:
+            self.retained_index_bytes -= previous[1]
+
+    def _retain_index(self, index):
+        key = str(index.path)
+        previous = self._index_sizes.get(key)
+        signature = (index.revision, index.association_revision)
+        try:
+            size = previous[1] if previous and previous[0] == signature else retained_index_size(index)
+        except BaseException:
+            self._forget_index(key)
+            raise
+        self._forget_index(key)
+        # A large history can still be read exactly for this request, but it
+        # cannot permanently displace the entire bounded recent working set.
+        if size > self.MAX_INDEX_BYTES:
+            return
+        self.indexes[key] = index
+        self._index_sizes[key] = (signature, size)
+        self.retained_index_bytes += size
+        while len(self.indexes) > self.MAX_INDEXES or self.retained_index_bytes > self.MAX_INDEX_BYTES:
+            self._forget_index(next(iter(self.indexes)))
 
     @staticmethod
     def projection_input(session):
@@ -394,6 +455,18 @@ class EventLogView:
             await asyncio.sleep(1)
 
     def read(self, session):
+        with self._read_lock:
+            try:
+                return self._read(session)
+            except BaseException:
+                # Any failure after mutable parsing/association work must not
+                # leave resident entries with stale, smaller byte charges.
+                self.indexes.clear()
+                self._index_sizes.clear()
+                self.retained_index_bytes = 0
+                raise
+
+    def _read(self, session):
         root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
         queue = [root, session['id']]
         queue.extend(row.get('sessionId') or row.get('id') for row in session.get('workers', []))
@@ -409,17 +482,23 @@ class EventLogView:
             except ValueError:
                 if sid == root:raise
                 continue
-            index = self.indexes.setdefault(str(path), EventIndex(path, sid))
-            self.indexes.move_to_end(str(path))
-            available = index.refresh()
+            index = self.indexes.get(str(path))
+            if index is None:
+                index = EventIndex(path, sid)
+            try:
+                available = index.refresh()
+            except BaseException:
+                # A failed refresh may already have grown the mutable index.
+                # Do not retain an unmeasured partial result over the budget.
+                self._forget_index(str(path))
+                raise
             inputs.append((path, index.revision))
             if not available:
+                self._forget_index(str(path))
                 continue
             indexes.append(index)
             workers.update(index.children)
             queue.extend(index.children)
-        while len(self.indexes) > max(64, len(seen)):
-            self.indexes.popitem(last=False)
         self.read_paths[session['id']] = tuple(path for path, _ in inputs)
         self.read_revisions[session['id']] = tuple((str(path), stamp) for path, stamp in inputs)
         if not indexes:
@@ -462,7 +541,12 @@ class EventLogView:
         from .automatic_history import directory
         root_index = next((index for index in indexes if index.identity == root), None)
         source = {**session, 'nativeProject': session.get('nativeProject') or project_slug(session['workspace'])}
-        associations = root_index.associations(directory(source)) if root_index else {}
+        try:
+            associations = root_index.associations(directory(source)) if root_index else {}
+        except BaseException:
+            if root_index:
+                self._forget_index(str(root_index.path))
+            raise
         if root_index:
             transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup'))
             self.read_paths[session['id']] += transcript_paths
@@ -628,6 +712,8 @@ class EventLogView:
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
         refresh_usage(tree)
+        for index in indexes:
+            self._retain_index(index)
         return tree
 
     async def refresh(self, identity):
