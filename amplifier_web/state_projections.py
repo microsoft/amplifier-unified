@@ -14,7 +14,13 @@ class StateProjections:
         self.values = {}
         self.previous_navigation = None
 
-    def invalidate(self, *, state=None, session_ids=None):
+    def invalidate(self, *, state=None, session_ids=None, detail_only=False):
+        if detail_only and session_ids is not None:
+            index = self.values.get(('session-index',))
+            if index is not None and index.patch(state, session_ids):
+                # Streaming text does not alter navigation, attention or shell
+                # evidence. Keep those immutable facts; detail is built anew.
+                return
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:

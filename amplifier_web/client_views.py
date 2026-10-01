@@ -119,18 +119,37 @@ class ClientViews:
         self.dirty.add(identity)
         self.service.computer_visual.reconcile(identity)
         sid = record.get("selectedSessionId")
-        if sid is not None and not any(row["id"] == sid for row in self.service._state.get("sessions", [])):
+        projections = getattr(self.service, '_projections', None)
+        index = projections.values.get(('session-index',)) if projections is not None else None
+        rows = self.service._state.get('sessions', [])
+        position = index.positions.get(sid) if index is not None else None
+        if index is not None and (len(rows) != len(index.positions) or sid is not None and
+                (position is None or position >= len(rows) or rows[position] is not index.by_id.get(sid))):
+            # A command can alter membership before publication invalidates its
+            # saved index. Reconcile against live membership, never stale cache.
+            index = None
+        selected = (index.by_id.get(sid) if index is not None else
+                    next((row for row in rows if row['id'] == sid), None))
+        if sid is not None and selected is None:
             record["selectedSessionId"] = None
             record["canvas"] = {}
         self.service.computer_visual.reconcile(identity)
         from .managed_chats import is_managed
-        selected = next((row for row in self.service._state.get("sessions", []) if row["id"] == sid), {})
+        selected = selected or {}
         managed = is_managed(selected) or (sid is None and is_managed(record.get("view", {}).get("newSessionDraft", {})))
         workspace = record.get("selectedWorkspaceId")
         if managed and workspace is None:
             pass
-        elif not any(row["id"] == workspace for row in self.service._state.get("workspaces", [])):
-            record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
+        else:
+            workspaces = self.service._state.get('workspaces', [])
+            position = index.workspace_positions.get(workspace) if index is not None else None
+            indexed_workspace = (index.workspaces.get(workspace) if index is not None
+                                 and len(workspaces) == len(index.workspaces) and position is not None
+                                 and position < len(workspaces) and workspaces[position] is index.workspaces.get(workspace)
+                                 else None)
+            available = indexed_workspace is not None or any(row['id'] == workspace for row in workspaces)
+            if not available:
+                record["selectedWorkspaceId"] = self.service._state.get("selectedWorkspaceId")
         if record.get('selectedSessionId') is None:
             # Older clients could persist an open Canvas without a chat. Hide
             # that presentation on reconnect; never discard its saved content.

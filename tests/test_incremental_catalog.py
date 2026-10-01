@@ -37,6 +37,110 @@ def test_persistent_cache_reuses_compact_metadata_without_reading_bodies(tmp_pat
     assert cache.stat().st_mode & 0o777 == 0o600
 
 
+def test_missed_notifications_recover_in_bounded_slices_and_keep_sources(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Original'})
+             for n in range(160)]
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    write_json(paths[-1] / 'metadata.json',
+               {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Missed event'})
+    before = (paths[-1] / 'transcript.jsonl').read_bytes()
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    observed = []
+    for _ in range(100):
+        base, delta = index.scan_changes(since=base)
+        assert delta['reconciliation']['steps'] <= 12
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('Bounded reconciliation did not complete')
+    assert any(row['title'] == 'Missed event' for row in observed)
+    assert (paths[-1] / 'transcript.jsonl').read_bytes() == before
+    assert index._catalog is not None
+    index.close()
+
+
+def test_transient_catalog_save_failure_reconnects_without_restart(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, cache_path=tmp_path / 'cache.sqlite3')
+    base, _ = index.scan_changes()
+    def locked(*args):
+        raise sqlite3.OperationalError('database is locked')
+    monkeypatch.setattr(index._catalog, 'save', locked)
+    write_json(path / 'metadata.json', {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'New'})
+    base, failed = index.scan_changes(since=base)
+    assert index._catalog is None and {'kind': 'unavailable-catalog-cache'} in failed['issues']
+    index._cache_retry_at = 0
+    _, recovered = index.scan_changes(since=base)
+    assert index._catalog is not None and not index._cache_error
+    assert index.scan()['sessions'][0]['title'] == 'New'
+    assert {'kind': 'unavailable-catalog-cache'} not in recovered['issues']
+
+
+def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors'}) for n in range(160)]
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path), original(path, *args))[1])
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved-007', 'transcript')}))
+    with (paths[7] / 'transcript.jsonl').open('a') as source:
+        source.write('changed\n')
+    _, delta = index.scan_changes(since=base)
+    assert len(probes) <= 13
+    assert delta['reconciliation']['steps'] <= 12
+    assert any(row['nativeIdentity'] == 'saved-007' for row in delta['sessions'])
+
+
+@pytest.mark.parametrize('ancestor', ['project', 'sessions'])
+def test_substituted_ancestors_never_admit_outside_reads(tmp_path, monkeypatch, ancestor):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    project = saved.parent.parent
+    substituted = project if ancestor == 'project' else saved.parent
+    retained = substituted.with_name(substituted.name + '-retained')
+    substituted.rename(retained)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    external = outside / 'sessions' if ancestor == 'project' else outside
+    external.mkdir(exist_ok=True)
+    (external / 'saved').mkdir()
+    write_json(external / 'saved' / 'metadata.json', {'working_dir': str(workspace), 'name': 'Outside'})
+    (external / 'saved' / 'transcript.jsonl').write_text('must not read')
+    substituted.symlink_to(outside, target_is_directory=True)
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path.resolve()), original(path, *args))[1])
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved', 'transcript')}))
+    _, delta = index.scan_changes(since=base)
+    assert all(not path.is_relative_to(outside) for path in probes)
+    assert not any(row['title'] == 'Outside' for row in delta['sessions'])
+    assert any(issue['kind'] == 'unreadable' for issue in delta['issues'])
+
+
 def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
@@ -188,6 +292,8 @@ async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_
     own = next(row for row in app.state['sessions'] if not row.get('historyManaged'))
     own['draft'] = 'Unrelated progress must reach the durable view'
     app._progress_dirty = True
+    # A later labelled writer cannot narrow an earlier unknown mutation.
+    await app.on_runtime_event('assistant.delta', {'sessionId': own['id'], 'text': 'later delta'})
     app.history.index._reconcile_at = time.monotonic() + 60
     monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
     with (saved / 'transcript.jsonl').open('a') as file:

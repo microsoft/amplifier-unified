@@ -48,6 +48,8 @@ class HistoryWatch:
                         parts = Path(path).relative_to(self.root).parts
                         if len(parts) == 4 and parts[3] in {'transcript.jsonl', 'transcript.jsonl.backup'}:
                             self.dirty.add((project, parts[2], 'transcript'))
+                        elif len(parts) >= 4 and parts[1] == 'sessions':
+                            self.dirty.add((project, parts[2], 'metadata'))
                         else:
                             # Metadata, membership and root uncertainty still
                             # require the conservative project/recovery path.
