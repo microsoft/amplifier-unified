@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from amplifier_web.deployment import config_path, load_server_config, save_server_config, validate_origin
+from amplifier_web.deployment import config_path, load_server_config, save_server_config, validate_origin, validate_server
 
 
 def test_server_config_is_private_atomic_and_defaults_to_loopback(tmp_path):
@@ -33,6 +33,48 @@ def test_server_config_rejects_boolean_numbers(tmp_path, key, value):
     config = load_server_config(tmp_path)
     with pytest.raises(ValueError, match=key):
         save_server_config(tmp_path, {**config, key: value})
+
+
+def test_server_config_preserves_extension_fields_without_rewriting_on_load(tmp_path):
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    original = "# Private extension configuration\nport: 8941\ndebug:\n  profiling: true\n  labels: [cpu]\ncustom_extension: disabled\n"
+    path.write_text(original)
+
+    config = load_server_config(tmp_path, overrides={"port": 9321})
+    assert config["debug"] == {"profiling": True, "labels": ["cpu"]}
+    assert config["custom_extension"] == "disabled"
+    assert config["port"] == 9321
+    assert path.read_text() == original
+
+    save_server_config(tmp_path, {**config, "session_ttl_seconds": 120})
+    saved = load_server_config(tmp_path)
+    assert saved["debug"] == config["debug"]
+    assert saved["custom_extension"] == config["custom_extension"]
+    assert saved["session_ttl_seconds"] == 120
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_server_config_validation_does_not_alias_extension_values():
+    source = {"debug": {"profiling": {"enabled": True}}}
+    config = validate_server(source)
+    config["debug"]["profiling"]["enabled"] = False
+    assert source["debug"]["profiling"]["enabled"] is True
+
+
+@pytest.mark.parametrize(("key", "value", "message"), [
+    ("schema_version", 2, "schema"),
+    ("bind", [], "bind"),
+    ("bind", ["192.0.2.5"], "Non-loopback"),
+    ("port", True, "port"),
+    ("session_ttl_seconds", 0, "session_ttl_seconds"),
+    ("public_origins", ["https://host.example/path"], "Public origins"),
+    ("tls", {"method": "invalid"}, "TLS"),
+    ("runtime", {"prewarm_on_select": "true"}, "prewarm_on_select"),
+])
+def test_server_extension_fields_do_not_bypass_known_setting_validation(key, value, message):
+    with pytest.raises(ValueError, match=message):
+        validate_server({"debug": {"profiling": True}, key: value})
 
 
 def test_tls_sans_use_canonical_public_origin_hostname(tmp_path):

@@ -184,3 +184,19 @@ through Foundation's shared metadata API. Custom names, including legacy names
 with unspecified source, skip automated renaming; compare-and-set storage also
 protects against an already-running naming call completing after a manual rename.
 Clients display the resulting shared title instead of running their own naming model.
+
+Unified defaults to the first name after one completed user exchange, then reviews
+the title and description at every fifth completed user input. During ongoing
+work, it checks every five minutes once that initial threshold has been met.
+Unchanged sampled conversation text does not trigger another model call. Existing
+`initial_trigger_turn` and `update_interval_turns` hook settings remain authoritative;
+`update_interval_seconds` can change the ongoing-work interval. Refresh prompts
+keep a suitable title stable rather than renaming it for small changes.
+
+Explicit regeneration also works during active conversation work. It uses a
+bounded snapshot of the conversation and selected provider, and its result cannot
+overwrite a later manual rename or naming-policy change. Naming calls retain
+diagnostic and usage records as background activity, without adding chat work rows
+or changing the conversation's working state. A second naming request can start
+after the current naming request finishes; a provider/bundle configuration change must
+finish before an explicit naming request starts.

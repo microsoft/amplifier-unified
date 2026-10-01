@@ -25,6 +25,8 @@ amplifier-unified doctor
 
 The private server configuration is stored at `config/server.yaml` under Unified's data directory, normally `~/.amplifier-unified`. Non-loopback binds do not start until TLS and at least one exact HTTPS public origin are configured.
 
+Additional top-level settings from local tooling or other versions do not prevent startup. Unified preserves them when saving ordinary configuration changes and does not activate features it does not implement. Known settings, including TLS, public origins and worker retention, retain their validation. Loading an existing configuration does not rewrite its file; an explicit `config reset all` resets the complete configuration.
+
 `setup-tls` creates Unified's local CA and a leaf certificate. Run `setup-tls force` only after changing an address that must appear in the certificate; it keeps the CA and replaces the leaf certificate.
 
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
@@ -78,3 +80,53 @@ agent and `amplifier-unified service logs` to read its recent output.
 Unified owns its own HTTPS listener and authentication. It does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.
 
 The public bootstrap endpoints are limited to `/login`, `/setup`, `/api/ca`, `/ca.crt`, and `/api/health`.
+
+## Debug-only profiling
+
+Opaque server extensions remain unchanged on load and save. The profiling
+consumer accepts only a literal boolean `true`; other extension values do not
+enable capture or prevent startup.
+
+The optional `amplifier-profiling` library must be installed in the serving host's
+Python environment. Normal installations do not require it. An operator can
+enable it through `amplifier-unified config set debug.profiling true`; no app
+action, bundle or tool configuration can enable this setting.
+
+`profiling.status`, `profiling.targets`, `profiling.start`, `profiling.read`,
+`profiling.stop` and `profiling.release` are authenticated shared actions.
+Mutations require a stable command ID. Start accepts only the process-local target
+returned by targets, 0.1–60 seconds, and 1–50 Hz. Results are memory-bounded and
+process-local, not retained across restart; small admission receipts prevent an
+exact retry from starting another capture. An unsettled receipt after restart is
+reported unavailable, never replayed. Download settled captures from the returned
+authenticated URL before explicitly releasing their retention slot.
+
+Disable through `amplifier-unified config set debug.profiling false`. While a
+capture is active, the host rechecks config every 250 ms (subject to event-loop and
+filesystem delays); malformed, missing or unreadable config fails closed.
+Download authorization is rechecked before returning bytes; already-returned
+bytes cannot be recalled. Shutdown stops the sampler.
+
+This is cooperative sampling of all Python threads in **the serving host
+process**, not arbitrary PID attachment. It records symbol metadata, not locals,
+arguments, source text, prompts or event bodies. GIL delays, missed samples and
+backend limitations remain visible. Function observations are wall-stack counts,
+not per-function CPU percentages. Do not infer native-thread/C-stack coverage.
+Profiles never enter canonical Context Intelligence capture or ordinary app-state
+publication. The native event JSONL and resume transcript remain authoritative.
+
+Enabling this setting grants the authenticated owner and its agents access to
+process-wide symbol metadata. Unified is currently single-owner; do not enable
+this adapter in a multi-tenant shared process without separate operator-only
+authorization and tenant-isolated targets. Hosted containers need no ptrace or
+root privileges for self-sampling. External/native sampling is not supplied.
+
+## Rebuildable history metadata
+
+The app's `native-catalog.sqlite3` stores derived metadata, not canonical
+transcripts or context-intelligence event bodies. Cache loading validates
+workspace path and availability types before discovery consumes them. An invalid
+cache is reported as unavailable and bypassed on ordinary and forced refreshes;
+original history and the rejected cache are preserved. This fallback is not
+permission to delete or repair canonical history. Resume admission continues to
+read native metadata rather than trusting cached classification.

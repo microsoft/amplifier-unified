@@ -1,5 +1,5 @@
 """Exercise the actual Foundation naming implementation with a local provider."""
-import asyncio,json,sys,tempfile
+import asyncio,json,os,sys,tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +24,8 @@ async def run():
     calls=[];events=[]
     with tempfile.TemporaryDirectory() as tmp:
         home=Path(tmp)
+        # The app shares native history normally; this probe owns its history.
+        os.environ['AMPLIFIER_HOME']=str(home/'native')
         class Provider:
             name='fixture';priority=1
             def get_info(self):return SimpleNamespace(id='fixture',defaults={'model':'naming-fixture'})
@@ -33,7 +35,8 @@ async def run():
                 return ChatResponse(content=[TextBlock(text=json.dumps(value))],usage=Usage(input_tokens=50,output_tokens=15,total_tokens=65))
         provider=Provider();telemetry=ExecutionEvents('fixture',events.append);telemetry.instrument_provider('fixture',provider)
         class Context:
-            async def get_messages(self):return [{'role':'user','content':'Create an interactive solar system'},{'role':'assistant','content':'I built orbit controls'},{'role':'user','content':'Add camera rotation'}]
+            def __init__(self):self.messages=[{'role':'user','content':'Create an interactive solar system'},{'role':'assistant','content':'I built orbit controls'}]
+            async def get_messages(self):return self.messages
         context=Context();hooks=Hooks()
         coordinator=SimpleNamespace(session_id='fixture',config={'hooks':[]},hooks=hooks,mount_points={'context':context},get=lambda k:{'providers':{'fixture':provider},'context':context}.get(k),get_capability=lambda k:None,register_cleanup=lambda f:None)
         def publish(e):
@@ -43,6 +46,7 @@ async def run():
         namer=LiveSessionNaming(coordinator,home,publish)
         assert namer.hook
         for i in range(1,6):
+            if i>1:context.messages.append({'role':'user','content':f'Add camera rotation option {i}'})
             namer.observe({'type':'input.delivered','input_id':str(i),'source':'user'})
             namer.observe({'type':'generation.finished','input_ids':[str(i)]})
             if namer.pending:await namer.pending
@@ -52,11 +56,11 @@ async def run():
         assert metadata['name']=='Build an orbit explorer'
         rows=[e['event'] for e in events if e.get('type')=='execution.event' and e['event'].get('phase')=='completed']
         assert len(rows)==2 and all(r['label']=='Session naming' and r['usage']['totalTokens']==65 for r in rows),rows
-        assert [r['turnId'] for r in rows]==['2','5']
+        assert [r['turnId'] for r in rows]==['1','5']
         before=SessionStore.for_app(home,Path.cwd()).load('fixture')
         assert (await namer.suggest())['name']=='Build an orbit explorer'
         assert len(calls)==3
         assert SessionStore.for_app(home,Path.cwd()).load('fixture')==before
         await namer.close()
-    print('Real Foundation hook verified: first name after turn 2, description at turn 5, configured provider, bounded request, durable metadata, attributed usage, explicit suggestion from a hook-free bundle; no network calls.')
+    print('Real Foundation hook verified: first name after turn 1, title and description refresh at turn 5, configured provider, bounded request, durable metadata, attributed background usage, explicit suggestion from a hook-free bundle; no network calls.')
 asyncio.run(run())

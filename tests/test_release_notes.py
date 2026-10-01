@@ -42,6 +42,13 @@ def test_history_limits_and_exact_published_version():
     assert release_notes.parse(document([entry('98.0.0'),entry()]),'99.0.0')[0]['version']=='99.0.0'
 
 
+@pytest.mark.parametrize('previous',[None,'Old title',['Old title']*6,[''],[None],['x'*161]])
+def test_invalid_previous_notice_titles_rejected(previous):
+    release=entry()
+    release['notices'][0]['previousTitles']=previous
+    with pytest.raises(ValueError):release_notes.parse(document([release]))
+
+
 async def test_exact_release_history_includes_skipped_versions_and_failure_does_not_block_update(monkeypatch):
     from unittest.mock import AsyncMock
     monkeypatch.setattr(app_updates.components,'updates',AsyncMock(return_value=[]))
@@ -88,6 +95,35 @@ async def test_notice_review_survives_restart_and_upgrade_but_changed_guidance_i
     changed=snapshot(restored.state)['items'][0]
     assert not changed['read'] and changed['fingerprint']!=item['fingerprint']
     await restored.dispatch('attention.read',{'ids':[item['id']],'fingerprints':{item['id']:item['fingerprint']}})
+    assert not snapshot(restored.state)['items'][0]['read']
+    await restored.close()
+
+
+@pytest.mark.parametrize('changed_field',['detail','action','title'])
+async def test_editorial_notice_title_preserves_review_after_upgrade_but_changed_content_is_unread(tmp_path,monkeypatch,changed_field):
+    original=entry(__version__)
+    monkeypatch.setattr(release_notes,'bundled',lambda:[original])
+    app=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    UpdateManager(app)
+    reviewed=snapshot(app.state)['items'][0]
+    await app.dispatch('attention.read',{'ids':[reviewed['id']],
+        'fingerprints':{reviewed['id']:reviewed['fingerprint']}})
+    await app.close()
+
+    corrected=copy.deepcopy(original)
+    notice=corrected['notices'][0]
+    notice['previousTitles']=[notice['title']]
+    notice['title']='Shared workspace defaults'
+    monkeypatch.setattr(release_notes,'bundled',lambda:release_notes.parse(document([corrected])))
+    restored=AppService(tmp_path,Runtime(),workspace=tmp_path)
+    UpdateManager(restored)
+    current=snapshot(restored.state)['items'][0]
+    assert current['title']=='Shared workspace defaults'
+    assert current['fingerprint']!=reviewed['fingerprint'] and current['read']
+
+    changed=restored.state['updates']['application']['releaseNotes'][0]['notices'][0]
+    changed[changed_field]='Changed content.'
+    if changed_field=='title':changed.pop('previousTitles')
     assert not snapshot(restored.state)['items'][0]['read']
     await restored.close()
 

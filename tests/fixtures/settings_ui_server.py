@@ -13,7 +13,7 @@ import yaml
 PLAN={'session':{'orchestrator':{'module':'loop-live','config':{'max_iterations':10}},'context':{'module':'context-simple','config':{'max_tokens':1000}}},'providers':[{'module':'provider-openai','id':'openai','config':{'default_model':'fixture-model'}}],'tools':[{'module':'tool-filesystem','config':{'read_only':False,'max_bytes':2000}}],'hooks':[{'module':'hooks-logging','config':{'enabled':True}}]}
 class Runtime:
  def __init__(self):self.plan=copy.deepcopy(PLAN)
- async def start(self,session,emit):await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
+ async def start(self,session,emit,*,preserve_emit=False):await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
  async def stop(self,*args):pass
  async def close(self):pass
  async def control(self,sid,operation,args):

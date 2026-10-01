@@ -12,7 +12,7 @@ from .session_navigation import is_top_level
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
-    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
+    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
@@ -44,13 +44,23 @@ class SessionIndex:
         self.active = set()
         self.notifications = []
         self.first_root = None
+        self.roots = []
+        self.attention_ids = set()
+        self._membership = {}
+        self.workspaces = {row['id']: row for row in state.get('workspaces', [])}
+        self.workspace_positions = {row['id']: position
+                                    for position, row in enumerate(state.get('workspaces', []))}
         for position, row in enumerate(state.get('sessions', [])):
             identity = row['id']
             self.by_id[identity] = row
             self.positions[identity] = position
+            self._membership[identity] = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
+            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+                self.attention_ids.add(identity)
             if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
                 self.active.add(identity)
             if is_top_level(row):
+                self.roots.append(row)
                 if self.first_root is None:
                     self.first_root = row
             else:
@@ -65,6 +75,66 @@ class SessionIndex:
         self.notifications.extend(state.get('scheduleNotifications', []))
         self.notifications.sort(key=lambda row: row.get('createdAt', 0))
         self.notifications = self.notifications[-100:]
+
+    def patch(self, state, identities):
+        """Update admitted rows without walking the complete session library."""
+        rows = state.get('sessions', [])
+        if len(self.workspaces) != len(state.get('workspaces', [])):
+            self.workspaces = {row['id']: row for row in state.get('workspaces', [])}
+            self.workspace_positions = {row['id']: position
+                                        for position, row in enumerate(state.get('workspaces', []))}
+        if len(rows) < len(self.positions):
+            return False  # Unscoped removals require rebuilding the index.
+        appended = rows[len(self.positions):]
+        identities = set(identities) | {row['id'] for row in appended}
+        roots_changed = False
+        for row in appended:
+            self.positions[row['id']] = len(self.positions)
+            self.by_id[row['id']] = row
+        for identity in identities:
+            position = self.positions.get(identity)
+            if position is None or position >= len(rows) or rows[position]['id'] != identity:
+                return False
+            row = rows[position]
+            old = self._membership.get(identity)
+            current = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
+            if old != current:
+                roots_changed = roots_changed or bool(current[2] or (old and old[2]))
+                if old:
+                    self.parents.get(old[0], set()).discard(identity)
+                    self.native_parents.get(old[1], set()).discard(identity)
+                    if old[2]:
+                        self.roots = [item for item in self.roots if item['id'] != identity]
+                if current[2]:
+                    self.roots.append(row)
+                else:
+                    self.parents.setdefault(current[0], set()).add(identity)
+                    self.native_parents.setdefault(current[1], set()).add(identity)
+                self._membership[identity] = current
+            self.by_id[identity] = row
+            self.active.discard(identity)
+            if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
+                self.active.add(identity)
+            self.attention_ids.discard(identity)
+            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+                self.attention_ids.add(identity)
+        if roots_changed:
+            self.roots.sort(key=lambda row: self.positions[row['id']])
+        self.first_root = self.roots[0] if self.roots else None
+        # Notifications are bounded presentation facts; only changed rows can
+        # contribute new assistant messages. Preserve independent schedule rows.
+        self.notifications = [row for row in self.notifications if row.get('sessionId') not in identities]
+        for identity in identities:
+            row = self.by_id[identity]
+            if row.get('sessionKind') != 'internal':
+                self.notifications.extend(
+                    {**{key: message[key] for key in ('id', 'role', 'via', 'createdAt') if key in message},
+                     'sessionId': identity, 'text': message.get('text', '')[:500]}
+                    for message in row.get('messages', [])
+                    if message.get('role') == 'assistant' and message.get('via') == 'text')
+        self.notifications.sort(key=lambda row: row.get('createdAt', 0))
+        self.notifications = self.notifications[-100:]
+        return True
 
     def children(self, parent):
         if not parent:
@@ -131,7 +201,8 @@ class SnapshotCopies:
         return result
 
 
-def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None):
+def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None,
+             detail_project=None):
     index = index or SessionIndex(state)
     result = dict(state)
     result.update(derived)
@@ -141,13 +212,15 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     selected_row = index.by_id.get(selected, {})
     visible.add(selected_row.get('parentId'))
     full = {selected, session_id, state.get('voice', {}).get('sessionId')}
-    full.update(index.active)
+    if client_id is None:
+        full.update(index.active)  # Legacy unbound readers retain compatibility.
     visible.update(full)
     visible.add(derived['subagentNavigation']['scope']['sessionId'])
     workers = derived['subagentNavigation']
     selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
                          else len(index.children(selected_row))) if selected_row else 0
-    result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
+    detail_project = detail_project or project
+    result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': selected_children} if row['id'] == selected else {})}
                           for row in (index.by_id[key] for key in sorted(visible & index.by_id.keys(), key=index.positions.__getitem__))]
     from .conversation_library import projection as organization_projection
@@ -160,7 +233,9 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
         state.get('selectedWorkspaceId'), state.get('view', {}).get('workWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
-    result['workspaces'] = [row for row in state.get('workspaces', []) if row['id'] in workspace_ids]
+    result['workspaces'] = [index.workspaces[key] for key in
+                            sorted(workspace_ids & index.workspaces.keys(),
+                                   key=index.workspace_positions.__getitem__)]
     result['runtimeControl'] = {key: value for key, value in state.get('runtimeControl', {}).items() if key in full}
     result['canvasArtifacts'] = [row for row in state.get('canvasArtifacts', [])
                                  if row.get('sessionId') == selected or row.get('id') == state.get('canvas', {}).get('id')]
@@ -171,7 +246,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                                      for row in index.notifications]
     selected_root = selected_row if selected_row and is_top_level(selected_row) else None
     continuation = selected_root or index.first_root
-    result['library'] = {'sessionCount': sum(is_top_level(row) for row in state.get('sessions', [])), 'workspaceCount': len(state.get('workspaces', [])),
+    result['library'] = {'sessionCount': len(index.roots), 'workspaceCount': len(state.get('workspaces', [])),
                          'continueSessionId': continuation['id'] if continuation else None,
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):

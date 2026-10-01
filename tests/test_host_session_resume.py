@@ -151,6 +151,31 @@ async def test_module_preparation_uses_active_registry_cache_not_shared_history_
     assert os.environ["AMPLIFIER_HOME"] == shared
 
 
+async def test_app_recording_policy_reaches_root_preparation_and_installs_redaction(mounted_host):
+    h = mounted_host
+    path = h.home / 'diagnostics' / 'config.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{"providerRequests":true}')
+    h.prepared.mount_plan['providers'] = [{'module':'provider-openai'}]
+    h.prepared.mount_plan['agents'] = {'private': {'providers':[
+        {'module':'provider-anthropic','config':{'raw':False}}]}}
+    class Root:
+        def to_mount_plan(self):
+            return copy.deepcopy({**h.prepared.mount_plan,
+                'providers': getattr(self, 'providers', h.prepared.mount_plan['providers']),
+                'agents': getattr(self, 'agents', h.prepared.mount_plan['agents'])})
+        async def prepare(self, **kwargs):
+            assert self.providers[0]['config']['raw'] is True
+            assert self.agents['private']['providers'][0]['config']['raw'] is False
+            return h.prepared
+    h.registry.load.return_value = Root()
+    host.compose_configured_bundle.return_value = h.registry.load.return_value
+    await h.prepare()
+    assert h.capabilities['web.provider_request_redaction'] is True
+    registrations = h.session.coordinator.hooks.register.call_args_list
+    assert any(call.args[0] == 'llm:request' and call.kwargs.get('priority') == -100 for call in registrations)
+
+
 async def test_missing_saved_connection_publishes_choices_without_changing_history(mounted_host):
     from amplifier_web.host.model_selection import ProviderSelectionError
     from amplifier_web.provider_recovery import catalog
