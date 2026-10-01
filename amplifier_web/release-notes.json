@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.42",
+      "title": "Compact native conversation history in one request",
+      "changes": [
+        "Send the complete eligible conversation window in one native compaction request, preserving the selected model, current instructions and tool definitions. Native compaction never uses text-summary fragments.",
+        "For providers that require text summaries, measure the complete summary request first and use a single summary when it fits. Split only when the provider budget, explicit source limit or unavailable measurement requires it.",
+        "Keep native checkpoints, retained reminders and original saved history intact. Record why native compaction was selected or why the text-summary path was needed; healthy calls remain free of elapsed-time deadlines."
+      ],
+      "notices": [
+        {
+          "id": "whole-native-compaction-components",
+          "title": "Compact native history in one request",
+          "detail": "This repair includes an updated context-management component. Existing conversation workers retain their loaded component code.",
+          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+        }
+      ]
+    },
+    {
       "version": "0.20.41",
       "title": "Bound history recovery and update only affected clients",
       "changes": [
