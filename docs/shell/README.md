@@ -75,6 +75,15 @@ supported actions pass through `shell.command`, which checks the declared
 capability before invoking the existing shared action handler. The namespace
 does not provide runtime/provider/bundle configuration operations.
 
+Navigation snapshots include `attention.items` containing only error review
+receipts (`id`, `sessionId`, `fingerprint`, `read`) for the bounded chat rows.
+With `chats.manage`, pass the observed IDs and fingerprints to `attention.read`
+through `host.dispatch`. This reviews the exact failed-turn notice, clears its
+historical navigation marker, and preserves the saved error and conversation.
+The module cannot review unrelated inbox items or omit fingerprints. Later
+errors become unread again; pending approvals, required questions, uncertain
+answer delivery and blocked work keep their attention markers.
+
 Supported capabilities are navigation reads and explicit selection, workspace
 management, chat management, folder location reads and history refresh.
 Changing a filter or browsing a folder never selects a conversation. Explicit

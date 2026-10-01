@@ -73,8 +73,8 @@ export function ModelContent({node,request,error,requestOpen,requestInline,toggl
  return <><dl className="a-execution-model-facts">{facts.map(([label,value])=><React.Fragment key={label}><dt>{label}</dt><dd>{String(value)}</dd></React.Fragment>)}</dl>
   {usage&&<p className="a-execution-model-usage">{usage.title}</p>}
   <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
-  {node.requestDetail?<>{!requestInline&&<button type="button" className="a-link a-execution-request-toggle" data-action="view.update" aria-expanded={requestOpen} onClick={toggleRequest}>{requestOpen?'Hide raw request':'Load raw request'}{!requestOpen&&` · ${node.requestDetail.length.toLocaleString()} characters`}</button>}
+  {node.requestDetail?<><small>Recorded by the provider; some adapters supply a summary.{node.requestCapture?.redacted?' Recognizable credentials redacted.':''}{node.requestCapture?.truncated?' This record reached the capture limit; part of the request is omitted.':''}</small>{!requestInline&&<button type="button" className="a-link a-execution-request-toggle" data-action="view.update" aria-expanded={requestOpen} onClick={toggleRequest}>{requestOpen?'Hide raw request':'Load raw request'}{!requestOpen&&` · ${node.requestDetail.length.toLocaleString()} characters`}</button>}
    {(requestInline||requestOpen)&&<><ExecutionBlock label="Raw request" text={request.value} loading={request.incomplete}/><FieldStatus label="Request" field={request}/></>}
-  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'No recorded raw request is available for this call.'}</small>}
+  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'No provider request was recorded for this call. Enable recording in Settings → Advanced → Diagnostics for future calls; availability depends on the provider.'}</small>}
  </>;
 }

@@ -49,6 +49,7 @@ def foundation_home(home):
     return home / 'updates' / 'releases' / identity / 'foundation' if identity else home / 'foundation'
 
 
+
 def safe_label(url):
     parsed = urlsplit(url)
     return (parsed.hostname or 'Git source') + '/' + parsed.path.strip('/').removesuffix('.git')
@@ -161,13 +162,6 @@ def configured_sources(service):
             incomplete = True
             continue
         selections.add((path, None, None))
-    try:
-        path = foundation_home(home)/'registry.json'
-        registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
-        if not isinstance(registry, dict):raise ValueError('Invalid registry')
-    except (OSError, ValueError, AttributeError):
-        registry = {}
-        issue('The bundle registry could not be read. Open Bundles to refresh its catalog.')
 
     for workspace, selected, session_id in selections:
         try:
@@ -176,11 +170,9 @@ def configured_sources(service):
             if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
             config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache)
-            registrations = {name: row['uri'] for name, row in registry.items()
-                             if isinstance(row, dict) and isinstance(row.get('uri'), str)}
-            configured = dict(config.registrations)
-            if 'foundation' in registry:configured.pop('foundation', None)
-            registrations.update(configured)
+            # Use the same settings authority as session startup. Retained
+            # imported registry aliases must not masquerade as configured use.
+            registrations = dict(config.registrations)
 
             def resolve(reference, evidence, seen=frozenset()):
                 nonlocal incomplete
@@ -784,16 +776,19 @@ class UpdateManager:
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await asyncio.to_thread(shutil.copytree,self.home/name,stage/name)
                 from .session_files import amplifier_home
+                shared_home=amplifier_home()
                 shared_stage=stage/'shared-config'
                 shared_stage.mkdir(mode=0o700)
                 for name in ('settings.yaml','keys.env','routing'):
-                    original=amplifier_home()/name
+                    original=shared_home/name
                     if original.is_dir():await asyncio.to_thread(shutil.copytree,original,shared_stage/name)
                     elif original.is_file():await asyncio.to_thread(shutil.copy2,original,shared_stage/name)
                 for config_file in (stage/'config').rglob('*.yaml'):
                     config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
+                # Snapshot shared configuration, never CLI registry or caches.
+                # Candidate preparation resolves declarations into its own store.
                 for row in candidates:
                     if row.get('kind') == 'included source':
                         from .update_sequence import stage_missing

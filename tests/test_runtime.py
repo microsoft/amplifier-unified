@@ -700,3 +700,49 @@ async def test_terminal_checkpoint_failure_still_cleans_up_and_releases_ownershi
     assert steps == [("checkpoint", "error"), "registration", "controls", "session", "release"]
     assert worker.shared_handle is None
     assert not worker.terminal_checkpointed
+
+
+async def test_naming_does_not_hold_command_lock_or_require_idle(monkeypatch):
+    from unittest.mock import AsyncMock
+    worker = Worker()
+    started, release, sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    worker.acquire_for_mutation = AsyncMock()
+    worker.bind_activation = lambda: None
+    worker.activation_gate = SimpleNamespace(reset=lambda token: None)
+    worker.park = AsyncMock()
+    worker.session = object()
+    worker.execution = object()
+    worker.controls = SimpleNamespace(require_idle=Mock(side_effect=AssertionError('Naming must run during work')))
+    async def suggest():
+        started.set()
+        await release.wait()
+        return {'name': 'Concurrent name'}
+    worker.naming = SimpleNamespace(suggest=suggest)
+    dispatch = worker._command_serial
+    async def serial(data):
+        if data['op'] == 'send': sent.set()
+        else: await dispatch(data)
+    worker._command_serial = serial
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', lambda event: None)
+    task = asyncio.create_task(worker.command({'id': 'naming', 'op': 'control', 'operation': 'session.naming'}))
+    await asyncio.wait_for(started.wait(), 1)
+    assert worker.operation_controls == 1 and not worker.command_lock.locked()
+    await asyncio.wait_for(worker.command({'id': 'input', 'op': 'send'}), .5)
+    assert sent.is_set() and not task.done()
+    release.set()
+    await task
+    assert worker.operation_controls == 0
+
+
+async def test_naming_reuses_worker_without_replacing_foreground_emitter(tmp_path):
+    runtime = RuntimeManager(tmp_path)
+    ready = asyncio.get_running_loop().create_future()
+    ready.set_result({})
+    original, naming = Mock(), Mock()
+    runtime.workers['active'] = {'process': SimpleNamespace(returncode=None), 'ready': ready, 'emit': original}
+    await runtime.start({'id': 'active'}, naming, preserve_emit=True)
+    assert runtime.workers['active']['emit'] is original
+    await runtime.start({'id': 'active'}, naming)
+    assert runtime.workers['active']['emit'] is naming
+    runtime.workers.clear()
+    await runtime.close()

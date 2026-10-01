@@ -102,3 +102,21 @@ async def test_generic_exit_does_not_redate_the_same_manager_failure(tmp_path):
         assert session['errorAt'] == session['failure']['recordedAt'] == 100
     finally:
         await app.close()
+
+
+async def test_handled_compaction_error_does_not_mark_conversation_broken(tmp_path):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        await app.on_runtime_event('execution.event', {'id': 'llm:compact', 'sessionId': session['id'],
+            'kind': 'llm', 'phase': 'error', 'purpose': 'context_compaction', 'lifecycle': 'turn',
+            'failure': generation_failure({'error_category': 'context_limit'}), 'endedAt': 123})
+        assert not session.get('failure') and not session.get('error')
+        # A real terminal manager failure still owns a turn-level diagnosis.
+        kind, payload = normalize_event({'type': 'generation.failed', 'generation_id': 'g1',
+            'error_type': 'ContextLengthError', 'error_category': 'context_limit'}, session['id'])
+        await app.on_runtime_event(kind, payload)
+        assert session['failure']['category'] == 'context_limit'
+    finally:
+        await app.close()

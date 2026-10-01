@@ -5,7 +5,7 @@ import time
 
 from .session_navigation import is_top_level
 from .managed_chats import is_managed
-from .navigation_summary import activity, path_labels
+from .navigation_summary import activity, path_labels, task_blocked
 
 PAGE_SIZE = 100
 SIDEBAR_FILTER_KEYS = {'navSort', 'navArchive', 'navCollection', 'navLocationFilter',
@@ -191,7 +191,10 @@ def catalog(state, *, indexed=None):
     if status_filter != 'all':
         scope['statusFilter'] = status_filter
     counts = dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)
-    unread = state.get('attention', {}).get('sessions', {})
+    from .attention import reviewed_session_errors
+    attention = state.get('attention', {})
+    unread = attention.get('sessions', {})
+    reviewed_errors = reviewed_session_errors(attention)
     pins = set(state.get('pinnedSessionIds', []))
     pin_order = {sid: i for i, sid in enumerate(state.get('pinnedSessionIds', []))}
     organization = state.get('conversationOrganization', {})
@@ -219,7 +222,9 @@ def catalog(state, *, indexed=None):
         shared_id = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
         if not _matches((title, description, session['id'], shared_id, workspace['path'], workspace.get('name', '')), query):
             continue
-        summary = activity(session, bool(unread.get(session['id'])))
+        summary = activity(session, bool(unread.get(session['id'])),
+                           error_reviewed=session['id'] in reviewed_errors,
+                           blocked=task_blocked(state, session['id']))
         counts[summary['kind']] += 1
         if status_filter != 'all' and summary['kind'] != status_filter:
             continue

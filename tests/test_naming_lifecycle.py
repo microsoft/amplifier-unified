@@ -66,6 +66,7 @@ async def mounted(community, home, identity, *, count=1, automatic=True, manual=
     started, release = asyncio.Event(), asyncio.Event()
     class Provider:
         name = 'fixture'
+        response_name = 'Generated project'
         priority = 1
         def get_info(self): return SimpleNamespace(id='fixture', defaults={'model': 'offline'})
         async def complete(self, request, **kwargs):
@@ -73,11 +74,12 @@ async def mounted(community, home, identity, *, count=1, automatic=True, manual=
             started.set()
             await release.wait()
             return ChatResponse(content=[TextBlock(text=json.dumps({'action': 'set',
-                'name': 'Generated project', 'description': 'Orbit work'}))],
+                'name': self.response_name, 'description': 'Orbit work'}))],
                 usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
     class Context:
-        async def get_messages(self): return [{'role': 'user', 'content': 'Build orbits'},
+        messages = [{'role': 'user', 'content': 'Build orbits'},
             {'role': 'assistant', 'content': 'Added camera controls'}]
+        async def get_messages(self): return self.messages
     context, provider, hooks, capabilities = Context(), Provider(), HookRegistry(), {}
     co = coordinator(hooks, [row(str(n)) for n in range(count)])
     co.config['project_dir'] = str(home)
@@ -95,7 +97,7 @@ async def mounted(community, home, identity, *, count=1, automatic=True, manual=
         'name_auto_revision': metadata.read().get('name_revision', 0)})
     for declaration in co.config['hooks']: await community.mount(co, declaration['config'])
     install(co)
-    return SimpleNamespace(co=co, calls=calls, started=started, release=release, metadata=metadata)
+    return SimpleNamespace(co=co, calls=calls, started=started, release=release, metadata=metadata, context=context, provider=provider)
 
 
 async def prompt(host):
@@ -297,3 +299,68 @@ def test_naming_dependency_is_in_both_app_and_worker_manifests():
     assert worker['tool']['uv']['sources'][name] == {'git':'https://github.com/microsoft/amplifier-foundation',
         'rev':'main', 'subdirectory':'modules/hooks-session-naming'}
     assert not any('amplifier-app-cli' in value for value in app['project']['dependencies'] + worker['project']['dependencies'])
+
+
+async def test_first_exchange_and_periodic_refresh_change_titles_without_idle_calls(native_home, community):
+    host = await mounted(community, native_home, 'cadence', count=0)
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda event: None)
+    host.release.set()
+    async def turn(number):
+        host.context.messages.append({'role': 'user', 'content': f'New scope {number}'})
+        namer.observe({'type': 'input.delivered', 'input_id': str(number), 'source': 'user'})
+        namer.observe({'type': 'generation.finished', 'input_ids': [str(number)]})
+        if namer.pending: await namer.pending
+    await turn(1)
+    assert len(host.calls) == 1
+    assert host.metadata.read()['name'] == 'Generated project'
+    host.provider.response_name = 'Expanded project'
+    for number in range(2, 6): await turn(number)
+    assert len(host.calls) == 2
+    assert host.metadata.read()['name'] == 'Expanded project'
+    # Both calls use the initial title+description contract; the second adds
+    # a stability instruction instead of the upstream description-only prompt.
+    assert 'Only change it when' in str(host.calls[1])
+    assert 'name + description' in str(host.calls[1])
+    before = len(host.calls)
+    namer.refresh_seconds = .01
+    namer.observe({'type': 'generation.started'})
+    await asyncio.sleep(.04)
+    assert len(host.calls) == before  # unchanged sample, no paid polling
+    host.context.messages.append({'role': 'assistant', 'content': 'A new design emerged'})
+    await asyncio.sleep(.04)
+    assert len(host.calls) == before + 1
+    namer.observe({'type': 'session.idle'})
+    host.context.messages.append({'role': 'assistant', 'content': 'Idle must not invoke providers'})
+    await asyncio.sleep(.03)
+    assert len(host.calls) == before + 1
+    await namer.close()
+    assert namer.timer is None
+
+
+async def test_manual_name_snapshot_remains_stable_while_context_changes(native_home, community):
+    host = await mounted(community, native_home, 'concurrent', count=0)
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda event: None)
+    pending = asyncio.create_task(namer.suggest())
+    await host.started.wait()
+    captured = str(host.calls[0])
+    host.context.messages.append({'role': 'user', 'content': 'A later concurrent message'})
+    host.release.set()
+    suggestion = await pending
+    assert 'A later concurrent message' not in captured
+    assert 'Build orbits' in captured
+    assert suggestion['name'] == 'Generated project'
+    assert host.metadata.read()['name'] == 'Hi!'
+    await namer.close()
+
+
+async def test_close_and_auto_off_prevent_periodic_calls(native_home, community):
+    host = await mounted(community, native_home, 'off', count=0, automatic=False)
+    namer = LiveSessionNaming(host.co, native_home / 'app', lambda event: None, ['old'])
+    namer.refresh_seconds = .01
+    namer.observe({'type': 'generation.started'})
+    await asyncio.sleep(.04)
+    assert not host.calls
+    await namer.close()
+    namer.observe({'type': 'generation.started'})
+    await asyncio.sleep(.02)
+    assert not host.calls

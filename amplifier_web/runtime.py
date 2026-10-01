@@ -220,10 +220,10 @@ class RuntimeManager:
         except (ValueError, IndexError) as exc:
             raise RuntimeError("The runtime command does not identify a uv project.") from exc
 
-    async def start(self, session: dict, emit: Emitter):
+    async def start(self, session: dict, emit: Emitter, *, preserve_emit=False):
         sid = session["id"]
         async with self._admission(sid):
-            await self._start_locked(session, emit)
+            await self._start_locked(session, emit, preserve_emit=preserve_emit)
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -251,7 +251,7 @@ class RuntimeManager:
             except TimeoutError as exc:
                 raise RuntimeError('Worker shutdown is still being confirmed. No new command was sent; retry after it settles.') from exc
 
-    async def _start_locked(self, session, emit):
+    async def _start_locked(self, session, emit, *, preserve_emit=False):
         if self._closed:
             raise RuntimeError("The runtime host is closing.")
         sid = session["id"]
@@ -261,7 +261,8 @@ class RuntimeManager:
         if current and current["process"].returncode is None:
             if current.get('preparation_error'):
                 raise current['preparation_error']
-            current["emit"] = emit
+            if not preserve_emit:
+                current["emit"] = emit
             current['start_session'] = {key: session[key] for key in (
                 'id', 'workspace', 'workingDirectory', 'executionRevision', 'bundle', 'selection',
                 'runtimeSessionId', 'nativeIdentity', 'forkContext') if key in session}

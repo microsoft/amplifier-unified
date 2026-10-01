@@ -40,6 +40,16 @@ async def test_default_local_capture_never_infers_remote_destination(service,mon
     with collector._db() as db:assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0]==0
 
 
+async def test_provider_request_setting_is_optional_private_and_saved_without_enabling_forwarding(service):
+    assert service.diagnostics.config['providerRequests'] is False
+    await configure(service, providerRequests=True)
+    assert json.loads(service.diagnostics.config_path.read_text())['providerRequests'] is True
+    assert service.diagnostics.config['destinations'] == []
+    assert service.diagnostics.config_path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match='true or false'):
+        validate_config({'providerRequests': 'true'})
+
+
 async def test_auxiliary_failure_keeps_label_and_safe_category_without_error_payload(service):
     collector=service.diagnostics
     collector.runtime_event('execution.event', {'id':'summary-call','kind':'llm','phase':'error',

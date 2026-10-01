@@ -161,6 +161,47 @@ async def test_staging_normalizes_only_verified_artifacts_and_preserves_live_cac
     assert before == ((cache/'AGENTS.md').read_bytes(), (cache/'__pycache__/module.cpython-313.pyc').read_bytes())
 
 
+async def test_staging_uses_shared_settings_without_cli_registry_or_cache(repository, service):
+    from amplifier_web.host.config import load_config
+    from amplifier_web.host.session import load_root_bundle
+    from amplifier_web.session_files import amplifier_home
+    import yaml
+
+    cached(service, repository, 'repo')
+    manager = service.update_manager
+    row = (await manager.inventory_sources())[0]
+    manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
+    shared = amplifier_home()
+    (shared / 'cache/cli-only').mkdir(parents=True)
+    sentinel = shared / 'cache/cli-only/sentinel'
+    sentinel.write_text('CLI remains independent')
+    (shared / 'registry.json').write_text('invalid and irrelevant CLI registry')
+    # A user-authored local bundle is shared; a downloaded CLI cache is not.
+    local = shared / 'bundles/example.yaml'
+    local.parent.mkdir()
+    local.write_text('bundle:\n  name: example\n')
+    (shared / 'settings.yaml').write_text(yaml.safe_dump({'bundle': {
+        'active': 'example', 'added': {'example': local.as_uri()}}}))
+    original = (shared / 'registry.json').read_bytes()
+    service.state['settings']['bundle'] = 'example'
+
+    async def validate(stage, release):
+        staged_shared = stage / 'shared-config'
+        assert not (staged_shared / 'cache').exists()
+        assert not (staged_shared / 'registry.json').exists()
+        assert not (stage / 'foundation/cache/cli-only').exists()
+        config = load_config(repository.parent, home=stage, legacy_home=staged_shared)
+        prepare_registry(config)
+        _, loaded, chosen = await load_root_bundle(config, config.active_bundle)
+        assert chosen == 'example' and loaded.name == 'example'
+
+    manager.validate = validate
+    await manager.install()
+    assert service.state['updates']['phase'] == 'installed'
+    assert (shared / 'registry.json').read_bytes() == original
+    assert sentinel.read_text() == 'CLI remains independent'
+
+
 async def test_source_edit_added_after_check_blocks_staging(repository, service):
     old = git(repository, 'rev-parse', 'HEAD')
     cache = service.data_dir/'foundation/cache/example'
@@ -250,7 +291,7 @@ async def test_configured_sources_include_scoped_settings_and_session_choices(re
     }}))
     (home/'config').mkdir(exist_ok=True)
     (shared/'settings.yaml').write_text(yaml.safe_dump({
-        'bundle': {'active': 'git+https://example.invalid/repo@main', 'app': ['app'], 'added': {'disabled': 'git+https://example.invalid/disabled@main'}},
+        'bundle': {'active': 'git+https://example.invalid/repo@main', 'app': ['app'], 'added': {'disabled': 'git+https://example.invalid/disabled@main', 'app': 'git+https://example.invalid/app@main'}},
         'web_bundles': {'excluded': ['disabled']},
         'sources': {'modules': {'tool-example': 'git+https://example.invalid/module@main'}},
         'config': {'tools': [{'module': 'tool-skills', 'config': {'skills': ['git+https://example.invalid/skill@main']}}]},
@@ -282,7 +323,7 @@ async def test_unresolvable_configuration_does_not_hide_cache_failures(repositor
     root = cached(service, repository, 'repo')
     service.state['settings']['bundle'] = 'missing'
     if failure == 'cycle':
-        (root.parent.parent/'registry.json').write_text(json.dumps({'bundles': {'missing': {'uri': 'missing'}}}))
+        (shared/'settings.yaml').write_text('bundle:\n  added:\n    missing: missing\n')
     if failure == 'yaml':
         (service.data_dir/'config').mkdir(exist_ok=True)
         (shared/'settings.yaml').write_text('bundle: [')

@@ -19,7 +19,7 @@ class NamingRuntime:
         self.release = asyncio.Event()
         self.ready = asyncio.Event()
 
-    async def start(self, source, emit):
+    async def start(self, source, emit, *, preserve_emit=False):
         self.started += 1
         self.source = source
         await emit('runtime.status', {'sessionId': source['id'], 'status': 'starting'})
@@ -189,10 +189,10 @@ async def test_edit_while_runtime_prepares_wins_over_regeneration(named):
     app, runtime, session = named
     preparing, prepared = asyncio.Event(), asyncio.Event()
     original = runtime.start
-    async def delayed(source, emit):
+    async def delayed(source, emit, **kwargs):
         preparing.set()
         await prepared.wait()
-        await original(source, emit)
+        await original(source, emit, **kwargs)
     runtime.start = delayed
     await app.dispatch('session.naming', {'id':session['id'], 'regenerate':True})
     await preparing.wait()
@@ -226,3 +226,19 @@ async def test_sidebar_projection_refreshes_naming_policy_and_progress(named):
     await settled(app, session)
     assert row()['naming']['status'] == 'ready'
     assert row()['autoName'] is False
+
+
+@pytest.mark.parametrize('status', ['starting', 'working', 'running', 'stopping'])
+async def test_manual_auto_name_during_work_preserves_foreground_and_newer_edit(named, status):
+    app, runtime, session = named
+    session['status'] = status
+    before = deepcopy(session['messages'])
+    await app.dispatch('session.naming', {'id': session['id'], 'regenerate': True})
+    await runtime.ready.wait()
+    assert session['status'] == status
+    await app.dispatch('session.rename', {'id': session['id'], 'title': 'My title while working'})
+    runtime.release.set()
+    await settled(app, session)
+    assert session['status'] == status and session['messages'] == before
+    assert session['title'] == 'My title while working'
+    assert session['naming']['status'] == 'conflict'

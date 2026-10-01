@@ -542,12 +542,7 @@ def session_registry(config):
 async def load_root_bundle(config, chosen, *, execution_workspace=None):
     """Compose in a session-local registry view; settings own registrations."""
     registry = session_registry(config)
-    registrations = dict(config.registrations)
-    explicit = {**config.settings.get('bundle', {}).get('added', {}),
-                **config.settings.get('sources', {}).get('bundles', {})}
-    if "foundation" in registry.list_registered() and "foundation" not in explicit:
-        registrations.pop("foundation", None)
-    registry.register(registrations)
+    registry.register(config.registrations)
     loaded, chosen = await load_configured_bundle(registry, config, chosen)
     loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
@@ -688,6 +683,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         from .mentions import include_instruction_files
         loaded = include_instruction_files(loaded)
     baseline = loaded.to_mount_plan()
+    from ..provider_recording import apply_provider_recording
+    apply_provider_recording(baseline, home=config.home)
+    loaded.providers = baseline.get('providers', [])
+    loaded.agents = baseline.get('agents', {})
     adapted, replacements = live_plan(baseline, background_delegate)
     # Modify the public Bundle fields before prepare(): loop-live and every
     # agent-specific source go through Foundation's normal activation mechanism.
@@ -746,6 +745,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        from ..provider_recording import install_request_redaction
+        install_request_redaction(coordinator)
         coordinator.register_capability('web.history_workspace', str(config.workspace))
         # Freeze credential/file/source/generation identity before provider
         # construction. A later rotation cannot relabel an old mounted result.

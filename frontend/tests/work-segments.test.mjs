@@ -57,3 +57,13 @@ test('summary tokens include cache writes once while preserving raw counters',as
  assert.match(usageLabel(usage).text,/106 tokens/);assert.equal(usage.totalTokens,6);
  assert.match(usageLabel({...usage,grossTotalTokens:106}).text,/106 tokens/);
 });
+
+test('background naming never creates working rows, failures or costs in chat work',()=>{
+ for(const phase of ['running','error','completed']){
+  const naming={id:'naming',kind:'llm',turnId:'turn',startedAt:25,phase,lifecycle:'background',label:'Session naming',usage:{totalTokens:5,costUsd:.001}};
+  const source={...data,nodes:[...data.nodes,naming]};
+  const grouped=splitWork(messages,source);
+  assert.deepEqual(grouped,splitWork(messages,data));
+  assert.equal(source.nodes.at(-1),naming);
+ }
+});

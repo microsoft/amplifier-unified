@@ -72,6 +72,25 @@ test('pin and unpin use shared actions without selecting chats or rewriting acti
  await renderAct(async()=>root.unmount());
 });
 
+test('chat details review only the displayed failure through the shared action',async()=>{
+ const state=initial(),chat={...state.sessions[0],status:'error',error:'Saved failure'},calls=[];
+ const item={id:'session:a',sessionId:'a',fingerprint:'failure-one',read:false};
+ state.attention={items:[item,{id:'approval:permission',sessionId:'a',fingerprint:'permission-one',read:false}]};
+ const act=async(name,args)=>{calls.push({name,args});item.read=true;return {accepted:true}};
+ let root;const render=()=>React.createElement(ChatDetails,{chat,model:{state,act,draft:{},choose:()=>{},setDraft:()=>{}},now:100,close:()=>{}});
+ await renderAct(async()=>{root=create(render())});
+ await renderAct(async()=>root.root.findByProps({'data-action':'attention.read'}).props.onClick());
+ assert.deepEqual(calls,[{name:'attention.read',args:{ids:['session:a'],fingerprints:{'session:a':'failure-one'}}}]);
+ assert.equal(chat.error,'Saved failure');assert.equal(chat.status,'error');
+ assert.equal(state.attention.items[1].read,false);
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAllByProps({'data-action':'attention.read'}).length,0);
+ item.read=false;item.fingerprint='failure-two';
+ await renderAct(async()=>root.update(render()));
+ assert.equal(root.root.findAllByProps({'data-action':'attention.read'}).length,1);
+ await renderAct(async()=>root.unmount());
+});
+
 test('sidebar collapse, workspace drill-in and chat selection use shared actions',async()=>{
  const state=initial(),calls=[],act=async(name,args)=>{calls.push({name,args});return {accepted:true}};let root;
  await renderAct(async()=>{root=create(React.createElement(WorkspaceRail,{state,act}))});
@@ -354,7 +373,7 @@ test('inline automatic name reflects completed results and recoverable errors',a
  const render=()=>React.createElement(ChatRename,{chat,act:async()=>({accepted:false,error:'Retry later'}),cancel:()=>{}});
  await renderAct(async()=>{root=create(render())});
  const generate=()=>root.root.findByProps({'data-action':'session.naming'});
- assert.equal(generate().props.disabled,true);
+ assert.equal(!!generate().props.disabled,false);
  chat={...chat,status:'idle'};
  await renderAct(async()=>root.update(render()));
  await renderAct(async()=>generate().props.onClick());

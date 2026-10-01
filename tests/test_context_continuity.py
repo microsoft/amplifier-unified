@@ -21,6 +21,7 @@ async def mount(directory, messages):
     await boundary.mount_boundary(coordinator, {'durable_checkpoints': True, 'max_tokens': 6000, 'summarize_trigger': .2})
     provider = SimpleNamespace(get_info=lambda: {'id': 'fixture', 'defaults': {'model': 'model-a'}}, complete=AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(type='text', text='Original task; revised constraints; operation uncertain-op outcome unknown; artifact report.md.')])) )
     coordinator.loop.root_provider = provider
+    coordinator.loop._select_provider = lambda providers: provider
     original_get = coordinator.get
     coordinator.get = lambda name: {'fixture': provider} if name == 'providers' else original_get(name)
     await coordinator.context.set_messages(messages)
@@ -80,3 +81,40 @@ async def test_corrupt_host_checkpoint_remains_visibly_rejected(tmp_path):
     assert adapter.public()['status'] == 'rejected'
     assert adapter.public()['originalsAvailable']
     assert json.loads(transcript.read_text()) == [{'role': 'user', 'content': 'Original'}]
+
+
+async def test_partial_progress_is_saved_on_actual_completion_before_worker_restart(tmp_path):
+    original = [{'role': 'user', 'content': 'Keep all source evidence.'},
+        {'role': 'assistant', 'content': 'Evidence ' * 1200},
+        {'role': 'user', 'content': 'Correction'}, {'role': 'assistant', 'content': 'Working'},
+        {'role': 'user', 'content': 'Continue'}]
+    first, provider, adapter, _, _ = await mount(tmp_path, original)
+    first.context.config.update(summary_max_source_chars=1200, summary_max_calls=32)
+    from amplifier_core.llm_errors import LLMError
+    note = SimpleNamespace(content=[SimpleNamespace(type='text', text='Verified partial evidence')])
+    provider.complete = AsyncMock(side_effect=[note, LLMError('offline', retryable=True)])
+    await first.context.get_messages_for_request(provider=provider)
+    saved = json.loads(adapter.path.read_text())
+    assert saved['summary'] is None and saved['progress']['completed'] == 1
+    second, newer_provider, newer_adapter, _, _ = await mount(tmp_path, original)
+    second.context.config.update(summary_max_source_chars=1200, summary_max_calls=32)
+    await second.context.get_messages_for_request(provider=newer_provider)
+    assert second.context.summary is not None and second.context._summary_progress is None, (second.context.checkpoint_status, second.context.summary_failure, newer_provider.complete.await_count, newer_adapter.public())
+    assert 'Verified partial evidence' in newer_provider.complete.call_args_list[0].args[0].messages[-1].content
+    assert await second.context.get_messages() == original
+
+
+async def test_restore_observer_failure_does_not_reject_a_valid_checkpoint(tmp_path):
+    original = [{'role': 'user', 'content': 'Keep originals.'},
+        {'role': 'assistant', 'content': 'Evidence ' * 2400},
+        {'role': 'user', 'content': 'Correction'}, {'role': 'assistant', 'content': 'Working'},
+        {'role': 'user', 'content': 'Continue'}]
+    first, provider, adapter, _, _ = await mount(tmp_path, original)
+    await first.context.get_messages_for_request(provider=provider)
+    adapter.save()
+    second, model, newer_adapter, _, _ = await mount(tmp_path, original)
+    second.hooks = SimpleNamespace(emit=AsyncMock(side_effect=ValueError('observer offline')))
+    await second.context.get_messages_for_request(provider=model)
+    assert newer_adapter.public()['status'] == 'restored'
+    model.complete.assert_not_awaited()
+    assert await second.context.get_messages() == original

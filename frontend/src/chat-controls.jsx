@@ -51,6 +51,7 @@ export function ModelControl({state,session,act,working}){
  const options=providerOptions(providers);
  const providerLabel=options.find(row=>row.id===provider)?.label||providerMetadata?.display_name||providerMetadata?.id||(initial?.instance===provider?initial.providerLabel:'')||provider;
  const modelAndEffort=effectiveEffort?`${model} (${effectiveEffort})`:model;
+ const usingChatGPTPlan=effectiveProvider?.info?.defaults?.auth_mode==='chatgpt_plan'||(isDraft&&effectiveProvider?.config?.auth_mode==='chatgpt_plan');
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
  const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),position=useComposerPopover(open,popover);
  useOutsideDismiss(open,popover,()=>edit({open:false}));
@@ -108,6 +109,7 @@ export function ModelControl({state,session,act,working}){
   <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{modelLabel}</span><ChevronDown/></button>
   {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
    <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
+   {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
    {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
    <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
     {!draft.instance&&<option value="" disabled>{providers.length?'Choose a provider':noProviders?'No providers configured':'Loading providers…'}</option>}{draft.instance&&!selected&&<option value={draft.instance} disabled>{draft.instance} (unavailable)</option>}{options.map(row=><option key={row.id} value={row.id}>{row.label}</option>)}
