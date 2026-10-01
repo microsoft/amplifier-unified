@@ -633,9 +633,14 @@ class AutomaticHistory:
                     state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]),
                         issueCount=len(issues), error=None, **counts)
                     if delta_mode:
-                        if state['sharedHistory'].get('reconciliation') != incoming.get('reconciliation'):
+                        # Slice counters are diagnostic work evidence, not a
+                        # reason to save/project every client hundreds of times.
+                        # Public freshness changes on phase/completion only.
+                        reconciliation = {key: incoming.get('reconciliation', {}).get(key)
+                                          for key in ('phase', 'completedAt')}
+                        if state['sharedHistory'].get('reconciliation') != reconciliation:
                             changed = True
-                        state['sharedHistory']['reconciliation'] = incoming.get('reconciliation')
+                        state['sharedHistory']['reconciliation'] = reconciliation
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
@@ -665,7 +670,13 @@ class AutomaticHistory:
                 if not self.service.closed:
                     async with self.service.lock:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
-                        self.service._publish()
+                        try:
+                            self.service._publish()
+                        except (OSError, ValueError):
+                            # The error report shares the failed persistence
+                            # boundary. Keep the error and dirty union for retry;
+                            # a second disk error must not kill discovery.
+                            pass
 
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)

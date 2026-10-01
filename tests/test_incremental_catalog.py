@@ -266,6 +266,82 @@ def test_close_waits_for_inflight_recovery_slice(tmp_path, monkeypatch):
     assert index._recovery is None
 
 
+def test_cached_load_can_cooperatively_stop_without_partial_snapshot(tmp_path, monkeypatch):
+    from amplifier_web.native_catalog import NativeCatalog
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    for number in range(30):
+        session(home, workspace, f'saved-{number}',
+                {'working_dir': str(workspace), 'bundle': 'anchors'})
+    cache = tmp_path / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    first.scan_changes()
+    first.close()
+    restarted = NativeHistory(home, cache_path=cache)
+    original = NativeCatalog._check_running
+    probes = []
+    def interrupted(catalog):
+        probes.append(True)
+        if len(probes) == 5:
+            restarted._closing.set()
+        original(catalog)
+    monkeypatch.setattr(NativeCatalog, '_check_running', interrupted)
+    with pytest.raises(InterruptedError):
+        restarted.scan_changes()
+    assert restarted._snapshot_revision is None
+    assert restarted._projects == {}
+    with sqlite3.connect(cache) as db:
+        assert db.execute('SELECT count(*) FROM native_rows').fetchone()[0] == 30
+    restarted.close()
+
+
+async def test_refresh_error_publication_failure_does_not_terminate_discovery(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'saved-root')
+    app = app_factory()
+    publish = app._publish
+    attempts = []
+    def refused(**kwargs):
+        attempts.append(kwargs)
+        raise OSError('Presentation file unavailable')
+    monkeypatch.setattr(app, '_publish', refused)
+    # Both the ordinary save and the error report encounter the same disk fault.
+    await app.history.refresh(force=False)
+    assert len(attempts) == 2
+    assert app.history._native_revision is None
+    assert app.state['sharedHistory']['error']
+    monkeypatch.setattr(app, '_publish', publish)
+    await app.history.refresh(force=False)
+    assert app.history._native_revision is not None
+    assert app.state['sharedHistory']['error'] is None
+    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+
+
+async def test_recovery_slice_counters_do_not_publish_unchanged_library(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    for number in range(160):
+        native_session(workspace, f'saved-{number:03d}')
+    app = app_factory()
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    index = app.history.index
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    publishes = []
+    original = app._publish
+    def observed(**kwargs):
+        publishes.append(kwargs)
+        return original(**kwargs)
+    monkeypatch.setattr(app, '_publish', observed)
+    for _ in range(60):
+        await app.history.refresh(force=False)
+        if index._recovery_status['phase'] == 'complete':
+            break
+    assert index._recovery_status['phase'] == 'complete'
+    assert len(publishes) <= 2  # Running and completed freshness, not slice counters.
+
+
 def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()

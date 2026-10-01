@@ -125,6 +125,7 @@ class NativeHistory:
         self._file_projects = set()
         self._projects = {}
         self._lock = threading.RLock()
+        self._closing = threading.Event()
         self._reads = 0
         self._project_inputs = {}
         self._working_dirs = {}
@@ -178,6 +179,7 @@ class NativeHistory:
         try:
             from .native_catalog import NativeCatalog
             self._catalog = NativeCatalog(self._cache_path, self.home)
+            self._catalog.stop = self._closing
             cached_projects, cached_files = self._catalog.load()
             if not was_loaded:
                 self._projects, self._files = cached_projects, cached_files
@@ -255,13 +257,17 @@ class NativeHistory:
     def close(self):
         # asyncio cancellation does not stop a to_thread scan. Close only after
         # that bounded slice releases ownership, including reentrant watch repair.
+        self._closing.set()
         with self._lock:
-            if self._recovery is not None:
-                self._recovery.close()
-                self._recovery = None
-            if self._watch:
-                self._watch.close()
-                self._watch = None
+            self._close_resources()
+
+    def _close_resources(self):
+        if self._recovery is not None:
+            self._recovery.close()
+            self._recovery = None
+        if self._watch:
+            self._watch.close()
+            self._watch = None
 
     def _invalidations(self):
         if not self._watch_enabled:
@@ -273,7 +279,7 @@ class NativeHistory:
         except OSError:
             identity = None
         if self._watch and (identity != self._watch_root or not self._watch.thread.is_alive()):
-            self.close()
+            self._close_resources()
         if not self._watch and identity and time.monotonic() >= self._watch_retry_at:
             from .history_watch import HistoryWatch
             self._watch_root = identity
@@ -788,7 +794,11 @@ class NativeHistory:
         returns a snapshot. Revisions belong to this index, not persisted state.
         """
         with self._lock:
+            if self._closing.is_set():
+                raise InterruptedError('Native discovery is closing')
             self._load_catalog()
+            if self._closing.is_set():
+                raise InterruptedError('Native discovery is closing')
             previous_projects = self._projects
             self._reads = 0
             self._working_dirs = {}

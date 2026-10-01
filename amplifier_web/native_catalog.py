@@ -19,6 +19,7 @@ class NativeCatalog:
         self.path = Path(path)
         self.home = Path(home)
         self.namespace = hashlib.sha256(str(self.home).encode()).hexdigest()
+        self.stop = None
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.connect() as db:
             db.executescript('''
@@ -50,6 +51,7 @@ class NativeCatalog:
         projects, files = {}, {}
         with self.connect() as db:
             for project, raw in db.execute('SELECT project,value FROM native_projects WHERE namespace=?', (self.namespace,)):
+                self._check_running()
                 value = json.loads(raw)
                 workspace = value.get('workspace') if isinstance(value, dict) else None
                 if (not isinstance(workspace, dict)
@@ -63,12 +65,14 @@ class NativeCatalog:
                 # A malformed rebuildable view must not poison repeated refreshes.
                 projects[project] = {'workspace': workspace, 'sessions': []}
             for project, identity, raw in db.execute('SELECT project,identity,value FROM native_rows WHERE namespace=?', (self.namespace,)):
+                self._check_running()
                 value = json.loads(raw)
                 if (project not in projects or not isinstance(value, dict)
                         or value.get('nativeProject') != project or value.get('nativeIdentity') != identity):
                     raise ValueError('Invalid native metadata cache')
                 projects[project]['sessions'].append(value)
             for raw_path, raw in db.execute('SELECT path,value FROM native_files WHERE namespace=?', (self.namespace,)):
+                self._check_running()
                 path = Path(raw_path)
                 if not path.is_relative_to(self.home / 'projects'):
                     raise ValueError('Invalid native metadata cache path')
@@ -79,16 +83,22 @@ class NativeCatalog:
                 files[path] = (tuples(value[0]), value[1], value[2])
         return projects, files
 
+    def _check_running(self):
+        if self.stop is not None and self.stop.is_set():
+            raise InterruptedError('Native catalog work stopped for shutdown')
+
     def save(self, projects, previous, files, dirty_files):
         """Commit only changed metadata; no transcript, event or app view bodies."""
         with self.connect() as db:
             for name in previous.keys() - projects.keys():
+                self._check_running()
                 db.execute('DELETE FROM native_rows WHERE namespace=? AND project=?', (self.namespace, name))
                 db.execute('DELETE FROM native_projects WHERE namespace=? AND project=?', (self.namespace, name))
                 prefix = str(self.home / 'projects' / name) + '/'
                 db.execute('DELETE FROM native_files WHERE namespace=? AND substr(path,1,?)=?',
                            (self.namespace, len(prefix), prefix))
             for name, project in projects.items():
+                self._check_running()
                 old = previous.get(name)
                 if project is old:
                     continue
@@ -101,10 +111,12 @@ class NativeCatalog:
                     db.execute('DELETE FROM native_rows WHERE namespace=? AND project=? AND identity=?',
                                (self.namespace, name, identity))
                 for identity, row in new_rows.items():
+                    self._check_running()
                     if row != old_rows.get(identity):
                         db.execute('INSERT OR REPLACE INTO native_rows VALUES(?,?,?,?)',
                                    (self.namespace, name, identity, json.dumps(row)))
             for path in dirty_files:
+                self._check_running()
                 value = files.get(path)
                 if value is not None:
                     db.execute('INSERT OR REPLACE INTO native_files VALUES(?,?,?)',
