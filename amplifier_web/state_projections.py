@@ -7,14 +7,34 @@ projections. The full agent state path remains an uncached read of live state.
 """
 import hashlib
 import json
+from collections import OrderedDict
+from copy import deepcopy
 
 
 class StateProjections:
     def __init__(self):
         self.values = {}
         self.previous_navigation = None
+        self.detail_bodies = OrderedDict()
 
-    def invalidate(self, *, state=None, session_ids=None):
+    def invalidate(self, *, state=None, session_ids=None, detail_only=False):
+        if session_ids is None:
+            self.detail_bodies.clear()
+        else:
+            for identity in session_ids:
+                self.detail_bodies.pop(identity, None)
+        if detail_only and session_ids is not None:
+            index = self.values.get(('session-index',))
+            if index is not None and index.patch(state, session_ids):
+                parents = {index.by_id[key].get('parentId') for key in session_ids
+                           if key in index.by_id and not index._membership[key][2]} - {None}
+                for key in list(self.values):
+                    if key[0] == 'browser-navigation' and (key[1] in parents
+                            or any(parent in str(key[-1]) for parent in parents)):
+                        self.values.pop(key, None)
+                # Streaming text does not alter navigation, attention or shell
+                # evidence. Keep those immutable facts; detail is built anew.
+                return
         # Keep only navigation results, not active sessions, notifications, or
         # worker pages. Those must observe each saved generation independently.
         if self.previous_navigation is None:
@@ -46,6 +66,27 @@ class StateProjections:
     def sessions(self, state):
         from .browser_state import SessionIndex
         return self.get(('session-index',), lambda: SessionIndex(state))
+
+    def detail(self, row):
+        """Reuse only unchanged bounded bodies; current scalar facts stay live.
+
+        A scoped commit evicts its identities; an unknown save evicts all.
+        No client draft/selection is retained in this shared body cache.
+        """
+        fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
+                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity')
+        body = self.detail_bodies.pop(row['id'], None)
+        if body is None:
+            from .browser_state import project
+            projected = project(row)
+            body = deepcopy({key: projected[key] for key in fields if key in projected})
+        self.detail_bodies[row['id']] = body
+        while len(self.detail_bodies) > 32:
+            self.detail_bodies.popitem(last=False)
+        result = {key: value for key, value in row.items()
+                  if key not in fields and key != 'messageQuotes'}
+        result.update(body)
+        return result
 
     def attention(self, state):
         from .attention import snapshot

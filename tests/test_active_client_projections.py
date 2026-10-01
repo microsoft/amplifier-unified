@@ -48,6 +48,131 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
     assert builds.count('workspace') == builds.count('chat') == 2
 
 
+async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(app_factory, monkeypatch):
+    from amplifier_web.session_projection import view_path
+    app, rows = fixture(app_factory, count=200)
+    for row in rows[:2]:
+        row['historyManaged'] = False
+    queues = []
+    for number in range(2):
+        with app.clients.bind(f'client-{number}'):
+            queues.append(app.subscribe())
+            app.browser_state()
+    unrelated = view_path(app.data_dir, rows[1])
+    app._save()
+    before = unrelated.read_bytes(), unrelated.stat().st_mtime_ns
+    builds = []
+    original = chat_navigation.registry
+    monkeypatch.setattr(chat_navigation, 'registry',
+                        lambda state: (builds.append('chat'), original(state))[1])
+    # Prime once after the unscoped fixture save.
+    with app.clients.bind('client-0'):
+        app.browser_state()
+    builds.clear()
+    await app.on_runtime_event('assistant.delta', {'sessionId': rows[0]['id'], 'text': 'Scoped'})
+    await app._flush_pending_progress()
+    assert queues[1].empty()
+    first = queues[0].get_nowait()
+    assert next(row for row in first['sessions'] if row['id'] == rows[0]['id'])['streaming'] == 'Scoped'
+    assert (unrelated.read_bytes(), unrelated.stat().st_mtime_ns) == before
+    assert builds == []
+    # Reconnect is a fresh bounded snapshot, not a replay of execution.
+    with app.clients.bind('client-1'):
+        latest = app.browser_state()
+    assert latest['revision'] == app.state['revision']
+    assert latest['view']['draft'] == 'Private 1'
+
+
+async def test_mixed_dirty_scope_preserves_union_and_failed_commit_for_retry(app_factory, monkeypatch):
+    app, rows = fixture(app_factory, count=20)
+    for row in rows[:3]:
+        row['historyManaged'] = False
+    app._save()
+    rows[2]['draft'] = 'C introduced by the failed publication'
+    await app.on_runtime_event('assistant.delta', {'sessionId': rows[0]['id'], 'text': 'A'})
+    await app.on_runtime_event('assistant.delta', {'sessionId': rows[1]['id'], 'text': 'B'})
+    save = app._save
+    def fail():
+        raise OSError('Scoped save refused')
+    monkeypatch.setattr(app, '_save', fail)
+    revision = app.state['revision']
+    with pytest.raises(OSError):
+        app._publish(session_ids={rows[2]['id']})
+    assert app.state['revision'] == revision
+    scopes = []
+    def observed():
+        scopes.append(app._publish_save_scope)
+        save()
+    monkeypatch.setattr(app, '_save', observed)
+    # A plain retry flush must retain C without the caller resupplying it.
+    await app._flush_pending_progress()
+    assert scopes == [{row['id'] for row in rows[:3]}]
+    assert not app._progress_dirty
+    import json
+    from amplifier_web.session_projection import view_path
+    assert json.loads(view_path(app.data_dir, rows[2]).read_text())['draft'] == rows[2]['draft']
+
+
+async def test_slow_scoped_subscriber_gets_latest_affected_revision_not_unrelated_detail(app_factory):
+    app, rows = fixture(app_factory, count=20)
+    with app.clients.bind('client-0'):
+        queue = app.subscribe(session_id=rows[0]['id'])
+    for number in range(6):
+        await app.on_runtime_event('assistant.delta', {'sessionId': rows[0]['id'], 'text': str(number)})
+        await app._flush_pending_progress()
+    assert queue.qsize() == 4
+    frames = [queue.get_nowait() for _ in range(4)]
+    assert frames[-1]['revision'] == app.state['revision']
+    assert frames[-1]['sessions'][0]['streaming'] == '012345'
+    # Unrelated detail commits do not needlessly copy or queue X's body.
+    app._publish(session_ids={rows[1]['id']}, detail_only=True)
+    assert queue.empty()
+    with app.clients.bind('client-0'):
+        assert app.session_state(rows[0]['id'])['revision'] == app.state['revision']
+
+
+async def test_worker_summary_detail_targets_parent_view_not_other_client(app_factory):
+    app, rows = fixture(app_factory, count=20)
+    child = next(row for row in rows if row.get('parentId') == rows[0]['id'])
+    queues = []
+    for number in range(2):
+        with app.clients.bind(f'client-{number}'):
+            queues.append(app.subscribe())
+            app.browser_state()
+    child['title'] = 'Changed worker summary'
+    app._publish(session_ids={child['id']}, detail_only=True)
+    assert queues[1].empty()
+    frame = queues[0].get_nowait()
+    assert any(row['title'] == 'Changed worker summary' for row in frame['subagentNavigation']['items'])
+
+
+async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_body(app_factory, monkeypatch):
+    from amplifier_web import browser_state
+    app, rows = fixture(app_factory, count=20)
+    queues = []
+    for number in range(2):
+        with app.clients.bind(f'client-{number}'):
+            queues.append(app.subscribe())
+            app.browser_state()
+    built = []
+    original = browser_state.project
+    monkeypatch.setattr(browser_state, 'project',
+                        lambda row: (built.append(row['id']), original(row))[1])
+    rows[0]['title'] = 'Updated title'
+    app._publish(session_ids={rows[0]['id']})
+    assert rows[1]['id'] not in built
+    b = queues[1].get_nowait()
+    assert any(row['title'] == 'Updated title' for row in b['chatNavigation']['items'])
+    assert b['view']['draft'] == 'Private 1'
+    # Unscoped same-revision saves remain conservative, including in-place edits.
+    rows[1]['messages'] = [{'id': 'new', 'role': 'assistant', 'text': 'Fresh body'}]
+    app._save()
+    with app.clients.bind('client-1'):
+        latest = app.browser_state()
+    assert rows[1]['id'] in built
+    assert next(row for row in latest['sessions'] if row['id'] == rows[1]['id'])['messages'][0]['text'] == 'Fresh body'
+
+
 async def test_clients_share_navigation_despite_layout_and_private_draft_differences(app_factory, monkeypatch):
     from amplifier_web import browser_state
     app, rows = fixture(app_factory)

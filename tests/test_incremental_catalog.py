@@ -37,6 +37,576 @@ def test_persistent_cache_reuses_compact_metadata_without_reading_bodies(tmp_pat
     assert cache.stat().st_mode & 0o777 == 0o600
 
 
+def test_missed_notifications_recover_in_bounded_slices_and_keep_sources(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Original'})
+             for n in range(160)]
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    write_json(paths[-1] / 'metadata.json',
+               {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Missed event'})
+    before = (paths[-1] / 'transcript.jsonl').read_bytes()
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    observed = []
+    for _ in range(100):
+        base, delta = index.scan_changes(since=base)
+        assert delta['reconciliation']['steps'] <= 12
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('Bounded reconciliation did not complete')
+    assert any(row['title'] == 'Missed event' for row in observed)
+    assert (paths[-1] / 'transcript.jsonl').read_bytes() == before
+    assert index._catalog is not None
+    index.close()
+
+
+def test_transient_catalog_save_failure_reconnects_without_restart(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, cache_path=tmp_path / 'cache.sqlite3')
+    base, _ = index.scan_changes()
+    def locked(*args):
+        raise sqlite3.OperationalError('database is locked')
+    monkeypatch.setattr(index._catalog, 'save', locked)
+    write_json(path / 'metadata.json', {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'New'})
+    base, failed = index.scan_changes(since=base)
+    assert index._catalog is None and {'kind': 'unavailable-catalog-cache'} in failed['issues']
+    index._cache_retry_at = 0
+    _, recovered = index.scan_changes(since=base)
+    assert index._catalog is not None and not index._cache_error
+    assert index.scan()['sessions'][0]['title'] == 'New'
+    assert {'kind': 'unavailable-catalog-cache'} not in recovered['issues']
+
+
+def test_transient_catalog_retry_deadline_wakes_quiet_watcher(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, cache_path=tmp_path / 'cache.sqlite3')
+    index.scan_changes()
+    info = (home / 'projects').stat()
+    index._watch = SimpleNamespace(unchanged=lambda: True, close=lambda: None)
+    index._watch_root = info.st_dev, info.st_ino
+    index._known_input = frozenset()
+    index._reconcile_at = time.monotonic() + 60
+    index._catalog = None
+    index._cache_error = True
+    index._cache_retry_at = time.monotonic() + 30
+    assert not index.needs_scan([])
+    index._cache_retry_at = 0
+    assert index.needs_scan([])
+    index.close()
+
+
+def test_incremental_aggregates_match_full_catalog_through_removal_and_recreation(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    root = session(home, workspace, 'saved-root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    child = session(home, workspace, 'saved-child',
+                    {'working_dir': str(workspace), 'bundle': 'anchors', 'parent_id': 'saved-root'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    assert (initial['sessionCount'], initial['workerSessionCount']) == (1, 1)
+    project = root.parent.parent
+    retained = tmp_path / 'retained'
+    project.rename(retained)
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project.name, 'saved-root', 'transcript')}))
+    base, removed = index.scan_changes(since=base)
+    assert (removed['sessionCount'], removed['workerSessionCount']) == (0, 0)
+    retained.rename(project)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, {project.name}))
+    for _ in range(12):
+        base, restored = index.scan_changes(since=base)
+        if restored['projectCount'] == 1:
+            break
+    assert (restored['sessionCount'], restored['workerSessionCount']) == (1, 1)
+    # Repeat the acknowledged base: counting is not repeated on consumer retries.
+    _, repeated = index.scan_changes(since=base)
+    assert (repeated['sessionCount'], repeated['workerSessionCount']) == (1, 1)
+    index.close()
+
+
+def test_aggregate_cache_tracks_reclassification_retry_and_old_consumers(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    metadata = {'working_dir': str(workspace), 'bundle': 'anchors'}
+    path = session(home, workspace, 'saved-root', metadata)
+    cache = tmp_path / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    first.scan_changes(force=True)
+    first.close()
+    index = NativeHistory(home, watch=True, cache_path=cache)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    oldest, initial = index.scan_changes()
+    assert (initial['sessionCount'], initial['workerSessionCount'], initial['internalSessionCount']) == (1, 0, 0)
+    base = oldest
+    variants = [
+        ({'parent_id': 'other-root'}, (0, 1, 0)),
+        ({'session_visibility': 'internal'}, (0, 0, 1)),
+        ({}, (1, 0, 0)),
+        ({'parent_id': 'other-root'}, (0, 1, 0)),
+        ({}, (1, 0, 0)),
+    ]
+    for number, (extra, expected) in enumerate(variants):
+        write_json(path / 'metadata.json', {**metadata, **extra, 'name': f'Change {number}'})
+        monkeypatch.setattr(index, '_invalidations',
+                            lambda: (True, {(project_slug(workspace), 'saved-root', 'metadata')}))
+        if number == 1:
+            def failed_save(*args):
+                raise sqlite3.OperationalError('database is locked')
+            monkeypatch.setattr(index._catalog, 'save', failed_save)
+        base, changed = index.scan_changes(since=base)
+        fields = ('sessionCount', 'workerSessionCount', 'internalSessionCount')
+        assert tuple(changed[field] for field in fields) == expected
+        if number == 1:
+            assert index._catalog is None
+            index._cache_retry_at = 0
+            base, changed = index.scan_changes(since=base)
+            assert index._catalog is not None
+            assert tuple(changed[field] for field in fields) == expected
+        _, retry = index.scan_changes(since=oldest)
+        assert tuple(retry[field] for field in fields) == expected
+        rows = [row for project in index._projects.values() for row in project['sessions']]
+        assert expected == tuple(sum(row['sessionKind'] == kind for row in rows)
+                                 for kind in ('root', 'worker', 'internal'))
+    assert retry['reset']  # The old consumer exceeded the bounded base journal.
+    _, forced = index.scan_changes(force=True)
+    assert tuple(forced[field] for field in fields) == (1, 0, 0)
+    index.close()
+
+
+def test_suspended_unreadable_leaf_keeps_revision_rows_immutable(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved-root', {'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    assert initial['sessions'][0]['workspace'] is None
+    original_row = dict(initial['sessions'][0])
+    retained_row = index._projects[path.parent.parent.name]['sessions'][0]
+    index._recovery_budget = 5
+    index._reconcile_at = 0
+    index.scan_changes(since=base, known_workspaces=[str(workspace)])
+    # Pause after the iterator selected this leaf, before its safety check.
+    retained = path.parent / '.retained-root'
+    path.rename(retained)
+    observed = []
+    for _ in range(12):
+        token, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert retained_row == original_row
+    assert any(row['workspace'] == str(workspace) and row['canResume'] for row in observed)
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert stored['workspace'] == str(workspace) and stored['canResume']
+    # A second consumer still using the original revision receives the same row.
+    _, retry = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+    assert any(row['workspace'] == str(workspace) for row in retry['sessions'])
+    retained.rename(path)
+    _, restored = index.scan_changes(since=token, known_workspaces=[str(workspace)], force=True)
+    assert restored['sessions'][0]['workspace'] == str(workspace)
+    index.close()
+
+
+def test_unchanged_recovery_probes_inputs_without_rebuilding_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    for number in range(80):
+        session(home, workspace, f'saved-{number:03d}',
+                {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    # The first pass learns the complete registered/workspace stamp.
+    index._reconcile_at = 0
+    for _ in range(60):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    builds, saves = [], []
+    original_build, original_save = index._scan_project_steps, index._catalog.save
+    def build(*args, **kwargs):
+        builds.append(True)
+        return original_build(*args, **kwargs)
+    def save(*args, **kwargs):
+        saves.append(True)
+        return original_save(*args, **kwargs)
+    monkeypatch.setattr(index, '_scan_project_steps', build)
+    monkeypatch.setattr(index._catalog, 'save', save)
+    index._reconcile_at = 0
+    index._recovery_budget = 12
+    for _ in range(60):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        assert delta['reconciliation']['steps'] <= 12
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    else:
+        pytest.fail('Unchanged bounded reconciliation did not complete')
+    assert not builds and not saves
+    assert delta['sessionCount'] == 80
+    index.close()
+
+
+def test_recovery_fastpath_rechecks_symlink_workspace_referent(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(workspace, target_is_directory=True)
+    path = session(home, workspace, 'saved-root', {'working_dir': str(alias), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    def recover(base):
+        index._reconcile_at = 0
+        observed = []
+        for _ in range(40):
+            base, delta = index.scan_changes(since=base, known_workspaces=[])
+            observed.extend(delta['sessions'])
+            if delta['reconciliation']['phase'] == 'complete':
+                return base, observed
+        pytest.fail('Workspace recovery did not complete')
+    base, _ = recover(base)
+    base, _ = recover(base)
+    workspace.rmdir()
+    base, observed = recover(base)
+    assert any(not row['canResume'] for row in observed)
+    assert not index._projects[path.parent.parent.name]['workspace']['available']
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert not stored['canResume']
+    workspace.mkdir()
+    _, observed = recover(base)
+    assert any(row['canResume'] for row in observed)
+    index.close()
+
+
+def test_registering_resolved_workspace_does_not_rebuild_unchanged_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'saved-root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    builds = []
+    original = index._scan_project_steps
+    def build(*args, **kwargs):
+        builds.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(index, '_scan_project_steps', build)
+    index._reconcile_at = 0
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert not builds
+    assert not delta['sessions'] and delta['sessionCount'] == 1
+    index.close()
+
+
+def test_removing_only_registered_workspace_resolver_rebuilds_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved-root', {'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True, known_workspaces=[str(workspace)])
+    index._reconcile_at = 0
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    index._reconcile_at = 0
+    observed = []
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[])
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert any(row['workspace'] is None and not row['canResume'] for row in observed)
+    assert index._projects[path.parent.parent.name]['workspace']['path'] is None
+    assert {'kind': 'unresolved-workspace', 'nativeProject': path.parent.parent.name} in delta['issues']
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert stored['workspace'] is None and not stored['canResume']
+    index.close()
+
+
+def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors'}) for n in range(160)]
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path), original(path, *args))[1])
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved-007', 'transcript')}))
+    with (paths[7] / 'transcript.jsonl').open('a') as source:
+        source.write('changed\n')
+    _, delta = index.scan_changes(since=base)
+    assert len(probes) <= 13
+    assert delta['reconciliation']['steps'] <= 12
+    assert any(row['nativeIdentity'] == 'saved-007' for row in delta['sessions'])
+
+
+@pytest.mark.parametrize('ancestor', ['project', 'sessions'])
+def test_substituted_ancestors_never_admit_outside_reads(tmp_path, monkeypatch, ancestor):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    project = saved.parent.parent
+    substituted = project if ancestor == 'project' else saved.parent
+    retained = substituted.with_name(substituted.name + '-retained')
+    substituted.rename(retained)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    external = outside / 'sessions' if ancestor == 'project' else outside
+    external.mkdir(exist_ok=True)
+    (external / 'saved').mkdir()
+    write_json(external / 'saved' / 'metadata.json', {'working_dir': str(workspace), 'name': 'Outside'})
+    (external / 'saved' / 'transcript.jsonl').write_text('must not read')
+    substituted.symlink_to(outside, target_is_directory=True)
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path.resolve()), original(path, *args))[1])
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved', 'transcript')}))
+    _, delta = index.scan_changes(since=base)
+    assert all(not path.is_relative_to(outside) for path in probes)
+    assert not any(row['title'] == 'Outside' for row in delta['sessions'])
+    assert any(issue['kind'] == 'unreadable' for issue in delta['issues'])
+
+
+def test_recovery_revalidates_leaf_after_suspension(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 3
+    index._reconcile_at = 0
+    base, _ = index.scan_changes(since=base)  # Suspended before the session read.
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    write_json(outside / 'metadata.json', {'working_dir': str(workspace), 'name': 'Outside'})
+    (outside / 'transcript.jsonl').write_text('outside')
+    saved.rename(saved.with_name('saved-retained'))
+    saved.symlink_to(outside, target_is_directory=True)
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path.resolve()), original(path, *args))[1])
+    for _ in range(8):
+        base, _ = index.scan_changes(since=base)
+    assert all(not path.is_relative_to(outside) for path in probes)
+    index.close()
+
+
+def test_hot_session_does_not_starve_missed_cold_recovery(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Original'})
+             for n in range(160)]
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    write_json(paths[-1] / 'metadata.json',
+               {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Cold recovered'})
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved-000', 'transcript')}))
+    seen = []
+    for number in range(48):
+        with (paths[0] / 'transcript.jsonl').open('a') as source:
+            source.write(f'hot {number}\n')
+        base, delta = index.scan_changes(since=base)
+        seen.extend(delta['sessions'])
+        if any(row['title'] == 'Cold recovered' for row in seen):
+            break
+    assert any(row['title'] == 'Cold recovered' for row in seen)
+    index.close()
+
+
+def test_suspended_recovery_cannot_restore_confirmed_removed_project(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    cache = tmp_path / 'cache.sqlite3'
+    index = NativeHistory(home, watch=True, cache_path=cache)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 3
+    index._reconcile_at = 0
+    base, _ = index.scan_changes(since=base)
+    project = saved.parent.parent
+    project.rename(tmp_path / 'retained-project')
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved', 'transcript')}))
+    removed = []
+    for _ in range(5):
+        base, delta = index.scan_changes(since=base)
+        removed.extend(delta['removed'])
+        assert project.name not in index._projects
+        monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    assert (project.name, 'saved') in removed
+    with sqlite3.connect(cache) as db:
+        assert db.execute('SELECT count(*) FROM native_rows').fetchone()[0] == 0
+    index.close()
+
+
+def test_close_waits_for_inflight_recovery_slice(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    index = NativeHistory(tmp_path / 'native', watch=True)
+    entered, release = threading.Event(), threading.Event()
+    def blocked_recovery(known):
+        entered.set()
+        assert release.wait(3)
+        yield
+    monkeypatch.setattr(index, '_recover_projects', blocked_recovery)
+    def scan():
+        with index._lock:
+            index._recovery_slice({})
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        active = workers.submit(scan)
+        assert entered.wait(3)
+        closing = workers.submit(index.close)
+        assert not closing.done()
+        release.set()
+        active.result(timeout=3)
+        closing.result(timeout=3)
+    assert index._recovery is None
+
+
+def test_cached_load_can_cooperatively_stop_without_partial_snapshot(tmp_path, monkeypatch):
+    from amplifier_web.native_catalog import NativeCatalog
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    for number in range(30):
+        session(home, workspace, f'saved-{number}',
+                {'working_dir': str(workspace), 'bundle': 'anchors'})
+    cache = tmp_path / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    first.scan_changes()
+    first.close()
+    restarted = NativeHistory(home, cache_path=cache)
+    original = NativeCatalog._check_running
+    probes = []
+    def interrupted(catalog):
+        probes.append(True)
+        if len(probes) == 5:
+            restarted._closing.set()
+        original(catalog)
+    monkeypatch.setattr(NativeCatalog, '_check_running', interrupted)
+    with pytest.raises(InterruptedError):
+        restarted.scan_changes()
+    assert restarted._snapshot_revision is None
+    assert restarted._projects == {}
+    with sqlite3.connect(cache) as db:
+        assert db.execute('SELECT count(*) FROM native_rows').fetchone()[0] == 30
+    restarted.close()
+
+
+@pytest.mark.parametrize('failure', [OSError, sqlite3.OperationalError])
+async def test_refresh_error_publication_failure_does_not_terminate_discovery(tmp_path, app_factory, monkeypatch, failure):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'saved-root')
+    app = app_factory()
+    publish = app._publish
+    attempts = []
+    def refused(**kwargs):
+        attempts.append(kwargs)
+        raise failure('Presentation storage unavailable')
+    monkeypatch.setattr(app, '_publish', refused)
+    # Both the ordinary save and the error report encounter the same disk fault.
+    await app.history.refresh(force=False)
+    assert len(attempts) == 2
+    assert app.history._native_revision is None
+    assert app.state['sharedHistory']['error']
+    monkeypatch.setattr(app, '_publish', publish)
+    await app.history.refresh(force=False)
+    assert app.history._native_revision is not None
+    assert app.state['sharedHistory']['error'] is None
+    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+
+
+async def test_actual_save_failure_retains_discovery_dirty_union(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'saved-root')
+    app = app_factory()
+    original = app._save
+    attempts = []
+    def refused(**kwargs):
+        attempts.append(kwargs)
+        raise sqlite3.OperationalError('Presentation database is locked')
+    monkeypatch.setattr(app, '_save', refused)
+    try:
+        await app.history.refresh(force=False)
+    finally:
+        monkeypatch.setattr(app, '_save', original)
+    assert len(attempts) == 2
+    assert app.history._native_revision is None
+    assert app._progress_dirty and app._progress_scope_known
+    assert app._progress_session_ids is None  # Unknown full scope survives both errors.
+    assert app.state['sharedHistory']['error']
+    await app.history.refresh(force=False)
+    assert app.history._native_revision is not None
+    assert not app._progress_dirty
+    assert app.state['sharedHistory']['error'] is None
+    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+
+
+async def test_recovery_slice_counters_do_not_publish_unchanged_library(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    for number in range(160):
+        native_session(workspace, f'saved-{number:03d}')
+    app = app_factory()
+    await app.history.refresh()
+    await app.history.refresh(force=False)
+    index = app.history.index
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    publishes = []
+    original = app._publish
+    def observed(**kwargs):
+        publishes.append(kwargs)
+        return original(**kwargs)
+    monkeypatch.setattr(app, '_publish', observed)
+    for _ in range(60):
+        await app.history.refresh(force=False)
+        if index._recovery_status['phase'] == 'complete':
+            break
+    assert index._recovery_status['phase'] == 'complete'
+    assert len(publishes) <= 2  # Running and completed freshness, not slice counters.
+
+
 def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
@@ -188,6 +758,9 @@ async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_
     own = next(row for row in app.state['sessions'] if not row.get('historyManaged'))
     own['draft'] = 'Unrelated progress must reach the durable view'
     app._progress_dirty = True
+    # A later labelled writer cannot narrow an earlier unknown mutation.
+    native_id = next(row['id'] for row in app.state['sessions'] if row.get('historyManaged'))
+    await app.on_runtime_event('assistant.delta', {'sessionId': native_id, 'text': 'later delta'})
     app.history.index._reconcile_at = time.monotonic() + 60
     monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
     with (saved / 'transcript.jsonl').open('a') as file:

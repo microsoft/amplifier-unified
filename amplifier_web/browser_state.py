@@ -12,7 +12,7 @@ from .session_navigation import is_top_level
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
-    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason',
+    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
@@ -47,6 +47,9 @@ class SessionIndex:
         self.roots = []
         self.attention_ids = set()
         self._membership = {}
+        self.workspaces = {row['id']: row for row in state.get('workspaces', [])}
+        self.workspace_positions = {row['id']: position
+                                    for position, row in enumerate(state.get('workspaces', []))}
         for position, row in enumerate(state.get('sessions', [])):
             identity = row['id']
             self.by_id[identity] = row
@@ -76,6 +79,10 @@ class SessionIndex:
     def patch(self, state, identities):
         """Update admitted rows without walking the complete session library."""
         rows = state.get('sessions', [])
+        if len(self.workspaces) != len(state.get('workspaces', [])):
+            self.workspaces = {row['id']: row for row in state.get('workspaces', [])}
+            self.workspace_positions = {row['id']: position
+                                        for position, row in enumerate(state.get('workspaces', []))}
         if len(rows) < len(self.positions):
             return False  # Unscoped removals require rebuilding the index.
         appended = rows[len(self.positions):]
@@ -194,7 +201,8 @@ class SnapshotCopies:
         return result
 
 
-def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None):
+def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None,
+             detail_project=None):
     index = index or SessionIndex(state)
     result = dict(state)
     result.update(derived)
@@ -204,13 +212,15 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     selected_row = index.by_id.get(selected, {})
     visible.add(selected_row.get('parentId'))
     full = {selected, session_id, state.get('voice', {}).get('sessionId')}
-    full.update(index.active)
+    if client_id is None:
+        full.update(index.active)  # Legacy unbound readers retain compatibility.
     visible.update(full)
     visible.add(derived['subagentNavigation']['scope']['sessionId'])
     workers = derived['subagentNavigation']
     selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
                          else len(index.children(selected_row))) if selected_row else 0
-    result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
+    detail_project = detail_project or project
+    result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': selected_children} if row['id'] == selected else {})}
                           for row in (index.by_id[key] for key in sorted(visible & index.by_id.keys(), key=index.positions.__getitem__))]
     from .conversation_library import projection as organization_projection
@@ -223,7 +233,9 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
         state.get('selectedWorkspaceId'), state.get('view', {}).get('workWorkspaceId')}
     explorer = derived.get('workspaceExplorer', {})
     workspace_ids.update(row.get('workspaceId') for row in explorer.get('rows', []))
-    result['workspaces'] = [row for row in state.get('workspaces', []) if row['id'] in workspace_ids]
+    result['workspaces'] = [index.workspaces[key] for key in
+                            sorted(workspace_ids & index.workspaces.keys(),
+                                   key=index.workspace_positions.__getitem__)]
     result['runtimeControl'] = {key: value for key, value in state.get('runtimeControl', {}).items() if key in full}
     result['canvasArtifacts'] = [row for row in state.get('canvasArtifacts', [])
                                  if row.get('sessionId') == selected or row.get('id') == state.get('canvas', {}).get('id')]

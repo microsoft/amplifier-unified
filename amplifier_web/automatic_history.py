@@ -6,6 +6,7 @@ from collections import deque
 import copy
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import time
 import uuid
@@ -21,7 +22,7 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
-                'messageAnnotations', 'messageQuotes')
+                'messageAnnotations', 'messageQuotes', 'nativeAvailable')
 
 def workspace_inputs(state):
     # Discovery needs identity/availability, not arbitrary presentation bodies.
@@ -313,6 +314,7 @@ class AutomaticHistory:
         self._existing = None
         self._public_ids = set()
         self._local_revision = None
+        self._availability_cursor = 0
         service.state.setdefault('sharedHistory', {}).update(loading=True, error=None)
 
     def start(self):
@@ -329,7 +331,12 @@ class AutomaticHistory:
             known = workspace_inputs(self.service.state)
             if await asyncio.to_thread(self.index.needs_scan, known):
                 await self.refresh(force=False)
-            await asyncio.sleep(15)
+            # Idle waits remain cheap. Recovery slices yield between bounded
+            # probes rather than spacing every 64 sessions fifteen seconds apart.
+            recovering = (getattr(self.index, '_recovery', None) is not None
+                          or bool(getattr(self.index, '_recovery_urgent', ()))
+                          or bool(getattr(self.index, '_pending_invalidations', ())))
+            await asyncio.sleep(.1 if recovering else 15)
 
     def hide_session(self, session):
         project = session.get('nativeProject') or project_slug(session['workspace'])
@@ -348,7 +355,10 @@ class AutomaticHistory:
             try:
                 known = workspace_inputs(self.service.state)
                 from .workspace_canvas import refresh_workspace_availability
-                await asyncio.to_thread(refresh_workspace_availability, known)
+                cursor = self._availability_cursor % max(1, len(known))
+                availability = known if force else known[cursor:cursor + 64]
+                self._availability_cursor = (cursor + len(availability)) % max(1, len(known))
+                await asyncio.to_thread(refresh_workspace_availability, availability)
                 delta_mode = (hasattr(self.service, '_history_local_revision')
                           and 'scan_if_changed' not in self.index.__dict__)
                 if delta_mode:
@@ -374,9 +384,7 @@ class AutomaticHistory:
                         self._catalog_workspaces.pop(project, None)
                     self._native_snapshot = {**incoming, 'sessions': self._catalog_rows.values(),
                                              'workspaces': self._catalog_workspaces.values()}
-                    full_merge = (incoming['reset'] or incoming['reconciled'] or force
-                                  or bool(incoming['workspaces'] or incoming['removed']
-                                          or incoming['removedProjects'])
+                    full_merge = (incoming['reset'] or force
                                   or self._local_revision != self.service._history_local_revision)
                     # Local overlays are independently invalidated by unscoped
                     # commits. A full recovery/manual pass retains their checks.
@@ -412,6 +420,12 @@ class AutomaticHistory:
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
+                    worker_detail_only = (delta_mode and not full_merge
+                        and not incoming['workspaces'] and not incoming['removed']
+                        and not incoming['removedProjects']
+                        and bool(snapshot['sessions'])
+                        and all(row.get('sessionKind') == 'worker' for row in snapshot['sessions'])
+                        and not changed)
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
                     # Most refreshes contain no unresolved folders. Index the
@@ -488,6 +502,17 @@ class AutomaticHistory:
                             self._public_ids = {row['id'] for row in state['sessions']}
                     else:
                         existing = self._existing
+                    if delta_mode:
+                        # Retain customized overlays, drafts and selections for
+                        # removed native records, but make their unavailability
+                        # explicit. A removal never authorizes deleting history.
+                        for key in incoming['removed']:
+                            previous = existing.get(tuple(key))
+                            if previous and previous.get('historyManaged'):
+                                previous.update(nativeAvailable=False,
+                                    historyReadOnlyReason='The canonical saved chat is no longer available. Restore its files before continuing.')
+                                touched.add(previous['id'])
+                                changed = True
                     from collections import Counter
                     native_counts = self._catalog_counts if delta_mode else Counter(row['nativeIdentity'] for row in snapshot['sessions'])
                     catalog_ids = self._public_ids if delta_mode else {row['id'] for row in state['sessions']}
@@ -568,6 +593,9 @@ class AutomaticHistory:
                         if managed and previous.get('location') != {'kind': 'managed'}:
                             previous['location'] = {'kind': 'managed'}; changed = True
                         previous['_catalogRecentAt'] = row.get('recentActivityAt', 0)
+                        if previous.get('nativeAvailable') is False:
+                            previous['nativeAvailable'] = True
+                            changed = True
                         previous['_catalogId'] = row['nativeIdentity'] if native_counts[row['nativeIdentity']] == 1 else row['id']
                         touched.add(previous['id'])
                     # Parent identities belong to their native project. UI IDs
@@ -605,10 +633,19 @@ class AutomaticHistory:
                         changed = True
                     state['sharedHistory'].update(loading=False, issues=copy.deepcopy(issues[:100]),
                         issueCount=len(issues), error=None, **counts)
+                    if delta_mode:
+                        # Slice counters are diagnostic work evidence, not a
+                        # reason to save/project every client hundreds of times.
+                        # Public freshness changes on phase/completion only.
+                        reconciliation = {key: incoming.get('reconciliation', {}).get(key)
+                                          for key in ('phase', 'completedAt')}
+                        if state['sharedHistory'].get('reconciliation') != reconciliation:
+                            changed = True
+                        state['sharedHistory']['reconciliation'] = reconciliation
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
-                            self.service._publish(session_ids=touched)
+                            self.service._publish(session_ids=touched, detail_only=worker_detail_only)
                         else:
                             self.service._publish()
                     if delta_mode:
@@ -619,7 +656,10 @@ class AutomaticHistory:
                 # views, not every historical client record retained on disk.
                 from .history_demand import subscribed_sessions
                 selected_ids = subscribed_sessions(self.service)
-                for selected in [row for row in self.service.state['sessions'] if row['id'] in selected_ids]:
+                by_id = (self.service.projections.sessions(self.service.state).by_id
+                         if hasattr(self.service, 'projections') else
+                         {row['id']: row for row in self.service.state['sessions']})
+                for selected in [by_id[key] for key in selected_ids if key in by_id]:
                     if not selected.get('nativeProject') or selected.get('status') in BUSY or selected.get('configurationBusy'):
                         continue
                     current = await asyncio.to_thread(revision, selected)
@@ -631,7 +671,13 @@ class AutomaticHistory:
                 if not self.service.closed:
                     async with self.service.lock:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
-                        self.service._publish()
+                        try:
+                            self.service._publish()
+                        except (OSError, ValueError, sqlite3.Error):
+                            # The error report shares the failed persistence
+                            # boundary. Keep the error and dirty union for retry;
+                            # a second disk error must not kill discovery.
+                            pass
 
     async def refresh_session(self, session_id):
         await self.load(session_id, only_if_changed=True)
@@ -651,7 +697,7 @@ class AutomaticHistory:
                     return
                 session.update(historyLoading=True, historyError=None)
                 source = copy.deepcopy(session)
-                self.service._publish()
+                self.service._publish(session_ids={session_id}, detail_only=True)
             try:
                 window = (max(limit, len(source.get('messages', []))) if source.get('historyManaged') else None) if before is None else limit
                 result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
@@ -689,7 +735,7 @@ class AutomaticHistory:
                             sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
                             sharedHistoryTotal=result['total'])
                     session['historyLoading'] = False
-                    self.service._publish()
+                    self.service._publish(session_ids={session_id}, detail_only=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -697,7 +743,7 @@ class AutomaticHistory:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session:
                         session.update(historyLoading=False, historyError='Could not read the saved chat. Its original files are unchanged. Try Refresh.')
-                        self.service._publish()
+                        self.service._publish(session_ids={session_id}, detail_only=True)
 
     async def ensure_loaded(self, session_id):
         session = self.service._session(session_id)

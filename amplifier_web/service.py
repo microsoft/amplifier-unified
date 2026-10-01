@@ -603,7 +603,8 @@ class AppService:
                 if session_id is not None:
                     self._session(session_id)
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
-                    copies=self._snapshot_copies if session_id is None else None, client_id=client_id))
+                    copies=self._snapshot_copies if session_id is None else None, client_id=client_id,
+                    detail_project=self.projections.detail))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:
@@ -614,7 +615,8 @@ class AppService:
         if cached is None or cached['revision'] != self.state['revision']:
             from .browser_state import snapshot
             derived = self.projections.browser(self.state)
-            self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state), copies=self._snapshot_copies)
+            self._browser_snapshot = snapshot(self.state, derived, index=self.projections.sessions(self.state),
+                                              copies=self._snapshot_copies, detail_project=self.projections.detail)
             self._browser_snapshot['shellDataKey'] = self.projections.shell_key(self.state)
         if session_id is not None:
             self._session(session_id)
@@ -649,19 +651,22 @@ class AppService:
             session_ids = getattr(self, '_publish_save_scope', None)
         if session_ids is None:
             self._history_local_revision += 1
-        self.questions.sync()
-        self.schedules.sync()
-        self.worktrees.sync()
-        self.portability.sync()
-        from .canvas_apps import sync
-        sync(self)
-        from .canvas_versions import sync as sync_versions
-        sync_versions(self)
+        detail_only = getattr(self, '_publish_detail_only', False)
+        if not detail_only:
+            self.questions.sync()
+            self.schedules.sync()
+            self.worktrees.sync()
+            self.portability.sync()
+            from .canvas_apps import sync
+            sync(self)
+            from .canvas_versions import sync as sync_versions
+            sync_versions(self)
         self._browser_snapshot = None
         self._client_snapshots.clear()
         self._client_snapshot_preferences = {}
         if getattr(self, '_projections', None) is not None:
-            self._projections.invalidate(state=self.state, session_ids=session_ids)
+            self._projections.invalidate(state=self.state, session_ids=session_ids,
+                                         detail_only=detail_only)
         from .state_storage import normalize_state
         index = self.projections.sessions(self.state) if session_ids is not None else None
         normalized = self.state if index is None else {
@@ -677,11 +682,15 @@ class AppService:
         from .storage_migration import maintenance
         maintenance(self)
 
-    def _publish(self, *, session_ids=None):
-        # Pending runtime progress is unscoped mutable state. Never let a native
-        # metadata-only publication cancel its durable commit or narrow it.
+    def _publish(self, *, session_ids=None, detail_only=False):
+        # A mixed publication commits the union, never just the newer writer's
+        # scope. Unknown writers retain the conservative complete-save path.
         if getattr(self, '_progress_dirty', False):
-            session_ids = None
+            pending = (getattr(self, '_progress_session_ids', None)
+                       if getattr(self, '_progress_scope_known', False) else None)
+            session_ids = (set(session_ids) | pending
+                           if session_ids is not None and pending is not None else None)
+            detail_only = detail_only and getattr(self, '_progress_detail_only', False)
         task = getattr(self, '_progress_publish_task', None)
         if task and task is not asyncio.current_task():
             task.cancel()
@@ -689,6 +698,7 @@ class AppService:
         previous = self.state["revision"]
         self.state["revision"] = previous + 1
         self._publish_save_scope = session_ids
+        self._publish_detail_only = detail_only and session_ids is not None
         try:
             # Keep the original no-argument boundary for host save hooks and
             # error-injection checks. The owned scope is visible only while
@@ -697,12 +707,33 @@ class AppService:
         except Exception:
             self.state["revision"] = previous
             self._browser_snapshot = None
+            # Retain every attempted writer, including a newly introduced
+            # scoped commit. An ordinary retry flush must not omit that record.
+            self._progress_dirty = True
+            self._progress_scope_known = True
+            self._progress_session_ids = set(session_ids) if session_ids is not None else None
+            self._progress_detail_only = detail_only and session_ids is not None
             raise
         finally:
             self._publish_save_scope = None
+            self._publish_detail_only = False
         published = {}
+        affected_detail = set(session_ids or ())
+        if detail_only and session_ids is not None:
+            index = self.projections.sessions(self.state)
+            affected_detail.update(index.by_id[key].get('parentId') for key in session_ids
+                                   if key in index.by_id)
+            affected_detail.discard(None)
         for queue in self.queues:
             key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
+            if session_ids is not None and key[1] is not None and key[1] not in session_ids:
+                continue
+            if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
+                record = self.clients.records.get(key[0], {})
+                interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
+                              (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+                if not interested.intersection(affected_detail):
+                    continue
             if key not in published:
                 with self.clients.bind(key[0]):
                     published[key] = self.session_state(key[1]) if key[1] is not None else self.browser_state()
@@ -713,11 +744,24 @@ class AppService:
         if hasattr(self, "coordination"):
             self.coordination.notify()
         self._progress_dirty = False
+        self._progress_session_ids = set()
+        self._progress_scope_known = False
+        self._progress_detail_only = True
         self._progress_publish_error = None
 
-    def _publish_progress(self):
+    def _publish_progress(self, *, session_ids=None, detail_only=False):
         """Batch stream/progress updates; final responses and approvals flush now."""
+        if not getattr(self, '_progress_dirty', False):
+            self._progress_session_ids = set(session_ids) if session_ids is not None else None
+            self._progress_detail_only = detail_only
+        else:
+            pending = (getattr(self, '_progress_session_ids', None)
+                       if getattr(self, '_progress_scope_known', False) else None)
+            self._progress_session_ids = (pending | set(session_ids)
+                                         if pending is not None and session_ids is not None else None)
+            self._progress_detail_only = getattr(self, '_progress_detail_only', False) and detail_only
         self._progress_dirty = True
+        self._progress_scope_known = True
         if getattr(self, '_progress_publish_task', None) is None:
             self._progress_publish_task = self._task(self._flush_progress())
 
@@ -735,7 +779,7 @@ class AppService:
             async with self.lock:
                 if self._progress_dirty and not self.closed:
                     try:
-                        self._publish()
+                        self._commit_pending_progress()
                     except Exception as exc:
                         # Retain dirty data for the next transition or shutdown.
                         self._progress_publish_error = str(exc)
@@ -758,9 +802,19 @@ class AppService:
                 self._progress_publish_task = None
         async with self.lock:
             if getattr(self, '_progress_dirty', False):
-                self._publish()
+                self._commit_pending_progress()
                 return True
         return False
+
+    def _commit_pending_progress(self):
+        scope = getattr(self, '_progress_session_ids', None)
+        if scope is None:
+            # Existing host observers wrap the public no-argument boundary.
+            # Unknown/global writers retain that exact boundary and full scope.
+            self._publish()
+        else:
+            self._publish(session_ids=scope,
+                          detail_only=getattr(self, '_progress_detail_only', False))
 
     def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
@@ -782,7 +836,14 @@ class AppService:
         sid = sid or self.state["selectedSessionId"]
         from .session_identity import resolve
         try:
-            session = next((row for row in self.state['sessions'] if row['id'] == sid), None) or resolve(self.state['sessions'], sid)
+            projections = getattr(self, '_projections', None)
+            index = projections.values.get(('session-index',)) if projections is not None else None
+            session = index.by_id.get(sid) if index is not None else None
+            position = index.positions.get(sid) if session is not None else None
+            if (position is None or position >= len(self.state['sessions'])
+                    or self.state['sessions'][position] is not session):
+                session = next((row for row in self.state['sessions'] if row['id'] == sid), None)
+            session = session or resolve(self.state['sessions'], sid)
         except ValueError as exc:
             raise AppError(str(exc), 409) from None
         if session:
@@ -2807,7 +2868,8 @@ class AppService:
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             if progress:
-                self._publish_progress()
+                self._publish_progress(session_ids={session['id']},
+                                       detail_only=kind == 'assistant.delta')
             else:
                 self._publish()
 
