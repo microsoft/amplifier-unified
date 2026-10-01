@@ -85,6 +85,27 @@ def test_transient_catalog_save_failure_reconnects_without_restart(tmp_path, mon
     assert {'kind': 'unavailable-catalog-cache'} not in recovered['issues']
 
 
+def test_transient_catalog_retry_deadline_wakes_quiet_watcher(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, cache_path=tmp_path / 'cache.sqlite3')
+    index.scan_changes()
+    info = (home / 'projects').stat()
+    index._watch = SimpleNamespace(unchanged=lambda: True, close=lambda: None)
+    index._watch_root = info.st_dev, info.st_ino
+    index._known_input = frozenset()
+    index._reconcile_at = time.monotonic() + 60
+    index._catalog = None
+    index._cache_error = True
+    index._cache_retry_at = time.monotonic() + 30
+    assert not index.needs_scan([])
+    index._cache_retry_at = 0
+    assert index.needs_scan([])
+    index.close()
+
+
 def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()

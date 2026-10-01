@@ -7,14 +7,22 @@ projections. The full agent state path remains an uncached read of live state.
 """
 import hashlib
 import json
+from collections import OrderedDict
+from copy import deepcopy
 
 
 class StateProjections:
     def __init__(self):
         self.values = {}
         self.previous_navigation = None
+        self.detail_bodies = OrderedDict()
 
     def invalidate(self, *, state=None, session_ids=None, detail_only=False):
+        if session_ids is None:
+            self.detail_bodies.clear()
+        else:
+            for identity in session_ids:
+                self.detail_bodies.pop(identity, None)
         if detail_only and session_ids is not None:
             index = self.values.get(('session-index',))
             if index is not None and index.patch(state, session_ids):
@@ -58,6 +66,27 @@ class StateProjections:
     def sessions(self, state):
         from .browser_state import SessionIndex
         return self.get(('session-index',), lambda: SessionIndex(state))
+
+    def detail(self, row):
+        """Reuse only unchanged bounded bodies; current scalar facts stay live.
+
+        A scoped commit evicts its identities; an unknown save evicts all.
+        No client draft/selection is retained in this shared body cache.
+        """
+        fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
+                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity')
+        body = self.detail_bodies.pop(row['id'], None)
+        if body is None:
+            from .browser_state import project
+            projected = project(row)
+            body = deepcopy({key: projected[key] for key in fields if key in projected})
+        self.detail_bodies[row['id']] = body
+        while len(self.detail_bodies) > 32:
+            self.detail_bodies.popitem(last=False)
+        result = {key: value for key, value in row.items()
+                  if key not in fields and key != 'messageQuotes'}
+        result.update(body)
+        return result
 
     def attention(self, state):
         from .attention import snapshot

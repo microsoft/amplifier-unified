@@ -201,7 +201,8 @@ class SnapshotCopies:
         return result
 
 
-def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None):
+def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None,
+             detail_project=None):
     index = index or SessionIndex(state)
     result = dict(state)
     result.update(derived)
@@ -218,7 +219,8 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     workers = derived['subagentNavigation']
     selected_children = (workers['unfilteredTotal'] if workers['scope']['sessionId'] == selected
                          else len(index.children(selected_row))) if selected_row else 0
-    result['sessions'] = [{**((row if row['id']==session_id else project(row)) if row['id'] in full else summary(row)),
+    detail_project = detail_project or project
+    result['sessions'] = [{**((row if row['id']==session_id else detail_project(row)) if row['id'] in full else summary(row)),
                            **({'subagentCount': selected_children} if row['id'] == selected else {})}
                           for row in (index.by_id[key] for key in sorted(visible & index.by_id.keys(), key=index.positions.__getitem__))]
     from .conversation_library import projection as organization_projection

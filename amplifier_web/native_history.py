@@ -221,6 +221,15 @@ class NativeHistory:
 
     def needs_scan(self, known_workspaces):
         """Cheap idle check; a manual refresh still always performs a scan."""
+        if self._cache_error and self._cache_path is not None and self._catalog is None:
+            if time.monotonic() >= self._cache_retry_at:
+                if self._cache_rejected_stamp is None:
+                    return True
+                try:
+                    if _signature(Path(self._cache_path)) != self._cache_rejected_stamp:
+                        return True
+                except (OSError, ValueError):
+                    return True
         if (self._recovery is not None or self._recovery_urgent or self._pending_invalidations
                 or time.monotonic() >= self._reconcile_at or not self._watch
                 or not self._watch.unchanged()
@@ -471,7 +480,7 @@ class NativeHistory:
             try:
                 safe = (self._safe_project(project)
                         and stat.S_ISDIR(directory.stat(follow_symlinks=False).st_mode)
-                        and directory.resolve().parent == (project / 'sessions').resolve())
+                        and directory.parent == project / 'sessions')
             except (OSError, ValueError, RuntimeError):
                 safe = False
             if not safe:
@@ -592,13 +601,16 @@ class NativeHistory:
     def _safe_project(self, project):
         root = self.home / 'projects'
         try:
-            if (not stat.S_ISDIR(project.stat(follow_symlinks=False).st_mode)
-                    or project.resolve().parent != root.resolve()):
+            # self.home was resolved at construction. Recheck each direct
+            # directory with lstat, without repeatedly resolving every ancestor
+            # for every session in every recovery slice.
+            if (not stat.S_ISDIR(root.stat(follow_symlinks=False).st_mode)
+                    or project.parent != root
+                    or not stat.S_ISDIR(project.stat(follow_symlinks=False).st_mode)):
                 return False
             sessions = project / 'sessions'
             try:
-                return (stat.S_ISDIR(sessions.stat(follow_symlinks=False).st_mode)
-                        and sessions.resolve().parent == project.resolve())
+                return stat.S_ISDIR(sessions.stat(follow_symlinks=False).st_mode)
             except FileNotFoundError:
                 return True
         except (OSError, ValueError, RuntimeError):
