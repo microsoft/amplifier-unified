@@ -82,7 +82,14 @@ class Questions:
             self._projection_version = self.store.version
         grouped = self._grouped
         for session in self.app.state["sessions"]:
-            records = grouped.get(session["id"], [])
+            records = grouped.get(session["id"])
+            if not records:
+                # Most indexed histories have no app questions. Preserve an
+                # existing empty list instead of allocating sets/generators
+                # and a new projection on every streamed publication.
+                if not isinstance(session.get("questions"), list) or session["questions"]:
+                    session["questions"] = []
+                continue
             # Retain every active/uncertain question and bounded recent history.
             visible = {r["id"] for r in records[-10:]}
             visible.update(r["id"] for r in records if r["status"] == "pending" or (r.get("delivery") or {}).get("status") in {"sending", "unknown", "rejected"})

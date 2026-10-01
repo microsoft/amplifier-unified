@@ -122,6 +122,34 @@ async def test_reconcile_stops_after_finding_each_selected_identity(live):
         service._state.update(sessions=sessions, workspaces=workspaces)
 
 
+async def test_restart_keeps_private_native_selection_until_catalog_is_loaded(tmp_path, monkeypatch):
+    from test_automatic_history import native_session, ObservedRuntime
+    native_session(tmp_path / 'native-project', 'saved-private')
+    service = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
+    await service.history.refresh()
+    selected = service._session('saved-private')
+    record = service.clients.attach('private-browser')
+    record.update(selectedSessionId=selected['id'], selectedWorkspaceId=selected['workspaceId'])
+    record['drafts'][selected['id']] = 'Retained native draft'
+    service.clients.dirty.add('private-browser')
+    service._publish()
+    await service.close()
+    restarted = AppService(tmp_path / 'app', ObservedRuntime(), workspace=tmp_path)
+    try:
+        assert restarted.state['sharedHistory']['loading']
+        restored = restarted.clients.attach('private-browser')
+        assert restored['selectedSessionId'] == selected['id']
+        assert restored['selectedWorkspaceId'] == selected['workspaceId']
+        assert restored['view']['draft'] == 'Retained native draft'
+        await restarted.history.refresh(force=False)
+        restarted.clients.reconcile('private-browser')
+        assert restored['selectedSessionId'] == selected['id']
+        assert restored['view']['draft'] == 'Retained native draft'
+        assert not restarted.runtime.started and not restarted.runtime.sent
+    finally:
+        await restarted.close()
+
+
 async def test_pre_conversation_drafts_are_private_and_survive_reload_and_restart(tmp_path):
     service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
     for identity in ("browser-a", "browser-b"):

@@ -98,7 +98,11 @@ async def test_event_reconnect_loads_restored_selection_without_reselecting(tmp_
     app = await create_app(home, workspace=tmp_path, runtime=runtime,
                            voice=False, preload_providers=False, background_updates=False)
     service = app['service']
-    await service.history.close()  # Isolate reconnect from the periodic refresh.
+    # Isolate reconnect from the periodic refresh, not from discovery itself.
+    # Closing the index now permanently rejects scans for safe shutdown.
+    service.history.task.cancel()
+    await asyncio.gather(service.history.task, return_exceptions=True)
+    service.history.task = None
     await service.history.refresh()
     client = await authenticated_client(app)
     assert service._session(sid)['historyLoaded'] is False

@@ -916,3 +916,25 @@ def test_child_call_exact_turn_survives_later_worker_turn(source):
     tree = EventLogView(None).read(session)
     assert {row['id']: row['turnId'] for row in tree['nodes'] if row['kind'] == 'llm'} == {'old-call': 'old', 'new-call': 'new'}
     assert {row['id']: row['aggregateUsage']['calls'] for row in tree['turns']} == {'old': 1, 'new': 1}
+
+
+@pytest.mark.parametrize('provenance', [{'purpose':'session-naming'}, {'origin_module':'hooks-session-naming'}])
+def test_native_naming_retains_background_identity_after_reload(source, provenance):
+    session, path = source
+    from amplifier_web.browser_detail import work_segments
+    # Same provider/model, overlapping calls, no request IDs. Provenance is
+    # enough to keep auxiliary and foreground durations/results separate.
+    append(path, 'llm:request', {'provider':'fixture','model':'offline'}, 10)
+    append(path, 'llm:request', {'provider':'fixture','model':'offline', **provenance}, 11)
+    append(path, 'llm:response', {'provider':'fixture','model':'offline','usage':{'input_tokens':3,'output_tokens':2}, **provenance}, 12)
+    append(path, 'llm:response', {'provider':'fixture','model':'offline','usage':{'input_tokens':30,'output_tokens':20}}, 13)
+    before = path.read_bytes()
+    session['execution'] = EventLogView(None).read(session)
+    rows = session['execution']['nodes']
+    naming = next(row for row in rows if row.get('label') == 'Session naming')
+    assert naming['lifecycle'] == 'background'
+    assert naming['startedAt'] == 11 and naming['endedAt'] == 12
+    assert session['execution']['aggregateUsage']['totalTokens'] == 55
+    _, segments = work_segments(session)
+    assert sum(row['aggregateUsage']['totalTokens'] for row in segments) == 50
+    assert path.read_bytes() == before

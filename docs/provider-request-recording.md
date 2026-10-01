@@ -46,28 +46,26 @@ native session logs.
 ## Adapter audit
 
 Audited all eleven Microsoft provider entries in the current upstream
-[`amplifier/docs/MODULES.md`](https://github.com/microsoft/amplifier/blob/main/docs/MODULES.md)
-on September 29, 2026, and rechecked their current revisions on September 30,
-as well as the app's configured/provider-environment
-composition paths. A read-only configuration inspection confirmed that raw/debug
-capture was not enabled and no app diagnostics configuration existed. No runtime
-state or credentials were changed.
+[`amplifier/docs/MODULES.md`](https://github.com/microsoft/amplifier/blob/main/docs/MODULES.md),
+and refreshed the source evidence on October 1, 2026 after the provider parity
+repairs merged. The app's root and child preparation paths were checked against
+these adapter contracts.
 
 The revisions below are the source evidence for this implementation, not pins
 to apply to user installations.
 
 | Module | Audited revision | Applied option | Actual emitted evidence |
 | --- | --- | --- | --- |
-| provider-anthropic | `9e2f20c9342253666d0bdb3dcf593a58456e72f9` | `raw` | Redacted SDK parameters in `llm:request.data.raw`. |
-| provider-openai | `71a8c79394fad07dc5c858962412f9fd127762d1` | `raw` | Redacted final request parameters in `data.raw`. |
-| provider-openai-chatgpt | `4a6ffdc11483a4192e1514189916fc4a91c202ed` | `raw` | Redacted built request payload in `data.raw`. |
-| provider-azure-openai | `00a3cf982778376cfe094b2a31bbdaa0e137365c` | `raw` | Inherits OpenAI request capture. |
-| provider-chat-completions | `a0b0f03793c3a46f1d047e84d49b893d3e901a44` | `raw` | Redacted chat-completions parameters in `data.raw`. |
-| provider-gemini | `e191990d3c7e031086ec1a40ed1f23fdac943cac` | `raw` | Structured Gemini request parameters in `data.raw`; `debug` and `raw_debug` are not substitutes. |
-| provider-github-copilot | `6cf56a032bff593a8274c334d5e5980b6dae9c44` | `raw` | Adapter summary: prompt/system lengths, tool schemas and settings. The SDK owns the final wire request. **Not full prompt/wire capture.** |
-| provider-ollama | `036626853c196521c2c12d6f5d11e3cfdc8affc0` | `raw` | Request parameters in `data.raw`, for streaming and nonstreaming. Unified adds redaction before recording. |
-| provider-vllm | `0fe391bde630a527d563e9e3f95d4d2e1acf7079` | `raw` | Redacted request parameters in `data.raw`. |
-| provider-litellm | `92f2ac5d627c28311eb7a096bca5d651934666d0` | `raw_debug` | JSON string in **`data.raw_request`**, already limited by the adapter to 16,384 characters. Unified now indexes this alternate field. This is LiteLLM input, not necessarily the downstream provider's final HTTP body. |
+| provider-anthropic | `be0eef2d2cdb2b1a0d4f960337a1d4374ddef7da` | `raw` | Redacted SDK parameters in `llm:request.data.raw`. |
+| provider-openai | `1aed3279fd7287f896b5bab6c6571a3983d1e411` | `raw` | Redacted final request parameters in `data.raw`. |
+| provider-openai-chatgpt | `37699a5ed7b53041d8cb757ca3e75383c2ef8556` | `raw` | Redacted built request payload in `data.raw`. |
+| provider-azure-openai | `3a67ed10e70d185bd1061ec7b0d4aa9bd361b136` | `raw` | Inherits OpenAI request capture. |
+| provider-chat-completions | `bd0de352072efca17ee332912d90a6b0633742bf` | `raw` | Redacted chat-completions parameters in `data.raw`. |
+| provider-gemini | `ac522d4f36c5817acf3526b089b43728c005c525` | `raw` | Structured Gemini request parameters in `data.raw`; `debug` and `raw_debug` are not substitutes. |
+| provider-github-copilot | `ed942e2c8a0c6d4ff6d878bc4ba480592f6c676a` | `raw` | Adapter summary: prompt/system lengths, tool schemas and settings. The SDK owns the final wire request. **Not full prompt/wire capture.** |
+| provider-ollama | `f86ae6c7bdf55745294cc1719b5df5dda4f84c2b` | `raw` | Request parameters in `data.raw`, for streaming and nonstreaming. Unified adds redaction before recording. |
+| provider-vllm | `bc8031d0431c6490764c8a2228b9078ef06c7352` | `raw` | Redacted request parameters in `data.raw`. |
+| provider-litellm | `1908d0eb5f4560ca187c360c8618f75cbd55abb1` | `raw_debug` (compatible alias for `raw`) | Full redacted SDK parameters in **`data.raw`**, with the legacy `data.raw_request` field retained. Unified honors explicit settings in either spelling. The adapter no longer applies its old 16,384-character limit; the host capture limit still applies. LiteLLM input is not necessarily the downstream provider's final HTTP body. |
 | provider-mock | `a90821f6b3767f8e52df5e754a96c20352684b43` | None | Debug emits a separate `llm:request:raw` count summary. No actual network request exists; Unified does not pretend that enabling debug creates one. |
 
 The setting covers every audited Microsoft real-provider adapter. Unknown/custom adapters

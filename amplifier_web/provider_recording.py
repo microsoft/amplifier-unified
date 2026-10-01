@@ -54,6 +54,10 @@ def apply_provider_recording(plan, *, enabled=None, home=None):
         if row.get('enabled') is False:
             continue
         module = row['module']
+        # LiteLLM now also accepts the canonical raw flag. Retain an explicit
+        # choice in either spelling instead of enabling the other alias.
+        if module == 'provider-litellm' and 'raw' in row.get('config', {}):
+            continue
         key = 'raw' if module in RAW_MODULES else 'raw_debug' if module == 'provider-litellm' else None
         if key and key not in row.setdefault('config', {}):
             row['config'][key] = True

@@ -52,6 +52,18 @@ def test_litellm_explicit_opt_out_and_no_blanket_debug():
     assert plan['providers'][1]['config'] == {'debug': False, 'raw': True}
 
 
+def test_litellm_canonical_raw_choice_is_not_overridden_by_legacy_alias():
+    plan = {'providers': [
+        {'module': 'provider-litellm', 'config': {'raw': False}},
+        {'module': 'provider-litellm', 'config': {'raw': True}},
+    ]}
+    initial = copy.deepcopy(plan)
+    apply_provider_recording(plan, enabled=True)
+    assert plan == initial
+    apply_provider_recording(plan, enabled=False)
+    assert plan == initial
+
+
 def test_host_defaults_can_be_disabled_after_a_foundation_snapshot_round_trip():
     from amplifier_foundation import Bundle
     plan = {'providers': [{'module': 'provider-openai'},

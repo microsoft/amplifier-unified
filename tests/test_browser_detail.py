@@ -144,3 +144,17 @@ def test_terminal_manager_status_does_not_relabel_unsettled_child_work():
     view=project(session)
     assert view['execution']['segments'][0]['phase']=='error'
     assert view['execution']['nodes'][0]['phase']=='running'
+
+
+def test_naming_stays_in_accounting_but_not_conversation_work_segments():
+    from amplifier_web.execution import refresh_usage
+    session = {'id':'chat','messages':[], 'execution':{'turns':[{'id':'turn','phase':'completed'}],
+        'nodes':[{'id':'answer','kind':'llm','turnId':'turn','phase':'completed','startedAt':1,'endedAt':2,
+                  'usage':{'totalTokens':100,'costUsd':.01}},
+                 {'id':'name','kind':'llm','turnId':'turn','phase':'running','startedAt':3,
+                  'lifecycle':'background','label':'Session naming','usage':{'totalTokens':5,'costUsd':.001}}]}}
+    refresh_usage(session['execution'])
+    view = project(session)['execution']
+    assert len(view['nodes']) == 2 and view['aggregateUsage']['totalTokens'] == 105
+    assert len(view['segments']) == 1 and view['segments'][0]['phase'] == 'completed'
+    assert view['segments'][0]['aggregateUsage']['totalTokens'] == 100

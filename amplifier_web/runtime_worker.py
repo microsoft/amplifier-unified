@@ -227,6 +227,11 @@ class Worker:
             detail = "Waiting for the configured model to respond."
             if event == "context:compaction_started":
                 phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+            elif event == "context:compaction_progress":
+                phase = "compacting"
+                completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)
+                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved."
+                          if remaining else "Conversation context prepared; continuing work.")
             elif event == "context:compaction_finished":
                 detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."
             elif event == "provider:retry":
@@ -250,7 +255,7 @@ class Worker:
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
                     "runId": activity_run_id, "time": time.time(), **retry})
             return HookResult()
-        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
+        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
 
     async def preparation_progress(self, directory):
@@ -579,6 +584,7 @@ class Worker:
 
         op = data.get("op")
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
+        naming_control = op == 'control' and data.get('operation') == 'session.naming'
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
             # Auxiliary personalization must never delay foreground admission.
             # Cancellation cannot retract an already accepted provider request;
@@ -616,7 +622,7 @@ class Worker:
                     self.memory_task.cancel()
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
-                detached_cancel = memory_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
+                detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
                 if detached_cancel:
                     self.operation_controls += 1
                     if memory_control:
@@ -738,7 +744,6 @@ class Worker:
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("observation.admit", value))
                 elif data["operation"] == "session.naming":
-                    self.controls.require_idle()
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')
                     result = await self.naming.suggest()
