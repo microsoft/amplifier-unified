@@ -18,6 +18,12 @@ class StateProjections:
         if detail_only and session_ids is not None:
             index = self.values.get(('session-index',))
             if index is not None and index.patch(state, session_ids):
+                parents = {index.by_id[key].get('parentId') for key in session_ids
+                           if key in index.by_id and not index._membership[key][2]} - {None}
+                for key in list(self.values):
+                    if key[0] == 'browser-navigation' and (key[1] in parents
+                            or any(parent in str(key[-1]) for parent in parents)):
+                        self.values.pop(key, None)
                 # Streaming text does not alter navigation, attention or shell
                 # evidence. Keep those immutable facts; detail is built anew.
                 return

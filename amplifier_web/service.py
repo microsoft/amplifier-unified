@@ -705,19 +705,32 @@ class AppService:
         except Exception:
             self.state["revision"] = previous
             self._browser_snapshot = None
+            # Retain every attempted writer, including a newly introduced
+            # scoped commit. An ordinary retry flush must not omit that record.
+            self._progress_dirty = True
+            self._progress_scope_known = True
+            self._progress_session_ids = set(session_ids) if session_ids is not None else None
+            self._progress_detail_only = detail_only and session_ids is not None
             raise
         finally:
             self._publish_save_scope = None
             self._publish_detail_only = False
         published = {}
+        affected_detail = set(session_ids or ())
+        if detail_only and session_ids is not None:
+            index = self.projections.sessions(self.state)
+            affected_detail.update(index.by_id[key].get('parentId') for key in session_ids
+                                   if key in index.by_id)
+            affected_detail.discard(None)
         for queue in self.queues:
             key = (self.queue_clients.get(queue), self.queue_sessions.get(queue))
             if session_ids is not None and key[1] is not None and key[1] not in session_ids:
                 continue
             if detail_only and session_ids is not None and key[1] is None and key[0] is not None:
                 record = self.clients.records.get(key[0], {})
-                interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId')}
-                if not interested.intersection(session_ids):
+                interested = {record.get('selectedSessionId'), self._state.get('voice', {}).get('sessionId'),
+                              (record.get('view', {}).get('subagentHistory') or {}).get('sessionId')}
+                if not interested.intersection(affected_detail):
                     continue
             if key not in published:
                 with self.clients.bind(key[0]):

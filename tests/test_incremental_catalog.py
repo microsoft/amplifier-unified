@@ -141,6 +141,86 @@ def test_substituted_ancestors_never_admit_outside_reads(tmp_path, monkeypatch, 
     assert any(issue['kind'] == 'unreadable' for issue in delta['issues'])
 
 
+def test_recovery_revalidates_leaf_after_suspension(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 3
+    index._reconcile_at = 0
+    base, _ = index.scan_changes(since=base)  # Suspended before the session read.
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    write_json(outside / 'metadata.json', {'working_dir': str(workspace), 'name': 'Outside'})
+    (outside / 'transcript.jsonl').write_text('outside')
+    saved.rename(saved.with_name('saved-retained'))
+    saved.symlink_to(outside, target_is_directory=True)
+    probes = []
+    original = index._native_metadata
+    monkeypatch.setattr(index, '_native_metadata',
+                        lambda path, *args: (probes.append(path.resolve()), original(path, *args))[1])
+    for _ in range(8):
+        base, _ = index.scan_changes(since=base)
+    assert all(not path.is_relative_to(outside) for path in probes)
+    index.close()
+
+
+def test_hot_session_does_not_starve_missed_cold_recovery(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    paths = [session(home, workspace, f'saved-{n:03d}',
+                     {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Original'})
+             for n in range(160)]
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    write_json(paths[-1] / 'metadata.json',
+               {'working_dir': str(workspace), 'bundle': 'anchors', 'name': 'Cold recovered'})
+    index._recovery_budget = 12
+    index._reconcile_at = 0
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved-000', 'transcript')}))
+    seen = []
+    for number in range(48):
+        with (paths[0] / 'transcript.jsonl').open('a') as source:
+            source.write(f'hot {number}\n')
+        base, delta = index.scan_changes(since=base)
+        seen.extend(delta['sessions'])
+        if any(row['title'] == 'Cold recovered' for row in seen):
+            break
+    assert any(row['title'] == 'Cold recovered' for row in seen)
+    index.close()
+
+
+def test_suspended_recovery_cannot_restore_confirmed_removed_project(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    saved = session(home, workspace, 'saved', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    cache = tmp_path / 'cache.sqlite3'
+    index = NativeHistory(home, watch=True, cache_path=cache)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    index._recovery_budget = 3
+    index._reconcile_at = 0
+    base, _ = index.scan_changes(since=base)
+    project = saved.parent.parent
+    project.rename(tmp_path / 'retained-project')
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project_slug(workspace), 'saved', 'transcript')}))
+    removed = []
+    for _ in range(5):
+        base, delta = index.scan_changes(since=base)
+        removed.extend(delta['removed'])
+        assert project.name not in index._projects
+        monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    assert (project.name, 'saved') in removed
+    with sqlite3.connect(cache) as db:
+        assert db.execute('SELECT count(*) FROM native_rows').fetchone()[0] == 0
+    index.close()
+
+
 def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
@@ -293,7 +373,8 @@ async def test_scoped_history_commit_does_not_drop_pending_runtime_progress(tmp_
     own['draft'] = 'Unrelated progress must reach the durable view'
     app._progress_dirty = True
     # A later labelled writer cannot narrow an earlier unknown mutation.
-    await app.on_runtime_event('assistant.delta', {'sessionId': own['id'], 'text': 'later delta'})
+    native_id = next(row['id'] for row in app.state['sessions'] if row.get('historyManaged'))
+    await app.on_runtime_event('assistant.delta', {'sessionId': native_id, 'text': 'later delta'})
     app.history.index._reconcile_at = time.monotonic() + 60
     monkeypatch.setattr(app.history.index, '_invalidations', lambda: (True, {project_slug(workspace)}))
     with (saved / 'transcript.jsonl').open('a') as file:

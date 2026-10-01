@@ -419,6 +419,12 @@ class AutomaticHistory:
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
+                    worker_detail_only = (delta_mode and not full_merge
+                        and not incoming['workspaces'] and not incoming['removed']
+                        and not incoming['removedProjects']
+                        and bool(snapshot['sessions'])
+                        and all(row.get('sessionKind') == 'worker' for row in snapshot['sessions'])
+                        and not changed)
                     hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
                     workspaces = {row['id']: row for row in state['workspaces']}
                     # Most refreshes contain no unresolved folders. Index the
@@ -633,7 +639,7 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
-                            self.service._publish(session_ids=touched)
+                            self.service._publish(session_ids=touched, detail_only=worker_detail_only)
                         else:
                             self.service._publish()
                     if delta_mode:
@@ -717,7 +723,7 @@ class AutomaticHistory:
                             sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
                             sharedHistoryTotal=result['total'])
                     session['historyLoading'] = False
-                    self.service._publish(session_ids={session_id})
+                    self.service._publish(session_ids={session_id}, detail_only=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -725,7 +731,7 @@ class AutomaticHistory:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session:
                         session.update(historyLoading=False, historyError='Could not read the saved chat. Its original files are unchanged. Try Refresh.')
-                        self.service._publish(session_ids={session_id})
+                        self.service._publish(session_ids={session_id}, detail_only=True)
 
     async def ensure_loaded(self, session_id):
         session = self.service._session(session_id)

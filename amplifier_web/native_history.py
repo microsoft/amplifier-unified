@@ -155,6 +155,7 @@ class NativeHistory:
         self._recovery_urgent = deque()
         self._recovery_queued = set()
         self._pending_invalidations = set()
+        self._cached_start = False
 
     def _load_catalog(self):
         # Called only from the discovery worker, never in host construction.
@@ -181,6 +182,7 @@ class NativeHistory:
             if not was_loaded:
                 self._projects, self._files = cached_projects, cached_files
                 self._file_projects = set(self._projects)
+                self._cached_start = bool(cached_projects)
             else:
                 # Live memory contains newer canonical reads after a failed
                 # cache save. Reconnect may not replace it with stale disk rows.
@@ -461,6 +463,20 @@ class NativeHistory:
             yield
             if directory is None:
                 continue
+            # Iterators survive between slices. Recheck every ancestor and leaf
+            # after resumption; an earlier DirEntry is not current authority.
+            try:
+                safe = (self._safe_project(project)
+                        and stat.S_ISDIR(directory.stat(follow_symlinks=False).st_mode)
+                        and directory.resolve().parent == (project / 'sessions').resolve())
+            except (OSError, ValueError, RuntimeError):
+                safe = False
+            if not safe:
+                issues.append({'kind': 'unreadable', 'nativeProject': slug,
+                               'nativeIdentity': directory.name})
+                if directory.name in previous_rows:
+                    rows.append(previous_rows[directory.name])
+                continue
             # CLI worker IDs can contain ':' and '_'. All existing basenames
             # are safe to index; root execution has a narrower ID contract.
             native = self._native_metadata(directory, issues, slug)
@@ -602,7 +618,9 @@ class NativeHistory:
         try:
             with os.scandir(root) as entries:
                 for entry in entries:
-                    while self._recovery_urgent:
+                    # One urgent project per discovery entry: continuous writes
+                    # cannot monopolize missed-event coverage for other projects.
+                    if self._recovery_urgent:
                         name = self._recovery_urgent.popleft()
                         self._recovery_queued.discard(name)
                         yield from self._recover_project(root / name, known)
@@ -639,11 +657,38 @@ class NativeHistory:
         result = yield from self._scan_project_steps(project, known, issues, bounded=True)
         # Another invalidation owns newer published rows when its work completed
         # while this generator was suspended. Do not replace those rows.
-        if self._projects.get(project.name) is not before:
-            if project.name not in self._recovery_queued:
-                self._recovery_urgent.append(project.name)
-                self._recovery_queued.add(project.name)
+        current = self._projects.get(project.name)
+        if before is not None and current is None:
+            # A confirmed canonical removal supersedes the suspended scan.
+            # Recreated storage must enter through a fresh invalidation/recovery.
             return
+        if current is not before and result is not None and current is not None:
+            baseline_rows = {row['nativeIdentity']: row for row in before['sessions']} if before else {}
+            current_rows = {row['nativeIdentity']: row for row in current['sessions']}
+            merged = {row['nativeIdentity']: row for row in result['sessions']}
+            # Accept cold independently reconciled rows while keeping newer
+            # watched rows. A hot session cannot starve the rest of its project.
+            for identity in baseline_rows.keys() | current_rows.keys():
+                if current_rows.get(identity) is not baseline_rows.get(identity):
+                    if identity in current_rows:
+                        merged[identity] = current_rows[identity]
+                    else:
+                        merged.pop(identity, None)
+            workspace_fields = ('path', 'id', 'available')
+            if before is not None and any(current['workspace'].get(key) != before['workspace'].get(key)
+                                          for key in workspace_fields):
+                # Workspace identity changes affect every row's interpretation.
+                if project.name not in self._recovery_queued:
+                    self._recovery_urgent.append(project.name)
+                    self._recovery_queued.add(project.name)
+                return
+            rows = sorted(merged.values(), key=lambda row: row['nativeIdentity'])
+            workspace = dict(result['workspace'])
+            workspace.update({field: sum(row['sessionKind'] == kind for row in rows)
+                              for field, kind in (('sessionCount', 'root'),
+                                                  ('workerSessionCount', 'worker'),
+                                                  ('internalSessionCount', 'internal'))})
+            result = {'workspace': workspace, 'sessions': rows}
         if result is not None:
             self._projects[project.name] = before if result == before else result
             self._project_inputs[project.name] = ((tuple(sorted(known.get(project.name, ()))),), issues)
@@ -754,7 +799,7 @@ class NativeHistory:
             dirty_projects = {item[0] if isinstance(item, tuple) else item for item in dirty}
             wildcard = '*' in dirty_projects
             incremental = (self._watch_enabled and _changes and not force
-                           and self._snapshot_revision is not None)
+                           and (self._snapshot_revision is not None or self._cached_start))
             if incremental:
                 # The previous detached journal retains old project objects.
                 # Discovery and missed-notification coverage advance separately.

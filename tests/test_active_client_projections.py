@@ -85,6 +85,10 @@ async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(
 
 async def test_mixed_dirty_scope_preserves_union_and_failed_commit_for_retry(app_factory, monkeypatch):
     app, rows = fixture(app_factory, count=20)
+    for row in rows[:3]:
+        row['historyManaged'] = False
+    app._save()
+    rows[2]['draft'] = 'C introduced by the failed publication'
     await app.on_runtime_event('assistant.delta', {'sessionId': rows[0]['id'], 'text': 'A'})
     await app.on_runtime_event('assistant.delta', {'sessionId': rows[1]['id'], 'text': 'B'})
     save = app._save
@@ -95,15 +99,51 @@ async def test_mixed_dirty_scope_preserves_union_and_failed_commit_for_retry(app
     with pytest.raises(OSError):
         app._publish(session_ids={rows[2]['id']})
     assert app.state['revision'] == revision
-    assert app._progress_session_ids == {rows[0]['id'], rows[1]['id']}
     scopes = []
     def observed():
         scopes.append(app._publish_save_scope)
         save()
     monkeypatch.setattr(app, '_save', observed)
-    app._publish(session_ids={rows[2]['id']})
+    # A plain retry flush must retain C without the caller resupplying it.
+    await app._flush_pending_progress()
     assert scopes == [{row['id'] for row in rows[:3]}]
     assert not app._progress_dirty
+    import json
+    from amplifier_web.session_projection import view_path
+    assert json.loads(view_path(app.data_dir, rows[2]).read_text())['draft'] == rows[2]['draft']
+
+
+async def test_slow_scoped_subscriber_gets_latest_affected_revision_not_unrelated_detail(app_factory):
+    app, rows = fixture(app_factory, count=20)
+    with app.clients.bind('client-0'):
+        queue = app.subscribe(session_id=rows[0]['id'])
+    for number in range(6):
+        await app.on_runtime_event('assistant.delta', {'sessionId': rows[0]['id'], 'text': str(number)})
+        await app._flush_pending_progress()
+    assert queue.qsize() == 4
+    frames = [queue.get_nowait() for _ in range(4)]
+    assert frames[-1]['revision'] == app.state['revision']
+    assert frames[-1]['sessions'][0]['streaming'] == '012345'
+    # Unrelated detail commits do not needlessly copy or queue X's body.
+    app._publish(session_ids={rows[1]['id']}, detail_only=True)
+    assert queue.empty()
+    with app.clients.bind('client-0'):
+        assert app.session_state(rows[0]['id'])['revision'] == app.state['revision']
+
+
+async def test_worker_summary_detail_targets_parent_view_not_other_client(app_factory):
+    app, rows = fixture(app_factory, count=20)
+    child = next(row for row in rows if row.get('parentId') == rows[0]['id'])
+    queues = []
+    for number in range(2):
+        with app.clients.bind(f'client-{number}'):
+            queues.append(app.subscribe())
+            app.browser_state()
+    child['title'] = 'Changed worker summary'
+    app._publish(session_ids={child['id']}, detail_only=True)
+    assert queues[1].empty()
+    frame = queues[0].get_nowait()
+    assert any(row['title'] == 'Changed worker summary' for row in frame['subagentNavigation']['items'])
 
 
 async def test_clients_share_navigation_despite_layout_and_private_draft_differences(app_factory, monkeypatch):
