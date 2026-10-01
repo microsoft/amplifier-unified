@@ -251,6 +251,50 @@ async def test_shell_summaries_derive_current_unread_without_acknowledging_it(se
     assert service.state.get('attentionRead', {}) == before
 
 
+async def test_error_review_exposes_only_bounded_receipts_and_uses_shared_action(service):
+    composition = deepcopy(DEFAULT)
+    composition['instances'].append({'id': 'limited', 'package': 'builtin.chats', 'slot': 'navigation',
+                                     'scope': {'mode': 'pinned', 'workspaceId': 'one'}})
+    change = await prepare(service, composition)
+    await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
+    for session in service.state['sessions']:
+        session.update(error='Private fixture failure detail', errorAt=1, status='error')
+    service._publish()
+    snapshot = (await command(service, 'shell.query', clientId='browser-one', instanceId='limited'))['result']
+    receipt, = snapshot['attention']['items']
+    unread_key = service.projections.shell_key(service.state)
+    assert set(receipt) == {'id', 'sessionId', 'fingerprint', 'read'}
+    assert receipt['id'] == 'session:alpha' and not receipt['read']
+    assert 'Private fixture failure detail' not in json.dumps(snapshot)
+    before = deepcopy(service.state['sessions'])
+    args = {'ids': [receipt['id']], 'fingerprints': {receipt['id']: receipt['fingerprint']}}
+    await command(service, 'shell.command', clientId='browser-one', instanceId='limited',
+                  action='attention.read', args=args)
+    after = (await command(service, 'shell.query', clientId='browser-one', instanceId='limited'))['result']
+    assert after['attention']['items'][0]['read']
+    assert after['chatNavigation']['items'][0]['activity']['kind'] == 'idle'
+    assert service.state['sessions'] == before
+    # A later same-text occurrence is not covered by the previously observed receipt.
+    service.state['sessions'][0]['errorAt'] = 2
+    service._publish()
+    await command(service, 'shell.command', clientId='browser-one', instanceId='limited',
+                  action='attention.read', args=args)
+    after = (await command(service, 'shell.query', clientId='browser-one', instanceId='limited'))['result']
+    assert not after['attention']['items'][0]['read']
+    assert after['chatNavigation']['items'][0]['activity']['kind'] == 'attention'
+    distinct_key = service.projections.shell_key(service.state)
+    assert distinct_key != unread_key
+    service.state['sessions'][0]['errorAt'] = 3
+    service._publish()
+    assert service.projections.shell_key(service.state) != distinct_key
+    for invalid in ({'ids': ['session:beta'], 'fingerprints': {'session:beta': receipt['fingerprint']}},
+                    {'ids': ['approval:fixture'], 'fingerprints': {'approval:fixture': receipt['fingerprint']}},
+                    {'ids': [receipt['id']]}, {'ids': [receipt['id']], 'fingerprints': {}}):
+        with pytest.raises(AppError, match='Only observed conversation errors'):
+            await command(service, 'shell.command', clientId='browser-one', instanceId='limited',
+                          action='attention.read', args=invalid)
+
+
 async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(service):
     for session in service.state['sessions']:
         session.update(workspace=str(service.default_workspace), messages=[])

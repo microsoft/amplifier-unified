@@ -10,6 +10,20 @@ test('navigation distinguishes unresolved input, active work, errors, and new re
  assert.equal(activityFor({id:'new'}, {attention:{sessions:{new:1}}}).kind,'unread');
  assert.equal(activityFor({activity:{kind:'attention',label:'Approval requested'}}).label,'Approval requested');
 });
+test('reviewing an exact failure clears its marker without hiding current obligations',()=>{
+ const chat={id:'failed',status:'error',error:'Saved failure'};
+ const item={id:'session:failed',sessionId:'failed',read:true,fingerprint:'current'};
+ const state={attention:{items:[item]}};
+ assert.deepEqual(activityFor(chat,state),{kind:'idle',label:'Idle'});
+ assert.equal(activityFor({...chat,status:'working'},state).kind,'working');
+ assert.equal(activityFor({...chat,approvals:[{status:'pending'}]},state).label,'Approval requested');
+ assert.equal(activityFor({...chat,questions:[{status:'pending',required:true}]},state).label,'Answer requested');
+ assert.equal(activityFor({...chat,questions:[{status:'answered',delivery:{status:'rejected'}}]},state).label,'Check answer delivery');
+ assert.equal(activityFor(chat,{...state,runtimeControl:{failed:{'task.get':{task:{status:'blocked'}}}}}).label,'Work blocked');
+ assert.equal(activityFor(chat,{attention:{...state.attention,sessions:{failed:1}}}).kind,'unread');
+ item.read=false;assert.equal(activityFor(chat,state).kind,'attention');
+ item.id='completion:failed';item.read=true;assert.equal(activityFor(chat,state).kind,'attention');
+});
 test('recency handles unknown and future timestamps without inventing activity',()=>{
  for(const value of [null,undefined,NaN,Infinity,'1',0,-1])assert.equal(relativeActivity(value,3600).short,'—');
  assert.equal(relativeActivity(4000,3600).short,'now');

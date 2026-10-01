@@ -103,6 +103,17 @@ def snapshot(state):
             'sections':{key:sum(i['section']==key or (key=='setup' and i['page']=='loaded-modules') for i in unread) for key in {'setup','capabilities','maintenance','chats','feedback'}},'pages':{key:sum(i['page']==key for i in unread) for key in {i['page'] for i in items}}}
 
 
+def reviewed_session_errors(attention):
+    """Use the current snapshot's exact fingerprint receipts, not saved status.
+
+    Reading an approval, completion or question never acknowledges an error.
+    A different occurrence is unread again even if its message is identical.
+    """
+    return {item['sessionId'] for item in attention.get('items', [])
+            if item.get('sessionId') and item.get('read')
+            and item.get('id') == 'session:' + item['sessionId']}
+
+
 def completed(session, generation):
     """Only manager completion with no delegated work outstanding is ready.
 

@@ -13,7 +13,7 @@ import re
 
 from .session_navigation import is_top_level
 from .chat_navigation import navigation_activity
-from .navigation_summary import activity, path_labels
+from .navigation_summary import activity, path_labels, task_blocked
 
 PAGE_SIZE = 100
 NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode'}
@@ -107,7 +107,10 @@ def _index(state):
                            'activityCounts': dict.fromkeys(('attention', 'working', 'unread', 'idle'), 0)}
         chats[path]['workspaceSelections'][workspace['id']] = workspace
     seen = set()
-    unread_sessions = state.get('attention', {}).get('sessions', {})
+    from .attention import reviewed_session_errors
+    attention = state.get('attention', {})
+    unread_sessions = attention.get('sessions', {})
+    reviewed_errors = reviewed_session_errors(attention)
     for session in state.get('sessions', []):
         if not is_top_level(session) or session.get('id') in seen:
             continue
@@ -120,7 +123,10 @@ def _index(state):
         entry['chatCount'] += 1
         entry['unread'] += bool(unread_sessions.get(session.get('id')))
         entry['recentActivityAt'] = max(entry['recentActivityAt'], navigation_activity(session))
-        entry['activityCounts'][activity(session, bool(unread_sessions.get(session.get('id'))))['kind']] += 1
+        summary = activity(session, bool(unread_sessions.get(session.get('id'))),
+                           error_reviewed=session.get('id') in reviewed_errors,
+                           blocked=task_blocked(state, session['id']))
+        entry['activityCounts'][summary['kind']] += 1
 
     root = _root(list(chats))
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}

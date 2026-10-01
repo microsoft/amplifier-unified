@@ -89,6 +89,7 @@ COMMAND_CAPABILITIES = {
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
     'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
+    'attention.read': 'chats.manage',
     'locations.create': 'workspaces.manage', 'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
 }
 
@@ -325,6 +326,15 @@ class ShellModules:
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
+        recent_shortcuts = projections.chats({**scoped, 'view': sidebar_home}, section='recent')['items'][:8]
+        visible_ids = {row['id'] for page in (chat_page, home, pins, recent, workspace_chats)
+                       for row in page['items']} | {row['id'] for row in recent_shortcuts}
+        # Exact review receipts for these bounded rows; never error bodies or
+        # unrelated settings/permission notices from the full attention inbox.
+        error_receipts = [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                          for item in scoped['attention']['items']
+                          if item.get('sessionId') in visible_ids
+                          and item['id'] == 'session:' + item['sessionId']]
         overview = {'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})
         shortcuts = projections.workspaces({**scoped, 'view': {**view, 'navWorkspaceMode': 'recent', 'navWorkspaceFilter': '', 'navWorkspacePage': 1}})
         # Only summaries and the selected registration leave this query. No
@@ -336,7 +346,7 @@ class ShellModules:
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
                 'homeNavigation': home, 'workspaceOverview': overview,
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
-                'recentShortcuts': projections.chats({**scoped, 'view': sidebar_home}, section='recent')['items'][:8],
+                'recentShortcuts': recent_shortcuts,
                 'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
@@ -344,7 +354,8 @@ class ShellModules:
                 'conversationOrganization': organization_projection(state, {row['id'] for row in chat_page['items']}),
                 'library': {'bounded': True, 'workspaceCount': sum(row.get('available') is True for row in state.get('workspaces', []))},
                 'sharedHistory': {key: state.get('sharedHistory', {}).get(key) for key in ['loading', 'refreshing', 'error', 'issues', 'issueCount']},
-                'attention': {'sessions': {row['id']: scoped['attention'].get('sessions', {}).get(row['id'], 0) for row in chat_page['items']}},
+                'attention': {'sessions': {sid: scoped['attention'].get('sessions', {}).get(sid, 0) for sid in visible_ids},
+                              'items': error_receipts},
                 'locationListing': copy.deepcopy(state.get('locationListing')) if 'locations.read' in self.manifest(instance['package'], validated=False)['capabilities'] else None,
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
@@ -440,6 +451,15 @@ class ShellModules:
             capability = COMMAND_CAPABILITIES.get(args['action'])
             if not capability or capability not in self.manifest(instance['package'])['capabilities']:
                 fail('Module has not declared this capability.', 403)
+            if args['action'] == 'attention.read':
+                observed = args['args']
+                ids, fingerprints = observed.get('ids'), observed.get('fingerprints')
+                visible = {item['id'] for item in self.navigation(client, instance)['attention']['items']}
+                if (set(observed) != {'ids', 'fingerprints'} or not isinstance(ids, list) or not ids
+                        or any(not isinstance(sid, str) or sid not in visible for sid in ids)
+                        or not isinstance(fingerprints, dict)
+                        or any(not isinstance(fingerprints.get(sid), str) or not fingerprints[sid] for sid in ids)):
+                    fail('Only observed conversation errors in this module can be reviewed.', 403)
             receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
             if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':
                 client = self.client(identity)

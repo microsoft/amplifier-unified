@@ -148,18 +148,24 @@ class StateProjections:
         Selection, canvas and selected-chat summaries are added by the client.
         """
         def build():
+            from .attention import reviewed_session_errors
             from .chat_navigation import navigation_activity
-            from .navigation_summary import activity
+            from .navigation_summary import activity, task_blocked
             attention = self.attention(state)
+            reviewed_errors = reviewed_session_errors(attention)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
             rows = [([row.get(key) for key in fields], navigation_activity(row),
-                     activity(row, bool(attention['sessions'].get(row['id']))))
+                     activity(row, bool(attention['sessions'].get(row['id'])),
+                              error_reviewed=row['id'] in reviewed_errors,
+                              blocked=task_blocked(state, row['id'])))
                     for row in self.sessions(state).roots]
             facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
+                     [[item['id'], item['fingerprint'], item['read']] for item in attention['items']
+                      if item.get('sessionId') and item['id'] == 'session:' + item['sessionId']],
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},
                      state.get('locationListing'), state.get('actionStatus', {}).get('locations.list'), state.get('actionStatus', {}).get('locations.create')]
             return hashlib.sha256(json.dumps(facts, sort_keys=True, separators=(',', ':')).encode()).hexdigest()

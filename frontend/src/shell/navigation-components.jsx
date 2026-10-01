@@ -11,6 +11,7 @@ import {WorkspaceExplorer} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
 import {ChatDelete} from '../chat-delete';
 import {PathField} from '../settings-ui';
+import {readItems} from '../attention';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
@@ -108,7 +109,9 @@ export function ChatDetails({chat,model,now,close}){
  const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
  const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
  const pins=state.pinnedSessionIds||[],pinIndex=pins.indexOf(chat.id);
- const [pinError,setPinError]=useState('');
+ const [pinError,setPinError]=useState(''),[reviewError,setReviewError]=useState(''),[reviewing,setReviewing]=useState(false);
+ const errorItem=state.attention?.items?.find(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&!item.read);
+ const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
@@ -118,6 +121,8 @@ export function ChatDetails({chat,model,now,close}){
   <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Saved in this folder’s native Amplifier history.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
+   {errorItem&&<button type="button" className="a-link" data-action="attention.read" disabled={reviewing} onClick={review}>{reviewing?'Marking reviewed…':'Mark error reviewed'}</button>}
+   {reviewError&&<span role="alert">{reviewError}</span>}
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action="session.pinOrder" disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action="session.pinOrder" disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
