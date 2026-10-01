@@ -257,3 +257,22 @@ and two consumer roles required 50 Git transport requests for 300 logical lookup
 zero for the warm automatic pass, and 50 again for a manual fresh pass. This measures
 request elimination, not real network latency. Installed-service, account-backed
 and physical-device acceptance remain separate from these tests.
+
+### Shared user resources and independent host downloads
+
+Unified reads shared Amplifier settings, credentials, native conversation
+history, routing, instructions, and user/workspace-authored bundles and skills.
+It constructs bundle registrations from those settings rather than importing
+CLI registrations. It never copies the CLI cache or registry on first startup.
+A previously imported registry in Unified's own directory is ignored for
+session source selection; its saved contents are retained. CLI behavior and
+its default cache locations are unchanged.
+
+Root and nested-agent Skills downloads use the current Unified generation's
+`cache/skills` directory, including remote sources added during a session.
+The explicitly enabled shared-model runtime adapter also prepares modules in
+the app-owned cache. Local skills stay shared, and explicit user cache paths
+remain authoritative. Skills' generic `cache_dir` option avoids changing
+`AMPLIFIER_HOME`, which remains the shared settings/history root. Older Skills
+modules must receive the component update before they honor that option;
+source tests do not establish adoption by already running workers.

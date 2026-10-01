@@ -14,11 +14,12 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 
-from .config import HostConfig, _load_keys, expand_environment
+from .config import HostConfig, _load_keys, app_home, configure_skill_cache, expand_environment
 from .session import _apply_settings
 from ..provider_environment import materialize_bundle_providers
 from ..session_files import amplifier_home
 from ..shared_settings import read_settings
+from ..updates import foundation_home
 
 ROUTING_SOURCE = "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=modules/hooks-routing"
 _CREDENTIAL = re.compile(r"^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|github[_-]?token|token|password|secret|authorization|credential|client_secret)$", re.I)
@@ -108,6 +109,11 @@ async def prepare_bundle(config, bundle, *, is_child=False):
     route = next(row for row in config["hooks"] if row.get("module") == "hooks-routing")
     bundle.hooks = [row for row in bundle.hooks if row.get("module") != "hooks-routing"] + [copy.deepcopy(route)]
     sources = config.get("module_sources", {})
-    prepared = await bundle.prepare(strict=True, source_resolver=lambda module, source: sources.get(module, source))
+    # Shared model settings do not grant the CLI registry/cache authority over
+    # this host. Domain resources still resolve from their configured sources.
+    registry_home = foundation_home(app_home())
+    configure_skill_cache(bundle, registry_home)
+    prepared = await bundle.prepare(cache_dir=registry_home / "cache", strict=True,
+                                    source_resolver=lambda module, source: sources.get(module, source))
     await materialize_bundle_providers(bundle, prepared)
     return prepared

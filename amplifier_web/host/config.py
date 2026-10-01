@@ -3,14 +3,11 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
-import shutil
 
-from filelock import FileLock
 
 from ..deployment import write_private
 from ..shared_settings import read_yaml, read_settings
@@ -44,26 +41,6 @@ def merge(base, overlay):
                 result.append(copy.deepcopy(row))
         return result
     return copy.deepcopy(overlay)
-
-
-def _import_registry(home: Path, shared: Path):
-    # Runtime checkouts remain isolated from the CLI. Configuration is never
-    # copied: the original shared files are authoritative on every mount.
-    foundation_home = home / "foundation"
-    if (foundation_home / "registry.json").exists():
-        return
-    old_registry = shared / "registry.json"
-    registry = json.loads(old_registry.read_text()) if old_registry.is_file() else {"version": 1, "bundles": {}}
-    old_cache, new_cache = shared / "cache", foundation_home / "cache"
-    if old_cache.is_dir() and not new_cache.exists():
-        shutil.copytree(old_cache, new_cache, symlinks=True)
-    for row in registry.get("bundles", {}).values():
-        if local := row.get("local_path"):
-            try:
-                row["local_path"] = str(new_cache / Path(local).resolve().relative_to(old_cache.resolve()))
-            except ValueError:
-                pass
-    write_private(foundation_home / "registry.json", json.dumps(registry, indent=2))
 
 
 def _load_keys(path):
@@ -217,11 +194,30 @@ class HostConfig:
 
 
 def prepare_registry(config):
-    """Copy a runtime cache only in the worker preparing its first session."""
-    (config.home / "config").mkdir(parents=True, exist_ok=True, mode=0o700)
-    with FileLock(str(config.home / "config" / ".migration.lock")):
-        _import_registry(config.home, config.config_home or amplifier_home())
+    """Create owned source storage; never read/copy the CLI registry or cache.
 
+    Settings and user-authored resources remain shared. Registry aliases are
+    constructed per session from those settings, including on older installs
+    whose owned directory still contains a former imported registry.
+    """
+    config.registry_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+def configure_skill_cache(bundle, registry_home):
+    """Keep remote clones private while local user/workspace skills stay shared."""
+    def apply(tools, agents):
+        for row in tools:
+            if isinstance(row, dict) and row.get("module") == "tool-skills":
+                config = row.setdefault("config", {})
+                # Explicit user paths remain authoritative; only the default
+                # remote cache is host-owned. Never change AMPLIFIER_HOME:
+                # settings, instructions and native history share that root.
+                if config.get("cache_dir") is None:
+                    config["cache_dir"] = str(Path(registry_home) / "cache/skills")
+        for child in agents.values():
+            if isinstance(child, dict):
+                apply(child.get("tools", []), child.get("agents", {}))
+    apply(getattr(bundle, "tools", []), getattr(bundle, "agents", {}))
 
 def load_config(workspace, *, home=None, legacy_home=None, session_id=None, global_only=False):
     workspace = Path(workspace).expanduser().resolve(strict=True)

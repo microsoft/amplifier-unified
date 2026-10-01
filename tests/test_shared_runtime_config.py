@@ -19,6 +19,7 @@ def setup(tmp_path, monkeypatch):
     root = tmp_path / 'shared'; workspace = tmp_path / 'actual work.space'
     workspace.mkdir()
     monkeypatch.setenv('AMPLIFIER_HOME', str(root))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'owned'))
     paths = settings_paths(workspace, session_id='native-session')
     write(paths['global'], {'config': {'providers': [
         {'id': 'primary', 'module': 'provider-a', 'source': 'source-a',
@@ -102,6 +103,8 @@ async def test_prepare_replaces_bundle_defaults_but_preserves_child_preferences(
     prepared = SimpleNamespace(mount_plan={})
     async def prepare(**kwargs):
         assert kwargs['strict'] is True
+        assert kwargs['cache_dir'] == bridge.foundation_home(bridge.app_home()) / 'cache'
+        assert kwargs['cache_dir'] != bridge.amplifier_home() / 'cache'
         return prepared
     calls = []
     async def materialize(bundle, actual):

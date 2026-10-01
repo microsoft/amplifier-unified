@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from amplifier_web.host.config import _import_registry
+from amplifier_web.host.config import HostConfig, prepare_registry
 from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager, active_release, cache_changes, foundation_home
 
@@ -177,18 +177,24 @@ async def test_source_edit_added_after_check_blocks_staging(repository, service)
     assert not (cache/'AGENTS.md').is_symlink()
 
 
-def test_import_preserves_symlinks_including_external_links(tmp_path, repository):
-    legacy = tmp_path/'legacy'
-    shutil.copytree(repository, legacy/'cache/repository', symlinks=True)
-    outside = tmp_path/'external';outside.mkdir();(outside/'notes.txt').write_text('private')
-    (legacy/'cache/repository/external').symlink_to(outside, target_is_directory=True)
-    home = tmp_path/'imported'
-    _import_registry(home, legacy)
-    imported = home/'foundation/cache/repository'
-    assert (imported/'AGENTS.md').is_symlink()
-    assert (imported/'AGENTS.md').readlink() == Path('CLAUDE.md')
-    assert (imported/'external').is_symlink()
-    assert git(imported, 'status', '--porcelain', '--untracked-files=no') == ''
+def test_registry_preparation_never_imports_cli_cache(tmp_path, repository):
+    legacy = tmp_path / 'legacy'
+    shutil.copytree(repository, legacy / 'cache/repository', symlinks=True)
+    outside = tmp_path / 'external'
+    outside.mkdir()
+    (outside / 'notes.txt').write_text('private')
+    (legacy / 'cache/repository/external').symlink_to(outside, target_is_directory=True)
+    # Even invalid registry data is irrelevant: no CLI registry is read.
+    (legacy / 'registry.json').write_text('not valid json')
+    home = tmp_path / 'owned'
+    prepare_registry(HostConfig(home, tmp_path, {}, home / 'foundation', legacy))
+    assert (home / 'foundation').is_dir()
+    assert not (home / 'foundation/cache').exists()
+    assert not (home / 'foundation/registry.json').exists()
+    assert (legacy / 'registry.json').read_text() == 'not valid json'
+    assert (legacy / 'cache/repository/AGENTS.md').is_symlink()
+    assert (legacy / 'cache/repository/external').readlink() == outside
+    assert (outside / 'notes.txt').read_text() == 'private'
 
 
 def cached(service, repository, name, ref='main'):
