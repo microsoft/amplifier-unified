@@ -33,7 +33,11 @@ try{
  await expect(overview).not.toContainText('Other components installed at');
  await stage('installed');await expect(overview).toContainText('Other components installed at');
  await expect(overview).toContainText('Included components installed at');
- await page.reload();await openSettingsPage(page,'updates');await expect(overview).toContainText('Other components installed at');
+ await page.reload();await page.waitForSelector('#amp-one');
+ // Settings is a persisted client view. Do not click the covered navigation
+ // toggle when reload has already restored the open Updates dialog.
+ if(!await overview.isVisible())await openSettingsPage(page,'updates');
+ await expect(overview).toContainText('Other components installed at');
  assert.deepEqual(errors,[]);result.status='passed';result.checks={progress:true,componentIdentity:true,completedMilestones:true,noPrematureActivation:true,waitingDistinct:true,failureDistinct:true,reload:true,mobileOverflow:false};result.browserErrors=errors;result.browserVersion=browser.version();
 }catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:output+'-failed.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},10000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});result.fixtureLog=log;await writeFile(output+'.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));}
