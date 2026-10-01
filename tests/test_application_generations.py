@@ -22,11 +22,14 @@ def qualified(tmp_path):
     return home, bootstrap, dist, target, graph
 
 
-def test_qualified_launch_preserves_arguments_and_data_scope(qualified, monkeypatch):
+@pytest.mark.parametrize('inherited_guard', [None, 'earlier-generation'])
+def test_qualified_launch_preserves_arguments_and_data_scope(qualified, monkeypatch, inherited_guard):
     home, bootstrap, dist, target, graph = qualified
     monkeypatch.setattr(generations.sys, 'prefix', str(bootstrap))
     monkeypatch.setattr(generations, '__file__', str(bootstrap / 'lib/application_generations.py'))
     monkeypatch.delenv('AMPLIFIER_APP_GENERATION_EXEC', raising=False)
+    if inherited_guard:
+        monkeypatch.setenv('AMPLIFIER_APP_GENERATION_EXEC', inherited_guard)
     monkeypatch.setattr('subprocess.run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(graph)))
     calls = []
     monkeypatch.setattr(generations.os, 'execv', lambda python, args: calls.append((python, args)))

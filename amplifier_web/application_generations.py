@@ -97,9 +97,10 @@ def delegate(argv=None):
     A newer manual uv upgrade takes precedence over an older active generation.
     Explicit development launches do not become a global application bootstrap.
     """
-    if os.environ.get("AMPLIFIER_APP_GENERATION_EXEC") or not Path(
-        __file__
-    ).resolve().is_relative_to(Path(sys.prefix).resolve()):
+    # Children inherit the generation marker. It is traceability, not a guard:
+    # invoking the public launcher from a child must still select the qualified
+    # app. The bootstrap identity below prevents recursive delegation.
+    if not Path(__file__).resolve().is_relative_to(Path(sys.prefix).resolve()):
         return
     args = list(sys.argv[1:] if argv is None else argv)
     from .host.config import app_home
