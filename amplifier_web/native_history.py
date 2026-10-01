@@ -124,7 +124,7 @@ class NativeHistory:
         self._files = {}
         self._file_projects = set()
         self._projects = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._reads = 0
         self._project_inputs = {}
         self._working_dirs = {}
@@ -244,12 +244,15 @@ class NativeHistory:
         return False
 
     def close(self):
-        if self._recovery is not None:
-            self._recovery.close()
-            self._recovery = None
-        if self._watch:
-            self._watch.close()
-            self._watch = None
+        # asyncio cancellation does not stop a to_thread scan. Close only after
+        # that bounded slice releases ownership, including reentrant watch repair.
+        with self._lock:
+            if self._recovery is not None:
+                self._recovery.close()
+                self._recovery = None
+            if self._watch:
+                self._watch.close()
+                self._watch = None
 
     def _invalidations(self):
         if not self._watch_enabled:

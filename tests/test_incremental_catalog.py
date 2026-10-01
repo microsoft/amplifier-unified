@@ -221,6 +221,30 @@ def test_suspended_recovery_cannot_restore_confirmed_removed_project(tmp_path, m
     index.close()
 
 
+def test_close_waits_for_inflight_recovery_slice(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    index = NativeHistory(tmp_path / 'native', watch=True)
+    entered, release = threading.Event(), threading.Event()
+    def blocked_recovery(known):
+        entered.set()
+        assert release.wait(3)
+        yield
+    monkeypatch.setattr(index, '_recover_projects', blocked_recovery)
+    def scan():
+        with index._lock:
+            index._recovery_slice({})
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        active = workers.submit(scan)
+        assert entered.wait(3)
+        closing = workers.submit(index.close)
+        assert not closing.done()
+        release.set()
+        active.result(timeout=3)
+        closing.result(timeout=3)
+    assert index._recovery is None
+
+
 def test_delta_is_detached_retryable_and_unknown_token_resets(tmp_path):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()

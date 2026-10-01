@@ -777,8 +777,7 @@ class AppService:
             async with self.lock:
                 if self._progress_dirty and not self.closed:
                     try:
-                        self._publish(session_ids=getattr(self, '_progress_session_ids', None),
-                                      detail_only=getattr(self, '_progress_detail_only', False))
+                        self._commit_pending_progress()
                     except Exception as exc:
                         # Retain dirty data for the next transition or shutdown.
                         self._progress_publish_error = str(exc)
@@ -801,10 +800,19 @@ class AppService:
                 self._progress_publish_task = None
         async with self.lock:
             if getattr(self, '_progress_dirty', False):
-                self._publish(session_ids=getattr(self, '_progress_session_ids', None),
-                              detail_only=getattr(self, '_progress_detail_only', False))
+                self._commit_pending_progress()
                 return True
         return False
+
+    def _commit_pending_progress(self):
+        scope = getattr(self, '_progress_session_ids', None)
+        if scope is None:
+            # Existing host observers wrap the public no-argument boundary.
+            # Unknown/global writers retain that exact boundary and full scope.
+            self._publish()
+        else:
+            self._publish(session_ids=scope,
+                          detail_only=getattr(self, '_progress_detail_only', False))
 
     def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
