@@ -89,7 +89,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
     return [row for row in rows if row['id'] not in omitted]
@@ -263,13 +263,15 @@ class EventIndex:
         if name not in {'llm:request', 'llm:response', 'llm:error'}:
             return
         request = data.get('request_id') or data.get('call_id')
-        scope = (sid, data.get('provider'), data.get('model'))
+        naming = data.get('purpose') == 'session-naming' or data.get('origin_module') == 'hooks-session-naming'
+        scope = (sid, data.get('provider'), data.get('model'), naming)
         if name == 'llm:request':
             key = f'llm:{sid}:{request or reference["offset"]}'
             node = {'id': key, 'kind': 'llm', 'sessionId': sid, 'label': 'Model call',
                 'provider': data.get('provider'), 'model': data.get('model'), 'startedAt': at,
                 'phase': 'running', 'canonicalHistory': True, 'eventOrder': reference['offset']}
-            raw = data.get('raw')
+            if naming:node.update(label='Session naming', lifecycle='background')
+            raw = data.get('raw', data.get('raw_request'))
             options = raw if isinstance(raw, dict) else {}
             keys = ('message_count', 'has_instructions', 'has_system', 'reasoning_enabled', 'thinking_enabled',
                     'thinking_budget', 'background_mode', 'stream', 'max_tokens', 'max_output_tokens',
@@ -283,7 +285,11 @@ class EventIndex:
             if isinstance(options.get('reasoning'), dict) and isinstance(options['reasoning'].get('effort'), str):
                 node['requestInfo']['reasoning_effort'] = options['reasoning']['effort'][:100]
             if raw is not None:
-                self.field(node, 'request', data, ('raw',), reference, preview=False)
+                self.field(node, 'request', data, ('raw', 'raw_request'), reference, preview=False)
+                capture = data.get('request_capture', {})
+                if isinstance(capture, dict):
+                    node['requestCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
+                                              if type(capture.get(key)) is bool}
             self.pending.setdefault(scope, []).append(node)
             if request:
                 self.nodes[key] = node
@@ -304,6 +310,7 @@ class EventIndex:
             pending.clear()
         node = self.nodes.setdefault(key, {'id': key, 'kind': 'llm', 'sessionId': sid,
             'label': 'Model call', 'canonicalHistory': True, 'eventOrder': reference['offset']})
+        if naming:node.update(label='Session naming', lifecycle='background')
         duration = data.get('duration_ms')
         if 'startedAt' not in node and at is not None and isinstance(duration, (int, float)):
             node['startedAt'] = at - duration / 1000
@@ -588,6 +595,8 @@ class EventLogView:
                 old = node['id'];node['id'] = previous['id'];remap[old] = node['id']
                 for key in ('turnId', 'parentId', 'lifecycle'):
                     if previous.get(key):node[key] = previous[key]
+                if previous.get('lifecycle') == 'background' and previous.get('label') == 'Session naming':
+                    node['label'] = 'Session naming'
                 if node['kind'] == 'tool' and previous.get('liveObservation'):
                     node['liveObservation'] = True
                 if node['kind'] == 'llm' and previous.get('usage'):

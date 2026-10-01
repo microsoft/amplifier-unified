@@ -121,10 +121,15 @@ async def check():
     base=application_state()
     if not shutil.which('gh'):return {**base,'status':'check_failed','detail':'Sign in with GitHub CLI to check this private release channel.'}
     try:
-        data=json.loads(await process('gh','api',f'repos/{REPOSITORY}/releases/latest',timeout=30))
+        from .update_checks import cached
+        async def release_lookup():
+            return await process('gh','api',f'repos/{REPOSITORY}/releases/latest',timeout=30)
+        data=json.loads(await cached(['release', REPOSITORY], release_lookup))
         tag=data['tag_name'];version=version_tuple(tag)
         if not version or data.get('draft') or data.get('prerelease'):raise ValueError('Unsupported release tag')
-        output=await process('git','ls-remote',SOURCE,'refs/tags/'+tag,'refs/tags/'+tag+'^{}',env=git_environment(),timeout=30)
+        async def tag_lookup():
+            return await process('git','ls-remote',SOURCE,'refs/tags/'+tag,'refs/tags/'+tag+'^{}',env=git_environment(),timeout=30)
+        output=await cached(['release-tag', SOURCE, tag], tag_lookup)
         rows=[line.split() for line in output.splitlines()]
         revision=next((row[0] for row in rows if row[1].endswith('^{}')),rows[0][0] if rows else '')
         if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Release revision not found')
@@ -140,7 +145,9 @@ async def check():
                 base['releaseNotes']=history(parse(raw,tag.removeprefix('v')),tag)
             except (ValueError,RuntimeError,TimeoutError):
                 base['releaseNotesWarning']='Release notes for the available update could not be loaded. Installed release history is still available.'
-        component_updates = await components.updates(process, git_environment())
+        # An available app replaces this graph. Do not spend time checking the
+        # old host's components against declarations about to be replaced.
+        component_updates = await components.updates(process, git_environment()) if version == current else []
         # Never downgrade a development host to an older published application.
         refresh_components = bool(component_updates) and not ahead
         return {**base,'status':'update' if version>current or refresh_components else 'current','latest':tag,'revision':revision,
@@ -260,9 +267,15 @@ async def installed_target():
     prefix=tool_root/'amplifier-unified'
     launcher=prefix/('Scripts/amplifier-unified.exe' if os.name=='nt' else 'bin/amplifier-unified')
     public_launcher=bin_root/('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')
-    if Path(sys.prefix).resolve()!=prefix.resolve() or Path(executable).resolve()!=launcher.resolve() or public_launcher.resolve()!=launcher.resolve():
+    from .application_generations import active, supports
+    from .host.config import app_home
+    generation = active(app_home())
+    owns_prefix = Path(sys.prefix).resolve() == prefix.resolve()
+    if generation and supports(prefix):
+        owns_prefix = owns_prefix or Path(sys.prefix).resolve() == generation['prefix'].resolve()
+    if not owns_prefix or Path(executable).resolve()!=launcher.resolve() or public_launcher.resolve()!=launcher.resolve():
         raise ValueError('This host is not running from the active uv tool installation. Restart it using that installation before updating; no global tool was changed.')
-    python=prefix/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
+    python=Path(sys.prefix)/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
     previous={'version':__version__,'installation':str(prefix),'source':None}
     try:
         info=json.loads(metadata.distribution('amplifier-unified').read_text('direct_url.json') or '{}')
@@ -368,7 +381,15 @@ async def _activate(manager):
         resolution_args=['--overrides',str(folder/'components.txt')] if graph is not None else []
         if selected:
             resolution_args.extend(['--with-requirements',str(folder/'components.txt')])
-        await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
+        from .application_generations import supports, promote
+        # Upgrade older bootstraps once through uv. Thereafter this tested app
+        # environment is itself the live target: no second install or relocation.
+        bootstrap = Path(previous['installation']) if previous.get('installation') else Path(sys.prefix)
+        if generation and supports(bootstrap):
+            target = manager.diagnostics.sync('replacement-promote', promote, manager.home, validated, bootstrap)
+            installed_python = target['prefix'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        else:
+            await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras),env=git_environment(),timeout=900)
         output=await manager.diagnostics.run('replacement-probe',process,installed_python,'-I','-c',PROBE,*extras,timeout=30)
         installed=verified_version(manager,output,validated['version'],'replacement-version')
         if graph is not None:

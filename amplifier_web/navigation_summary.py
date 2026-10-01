@@ -4,13 +4,26 @@ from functools import lru_cache
 import re
 
 
-def activity(session, unread=False):
+def task_blocked(state, sid):
+    task = state.get('runtimeControl', {}).get(sid, {}).get('task.get', {}).get('task') or {}
+    return task.get('status') == 'blocked'
+
+
+def activity(session, unread=False, *, error_reviewed=False, blocked=False):
     if any(row.get('status') in {None, 'pending'} for row in session.get('approvals', [])):
         return {'kind': 'attention', 'label': 'Approval requested'}
+    if any(row.get('status') == 'pending' and row.get('required')
+           for row in session.get('questions', [])):
+        return {'kind': 'attention', 'label': 'Answer requested'}
+    if any((row.get('delivery') or {}).get('status') in {'unknown', 'rejected'}
+           for row in session.get('questions', [])):
+        return {'kind': 'attention', 'label': 'Check answer delivery'}
+    if blocked or session.get('status') == 'blocked':
+        return {'kind': 'attention', 'label': 'Work blocked'}
     status = session.get('status', 'idle')
     if status in {'starting', 'working', 'running', 'stopping'}:
         return {'kind': 'working', 'label': {'starting': 'Starting', 'stopping': 'Stopping'}.get(status, 'Working')}
-    if session.get('error') or status in {'error', 'failed'}:
+    if (session.get('error') or status in {'error', 'failed'}) and not error_reviewed:
         return {'kind': 'attention', 'label': 'Needs attention'}
     if unread:
         return {'kind': 'unread', 'label': 'New response'}

@@ -50,7 +50,7 @@ async def test_device_login_publishes_code_then_removes_it_after_success(tmp_pat
     manager=SetupManager(tmp_path/'app')
     await manager.perform('providers.save',{'workspace':str(tmp_path),'module':'provider-openai-chatgpt','id':'chatgpt','config':{}})
     script=tmp_path/'auth.py'
-    script.write_text('import sys,json\njson.loads(sys.stdin.readline())\nprint(json.dumps({"status":"waiting","instruction":"Enter code: TEST-1234"}),flush=True)\nprint(json.dumps({"status":"completed"}),flush=True)\n')
+    script.write_text('import sys,json,pathlib\nr=json.loads(sys.stdin.readline())\nprint(json.dumps({"status":"waiting","instruction":"Enter code: TEST-1234"}),flush=True)\np=pathlib.Path(r["tokenFile"]);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps({"access_token":"fixture-access","refresh_token":"fixture-refresh"}));p.chmod(0o600)\nprint(json.dumps({"status":"completed"}),flush=True)\n')
     manager.auth_command=[sys.executable,str(script)]
     updates=[]
     async def progress(value):updates.append(value['login'])

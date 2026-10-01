@@ -52,7 +52,7 @@ def source_fixture(tmp_path, monkeypatch):
         write(root / "bundle.yaml", {"bundle": {"name": "portable"}})
     root_uri, app_uri = (ORIGIN + "#subdirectory=" + name + ".yaml" for name in ("root", "app"))
     paths = settings_paths(workspace, shared_home=shared, session_id="session-one")
-    write(paths["global"], {"bundle": {"active": "selected", "added": {"selected": root_uri}, "app": [app_uri]}})
+    write(paths["global"], {"bundle": {"active": "selected", "added": {"selected": root_uri, "portable": ORIGIN}, "app": [app_uri]}})
     calls = []
     original_resolve = SimpleSourceResolver.resolve
 
@@ -70,6 +70,8 @@ def source_fixture(tmp_path, monkeypatch):
         return ResolvedSource(active_path=active, source_root=roots[origin])
 
     monkeypatch.setattr(SimpleSourceResolver, "resolve", resolve)
+    # Shared settings supply the namespace; the retained historical registry
+    # is preservation evidence, never the source of session registrations.
     baseline = BundleRegistry(app / "foundation")
     baseline.register({"portable": ORIGIN, "selected": root_uri})
     baseline.save()

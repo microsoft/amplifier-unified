@@ -10,7 +10,7 @@ import time
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from urllib.parse import urlsplit,urlunsplit
+from urllib.parse import urlsplit,urlunsplit,parse_qsl
 import os
 from pathlib import Path
 import re
@@ -115,20 +115,60 @@ def github_cli_token():
     except (OSError,subprocess.TimeoutExpired):return None
 
 
-def account_connected(config):
+def chatgpt_auth_mode(value=None):
+    # The previous public spelling remains a read alias; new choices use Codex.
+    return 'chatgpt_codex' if value in (None, 'legacy_codex') else value
+
+
+def chatgpt_token_path(config):
+    default='~/.amplifier/chatgpt-plan/default.json' if config.get('auth_mode')=='chatgpt_plan' else '~/.amplifier/openai-chatgpt-oauth.json'
+    value=config.get('token_file_path')
+    return default if value is None else value
+
+
+def account_status(config):
     # Match the provider's token-file contract, without starting a login or refresh.
-    path=config.get('token_file_path')
-    if path is None:path='~/.amplifier/openai-chatgpt-oauth.json'
-    if not isinstance(path,str):return False
+    mode=chatgpt_auth_mode(config.get('auth_mode'))
+    status={'authMode':mode,'connected':False,'planEnabled':False}
+    path=chatgpt_token_path(config)
+    if not isinstance(path,str):return status
     try:
         file=Path(path).expanduser()
-        if file.stat().st_size>1_000_000:return False
+        if file.stat().st_size>1_000_000:return status
         tokens=json.loads(file.read_text())
-        if not isinstance(tokens,dict) or not tokens.get('access_token'):return False
-        if tokens.get('refresh_token'):return True
-        expiry=datetime.fromisoformat(tokens.get('expires_at','').replace('Z','+00:00'))
-        return expiry.astimezone(timezone.utc)>datetime.now(timezone.utc)
-    except (OSError,ValueError,TypeError):return False
+        if not isinstance(tokens,dict) or not tokens.get('access_token'):return status
+        stored_mode=chatgpt_auth_mode(tokens.get('auth_mode'))
+        if stored_mode=='oauth':stored_mode='chatgpt_codex'
+        if mode not in {'chatgpt_codex','chatgpt_plan'} or stored_mode!=mode:return status
+        if mode=='chatgpt_plan':
+            if not tokens.get('subject') or not tokens.get('client_id'):return status
+            connected=bool(tokens.get('refresh_token')) or float(tokens.get('expires_at',0))>time.time()
+            status.update(connected=connected,planEnabled=connected and isinstance(tokens.get('scopes'),list) and 'chatgpt.tokens.use.direct' in tokens['scopes'])
+            # Identity was verified by the provider at sign-in. Never decode or
+            # publish a JWT from the app process just to render settings.
+            if connected and isinstance(tokens.get('email'),str):status['email']=tokens['email'][:320]
+        else:
+            connected=bool(tokens.get('refresh_token'))
+            if not connected:
+                expiry=datetime.fromisoformat(tokens.get('expires_at','').replace('Z','+00:00'))
+                connected=expiry.astimezone(timezone.utc)>datetime.now(timezone.utc)
+            status['connected']=connected
+        return status
+    except (OSError,ValueError,TypeError,OverflowError,AttributeError):return status
+
+
+def account_connected(config):
+    return account_status(config)['connected']
+
+
+def login_url(value):
+    """Only expose authorization navigation, never tokens or identity hints."""
+    try:
+        parsed=urlsplit(value)
+        if parsed.scheme!='https' or parsed.hostname not in {'auth.openai.com','chatgpt.com','platform.openai.com'} or parsed.username or parsed.password or parsed.fragment:return None
+        if any(key.lower() in {'id_token_hint','access_token','refresh_token','id_token','code','client_secret'} for key,_ in parse_qsl(parsed.query)):return None
+        return value
+    except ValueError:return None
 
 
 def safe_name(value):
@@ -210,10 +250,11 @@ class SetupManager:
             credential=environment_credential(value['module'],raw)
             configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
             if not refs:configured=credential['available']
-            connected=account_connected(raw) if value['module']=='provider-openai-chatgpt' else False
-            if value['module']=='provider-openai-chatgpt':configured=connected
+            account=account_status(raw) if value['module']=='provider-openai-chatgpt' else None
+            connected=bool(account and account['connected'])
+            if account:configured=connected and (account['authMode']!='chatgpt_plan' or account['planEnabled'])
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
-                'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
+                'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
     def catalog_key(self,args,workspace):
@@ -359,6 +400,8 @@ class SetupManager:
                         if credential['supported'] and credential['available']:config[field]='${'+credential['envVar']+'}' 
                 if module=='provider-openai-chatgpt':
                     same_provider=existing is not None and existing['module']==module
+                    if same_provider and 'auth_mode' not in config and old.get('auth_mode'):
+                        config['auth_mode']=old['auth_mode']
                     token_path=config.get('token_file_path') or (old.get('token_file_path') if same_provider else None)
                     if token_path:
                         config['token_file_path']=token_path
@@ -550,21 +593,32 @@ class SetupManager:
         if not row:return {"providerId":identity,"status":"idle"}
         return {key:value for key,value in row.items() if key not in {"task","process"}}
 
-    async def publish_login(self,identity):
-        result={"providerId":identity,"login":self.login_state(identity)}
+    async def publish_login(self,identity,**values):
+        result={**values,"providerId":identity,"login":self.login_state(identity)}
         if self.progress:await self.progress(result)
         return result
 
     async def start_login(self,provider,args,workspace,scope):
         identity=args['id']; previous=self.logins.get(identity)
         if previous and not previous['task'].done():return await self.publish_login(identity)
-        path=self.home/'config'/('openai-chatgpt-'+safe_name(identity)+'-oauth.json')
-        config={**provider.get('config',{}),'token_file_path':str(path),'login_on_mount':False}
-        self._provider_mutation({**args,'module':provider['module'],'config':config},workspace,scope)
-        row={'providerId':identity,'loginId':uuid.uuid4().hex,'status':'starting','instructions':[]}
+        original=copy.deepcopy(provider)
+        old=original.get('config',{})
+        mode=chatgpt_auth_mode(args.get('authMode') or old.get('auth_mode'))
+        if mode not in {'chatgpt_codex','chatgpt_plan'}:raise ValueError('Choose a supported ChatGPT sign-in method.')
+        login_id=uuid.uuid4().hex
+        profile_dir=self.home/'config'/'chatgpt-sign-in'/safe_name(identity)
+        path=profile_dir/(login_id+'.json')
+        source_path=Path(chatgpt_token_path(old)).expanduser()
+        host_path=Path(old.get('host_file_path') or (source_path.parent/'host.json' if old.get('auth_mode')=='chatgpt_plan' else self.home/'config'/'chatgpt-host.json')).expanduser()
+        from .provider_catalog import fingerprint
+        registration_path=profile_dir/('registration-'+fingerprint([workspace,mode,str(source_path)])[:24]+'.json')
+        config={**old,'auth_mode':mode,'token_file_path':str(path),'login_on_mount':False}
+        if mode=='chatgpt_plan':config['host_file_path']=str(host_path)
+        before=account_status(old)
+        row={'providerId':identity,'loginId':login_id,'authMode':mode,'status':'starting','instructions':[]}
         self.logins[identity]=row
         async def run():
-            process=None
+            process=None;completed=False;activated=False
             try:
                 if self.auth_command:command=list(self.auth_command)
                 else:
@@ -572,29 +626,49 @@ class SetupManager:
                     command=RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_auth.py'))]
                 process=await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
                 row['process']=process
-                process.stdin.write((json.dumps({'module':provider['module'],'tokenFile':str(path)})+'\n').encode());await process.stdin.drain();process.stdin.close()
+                process.stdin.write((json.dumps({'module':provider['module'],'tokenFile':str(path),'authMode':mode,
+                    'hostFile':str(host_path),'registrationFile':str(registration_path),
+                    'sourceTokenFile':str(source_path) if mode==old.get('auth_mode')=='chatgpt_plan' else None,'enablePlan':bool(args.get('enablePlan'))})+'\n').encode());await process.stdin.drain();process.stdin.close()
                 async with asyncio.timeout(900):
                     while line:=await process.stdout.readline():
                         try:event=json.loads(line)
                         except (ValueError,UnicodeError):continue
                         if event.get('status') not in {'waiting','completed','failed'}:continue
-                        row['status']=event['status']
+                        if event['status']=='completed':
+                            completed=True
+                        else:row['status']=event['status']
                         if event.get('instruction'):
                             text=str(event['instruction'])[:2000]
-                            row['instructions']=(row['instructions']+[text])[-20:]
+                            # Do not send provider stdout verbatim into persisted
+                            # browser state. Only a vetted URL and device code.
                             for url in re.findall(r'https://[^\s<>]+',text):
-                                if urlsplit(url).hostname in {'auth.openai.com','chatgpt.com','platform.openai.com'}:row['url']=url
+                                if login_url(url):row['url']=url
                         code_match=re.search(r'(?i)enter\s+(?:the\s+)?code:\s*([A-Z0-9]+(?:-[A-Z0-9]+)+)',str(event.get('instruction','')))
                         if code_match:row['deviceCode']=code_match.group(1)
                         if event['status'] in {'completed','failed'}:
                             row.pop('deviceCode',None);row.pop('url',None);row['instructions']=[]
-                        if event.get('error'):row['error']=str(event['error'])[:300]
+                        if event.get('error'):row['error']='Sign-in did not finish. Update the included ChatGPT provider if necessary, then try again.'
                         await self.publish_login(identity)
                     code=await process.wait()
-                    if code or row['status'] not in {'completed','failed'}:
-                        row.update(status='failed',error='The provider login ended before authentication completed.')
+                    if code or not completed or row['status']=='failed':
+                        row.update(status='failed',error=row.get('error') or 'The provider login ended before authentication completed.')
+                    else:
+                        account=account_status(config)
+                        if not account['connected']:raise ValueError('No authenticated account was saved.')
+                        current=next((p for p in self.config(workspace).providers if (p.get('id') or p.get('instance_id') or p['module'].removeprefix('provider-'))==identity),None)
+                        disabled=self.config(workspace).settings.get('configurator',{}).get('disabled',{}).get('providers',[])
+                        if current!=original or identity in disabled:
+                            row.update(status='failed',error='This connection changed during sign-in. Refresh its settings before trying again.')
+                        else:
+                            # Activate a separate credential profile only after
+                            # successful exit and a current configuration check.
+                            # Existing workers/shared custom files stay intact.
+                            result=self._provider_mutation({**args,'module':provider['module'],'config':config},workspace,scope)
+                            activated=True
+                            row.update(status='completed',account=account,showPlanWelcome=account['planEnabled'] and not before['planEnabled'])
+                            await self.publish_login(identity,providers=result['providers'],providersWorkspace=workspace,providersLoadedAt=time.time(),loginConfigurationChanged=True)
             except asyncio.CancelledError:row['status']='cancelled';raise
-            except TimeoutError:row.update(status='expired',error='Device login expired. Start again.')
+            except TimeoutError:row.update(status='expired',error='Sign-in expired. Start again.')
             except Exception as exc:row.update(status='failed',error='Unable to run provider login ('+type(exc).__name__+').')
             finally:
                 if row['status'] in {'completed','failed','expired','cancelled'}:
@@ -607,6 +681,24 @@ class SetupManager:
                         try:os.killpg(process.pid,signal.SIGKILL)
                         except ProcessLookupError:pass
                         await process.wait()
+                if not activated:
+                    try:
+                        # Inspect effective and persisted rows, including
+                        # disabled/shadowed connections. Only unlink this
+                        # attempt-owned candidate after the worker has stopped.
+                        # Source, registration, host and lock files stay intact;
+                        # copied credentials are never remotely revoked here.
+                        providers=list(self.config(workspace).providers)
+                        for location in ('global','project','local'):
+                            providers.extend(self.store.read(workspace,location).get('config',{}).get('providers',[]))
+                        referenced=any(
+                            Path(value['config']['token_file_path']).expanduser().resolve()==path.resolve()
+                            for value in providers if value.get('config',{}).get('token_file_path')
+                        )
+                        if not referenced and path.resolve()!=source_path.resolve():
+                            path.unlink(missing_ok=True)
+                    except Exception:
+                        row['cleanupWarning']='An abandoned sign-in file could not be safely removed.'
                 await self.publish_login(identity)
         row['task']=asyncio.create_task(run())
         return await self.publish_login(identity)

@@ -11,13 +11,14 @@ import {WorkspaceExplorer} from '../workspace-explorer';
 import {LibraryFilters} from '../conversation-library';
 import {ChatDelete} from '../chat-delete';
 import {PathField} from '../settings-ui';
+import {readItems} from '../attention';
 import {useNavigation} from '../../../packages/shell-sdk/index.js';
 const patch=(act,value)=>act('view.update',{patch:value});
 export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
  const [name,setName]=useState(chat.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const submitting=useRef(false),dirty=useRef(false);
  const naming=chat.naming?.status==='working';
- const busy=['starting','working','running','stopping'].includes(chat.status)||chat.configurationBusy;
+ const busy=chat.configurationBusy;
  const automatic=chat.autoName??(chat.titleSource!=='manual'&&chat.nativeNameSource!=='manual');
  useEffect(()=>{if(!dirty.current)setName(chat.title||'')},[chat.title]);
  const submit=async e=>{
@@ -45,7 +46,7 @@ export function ChatRename({chat,act,cancel,inputId="nav-workspace-name"}){
   <button type="submit" className="a-icon a-nav-chat-edit" aria-label="Save conversation name" disabled={saving||!name.trim()} data-action="session.rename"><Check/></button>
   <button type="button" className="a-icon a-nav-chat-edit" aria-label="Cancel conversation rename" disabled={saving} data-action="view.update" onClick={cancel}><X/></button>
   <button type="button" className="a-link" data-action="session.naming" disabled={saving||naming||busy||name!==(chat.title||'')} onClick={generate}><RefreshCw/>{naming?'Naming…':'Auto name now'}</button>
-  <small className="a-nav-name-help">Generate one name. Future automatic naming stays {automatic?'on':'off'}.{busy?' Wait for current work to finish.':name!==(chat.title||'')?' Save or cancel your edit first.':''}</small>
+  <small className="a-nav-name-help">Generate one name. Future automatic naming stays {automatic?'on':'off'}.{busy?' Finish changing the conversation configuration first.':name!==(chat.title||'')?' Save or cancel your edit first.':''}</small>
   {naming&&<small role="status">Generating chat name…</small>}
   {(error||chat.naming?.error)&&<small role="alert" className="a-danger">{error||chat.naming.error}</small>}
  </form>;
@@ -108,7 +109,9 @@ export function ChatDetails({chat,model,now,close}){
  const {state,act,draft,setDraft,choose,prefix}=model,activity=activityFor(chat,state);
  const title=chat.title||'Untitled conversation',managed=chat.location?.kind==='managed';
  const pins=state.pinnedSessionIds||[],pinIndex=pins.indexOf(chat.id);
- const [pinError,setPinError]=useState('');
+ const [pinError,setPinError]=useState(''),[reviewError,setReviewError]=useState(''),[reviewing,setReviewing]=useState(false);
+ const errorItem=state.attention?.items?.find(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&!item.read);
+ const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
@@ -118,6 +121,8 @@ export function ChatDetails({chat,model,now,close}){
   <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Saved in this folder’s native Amplifier history.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
+   {errorItem&&<button type="button" className="a-link" data-action="attention.read" disabled={reviewing} onClick={review}>{reviewing?'Marking reviewed…':'Mark error reviewed'}</button>}
+   {reviewError&&<span role="alert">{reviewError}</span>}
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action="session.pinOrder" disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action="session.pinOrder" disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>

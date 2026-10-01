@@ -33,6 +33,18 @@ def manifest_content(home, generation=None):
 
 
 def project_path(home, generation=None, *, content=None):
+    alias = receipt_directory(home, generation) / 'runtime-project.json'
+    if alias.exists():
+        if content is not None and content != manifest_content(home, generation):
+            raise ValueError('Qualified project manifest changed')
+        value = json.loads(alias.read_text())
+        name = value.get('project', '')
+        if not isinstance(name, str) or not re.fullmatch(r'q-[a-f0-9]{32}(?:-[a-f0-9]{8})?', name):
+            raise ValueError('Invalid qualified worker project identity')
+        target = Path(home) / 'runtime' / name
+        if target.is_symlink() or not target.resolve().is_relative_to((Path(home) / 'runtime').resolve()):
+            raise ValueError('Qualified worker project is outside its owner')
+        return target
     digest = hashlib.sha256(manifest_content(home, generation) if content is None else content)
     if generation:
         digest.update(generation.encode())

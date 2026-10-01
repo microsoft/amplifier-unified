@@ -95,6 +95,7 @@ def configuration_paths(workspace: Path, session_id: str, home: Path) -> tuple[P
         home / "sessions" / session_id / "configuration.json",
         home / "sessions" / session_id / "control-state.json",
         home / "updates" / "active.json",
+        home / "diagnostics" / "config.json",
     )
 
 

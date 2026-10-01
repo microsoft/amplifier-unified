@@ -125,14 +125,14 @@ def test_included_classification_keeps_explicit_pins_and_local_sources_protected
 
 
 async def test_missing_source_staging_verifies_exact_checked_revision(tmp_path,monkeypatch):
-    from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    from amplifier_foundation.sources.git import GitSourceHandler
     destination=tmp_path/'foundation'
     cached=destination/'cache/source';cached.mkdir(parents=True)
-    async def resolve(self,uri):
-        assert self.cache_dir==destination/'cache'
+    async def resolve(self,parsed,cache_dir):
+        assert cache_dir==destination/'cache' and parsed.ref=='main'
         return SimpleNamespace(active_path=cached)
     async def process(*args,**kwargs):return 'b'*40
-    monkeypatch.setattr(SimpleSourceResolver,'resolve',resolve)
+    monkeypatch.setattr(GitSourceHandler,'_resolve_locked',resolve)
     monkeypatch.setattr(updates,'process',process)
     row={'url':'https://example.invalid/skills','ref':'main','latest':'a'*40}
     with pytest.raises(ValueError,match='moved after checking'):

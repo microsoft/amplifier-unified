@@ -114,7 +114,7 @@ ACTION_DEFINITIONS = {
     "worker.message": ("Send a follow-up to an active persistent worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["sessionId", "id", "text"])),
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
-    "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
+    "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
     "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat returns to the conversation. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
@@ -131,7 +131,7 @@ ACTION_DEFINITIONS = {
     "providers.testMessage": ("Send a small real inference request using a saved provider and model. May incur provider usage charges. Creates no conversation.",schema({"id":string(200),"sessionId":string(200),"workspace":string(4000),"model":string(200)},["id"])),
     "providers.test": ("Test a configured provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
     "providers.models": ("Browse cached provider models; refresh only this provider when requested",schema({"location": LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
-    "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200)},["id"])),
+    "providers.login": ("Sign in to a provider",schema({"id":string(200),"sessionId":string(200),"scope":{"enum":["global","project","local"]},"authMode":{"enum":["chatgpt_codex","chatgpt_plan","legacy_codex"]},"enablePlan":{"type":"boolean"}},["id"])),
     "providers.loginStatus": ("Check provider sign-in progress",schema({"id":string(200)},["id"])),
     "providers.loginCancel": ("Cancel provider sign-in",schema({"id":string(200)},["id"])),
     "routing.list": ("List model routing presets",schema()),
@@ -1636,8 +1636,8 @@ class AppService:
                         raise AppError('The naming runtime is unavailable.', 503)
                     if session.get('naming', {}).get('status') == 'working':
                         raise AppError('A chat name is already being generated.', 409)
-                    if session.get('status') in {'starting', 'working', 'running', 'stopping'} or session.get('configurationBusy'):
-                        raise AppError('Wait for the current work to finish before regenerating its name.', 409)
+                    if session.get('configurationBusy'):
+                        raise AppError('Finish changing the conversation configuration before regenerating its name.', 409)
                     if not session.get('messages'):
                         raise AppError('Send a message before generating a chat name.')
                 if 'automatic' in args:
@@ -2280,7 +2280,7 @@ class AppService:
                 return
             await self.on_runtime_event(kind, payload)
         try:
-            await self.runtime.start(source, emit)
+            await self.runtime.start(source, emit, preserve_emit=True)
             candidate = await self.runtime.control(identity, 'session.naming', {})
             async with self.lock:
                 session = self._session(identity)
@@ -2663,7 +2663,10 @@ class AppService:
                 SessionStore._atomic(directory/'naming.json',json.dumps(data))
             elif kind == "execution.event":
                 ingest_execution(session,payload)
-                if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background':
+                if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
+                    # Auxiliary preparation failures stay on their call. The
+                    # manager's terminal generation.failed event owns whether
+                    # this turn stopped; a successful recovery is not an app fault.
                     session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
                     session.pop('health', None)
             elif kind == 'runtime.delivery':

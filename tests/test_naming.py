@@ -51,7 +51,7 @@ async def test_live_naming_schedule_dedupes_service_turns_resumes_and_updates(mo
             calls.append(is_update)
             persist(tmp_path,{'id':sid,'title':'Generated','titleSource':'generated','description':'A useful description'})
     monkeypatch.setitem(sys.modules,'amplifier_module_hooks_session_naming',SimpleNamespace(SessionNamingHook=Hook,SessionNamingConfig=Config))
-    coordinator=SimpleNamespace(config={'hooks':[{'module':'hooks-session-naming'}]},session_id='s',hooks=SimpleNamespace(register=lambda *a,**k:None),register_cleanup=lambda *a:None)
+    coordinator=SimpleNamespace(config={'hooks':[{'module':'hooks-session-naming','config':{'initial_trigger_turn':2}}]},session_id='s',hooks=SimpleNamespace(register=lambda *a,**k:None),register_cleanup=lambda *a:None)
     namer=LiveSessionNaming(coordinator,tmp_path,lambda e:None)
     namer.store.save('s', [], {})
     async def turn(n):
@@ -62,14 +62,14 @@ async def test_live_naming_schedule_dedupes_service_turns_resumes_and_updates(mo
     await turn(1);assert not calls
     await turn(2);assert calls==[False]
     for n in range(3,6):await turn(n)
-    assert calls==[False,True]
+    assert calls==[False,False]
     namer.observe({'type':'input.delivered','input_id':'service','source':'amplifier-child'})
     namer.observe({'type':'generation.finished','input_ids':['service']})
     assert len(namer.completed)==5
     namer=LiveSessionNaming(coordinator,tmp_path,lambda e:None,completed_inputs=list(namer.completed))
     for n in range(6,10):await turn(n)
-    assert calls==[False,True]
-    await turn(10);assert calls==[False,True,True]
+    assert calls==[False,False]
+    await turn(10);assert calls==[False,False,False]
 
 
 @pytest.mark.parametrize('foreground_status',['idle','stopped','error'])
