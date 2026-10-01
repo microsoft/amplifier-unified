@@ -359,3 +359,18 @@ def test_cold_configuration_does_not_skip_live_turn_anchor_normalization(app,mon
     app._publish(session_ids={row['id']})
     assert row['execution']['turns'][0]['anchorMessageId']=='anchor-message'
     assert not dict.__contains__(row,'configuration')
+
+
+async def test_managed_deletion_plan_owns_cold_payload_blobs(app,monkeypatch):
+    from amplifier_web.managed_deletion import plan
+    await app.dispatch('session.create',{'location':{'kind':'managed'},'title':'To remove'})
+    sid=app.state['selectedSessionId']
+    row=app._session(sid)
+    row['messages']=[{'id':str(n),'role':'user','text':'private body '+'x'*2000,'createdAt':n} for n in range(20)]
+    app._publish()
+    await app.dispatch('session.create',{'location':{'kind':'managed'},'title':'Retained'})
+    monkeypatch.setattr(app.cold_display,'RECENT_LIMIT',0)
+    app.cold_display.retire(force=True)
+    ref=dict.get(row,'_coldFields')['messages']['$resource']
+    deletion=plan(app,sid)
+    assert ref in deletion['resourceIds'], 'confirmed deletion must not leave a full cold conversation copy behind'
