@@ -134,19 +134,13 @@ async def updates(process, environment):
     """Check every installed Amplifier Git dependency, including optional extras."""
     graph = installed_graph()
     rows = [item for item in graph if item['name'].startswith('amplifier-') and item['name'] != 'amplifier-unified']
-    semaphore = asyncio.Semaphore(5)
     tasks = {}
+    from .update_checks import git_revision, index_latest as cached_index
     async def remote(url):
-        async with semaphore:
-            output = await process('git', 'ls-remote', url, 'refs/heads/main', env=environment, timeout=35)
-            pairs = [line.split() for line in output.splitlines()]
-            revision = next((row[0] for row in pairs if len(row) == 2 and row[1] == 'refs/heads/main'), '')
-            if not re.fullmatch(r'[a-f0-9]{40}', revision):
-                raise ValueError('Component branch could not be checked')
-            return revision
+        return await git_revision(url, 'main', process, environment)
     async def inspect(item):
         if not item.get('url'):
-            latest = await index_latest(item['name'])
+            latest = await cached_index(item['name'], lambda: index_latest(item['name']))
             current = item['version']
             if not re.fullmatch(r'\d+\.\d+\.\d+', current):
                 raise ValueError('A component uses a development version; preserve it and review the installation')

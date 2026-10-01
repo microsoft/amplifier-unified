@@ -17,6 +17,9 @@ def git(path, *args):
 
 
 class Diagnostics:
+    def record(self, *args, **kwargs):
+        pass
+
     async def run(self, name, function, *args, **kwargs):
         return await function(*args, **kwargs)
 
@@ -386,3 +389,34 @@ async def test_nonprefixed_installed_override_blocks_stale_git_lock_staging(envi
     assert {path: path.read_bytes() for path in before} == before
     assert not (receipt / 'runtime.lock').exists()
     assert not active_release(manager.home)
+
+
+async def test_identical_qualified_graph_reuses_environment_without_reinstallation(installed_transitive, monkeypatch):
+    from amplifier_web.runtime_qualification import freeze, verify_recorded
+    manager, current, row, old, new, repo = installed_transitive
+    generations = ['8' * 32, '9' * 32]
+    for generation in generations:
+        environments.receipt_directory(manager.home, generation).mkdir(parents=True)
+    first = await freeze(manager, generations[0], current)
+    before = (first / 'uv.lock').read_bytes()
+    events = []
+    original = manager.diagnostics.run
+    async def trace(name, function, *args, **kwargs):
+        events.append(name)
+        return await original(name, function, *args, **kwargs)
+    manager.diagnostics.run = trace
+    second = await freeze(manager, generations[1], current)
+    assert first == second
+    assert 'ecosystem-runtime-freeze-install' not in events
+    assert (first / 'uv.lock').read_bytes() == before
+    for generation in generations:
+        receipt = environments.receipt_directory(manager.home, generation)
+        assert environments.project_path(manager.home, generation) == first
+        verify_recorded(first, receipt)
+    # A corrupted retained environment is preserved, never synced or repaired.
+    (first / 'uv.lock').write_bytes(before + b'\n# changed by another owner\n')
+    generation = 'a1' * 16
+    environments.receipt_directory(manager.home, generation).mkdir(parents=True)
+    replacement = await freeze(manager, generation, current)
+    assert replacement != first
+    assert (first / 'uv.lock').read_bytes().endswith(b'# changed by another owner\n')

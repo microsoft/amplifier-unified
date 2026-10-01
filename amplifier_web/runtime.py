@@ -209,7 +209,7 @@ class RuntimeManager:
         generation = release if release is not None else active_release(home).get("current")
         cache = prepare_project(home, generation)
         recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
-        return [uv, "run", *(["--locked"] if recorded else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
+        return [uv, "run", *(["--locked"] if recorded else []), *(["--no-sync"] if (receipt_directory(home, generation) / "runtime-project.json").exists() else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
 
     @staticmethod
     def project_path(command):

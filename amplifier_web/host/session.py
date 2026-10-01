@@ -514,22 +514,27 @@ async def load_configured_bundle(registry, config, reference):
 
 
 def session_registry(config):
-    """Keep scoped registrations private, including in older locked workers.
+    """Settings own aliases; neither CLI nor former imported registries do.
 
-    Host and worker dependencies update independently. Older Foundation
-    registries funnel writes through save(), including constructor cleanup.
-    Override that method before construction, never patch a shared instance.
+    Older locked Foundation versions lack the public read_persisted option.
+    Suppress their constructor read and save hooks before construction so an
+    old imported alias cannot silently become a source-selection fallback.
     """
     from amplifier_foundation import BundleRegistry
     options = dict(home=config.registry_home, strict=True,
                    include_source_resolver=config.resolve_source)
     parameters = inspect.signature(BundleRegistry).parameters
-    if 'persist' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
-        return BundleRegistry(**options, persist=False)
+    if 'persist' in parameters:
+        options['persist'] = False
+    if 'read_persisted' in parameters:
+        return BundleRegistry(**options, read_persisted=False)
 
     class SessionRegistry(BundleRegistry):
+        def _load_persisted_state(self):
+            """Start from scoped settings even with older Foundation."""
+
         def save(self):
-            """Session composition must never modify shared registrations."""
+            """Session composition must never modify saved registrations."""
 
     return SessionRegistry(**options)
 
@@ -537,12 +542,7 @@ def session_registry(config):
 async def load_root_bundle(config, chosen, *, execution_workspace=None):
     """Compose in a session-local registry view; settings own registrations."""
     registry = session_registry(config)
-    registrations = dict(config.registrations)
-    explicit = {**config.settings.get('bundle', {}).get('added', {}),
-                **config.settings.get('sources', {}).get('bundles', {})}
-    if "foundation" in registry.list_registered() and "foundation" not in explicit:
-        registrations.pop("foundation", None)
-    registry.register(registrations)
+    registry.register(config.registrations)
     loaded, chosen = await load_configured_bundle(registry, config, chosen)
     loaded = await compose_configured_bundle(registry, loaded, config, execution_workspace=execution_workspace)
     return registry, loaded, chosen
@@ -588,6 +588,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     loaded.session = adapted['session']
     loaded.agents = adapted.get('agents', {})
     components.apply(loaded)
+    from .config import configure_skill_cache
+    configure_skill_cache(loaded, config.registry_home)
     await loaded.prepare(strict=True, refresh_dependencies=True,
         **({'install_overrides': Path(install_overrides)} if install_overrides is not None else {}),
         cache_dir=config.registry_home / 'cache',
@@ -692,6 +694,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     loaded.agents = adapted.get("agents", {})
     components = getattr(loaded, "_host_components", None) or required_components()
     components.apply(loaded)
+    from .config import configure_skill_cache
+    configure_skill_cache(loaded, config.registry_home)
     adapted = components.normalize(adapted)
     write_private(directory / "baseline-mount-plan.json", json.dumps(redact(baseline), indent=2, default=str))
     write_private(directory / "live-mount-plan.json", json.dumps(redact(adapted), indent=2, default=str))

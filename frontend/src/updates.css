@@ -59,3 +59,8 @@
 .a-update-summary>div{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .a-update-summary>div>span{color:var(--a-muted,#5c6475)}
 .a-update-summary strong{font-weight:500}
+
+.a-source-roles{margin:6px 0;font-size:var(--a-text-base,14px)}
+.a-source-roles summary{cursor:pointer;color:var(--a-muted)}
+.a-source-roles li{display:flex;flex-wrap:wrap;gap:6px 12px;overflow-wrap:anywhere}
+.a-source-roles code{font-size:inherit}

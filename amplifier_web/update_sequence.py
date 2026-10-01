@@ -92,10 +92,13 @@ def summary(rows, *, checked=True):
 
 async def stage_missing(manager, destination, row):
     """Populate a missing shipped source only inside the isolated generation."""
-    from amplifier_foundation.sources.resolver import SimpleSourceResolver
     from .updates import process
-    resolver = SimpleSourceResolver(cache_dir=Path(destination) / 'cache')
-    source = await resolver.resolve('git+' + row['url'] + '@' + row['ref'])
+    # Populate a conventional staged checkout first. Shared adoption waits
+    # until the candidate worker's Foundation API has been checked, so a pinned
+    # older worker cannot bypass this checked revision by ignoring a binding.
+    from amplifier_foundation.sources.git import GitSourceHandler
+    from amplifier_foundation.paths.resolution import parse_uri
+    source = await GitSourceHandler()._resolve_locked(parse_uri('git+' + row['url'] + '@' + row['ref']), Path(destination) / 'cache')
     root = Path(source.active_path)
     if not root.resolve().is_relative_to(Path(destination).resolve()):
         raise ValueError('Included source escaped the staging cache')

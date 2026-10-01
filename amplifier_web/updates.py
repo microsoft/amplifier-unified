@@ -49,49 +49,6 @@ def foundation_home(home):
     return home / 'updates' / 'releases' / identity / 'foundation' if identity else home / 'foundation'
 
 
-async def merge_shared_registry(stage, shared, cache, selections):
-    """Import missing shared registrations without exposing the live cache."""
-    registry_path = stage / 'foundation' / 'registry.json'
-    shared_registry = shared / 'registry.json'
-    if not shared_registry.is_file():
-        return
-    staged = json.loads(registry_path.read_text()) if registry_path.exists() else {'version': 1, 'bundles': {}}
-    incoming = json.loads(shared_registry.read_text())
-    if not isinstance(staged, dict) or not isinstance(incoming, dict):
-        raise ValueError('Invalid staged bundle registry')
-    bundles = staged.setdefault('bundles', {})
-    shared_bundles = incoming.get('bundles', {})
-    if not isinstance(bundles, dict) or not isinstance(shared_bundles, dict):
-        raise ValueError('Invalid staged bundle registry')
-    shared_cache = Path(cache).resolve()
-    staged_cache = stage / 'foundation' / 'cache'
-    for name, entry in shared_bundles.items():
-        if name in bundles or not isinstance(entry, dict):
-            continue
-        imported = dict(entry)
-        local = imported.get('local_path')
-        if isinstance(local, str):
-            try:
-                relative = Path(local).expanduser().resolve().relative_to(shared_cache)
-            except ValueError:
-                imported.pop('local_path')
-            else:
-                selected = name in selections or imported.get('uri') in selections
-                if selected and relative.parts:
-                    source = shared_cache / relative.parts[0]
-                    target = staged_cache / relative.parts[0]
-                    if source.is_dir() and not target.exists():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        await asyncio.to_thread(shutil.copytree, source, target, symlinks=True)
-                    if target.exists():
-                        imported['local_path'] = str(staged_cache / relative)
-                    else:
-                        imported.pop('local_path')
-                else:
-                    imported.pop('local_path')
-        bundles[name] = imported
-    write_private(registry_path, json.dumps(staged, indent=2))
-
 
 def safe_label(url):
     parsed = urlsplit(url)
@@ -99,22 +56,39 @@ def safe_label(url):
 
 
 def group_sources(items):
-    """Collapse identical cached checkouts for display; installation keeps every path."""
-    groups={}
+    """One repository/ref/revision/status per display row, with every role kept.
+
+    Installation consumes the private inventory, never these presentation rows.
+    Distinct refs, revisions, tiers and protected states must remain distinct.
+    """
+    groups = {}
     for item in items:
-        row={k:v for k,v in item.items() if k not in {'path','url','eligible'}}
-        if row.get('kind')!='bundle / module':
-            groups[row['id']]=row
+        row = {k: v for k, v in item.items() if k not in {'path', 'url', 'eligible'}}
+        if row.get('kind') not in {'bundle / module', 'runtime dependency', 'source group'} or not row.get('ref'):
+            groups[('id', row['id'])] = row
             continue
-        key=tuple(row.get(k) for k in ('label','ref','current','latest','status'))
-        key = (*key, row.get('usage'), tuple(row.get('usageEvidence', [])), row.get('updateTier'))
-        if key in groups:
-            groups[key]['cacheCopies']+=row.get('cacheCopies',1)
-        else:
-            row['id']='source:'+hashlib.sha256(json.dumps(key).encode()).hexdigest()[:20]
-            row['cacheCopies']=row.get('cacheCopies',1)
-            groups[key]=row
-    return list(groups.values())
+        key = tuple(row.get(k) for k in ('label', 'ref', 'current', 'latest', 'status', 'updateTier'))
+        members = row.get('members') or [row]
+        if key not in groups:
+            groups[key] = {**row, 'members': []}
+        target = groups[key]
+        known = {member['id'] for member in target['members']}
+        target['members'].extend(member for member in members if member['id'] not in known)
+    result = []
+    for key, row in groups.items():
+        members = row.get('members', [])
+        if len(members) > 1:
+            row['id'] = 'source:' + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:20]
+            row['kind'] = 'source group'
+            row['cacheCopies'] = sum(member.get('cacheCopies', 1) for member in members if member.get('kind') == 'bundle / module')
+            row['packageCount'] = len({member['package'] for member in members if member.get('package')})
+            row['usage'] = 'configured' if any(member.get('usage') == 'configured' for member in members) else 'unknown'
+            row['usageEvidence'] = sorted({evidence for member in members for evidence in member.get('usageEvidence', [])})
+            row['members'] = sorted(members, key=lambda member: (member.get('package', ''), member['id']))
+        elif members:
+            row = {**members[0]}
+        result.append(row)
+    return result
 
 
 def pinned(ref):
@@ -141,7 +115,7 @@ def configured_sources(service):
     from .shared_settings import SettingsReadCache
     import yaml
     sources, incomplete = {}, False
-    settings_cache = SettingsReadCache()
+    settings_cache = getattr(service, "settings_cache", None) or SettingsReadCache()
     issues = getattr(service, 'source_issues', None)
     def issue(reason, *, workspace=None, session_id=None, reference=None, historical=False):
         nonlocal incomplete
@@ -188,13 +162,6 @@ def configured_sources(service):
             incomplete = True
             continue
         selections.add((path, None, None))
-    try:
-        path = foundation_home(home)/'registry.json'
-        registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
-        if not isinstance(registry, dict):raise ValueError('Invalid registry')
-    except (OSError, ValueError, AttributeError):
-        registry = {}
-        issue('The bundle registry could not be read. Open Bundles to refresh its catalog.')
 
     for workspace, selected, session_id in selections:
         try:
@@ -203,11 +170,9 @@ def configured_sources(service):
             if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
             config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache)
-            registrations = {name: row['uri'] for name, row in registry.items()
-                             if isinstance(row, dict) and isinstance(row.get('uri'), str)}
-            configured = dict(config.registrations)
-            if 'foundation' in registry:configured.pop('foundation', None)
-            registrations.update(configured)
+            # Use the same settings authority as session startup. Retained
+            # imported registry aliases must not masquerade as configured use.
+            registrations = dict(config.registrations)
 
             def resolve(reference, evidence, seen=frozenset()):
                 nonlocal incomplete
@@ -422,9 +387,15 @@ class UpdateManager:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.lock = asyncio.Lock()
         self.inventory = []
+        from .update_checks import CheckCache
+        self.check_cache = CheckCache(self.directory)
+        self.check_task = None
+        from .shared_settings import SettingsReadCache
+        self.settings_cache = SettingsReadCache(limit=512)
         self.task = None
         self.readiness_task = None
         self.closed = False
+        self.cleanup_task = None
         from .update_readiness import running_identity,valid_target
         self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
@@ -536,32 +507,39 @@ class UpdateManager:
                            for row in state.get('workspaces', [])],
         })
         snapshot.source_issues = []
+        snapshot.settings_cache = self.settings_cache
         configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
         rows = []
-        for meta in sorted((base/'cache').rglob('.amplifier_cache_meta.json')):
+        semaphore = asyncio.Semaphore(8)
+        async def inspect(meta):
+            async with semaphore:
+                return await inspect_one(meta)
+        async def inspect_one(meta):
             # Each cache may include nested skills copies. All are app-owned;
             # skip symlinked external worktrees and malformed metadata.
             root = meta.parent
-            if root.is_symlink() or not root.resolve().is_relative_to(base.resolve()): continue
+            if root.is_symlink() or not root.resolve().is_relative_to(base.resolve()): return None
             try:
                 data = json.loads(meta.read_text())
                 url, ref = data['git_url'], data.get('ref') or 'HEAD'
                 parsed = urlsplit(url)
-                if parsed.scheme not in {'https','http','ssh'} or not parsed.hostname: continue
+                if parsed.scheme not in {'https','http','ssh'} or not parsed.hostname: return None
                 relative = str(root.relative_to(base))
                 identity = hashlib.sha256(relative.encode()).hexdigest()[:20]
                 current = await process('git','rev-parse','HEAD',cwd=root,timeout=10)
                 evidence = sorted(configured.get(source_key(url, ref), ()))
                 dirty, _ = await cache_changes(root)
-                rows.append({'id':identity,'label':safe_label(url),'ref':ref,'current':current,
+                return {'id':identity,'label':safe_label(url),'ref':ref,'current':current,
                     'status':'local_changes' if dirty else 'pinned' if pinned(ref) else 'not_checked',
                     'usage':'configured' if evidence else 'unknown','usageEvidence':evidence,
                     **({'detail':'Tracked source changes are preserved and block automatic updates. Builds can also modify tracked files (including version stamps); without verified provenance these changes are not discarded.'} if dirty else {}),
-                    'path':relative,'url':url,'kind':'bundle / module','eligible':not dirty and not pinned(ref)})
-            except (ValueError, KeyError, RuntimeError, TimeoutError):
-                rows.append({'id':hashlib.sha256(str(root).encode()).hexdigest()[:20],
+                    'path':relative,'url':url,'kind':'bundle / module','eligible':not dirty and not pinned(ref)}
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, TimeoutError):
+                return {'id':hashlib.sha256(str(root).encode()).hexdigest()[:20],
                     'label':'Unrecognized cached source','status':'check_failed','eligible':False,'kind':'source',
-                    'usage':'unknown','usageEvidence':[]})
+                    'usage':'unknown','usageEvidence':[]}
+        metadata = await asyncio.to_thread(lambda: sorted((base/'cache').rglob('.amplifier_cache_meta.json')))
+        rows = [row for row in await asyncio.gather(*(inspect(meta) for meta in metadata)) if row]
         active_issues = [issue for issue in snapshot.source_issues if not issue.get('historical')]
         historical_issues = [issue for issue in snapshot.source_issues if issue.get('historical')]
         if incomplete and (active_issues or not snapshot.source_issues):
@@ -573,6 +551,8 @@ class UpdateManager:
             rows.append({'id': 'historical-source-configuration', 'label': 'Older conversation settings', 'status': 'historical',
                 'eligible': False, 'kind': 'history', 'sourceIssues': historical_issues,
                 'detail': 'These older conversations use bundles that are no longer registered. Their history is kept. Choose an available bundle if you resume one; cached-source updates are unaffected.'})
+        from .update_sources import bindings
+        rows.extend(await bindings(self.home, base, configured))
         from .runtime_environment import update_inventory
         rows.extend(await update_inventory(self.home))
         from .update_sequence import classify
@@ -602,7 +582,31 @@ class UpdateManager:
             if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
             await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
 
-    async def check(self, *, tier='application', install=False):
+    async def check(self, *, tier='application', install=False, fresh=True):
+        state = self.service.state['updates']
+        if self.closed or self.awaiting_restart() or state.get('pendingApp') or state.get('pendingRelease') or state.get('pendingSmartTools'):
+            return  # A timing measurement must not change a pending handoff.
+        if self.check_task and not self.check_task.done():
+            # Join only an equivalent availability operation. A manual refresh
+            # must not inherit a background TTL result, tier or install action.
+            previous = self.check_task
+            equivalent = getattr(self, 'check_request', None) == (tier, install, fresh)
+            result = await asyncio.shield(previous)
+            if equivalent:
+                return result
+            return await self.check(tier=tier, install=install, fresh=fresh)
+        async def run():
+            from .update_checks import checking
+            ttl = self.service.state['settings']['updates'].get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600
+            started = time.monotonic()
+            async with checking(self.check_cache, fresh=fresh, ttl=ttl):
+                await self._check(tier=tier, install=install)
+            await self.publish(checkTiming={'elapsedMs': round((time.monotonic()-started)*1000), **self.check_cache.stats})
+        self.check_request = (tier, install, fresh)
+        self.check_task = asyncio.create_task(run())
+        return await asyncio.shield(self.check_task)
+
+    async def _check(self, *, tier='application', install=False):
         if self.lock.locked() or self.awaiting_restart() or self.service.state['updates'].get('pendingApp') or self.service.state['updates'].get('pendingRelease') or self.service.state['updates'].get('pendingSmartTools'): return
         from .update_sequence import summary
         async with self.lock:
@@ -642,16 +646,13 @@ class UpdateManager:
                             detail='App update available. Included components will be checked after the new app restarts.' if app_available else 'Component checks are waiting for the application check.')
                         return
                     tier = 'included'
+                started = time.monotonic()
                 rows = await self.inventory_sources()
-                semaphore = asyncio.Semaphore(5)
+                await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000))
                 remote_tasks = {}
+                from .update_checks import git_revision
                 async def remote(url, ref):
-                    async with semaphore:
-                        pattern = ref if ref == 'HEAD' or ref.startswith('refs/') else 'refs/heads/'+ref
-                        output = await process('git','ls-remote',url,pattern,timeout=35)
-                        sha = output.split()[0] if output else ''
-                        if not re.fullmatch('[a-f0-9]{40}',sha): raise ValueError('Remote ref unavailable')
-                        return sha
+                    return await git_revision(url, ref, process)
                 async def check_row(row):
                     if not row.get('eligible') or row.get('kind') == 'runtime environment': return
                     key = (row['url'],row['ref'])
@@ -768,7 +769,8 @@ class UpdateManager:
             try:
                 await self.publish(phase='staging',detail='Preparing an isolated copy of the ecosystem…',error=None)
                 if source.exists():
-                    await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,shutil.copytree,source,stage/'foundation',symlinks=True)
+                    from .update_storage import copy_snapshot
+                    await self.diagnostics.run('ecosystem-copy',asyncio.to_thread,copy_snapshot,source,stage/'foundation')
                 else:
                     (stage/'foundation').mkdir()
                 for name in ('config','routing'):
@@ -777,7 +779,7 @@ class UpdateManager:
                 shared_home=amplifier_home()
                 shared_stage=stage/'shared-config'
                 shared_stage.mkdir(mode=0o700)
-                for name in ('settings.yaml','keys.env','routing','registry.json'):
+                for name in ('settings.yaml','keys.env','routing'):
                     original=shared_home/name
                     if original.is_dir():await asyncio.to_thread(shutil.copytree,original,shared_stage/name)
                     elif original.is_file():await asyncio.to_thread(shutil.copy2,original,shared_stage/name)
@@ -785,22 +787,18 @@ class UpdateManager:
                     config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
-                state=self.service.state
-                selections={bundle for session in state['sessions'] if not session.get('historyManaged')
-                            if isinstance(bundle:=session.get('bundle'),str)}
-                if isinstance(bundle:=state['settings'].get('bundle'),str): selections.add(bundle)
-                from .shared_settings import read_yaml
-                shared_settings=read_yaml(shared_stage/'settings.yaml') if (shared_stage/'settings.yaml').exists() else {}
-                if not isinstance(shared_settings,dict): raise ValueError('Invalid shared settings')
-                if isinstance(shared_settings.get('bundle'),dict):
-                    if isinstance(bundle:=shared_settings['bundle'].get('active'),str): selections.add(bundle)
-                await merge_shared_registry(stage, shared_stage, shared_home/'cache', selections)
+                # Snapshot shared configuration, never CLI registry or caches.
+                # Candidate preparation resolves declarations into its own store.
                 for row in candidates:
                     if row.get('kind') == 'included source':
                         from .update_sequence import stage_missing
                         await self.diagnostics.run('ecosystem-fetch', stage_missing, self, stage/'foundation', row)
                         continue
                     if row.get('kind') in {'runtime dependency', 'runtime environment'}:
+                        continue
+                    if row.get('sharedSource'):
+                        from .update_sources import stage_binding
+                        await self.diagnostics.run('ecosystem-fetch', stage_binding, self, stage, row)
                         continue
                     target=stage/'foundation'/row['path']
                     if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
@@ -821,7 +819,7 @@ class UpdateManager:
                     await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
                     data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
                     meta.write_text(json.dumps(data))
-                await self.publish(phase='validating',detail='Validating bundles and modules in a separate runtime…')
+                await self.publish(phase='validating',detail='Preparing dependencies in a separate runtime…')
                 phase='ecosystem-validation'
                 await self.validate(stage,release)
                 write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
@@ -856,11 +854,22 @@ class UpdateManager:
         configs={(s['workspace'],s['bundle']) for s in state['sessions']
                  if not s.get('historyManaged') and s.get('workspace') and s.get('bundle')}
         configs.add((state['settings']['workspace'],state['settings']['bundle']))
-        env={**os.environ,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':''}
+        from .update_sources import store_environment, worker_supports_shared, adopt_clean_sources
+        if fresh:
+            # Materialize the candidate lock once, rather than uv-syncing before
+            # every workspace probe. The serving environment is never targeted.
+            await self.diagnostics.run('ecosystem-runtime-prepare', process, shutil.which('uv'), 'sync', '--locked',
+                '--project', str(project), '--python', '3.13', timeout=900)
+        shared = store_environment(self.home) if worker_supports_shared(project) else {}
+        if fresh and shared:
+            await self.diagnostics.run('ecosystem-source-sharing', adopt_clean_sources, self, stage)
+        env={**os.environ,**shared,'AMPLIFIER_WEB_HOME':str(stage),'AMPLIFIER_HOME':str(stage/'shared-config'),'AMPLIFIER_UNIFIED_RELEASE':'','AMPLIFIER_INSTALL_PREPARATION':uuid.uuid4().hex}
+        if not shared:
+            env.pop('AMPLIFIER_SOURCE_STORE', None)  # Preserve pinned/older workers' legacy source contract.
         async def probe(project, *, refresh=False):
             qualified=fresh or (receipt/'runtime-installed.json').exists()
             overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
-            command=[shutil.which('uv'),'run','--locked','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
+            command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
             if refresh:flags.append('--refresh-dependencies')
             async def run_one(workspace, bundle):
@@ -870,7 +879,6 @@ class UpdateManager:
             # Installers remain serial. After freezing, mount isolated workers
             # without uv sync or Foundation dependency installation.
             if not refresh:
-                command.insert(2, '--no-sync')
                 flags.append('--read-only')
             semaphore = asyncio.Semaphore(1 if refresh else 4)
             tasks = [asyncio.create_task(run_one(*config)) for config in sorted(configs)]
@@ -881,13 +889,16 @@ class UpdateManager:
                     if not task.done(): task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         if fresh:
+            await self.publish(detail='Preparing changed dependencies in an isolated runtime…')
             # The refresh activator dies with each short-lived probe process.
             # Capture after dynamic module installation, then recreate an
             # ordinary resolver against the frozen graph before activation.
             await probe(project,refresh=True)
+            await self.publish(detail='Recording and verifying the exact worker dependencies…')
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
             verify_recorded(project,receipt)
+        await self.publish(detail=f'Checking compatibility for {len(configs)} workspace/bundle configurations…')
         await probe(project)
         verify_recorded(project,receipt)
 
@@ -979,6 +990,8 @@ class UpdateManager:
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-activation','succeeded')
                 self.inventory=[]
+                if self.cleanup_task is None or self.cleanup_task.done():
+                    self.cleanup_task = asyncio.create_task(self.retire_storage())
                 # The release is live and the replacement runtime installed.
                 # A stale inventory is recoverable; it must not rewrite this
                 # successful activation as an installation failure.
@@ -1070,7 +1083,7 @@ class UpdateManager:
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
             await self.check(tier=sequence['nextStage'], install=sequence.get('install', False))
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
-            await self.check()
+            await self.check(fresh=False)
         state=self.service.state['updates']
         managed_preview=state.get('appAvailable') and state.get('application',{}).get('canInstall') is False
         if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
@@ -1095,8 +1108,30 @@ class UpdateManager:
             delay = 1 if sequence.get('nextStage') and self.service.state['updates'].get('phase') == 'installed' else 60
             await asyncio.sleep(delay)
 
+    async def retire_storage(self):
+        # Storage maintenance is outside the critical activation request. Wait
+        # for an idle window and preserve everything if new work has started.
+        await asyncio.sleep(10)
+        if self.closed or self.busy() or self.awaiting_restart():
+            return
+        async with self.service.runtime_lifecycle():
+            if self.closed or self.busy() or self.awaiting_restart():
+                return
+            try:
+                from .update_retention import reclaim
+                await self.publish(storage=await reclaim(self))
+            except Exception:
+                await self.publish(storage={'reason': 'Storage reclamation was deferred; existing files were kept.'})
+
     async def close(self):
         self.closed=True
+        if self.cleanup_task and not self.cleanup_task.done():
+            self.cleanup_task.cancel()
+            await asyncio.gather(self.cleanup_task, return_exceptions=True)
+        if self.check_task:
+            self.check_task.cancel()
+            await asyncio.gather(self.check_task, return_exceptions=True)
+        await self.check_cache.close()
         if self.readiness_task:
             self.readiness_task.cancel()
             await asyncio.gather(self.readiness_task,return_exceptions=True)

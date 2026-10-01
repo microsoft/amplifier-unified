@@ -48,7 +48,7 @@ def mounted_host(tmp_path, monkeypatch):
                                load=AsyncMock(return_value=loaded))
     configurator = SimpleNamespace(apply_saved_settings=AsyncMock(), take_snapshot=Mock())
     monkeypatch.setitem(sys.modules, "amplifier_foundation", SimpleNamespace(
-        BundleRegistry=lambda **_: registry, SessionConfigurator=lambda *_: configurator))
+        BundleRegistry=lambda *, persist=True, read_persisted=True, **_: registry, SessionConfigurator=lambda *_: configurator))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.runtime", SimpleNamespace(Runtime=lambda: runtime))
     monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.job_store", SimpleNamespace(
         JobStore=lambda _: SimpleNamespace(rows=[], close=Mock())))

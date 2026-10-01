@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from amplifier_web.host.config import _import_registry
+from amplifier_web.host.config import HostConfig, prepare_registry
 from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager, active_release, cache_changes, foundation_home
 
@@ -161,82 +161,45 @@ async def test_staging_normalizes_only_verified_artifacts_and_preserves_live_cac
     assert before == ((cache/'AGENTS.md').read_bytes(), (cache/'__pycache__/module.cpython-313.pyc').read_bytes())
 
 
-async def test_staging_includes_shared_registry_and_cache_for_selected_bundle(repository, service):
-    from amplifier_web.host.config import load_config, prepare_registry
+async def test_staging_uses_shared_settings_without_cli_registry_or_cache(repository, service):
+    from amplifier_web.host.config import load_config
     from amplifier_web.host.session import load_root_bundle
     from amplifier_web.session_files import amplifier_home
+    import yaml
 
     cached(service, repository, 'repo')
     manager = service.update_manager
     row = (await manager.inventory_sources())[0]
     manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
-    stage_cache = service.data_dir/'foundation/cache'
-    existing = stage_cache/'existing'
-    shutil.copytree(repository, existing, symlinks=True)
-    (existing/'sentinel.txt').write_text('keep staged cache')
-    collision = stage_cache/'collision'
-    shutil.copytree(repository, collision, symlinks=True)
-    (service.data_dir/'foundation/registry.json').write_text(json.dumps({'version': 1, 'bundles': {
-        'existing': {'uri': 'git+https://example.invalid/existing@main', 'local_path': str(existing)},
-        'collision': {'uri': 'git+https://example.invalid/staged-collision@main', 'local_path': str(collision)},
-    }}))
     shared = amplifier_home()
-    def shared_checkout(name):
-        uri = f'git+https://example.invalid/{name}@main'
-        root = shared/'cache'/(name + '-' + hashlib.sha256(
-            uri.removeprefix('git+').encode()).hexdigest()[:16])
-        shutil.copytree(repository, root, symlinks=True)
-        (root/'bundle.yaml').write_text(f'bundle:\n  name: {name}\n')
-        (root/'manifest-link.yaml').symlink_to('bundle.yaml')
-        git(root, 'add', 'bundle.yaml', 'manifest-link.yaml')
-        git(root, 'commit', '-m', f'{name} bundle')
-        return uri, root
-
-    uri, selected = shared_checkout('anchors-amp-dev')
-    _, unselected = shared_checkout('unselected')
-    collision_uri, shared_collision = shared_checkout('collision')
-    external = repository.parent/'external'
-    external.mkdir()
-    (external/'bundle.yaml').write_text('bundle:\n  name: external\n')
-    (shared/'settings.yaml').write_text('bundle:\n  active: anchors-amp-dev\n')
-    registry = {'version': 1, 'bundles': {
-        'anchors-amp-dev': {'uri': uri, 'local_path': str(selected)},
-        'unselected': {'uri': 'git+https://example.invalid/unselected@main', 'local_path': str(unselected)},
-        'collision': {'uri': collision_uri, 'local_path': str(shared_collision)},
-        'external': {'uri': external.as_uri(), 'local_path': str(external)},
-    }}
-    (shared/'registry.json').write_text(json.dumps(registry))
-    original_registry = (shared/'registry.json').read_bytes()
-    original_cache = {path: path.read_bytes() for path in (shared/'cache').rglob('*') if path.is_file()}
-    service.state['settings']['bundle'] = 'anchors-amp-dev'
+    (shared / 'cache/cli-only').mkdir(parents=True)
+    sentinel = shared / 'cache/cli-only/sentinel'
+    sentinel.write_text('CLI remains independent')
+    (shared / 'registry.json').write_text('invalid and irrelevant CLI registry')
+    # A user-authored local bundle is shared; a downloaded CLI cache is not.
+    local = shared / 'bundles/example.yaml'
+    local.parent.mkdir()
+    local.write_text('bundle:\n  name: example\n')
+    (shared / 'settings.yaml').write_text(yaml.safe_dump({'bundle': {
+        'active': 'example', 'added': {'example': local.as_uri()}}}))
+    original = (shared / 'registry.json').read_bytes()
+    service.state['settings']['bundle'] = 'example'
 
     async def validate(stage, release):
-        staged_shared = stage/'shared-config'
-        assert not (staged_shared/'cache').exists()
-        staged_registry = json.loads((stage/'foundation/registry.json').read_text())['bundles']
-        assert staged_registry['existing'].get('local_path') == str(stage/'foundation/cache/existing')
-        assert staged_registry['collision']['uri'] == 'git+https://example.invalid/staged-collision@main'
-        assert staged_registry['anchors-amp-dev'].get('local_path') == str(stage/'foundation/cache'/selected.name)
-        assert 'local_path' not in staged_registry['unselected']
-        assert 'local_path' not in staged_registry['external']
-        assert (stage/'foundation/cache/existing/sentinel.txt').read_text() == 'keep staged cache'
-        assert (stage/'foundation/cache'/selected.name/'manifest-link.yaml').is_symlink()
-        assert not (stage/'foundation/cache'/unselected.name).exists()
+        staged_shared = stage / 'shared-config'
+        assert not (staged_shared / 'cache').exists()
+        assert not (staged_shared / 'registry.json').exists()
+        assert not (stage / 'foundation/cache/cli-only').exists()
         config = load_config(repository.parent, home=stage, legacy_home=staged_shared)
         prepare_registry(config)
         _, loaded, chosen = await load_root_bundle(config, config.active_bundle)
-        assert chosen == 'anchors-amp-dev'
-        assert loaded.name == 'anchors-amp-dev'
-        _, external_bundle, _ = await load_root_bundle(config, 'external')
-        assert external_bundle.name == 'external'
-        assert (stage/'foundation/registry.json').stat().st_mode & 0o077 == 0
+        assert chosen == 'example' and loaded.name == 'example'
 
     manager.validate = validate
     await manager.install()
     assert service.state['updates']['phase'] == 'installed'
-    assert (shared/'registry.json').read_bytes() == original_registry
-    assert original_cache == {path: path.read_bytes() for path in (shared/'cache').rglob('*') if path.is_file()}
-    assert (selected/'manifest-link.yaml').is_symlink()
+    assert (shared / 'registry.json').read_bytes() == original
+    assert sentinel.read_text() == 'CLI remains independent'
 
 
 async def test_source_edit_added_after_check_blocks_staging(repository, service):
@@ -255,18 +218,24 @@ async def test_source_edit_added_after_check_blocks_staging(repository, service)
     assert not (cache/'AGENTS.md').is_symlink()
 
 
-def test_import_preserves_symlinks_including_external_links(tmp_path, repository):
-    legacy = tmp_path/'legacy'
-    shutil.copytree(repository, legacy/'cache/repository', symlinks=True)
-    outside = tmp_path/'external';outside.mkdir();(outside/'notes.txt').write_text('private')
-    (legacy/'cache/repository/external').symlink_to(outside, target_is_directory=True)
-    home = tmp_path/'imported'
-    _import_registry(home, legacy)
-    imported = home/'foundation/cache/repository'
-    assert (imported/'AGENTS.md').is_symlink()
-    assert (imported/'AGENTS.md').readlink() == Path('CLAUDE.md')
-    assert (imported/'external').is_symlink()
-    assert git(imported, 'status', '--porcelain', '--untracked-files=no') == ''
+def test_registry_preparation_never_imports_cli_cache(tmp_path, repository):
+    legacy = tmp_path / 'legacy'
+    shutil.copytree(repository, legacy / 'cache/repository', symlinks=True)
+    outside = tmp_path / 'external'
+    outside.mkdir()
+    (outside / 'notes.txt').write_text('private')
+    (legacy / 'cache/repository/external').symlink_to(outside, target_is_directory=True)
+    # Even invalid registry data is irrelevant: no CLI registry is read.
+    (legacy / 'registry.json').write_text('not valid json')
+    home = tmp_path / 'owned'
+    prepare_registry(HostConfig(home, tmp_path, {}, home / 'foundation', legacy))
+    assert (home / 'foundation').is_dir()
+    assert not (home / 'foundation/cache').exists()
+    assert not (home / 'foundation/registry.json').exists()
+    assert (legacy / 'registry.json').read_text() == 'not valid json'
+    assert (legacy / 'cache/repository/AGENTS.md').is_symlink()
+    assert (legacy / 'cache/repository/external').readlink() == outside
+    assert (outside / 'notes.txt').read_text() == 'private'
 
 
 def cached(service, repository, name, ref='main'):
@@ -322,7 +291,7 @@ async def test_configured_sources_include_scoped_settings_and_session_choices(re
     }}))
     (home/'config').mkdir(exist_ok=True)
     (shared/'settings.yaml').write_text(yaml.safe_dump({
-        'bundle': {'active': 'git+https://example.invalid/repo@main', 'app': ['app'], 'added': {'disabled': 'git+https://example.invalid/disabled@main'}},
+        'bundle': {'active': 'git+https://example.invalid/repo@main', 'app': ['app'], 'added': {'disabled': 'git+https://example.invalid/disabled@main', 'app': 'git+https://example.invalid/app@main'}},
         'web_bundles': {'excluded': ['disabled']},
         'sources': {'modules': {'tool-example': 'git+https://example.invalid/module@main'}},
         'config': {'tools': [{'module': 'tool-skills', 'config': {'skills': ['git+https://example.invalid/skill@main']}}]},
@@ -354,7 +323,7 @@ async def test_unresolvable_configuration_does_not_hide_cache_failures(repositor
     root = cached(service, repository, 'repo')
     service.state['settings']['bundle'] = 'missing'
     if failure == 'cycle':
-        (root.parent.parent/'registry.json').write_text(json.dumps({'bundles': {'missing': {'uri': 'missing'}}}))
+        (shared/'settings.yaml').write_text('bundle:\n  added:\n    missing: missing\n')
     if failure == 'yaml':
         (service.data_dir/'config').mkdir(exist_ok=True)
         (shared/'settings.yaml').write_text('bundle: [')
@@ -539,7 +508,10 @@ def test_grouping_preserves_orthogonal_usage_evidence():
            'usage': 'configured', 'usageEvidence': ['Selected bundle']}
     rows = group_sources([row, {**row, 'id': 'two', 'usage': 'unknown', 'usageEvidence': []},
                           {**row, 'id': 'three', 'usageEvidence': ['Enabled app bundle']}])
-    assert len(rows) == 3
+    assert len(rows) == 1
+    assert len(rows[0]['members']) == 3
+    assert rows[0]['usageEvidence'] == ['Enabled app bundle', 'Selected bundle']
+    assert {member['usage'] for member in rows[0]['members']} == {'configured', 'unknown'}
     assert group_sources(rows) == rows
 
 
