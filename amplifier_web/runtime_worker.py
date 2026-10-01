@@ -227,6 +227,11 @@ class Worker:
             detail = "Waiting for the configured model to respond."
             if event == "context:compaction_started":
                 phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+            elif event == "context:compaction_progress":
+                phase = "compacting"
+                completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)
+                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved."
+                          if remaining else "Conversation context prepared; continuing work.")
             elif event == "context:compaction_finished":
                 detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."
             elif event == "provider:retry":
@@ -250,7 +255,7 @@ class Worker:
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
                     "runId": activity_run_id, "time": time.time(), **retry})
             return HookResult()
-        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_finished"):
+        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
 
     async def preparation_progress(self, directory):
