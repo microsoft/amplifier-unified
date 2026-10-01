@@ -140,6 +140,7 @@ class ExecutionEvents:
                "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":label or (purpose["label"] if purpose else "Model call"),
                "provider":str(provider_id)[:160],
                "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
+               "purpose": purpose.get("purpose") if purpose else None,
                "startedAt":time.time(),"lifecycle":"background" if purpose and purpose.get("lifecycle")=="background" else "turn"}
         if self.admission_guard:
             await self.admission_guard(row)
@@ -157,7 +158,7 @@ class ExecutionEvents:
         if isinstance(metadata, dict) and metadata.get("purpose") == "context-compaction":
             # Auxiliary output must never appear as a conversational response.
             # Keep its measured usage in the owning turn with a distinct label.
-            purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction"})
+            purpose_token = CALL_PURPOSE.set({**(CALL_PURPOSE.get() or {}), "label": "Context compaction", "purpose": "context_compaction"})
             label = "Context compaction"
         try:
             return await self._observed_provider_call(sid, provider, request, invoke, label=label)
@@ -331,7 +332,7 @@ class ExecutionEvents:
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)
-            scope = {"label": purpose.get("label", "Model call"), "lifecycle": "background" if purpose.get("lifecycle")=="background" else "turn"}
+            scope = {"purpose": purpose.get("purpose"), "label": purpose.get("label", "Model call"), "lifecycle": "background" if purpose.get("lifecycle")=="background" else "turn"}
             task = asyncio.current_task()
             if task is None:
                 return
