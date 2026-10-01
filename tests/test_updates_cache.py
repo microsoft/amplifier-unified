@@ -161,6 +161,84 @@ async def test_staging_normalizes_only_verified_artifacts_and_preserves_live_cac
     assert before == ((cache/'AGENTS.md').read_bytes(), (cache/'__pycache__/module.cpython-313.pyc').read_bytes())
 
 
+async def test_staging_includes_shared_registry_and_cache_for_selected_bundle(repository, service):
+    from amplifier_web.host.config import load_config, prepare_registry
+    from amplifier_web.host.session import load_root_bundle
+    from amplifier_web.session_files import amplifier_home
+
+    cached(service, repository, 'repo')
+    manager = service.update_manager
+    row = (await manager.inventory_sources())[0]
+    manager.inventory = [{**row, 'latest': row['current'], 'status': 'update'}]
+    stage_cache = service.data_dir/'foundation/cache'
+    existing = stage_cache/'existing'
+    shutil.copytree(repository, existing, symlinks=True)
+    (existing/'sentinel.txt').write_text('keep staged cache')
+    collision = stage_cache/'collision'
+    shutil.copytree(repository, collision, symlinks=True)
+    (service.data_dir/'foundation/registry.json').write_text(json.dumps({'version': 1, 'bundles': {
+        'existing': {'uri': 'git+https://example.invalid/existing@main', 'local_path': str(existing)},
+        'collision': {'uri': 'git+https://example.invalid/staged-collision@main', 'local_path': str(collision)},
+    }}))
+    shared = amplifier_home()
+    def shared_checkout(name):
+        uri = f'git+https://example.invalid/{name}@main'
+        root = shared/'cache'/(name + '-' + hashlib.sha256(
+            uri.removeprefix('git+').encode()).hexdigest()[:16])
+        shutil.copytree(repository, root, symlinks=True)
+        (root/'bundle.yaml').write_text(f'bundle:\n  name: {name}\n')
+        (root/'manifest-link.yaml').symlink_to('bundle.yaml')
+        git(root, 'add', 'bundle.yaml', 'manifest-link.yaml')
+        git(root, 'commit', '-m', f'{name} bundle')
+        return uri, root
+
+    uri, selected = shared_checkout('anchors-amp-dev')
+    _, unselected = shared_checkout('unselected')
+    collision_uri, shared_collision = shared_checkout('collision')
+    external = repository.parent/'external'
+    external.mkdir()
+    (external/'bundle.yaml').write_text('bundle:\n  name: external\n')
+    (shared/'settings.yaml').write_text('bundle:\n  active: anchors-amp-dev\n')
+    registry = {'version': 1, 'bundles': {
+        'anchors-amp-dev': {'uri': uri, 'local_path': str(selected)},
+        'unselected': {'uri': 'git+https://example.invalid/unselected@main', 'local_path': str(unselected)},
+        'collision': {'uri': collision_uri, 'local_path': str(shared_collision)},
+        'external': {'uri': external.as_uri(), 'local_path': str(external)},
+    }}
+    (shared/'registry.json').write_text(json.dumps(registry))
+    original_registry = (shared/'registry.json').read_bytes()
+    original_cache = {path: path.read_bytes() for path in (shared/'cache').rglob('*') if path.is_file()}
+    service.state['settings']['bundle'] = 'anchors-amp-dev'
+
+    async def validate(stage, release):
+        staged_shared = stage/'shared-config'
+        assert not (staged_shared/'cache').exists()
+        staged_registry = json.loads((stage/'foundation/registry.json').read_text())['bundles']
+        assert staged_registry['existing'].get('local_path') == str(stage/'foundation/cache/existing')
+        assert staged_registry['collision']['uri'] == 'git+https://example.invalid/staged-collision@main'
+        assert staged_registry['anchors-amp-dev'].get('local_path') == str(stage/'foundation/cache'/selected.name)
+        assert 'local_path' not in staged_registry['unselected']
+        assert 'local_path' not in staged_registry['external']
+        assert (stage/'foundation/cache/existing/sentinel.txt').read_text() == 'keep staged cache'
+        assert (stage/'foundation/cache'/selected.name/'manifest-link.yaml').is_symlink()
+        assert not (stage/'foundation/cache'/unselected.name).exists()
+        config = load_config(repository.parent, home=stage, legacy_home=staged_shared)
+        prepare_registry(config)
+        _, loaded, chosen = await load_root_bundle(config, config.active_bundle)
+        assert chosen == 'anchors-amp-dev'
+        assert loaded.name == 'anchors-amp-dev'
+        _, external_bundle, _ = await load_root_bundle(config, 'external')
+        assert external_bundle.name == 'external'
+        assert (stage/'foundation/registry.json').stat().st_mode & 0o077 == 0
+
+    manager.validate = validate
+    await manager.install()
+    assert service.state['updates']['phase'] == 'installed'
+    assert (shared/'registry.json').read_bytes() == original_registry
+    assert original_cache == {path: path.read_bytes() for path in (shared/'cache').rglob('*') if path.is_file()}
+    assert (selected/'manifest-link.yaml').is_symlink()
+
+
 async def test_source_edit_added_after_check_blocks_staging(repository, service):
     old = git(repository, 'rev-parse', 'HEAD')
     cache = service.data_dir/'foundation/cache/example'
