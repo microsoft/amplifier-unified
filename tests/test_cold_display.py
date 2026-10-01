@@ -374,3 +374,32 @@ async def test_managed_deletion_plan_owns_cold_payload_blobs(app,monkeypatch):
     ref=dict.get(row,'_coldFields')['messages']['$resource']
     deletion=plan(app,sid)
     assert ref in deletion['resourceIds'], 'confirmed deletion must not leave a full cold conversation copy behind'
+    from amplifier_web.resource_files import root
+    body_path=root(app.db)/(ref+'.json')
+    preview=(await app.dispatch('session.deletePreview',{'id':sid}))['result']
+    await app.dispatch('session.delete',{'id':sid,'confirmationToken':preview['confirmationToken']})
+    assert not body_path.exists()
+    assert not app.db.execute('SELECT 1 FROM state_resources WHERE id=?',(ref,)).fetchone()
+    assert sid not in {row['id'] for row in app._state['sessions']}
+
+
+async def test_deleting_one_chat_preserves_a_shared_cold_payload(app,monkeypatch):
+    from amplifier_web.managed_deletion import plan
+    await app.dispatch('session.create',{'location':{'kind':'managed'},'title':'To remove'})
+    first=app._session()
+    first['messages']=[{'id':str(n),'role':'user','text':'shared body '+'x'*2000,'createdAt':n} for n in range(20)]
+    app._publish()
+    await app.dispatch('session.create',{'location':{'kind':'managed'},'title':'Keep'})
+    second=app._session()
+    second['messages']=copy.deepcopy(first['messages'])
+    app._publish()
+    app.state['selectedSessionId']=None
+    monkeypatch.setattr(app.cold_display,'RECENT_LIMIT',0)
+    app.cold_display.retire(force=True)
+    ref=dict.get(first,'_coldFields')['messages']['$resource']
+    assert ref==dict.get(second,'_coldFields')['messages']['$resource']
+    deletion=plan(app,first['id'])
+    assert ref not in deletion['resourceIds']
+    preview=(await app.dispatch('session.deletePreview',{'id':first['id']}))['result']
+    await app.dispatch('session.delete',{'id':first['id'],'confirmationToken':preview['confirmationToken']})
+    assert len(app._session(second['id'])['messages'])==20

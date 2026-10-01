@@ -305,6 +305,25 @@ def _resources(app, removed_values, retained):
     kept = expand(list(references(retained_values)))
     return sorted(candidates - kept)
 
+def _cold_roots(app, ids):
+    """Exact payload manifests remain deletion-owned after snapshot hydration.
+
+    Explicit read snapshots materialize bodies without their private markers.
+    Consult both live manifests and the last committed roots, partitioned by
+    the same confirmed conversation scope. Unrelated chats retain shared blobs.
+    """
+    states = [app._state]
+    states.extend(json.loads(text) for (text,) in app.db.execute('SELECT value FROM state'))
+    removed, retained = [], []
+    for state in states:
+        records = [(row['id'], row) for row in state.get('sessions', [])]
+        records.extend(state.get('runtimeControl', {}).items())
+        for identity, row in records:
+            manifest = dict.get(row, '_coldFields', {})
+            if manifest:
+                (removed if identity in ids else retained).append(copy.deepcopy(manifest))
+    return removed, retained
+
 
 def plan(app, sid):
     row, marker, sessions, ids = _scope(app, sid)
@@ -317,6 +336,9 @@ def plan(app, sid):
     scrub_state(retained, provisional)
     retained_clients = [_scrub_local(value, ids, set(artifact_ids)) for value in app.clients.records.values()]
     values = [sessions, artifacts, [item[2] for item in owned_rows], [value for value in app.clients.records.values() if value.get('selectedSessionId') in ids]]
+    cold_removed, cold_retained = _cold_roots(app, ids)
+    values.extend(cold_removed)
+    retained_clients.extend(cold_retained)
     # Resource graph retention is evaluated using scrubbed client values.
     removed_encoded = set()
     for table, identity, _ in owned_rows:
