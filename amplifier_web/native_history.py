@@ -667,13 +667,14 @@ class NativeHistory:
             # self.home was resolved at construction. Recheck each direct
             # directory with lstat, without repeatedly resolving every ancestor
             # for every session in every recovery slice.
-            if (not stat.S_ISDIR(root.stat(follow_symlinks=False).st_mode)
+            root_path, project_path = str(root), str(project)
+            if (not stat.S_ISDIR(os.stat(root_path, follow_symlinks=False).st_mode)
                     or project.parent != root
-                    or not stat.S_ISDIR(project.stat(follow_symlinks=False).st_mode)):
+                    or not stat.S_ISDIR(os.stat(project_path, follow_symlinks=False).st_mode)):
                 return False
-            sessions = project / 'sessions'
             try:
-                return stat.S_ISDIR(sessions.stat(follow_symlinks=False).st_mode)
+                return stat.S_ISDIR(os.stat(project_path + os.sep + 'sessions',
+                                           follow_symlinks=False).st_mode)
             except FileNotFoundError:
                 return True
         except (OSError, ValueError, RuntimeError):
@@ -747,6 +748,8 @@ class NativeHistory:
             path = before['workspace']['path']
             prefix = str(project) + os.sep
             unchanged = (
+                set(cached[0][0]) <= set(stamp[0])
+                and
                 set(stamp[0]) <= {path}
                 and all(resolved == path for _, resolved in stamp[1])
                 and tuple(value for value in stamp[2:] if value[0].startswith(prefix)) ==

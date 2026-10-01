@@ -316,6 +316,34 @@ def test_registering_resolved_workspace_does_not_rebuild_unchanged_rows(tmp_path
     index.close()
 
 
+def test_removing_only_registered_workspace_resolver_rebuilds_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved-root', {'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True, known_workspaces=[str(workspace)])
+    index._reconcile_at = 0
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    index._reconcile_at = 0
+    observed = []
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[])
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert any(row['workspace'] is None and not row['canResume'] for row in observed)
+    assert index._projects[path.parent.parent.name]['workspace']['path'] is None
+    assert {'kind': 'unresolved-workspace', 'nativeProject': path.parent.parent.name} in delta['issues']
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert stored['workspace'] is None and not stored['canResume']
+    index.close()
+
+
 def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
