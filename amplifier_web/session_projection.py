@@ -13,6 +13,7 @@ def view_path(home, session):
 
 
 def hydrate(home, state, db):
+    from .cold_display import ColdRecord, MARKER
     canvas = state.get('canvas', {})
     reference = canvas.pop('$body', None)
     if reference and not canvas.get('contentResource'):
@@ -23,20 +24,27 @@ def hydrate(home, state, db):
         restore_body(canvas, db, inline_documents=True)
     for index, session in enumerate(state.get('sessions', [])):
         if session.pop('$native', False):
-            session.update(messages=[], workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)
+            session.update(workers=[], approvals=[], status='idle', historyLoaded=False, historyLoading=False)
+            if 'messages' not in session.get(MARKER, {}):
+                session['messages'] = []
+            state['sessions'][index] = ColdRecord(session, db)
             continue
         if not session.get('$view'):
+            state['sessions'][index] = ColdRecord(session, db)
             continue
         path = view_path(home, session)
         # Fail visibly rather than silently replacing lost chat history.
         value = json.loads(path.read_text())
-        if value.get('id') != session['id'] or not isinstance(value.get('messages'), list):
+        if value.get('id') != session['id'] or not (isinstance(value.get('messages'), list)
+                or isinstance(value.get(MARKER, {}).get('messages'), dict)):
             raise ValueError('A saved conversation view is invalid; its files were preserved.')
         if value.get('nativeProject'):
             # Reconcile older UI copies with the current display policy on open,
             # even when the canonical transcript has not changed since restart.
             value['historyLoaded'] = False
-        state['sessions'][index] = value
+        state['sessions'][index] = ColdRecord(value, db)
+    state['runtimeControl'] = {identity: ColdRecord(value, db)
+                               for identity, value in state.get('runtimeControl', {}).items()}
 
 
 def migrate(home, state):
@@ -127,6 +135,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
     sessions = (state.get('sessions', []) if session_ids is None else
                 (by_id[identity] for identity in session_ids if identity in by_id))
     for session in sessions:
+        from .cold_display import MARKER
         if session.get('historyManaged'):
             # Rebuild native catalog rows from their source. Persist only local
             # presentation overrides and startup selection/pin references.
@@ -137,15 +146,22 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 or session.get('titleSource') not in {None, 'native'}
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
                 or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))
-                or session.get('recentActivityAt', 0) > baseline)
+                or session.get('recentActivityAt', 0) > baseline
+                or bool(dict.get(session, MARKER)))
             if customized:
-                result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True})
+                result['sessions'].append({**{key: session[key] for key in INDEX_FIELDS if key in session}, '$native': True,
+                    **({MARKER: copy.deepcopy(dict.get(session, MARKER)),
+                        '_coldMessageCount': session.get('_coldMessageCount', 0),
+                        '_coldNotifications': copy.deepcopy(session.get('_coldNotifications', []))}
+                       if dict.get(session, MARKER) else {})})
             continue
         path = view_path(home, session)
         # Native event activity is a lazy view, never another persisted event
         # or message cache. Preserve pre-existing legacy records, but never write
         # new live observations or event-log-derived action bodies here.
-        value = {key: item for key, item in session.items() if key not in {'historyActivity', 'questions'}}
+        from .cold_display import saved as saved_cold, MARKER
+        value = {key: item for key, item in saved_cold(session).items()
+                 if key not in {'historyActivity', 'questions'}}
         if 'execution' in value:
             value['execution'] = {**value['execution'],
                 'retiredUsageNodes': accounting_projection(value['execution']),
@@ -156,7 +172,8 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             SessionStore._atomic(path, text)
             cache[str(path)] = text
-        result['sessions'].append({**{key: session[key] for key in ('id', 'workspace', 'runtimeSessionId') if key in session}, '$view': 1})
+        result['sessions'].append({**{key: session[key] for key in ('id', 'workspace', 'runtimeSessionId') if key in session}, '$view': 1,
+                                   **({MARKER: copy.deepcopy(value[MARKER])} if value.get(MARKER) else {})})
     if references is not None:
         if session_ids is not None:
             retained_ids = {row['id'] for row in result['sessions']}

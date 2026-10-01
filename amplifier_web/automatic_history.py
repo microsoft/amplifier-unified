@@ -331,6 +331,14 @@ class AutomaticHistory:
             known = workspace_inputs(self.service.state)
             if await asyncio.to_thread(self.index.needs_scan, known):
                 await self.refresh(force=False)
+            if hasattr(self.service, 'cold_display'):
+                async with self.service.lock:
+                    try:
+                        self.service.cold_display.retire()
+                    except (OSError, ValueError, sqlite3.Error):
+                        # Exact fields remain resident on failed storage. This
+                        # optional retirement must not stop canonical discovery.
+                        pass
             # Idle waits remain cheap. Recovery slices yield between bounded
             # probes rather than spacing every 64 sessions fifteen seconds apart.
             recovering = (getattr(self.index, '_recovery', None) is not None
@@ -543,6 +551,8 @@ class AutomaticHistory:
                                         'description': row.get('description', ''), 'shared': True,
                                         'historyReadOnlyReason': row.get('readOnlyReason'),
                                         'historyManaged': True, 'historyLoaded': False}
+                            if hasattr(self.service, 'cold_display'):
+                                previous = self.service.cold_display.record(previous)
                             state['sessions'].append(previous); existing[key] = previous; catalog_ids.add(public_id); changed = True
                         else:
                             from .chat_navigation import recent_activity, navigation_activity

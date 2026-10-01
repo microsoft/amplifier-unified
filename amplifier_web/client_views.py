@@ -233,7 +233,8 @@ class ClientViews:
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
-        snapshot["sessions"] = [dict(row) for row in snapshot.get("sessions", [])]
+        from .cold_display import detached
+        snapshot["sessions"] = [detached(row) for row in snapshot.get("sessions", [])]
         for session in snapshot["sessions"]:
             session["draft"] = record.get("drafts", {}).get(session["id"], "")
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))

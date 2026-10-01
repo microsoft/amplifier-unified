@@ -10,6 +10,9 @@ def normalize_state(state, db):
     controls=state.get('runtimeControl', {})
     from .execution import anchor_turns
     for session in state.get('sessions', []):
+        from .cold_display import MARKER
+        if dict.get(session, MARKER):
+            continue  # exact frozen body references must not hydrate on a save
         if session.get('historyManaged') and not session.get('historyLoaded'):
             continue
         anchor_turns(session)

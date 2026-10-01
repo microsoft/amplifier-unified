@@ -6,6 +6,7 @@ import copy
 from contextlib import asynccontextmanager
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -400,6 +401,8 @@ class AppService:
         self._view_cache = {}
         self._session_projection_refs = {}
         self._history_local_revision = 0
+        from .cold_display import ColdDisplay
+        self.cold_display = ColdDisplay(self)
         from .session_projection import hydrate
         hydrate(self.data_dir, self.state, self.db)
         from .storage_migration import upgrade
@@ -677,6 +680,9 @@ class AppService:
                         session_ids=session_ids, by_id=index.by_id if index else None,
                         references=self._session_projection_refs)
         self.clients.save()
+        from .cold_display import saved as saved_cold
+        saved['runtimeControl'] = {identity: saved_cold(record)
+                                   for identity, record in saved.get('runtimeControl', {}).items()}
         self.db.execute("INSERT OR REPLACE INTO state VALUES (1,?)", (json.dumps(saved),))
         self.db.commit()
         from .storage_migration import maintenance
@@ -743,6 +749,14 @@ class AppService:
             queue.put_nowait(snapshot)
         if hasattr(self, "coordination"):
             self.coordination.notify()
+        # Only after the publication committed and its snapshots were handed
+        # out. Dirty/error retries remain hot; retirement itself emits no work.
+        try:
+            self.cold_display.retire()
+        except (OSError, ValueError, sqlite3.Error):
+            # Publication already committed. Optional cold retirement failure
+            # cannot turn its successful durable command into a failed receipt.
+            logging.getLogger(__name__).warning('Cold display retirement deferred; resident data kept.', exc_info=True)
         self._progress_dirty = False
         self._progress_session_ids = set()
         self._progress_scope_known = False
@@ -849,7 +863,7 @@ class AppService:
         if session:
             if session.get('_deleting'):
                 raise AppError('This chat is being deleted. No new work was started.', 409)
-            return session
+            return self.cold_display.hydrate(session)
         raise AppError("Select or create a conversation first.", 404)
 
     def _new_session(self, args):
@@ -868,7 +882,7 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return {**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []}
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []})
 
     def _message(self, session, role, text, via="chat", **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
