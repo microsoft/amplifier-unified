@@ -293,6 +293,29 @@ def test_recovery_fastpath_rechecks_symlink_workspace_referent(tmp_path, monkeyp
     index.close()
 
 
+def test_registering_resolved_workspace_does_not_rebuild_unchanged_rows(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    session(home, workspace, 'saved-root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, _ = index.scan_changes(force=True)
+    builds = []
+    original = index._scan_project_steps
+    def build(*args, **kwargs):
+        builds.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(index, '_scan_project_steps', build)
+    index._reconcile_at = 0
+    for _ in range(12):
+        base, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert not builds
+    assert not delta['sessions'] and delta['sessionCount'] == 1
+    index.close()
+
+
 def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()

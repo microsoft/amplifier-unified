@@ -435,9 +435,9 @@ class NativeHistory:
         result.append(tuple((path, str(Path(path).resolve()))
                             for path in sorted(self._project_paths.get(project.name, ()))))
         yield
+        if not self._safe_project(project):
+            raise OSError('Native project changed during reconciliation')
         for path in paths:
-            if not self._safe_project(project):
-                raise OSError('Native project changed during reconciliation')
             try:
                 info = os.stat(path, follow_symlinks=False)
                 result.append((str(path), info.st_dev, info.st_ino, info.st_mode,
@@ -450,12 +450,13 @@ class NativeHistory:
             # still admits no more than 128 distinct session probes.
             if number % 2 == 0:
                 yield
+                if not self._safe_project(project):
+                    raise OSError('Native project changed during reconciliation')
             if directory is None:
                 continue
             # Suspended iterators are hints, never authority to follow a
             # substituted ancestor or a session symlink.
-            if (not self._safe_project(project)
-                    or not stat.S_ISDIR(directory.stat(follow_symlinks=False).st_mode)):
+            if not stat.S_ISDIR(os.stat(str(directory), follow_symlinks=False).st_mode):
                 raise OSError('Native session changed during reconciliation')
             values = []
             prefix = str(directory) + os.sep
@@ -736,12 +737,27 @@ class NativeHistory:
             stamp = yield from self._project_stamp_steps(project, known)
         except (OSError, RuntimeError):
             stamp = None
+        unchanged = bool(stamp is not None and cached and cached[0] == stamp)
+        if (not unchanged and before is not None and stamp is not None and cached
+                and cached[0] and not cached[1] and before['workspace'].get('path')):
+            # Automatic discovery registers an already resolved workspace.
+            # That registration changes header inputs, not canonical rows.
+            # Compare every native file stamp and revalidate all resolved paths;
+            # a new ambiguity or substituted symlink must still rebuild.
+            path = before['workspace']['path']
+            prefix = str(project) + os.sep
+            unchanged = (
+                set(stamp[0]) <= {path}
+                and all(resolved == path for _, resolved in stamp[1])
+                and tuple(value for value in stamp[2:] if value[0].startswith(prefix)) ==
+                    tuple(value for value in cached[0][2:] if value[0].startswith(prefix)))
         if (before is not None and stamp is not None and cached
-                and cached[0] == stamp and not cached[1]
+                and unchanged and not cached[1]
                 and before['workspace']['available'] ==
                     bool(before['workspace'].get('path') and Path(before['workspace']['path']).is_dir())):
             # No row interpretation changed. Preserve any newer hot update
             # rather than replacing it with this pass's earlier reference.
+            self._project_inputs[project.name] = (stamp, cached[1])
             return
         issues = []
         result = yield from self._scan_project_steps(project, known, issues, bounded=True)
