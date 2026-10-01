@@ -461,7 +461,10 @@ def test_grouping_preserves_orthogonal_usage_evidence():
            'usage': 'configured', 'usageEvidence': ['Selected bundle']}
     rows = group_sources([row, {**row, 'id': 'two', 'usage': 'unknown', 'usageEvidence': []},
                           {**row, 'id': 'three', 'usageEvidence': ['Enabled app bundle']}])
-    assert len(rows) == 3
+    assert len(rows) == 1
+    assert len(rows[0]['members']) == 3
+    assert rows[0]['usageEvidence'] == ['Enabled app bundle', 'Selected bundle']
+    assert {member['usage'] for member in rows[0]['members']} == {'configured', 'unknown'}
     assert group_sources(rows) == rows
 
 

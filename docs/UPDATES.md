@@ -8,9 +8,9 @@ Settings also provides manual checks, installation, and ecosystem rollback. Sche
 
 Checks compare the actual commit in all eligible app-owned Foundation Git caches against their remote branches, including unregistered transitive modules and skill copies. Usage is a separate classification, never an eligibility gate: `usage: configured` has positive repository/ref evidence from default and saved-session bundle selections, known workspaces' existing settings, enabled app bundles, module source overrides or explicit Git inputs in module configuration (including skill sources). `usageEvidence` reports those categories without exposing workspace paths or private source URLs. Shared global, project, local and native-session settings use the same merge rules and session identity as runtime configuration, but checks never import settings, load keys or prepare bundles. Registry entries only resolve selected names; historical entries are not evidence of use. Different refs, including main and master, are never assumed equivalent.
 
-Caches without that evidence have `usage: unknown`. They may be transitive dependencies, dependencies of local bundles, dynamically loaded skills, shared-session checkpoint selections, or old leftovers; none are declared unused. Their **Current**, **Update available**, **Check failed**, **Local changes**, or **Pinned** status remains independent and checks and eligible installations continue normally. The UI separates configured problems under **Needs attention** from **Other cached sources**. The latter shows counts by condition and its failures/local changes even with the full inventory collapsed; unknown updates remain in the installable list. All failures still contribute to attention. This is reporting, not complete reachability analysis or cleanup: all caches continue to copy into candidate generations and disk usage is unchanged.
+Caches without that evidence have `usage: unknown`. They may be transitive dependencies, dependencies of local bundles, dynamically loaded skills, shared-session checkpoint selections, or old leftovers; none are declared unused. Their **Current**, **Update available**, **Check failed**, **Local changes**, or **Pinned** status remains independent and checks and eligible installations continue normally. The UI separates configured problems under **Needs attention** from **Other cached sources**. The latter shows counts by condition and its failures/local changes even with the full inventory collapsed; unknown updates remain in the installable list. All failures still contribute to attention. Usage reporting is not complete reachability analysis. Unknown or modified sources are retained. New component generations can adopt verified clean source copies into the shared store described below.
 
-Shared remotes are checked once per cycle, with bounded concurrency/timeouts. A failed source stays **Check failed**, never **Current**, regardless of usage. Missing workspace directories retained for history are skipped without creating a warning; existing directories are checked even if a saved availability flag is stale. Unresolvable selected names or unreadable configuration produce a separate classification warning without hiding cache failures or blocking otherwise eligible updates. Installation checks source identity, revision and local changes again in staging, without gating on usage. Local edits and SHA/version pins are not automatically replaced. The check distinguishes real source edits from tracked Python bytecode rewritten on import and symlinks flattened by an earlier cache migration. Only verified generated changes are exempted; normalization happens in the isolated staging copy, never the active cache. Tracked source changes carry an explanatory diagnostic: builds can also modify tracked files, so their origin is not assumed to be a person. A version filename or generated-file comment alone never exempts an edit. The exact wiki-weaver version output is recognized only with its reviewed build-hook hash, matching build configuration, unchanged index and a consistent commit identity; unknown hooks and genuine edits remain protected. New migrations preserve symlinks. Missing, not-yet-prepared bundles are outside the cached-source inventory; their normal first preparation still resolves them through Foundation.
+Shared remote/ref lookups join across application and worker checks, with bounded concurrency/timeouts. Sibling refs for the same repository use one Git request. Manual checks bypass saved availability results; automatic checks can reuse successful results within the configured interval. Credential/access identity changes invalidate reuse, and a failed fresh lookup invalidates its earlier success. A failed source stays **Check failed**, never **Current**, regardless of usage. Missing workspace directories retained for history are skipped without creating a warning; existing directories are checked even if a saved availability flag is stale. Unresolvable selected names or unreadable configuration produce a separate classification warning without hiding cache failures or blocking otherwise eligible updates. Installation checks source identity, revision and local changes again in staging, without gating on usage. Local edits and SHA/version pins are not automatically replaced. The check distinguishes real source edits from tracked Python bytecode rewritten on import and symlinks flattened by an earlier cache migration. Only verified generated changes are exempted; normalization happens in the isolated staging copy, never the active cache. Tracked source changes carry an explanatory diagnostic: builds can also modify tracked files, so their origin is not assumed to be a person. A version filename or generated-file comment alone never exempts an edit. The exact wiki-weaver version output is recognized only with its reviewed build-hook hash, matching build configuration, unchanged index and a consistent commit identity; unknown hooks and genuine edits remain protected. New migrations preserve symlinks. Missing, not-yet-prepared bundles are outside the cached-source inventory; their normal first preparation still resolves them through Foundation.
 
 Installation copies the source cache into a new private generation, fetches the exact checked revisions, and prepares configured conversation bundles plus the default bundle in an independent Python runtime. The probe creates fresh non-user sessions, denies approval requests, verifies required host capabilities and absence of CLI libraries, and never calls `session.execute`. Preparation can run module initialization hooks; it does not establish live-model compatibility for every tool.
 
@@ -113,7 +113,7 @@ Manual reruns can resume a draft and replace incomplete draft assets only when t
 Full private state backup and selected reset are available under Maintenance. Backups include credential files and are mode 0600, but are not encrypted. Reset previews its selected app-owned areas, requires typing RESET, makes a backup, and moves originals into a retained recovery directory; workspace and CLI files are untouched.
 
 
-The source inventory groups identical repository/ref/revision/status/usage/evidence entries and shows their cache-copy count. Installation retains its full path inventory and updates every eligible cached copy. Different branches, revisions, statuses or usage evidence stay separate. Successful checks use compact inline status; failures include an explanatory notice.
+The source inventory groups matching repository/ref/current-revision/latest-revision/status/update-tier rows across source caches and worker packages. Source details retain package names, subdirectories, roles and usage evidence. Different branches, revisions, statuses and update tiers stay separate. All source lists sort alphabetically by their displayed name, with repository/ref/revision tie-breaks. Installation retains its private full inventory and updates every eligible cached copy or generation binding. Successful checks use compact inline status; failures include an explanatory notice.
 
 Unread attention counts lead from Settings to Updates. Users and agents can mark items reviewed through `attention.read`; the underlying condition stays visible until resolved, and a new version or changed error becomes unread again.
 
@@ -160,3 +160,100 @@ are refused. The selected commit supplies the version and is checked out before
 all normal runtime, browser and package gates. Existing immutable tags cannot
 be moved or reused for different source. Leaving the input blank keeps the
 normal main-commit release behavior.
+
+
+## Shared sources and incremental update preparation
+
+Availability checks share a durable success cache and join identical in-flight
+requests. Automatic checks may reuse results within the configured check interval;
+manual checks fetch fresh upstream results. Cache identity includes the repository,
+ref or package and an opaque access-context fingerprint. Failed fresh lookups
+invalidate earlier successes. Git refs for the same repository are batched, registry
+requests share a connection pool, and local checkout inspections use bounded
+concurrency. New configuration still produces a new inventory; a cached availability
+result never qualifies an installation.
+
+With a compatible Foundation component, Unified supplies an application-owned
+`AMPLIFIER_SOURCE_STORE`. Git bundles, module sources and Skills share one
+read-only checkout per repository and exact commit. Each generation has its own
+repository/ref binding; advancing `main` creates a new object and changes only
+the unpublished generation's binding. Old readers and rollback keep their exact
+objects. Different revisions and dependency environments still need separate
+identities; this is not a mutable global latest checkout.
+
+Legacy source adoption happens only in the unpublished staging copy. Every copy
+of the same repository/ref is checked before adoption. Tracked changes, ignored
+or untracked local files, external Git directories, conflicting revisions and
+uncertain metadata prevent adoption for that identity. The serving and rollback
+copies remain intact. Foundation's file, HTTP, archive and non-opted-in Git
+sources retain their existing behavior. Skills without the compatible Foundation
+API retains its legacy resolver until both components are updated. Legacy skill
+copies remain authoritative until staging adoption, and Skills keeps its existing
+default `main` ref. Foundation's status API reads shared bindings without cloning.
+
+Python build backends receive a separate writable source view. Builds of that
+view are serialized; the canonical object never becomes an editable install.
+uv remains responsible for wheel reuse and dependency resolution. Staging uses
+filesystem copy-on-write when supported, with an ordinary-copy fallback and no
+writable hardlinks.
+
+Worker reuse requires the same complete installed graph, source content,
+manifest, Python version, OS/architecture and unchanged lockfile. Each update
+keeps separate source policy and qualification receipts. If an existing project
+has changed, it is preserved and a new project is built; it is never repaired or
+synced beneath readers. Recorded worker starts use `--no-sync`. Fresh generation
+preparation and no-model compatibility probes remain required. The candidate
+lock is synchronized once before preparation. Duplicate module installs within
+that attempt can reuse evidence only while their complete installed metadata,
+source content and explicit policy match; graph changes invalidate that reuse.
+A new attempt always starts with fresh dependency resolution. Existing explicit
+local/registry overrides are not replaced by a remembered Git lock.
+
+After the uv-managed launcher supports generation activation, an already tested
+application environment becomes the live launch target through an atomic private
+pointer. This avoids installing its exact packages a second time. Older
+launchers make one normal uv replacement first. A manual uv reinstall/upgrade
+changes the bootstrap identity and takes precedence; source checkouts and
+unrelated development venvs are never redirected. Package graph and restarted
+HTTP readiness are still separately verified before work resumes.
+The qualified app starts with an isolated Python import path so a checkout in the
+launch directory cannot replace its tested package.
+
+After successful component activation, idle background retirement considers only proven,
+application-owned ecosystem generations. Current, previous rollback, pending,
+process-referenced and configuration-referenced generations stay. Modified
+sources, unverifiable receipts, inaccessible process inventories and unknown
+references are retained. Shared worker environments are kept while another
+retained generation references them. The shared source store, global uv cache,
+CLI installation, history and unverified legacy folders are not swept.
+
+The last check reports its elapsed time and reused lookups. These are local
+operation measurements, not a promised network or installation duration.
+Storage reuse does not bypass package qualification, configured bundle/module
+compatibility, source integrity or restarted-host readiness.
+
+### Compatibility and validation boundary
+
+The implementation was checked against the component catalog in
+`microsoft/amplifier` at `33b75749920472257d1d85d20a5699ecf9d1ece7`, Foundation at
+`89575c3482e3e8afe5a03df72e723cf815fa1f6c`, Skills at
+`402ee0d1e75f2d13e8b090d2b10c716cd60f526d` and Unified at
+`2d6962d712348ff1b92d9e24861bac3a11c131b7` before these changes.
+
+| Implementation | Boundary |
+| --- | --- |
+| Foundation Git resolve/status/update | Shared storage is opt-in; exact source roots and `ResolvedSource` are retained. |
+| Foundation file/HTTP/archive/custom handlers | Handler selection and existing cache behavior are unchanged. |
+| Foundation Python module activation | Shared objects build into wheels from locked writable views; ordinary local/editable sources remain local/editable. |
+| Skills remote sources | Compatible shared API is optional; absent API and unadopted legacy copies retain their existing behavior. |
+| Unified host, worker, bundle and registered-source checks | One availability scope; separate installation and generation receipts remain authoritative. |
+| Smart Tool and global uv installations | Their package environments stay separate; source sharing does not combine executables, ABI contracts or credentials. |
+| Other CLI/agent/community consumers | No automatic opt-in or external cache migration; consumers can choose an explicit shared root. |
+
+Local validation includes real offline Git repositories, uv wheel installation,
+worker freeze/reuse, app interpreter delegation, protected storage and desktop/mobile
+source-list rendering. A synthetic check fixture with 50 repositories, three refs
+and two consumer roles required 50 Git transport requests for 300 logical lookups,
+zero for the warm automatic pass, and 50 again for a manual fresh pass. This measures
+request elimination, not real network latency. Installed-service, account-backed
+and physical-device acceptance remain separate from these tests.

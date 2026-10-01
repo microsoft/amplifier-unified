@@ -393,3 +393,16 @@ test('disabled update controls explain active component work without expanding d
  assert.match(top,/this page will update automatically/);
  assert.match(top,/Checking…/);
 });
+
+
+test('every source list is alphabetical and grouped package roles remain inspectable',()=>{
+ const items=[{id:'z',label:'org/amplifier-bundle-zebra',status:'current'}, {id:'a',label:'org/amplifier-foundation',status:'current'}, {id:'c',label:'org/amplifier-bundle-context-managed',status:'update',ref:'main',current:'aaaa',latest:'bbbb',kind:'source group',packageCount:2,cacheCopies:1,members:[{id:'cache',kind:'bundle / module'},{id:'one',package:'amplifier-context-managed',subdirectory:'modules/context',kind:'runtime dependency'},{id:'two',package:'amplifier-hooks-context',subdirectory:'modules/hooks',kind:'runtime dependency'}]}];
+ const html=render({items},{maintenanceDraft:{updatesExpanded:true}});
+ const full=html.slice(html.indexOf('id="update-sources-list"'));
+ assert.ok(full.indexOf('amplifier-foundation') < full.indexOf('context-managed'));
+ assert.ok(full.indexOf('context-managed') < full.indexOf('zebra'));
+ assert.match(full,/2 packages/);
+ assert.match(full,/modules\/context/);
+ assert.match(full,/modules\/hooks/);
+ assert.match(full,/runtime dependency/);
+});

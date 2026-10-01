@@ -103,8 +103,10 @@ def worker_environment():
     values must not become indistinguishable from explicit credentials merely
     because a worker inherited the server's environment.
     """
-    return {name: value for name, value in os.environ.items()
-            if name not in _KEY_FILE_VALUES or value != _KEY_FILE_VALUES[name]}
+    from ..update_sources import store_environment
+    return {**{name: value for name, value in os.environ.items()
+            if name not in _KEY_FILE_VALUES or value != _KEY_FILE_VALUES[name]},
+            **store_environment(app_home())}
 
 
 def credential_environment_source(name):

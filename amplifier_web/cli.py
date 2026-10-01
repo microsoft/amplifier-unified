@@ -263,6 +263,8 @@ def _tui(args, data_dir):
 
 
 def main():
+    from .application_generations import delegate
+    delegate()
     args = _parse()
     data_dir = _data_dir(args.data_dir)
     if args.command == "tui":
