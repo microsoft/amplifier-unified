@@ -11,11 +11,14 @@ def normalize_state(state, db):
     from .execution import anchor_turns
     for session in state.get('sessions', []):
         from .cold_display import MARKER
-        if dict.get(session, MARKER):
+        frozen = dict.get(session, MARKER, {})
+        if any(key in frozen for key in ('messages', 'execution')):
             continue  # exact frozen body references must not hydrate on a save
         if session.get('historyManaged') and not session.get('historyLoaded'):
             continue
         anchor_turns(session)
+        if 'configuration' in frozen:
+            continue  # independent inspection data must not suppress live anchors
         sid=session['id'];runtime=controls.get(sid,{})
         config=session.get('configuration') or legacy.get(sid) or runtime.get('configuration.inspect')
         if not isinstance(config,dict) or 'plan' not in config:

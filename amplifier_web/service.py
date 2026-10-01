@@ -505,6 +505,7 @@ class AppService:
         from .operations import Operations
         self.operations = Operations(self)
         self._save()
+        self.cold_display.track_restored()
 
     def default_theme(self):
         for name in ("unified.amplifier.css", "default-theme.css"):

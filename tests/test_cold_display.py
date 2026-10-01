@@ -322,3 +322,40 @@ def test_native_catalog_cold_references_remain_gc_roots_without_full_view(app,mo
     app._publish()
     assert ref in retained_references(app.db,{})
     assert ref not in collect(app.db,{})
+
+
+def test_ordinary_retirement_is_small_batch_and_cold_catalog_is_not_rescanned(app,monkeypatch):
+    rows=[add_history(app,'batch-'+str(n)) for n in range(12)]
+    monkeypatch.setattr(app.cold_display,'RECENT_LIMIT',0)
+    for row in rows:app.cold_display.recent[row['id']]=0
+    app.cold_display.last_sweep=0
+    retired=app.cold_display.retire()
+    assert 0<len(retired)<=app.cold_display.RETIRE_BATCH
+    assert not retired.intersection(app.cold_display.recent)
+    assert all(app.cold_display.is_cold(row) for row in rows if row['id'] in retired)
+
+
+def test_busy_probe_front_does_not_starve_a_later_inactive_body(app,monkeypatch):
+    busy=[add_history(app,'probe-busy-'+str(n),status='working') for n in range(2)]
+    last=add_history(app,'probe-tail')
+    monkeypatch.setattr(app.cold_display,'RECENT_LIMIT',0)
+    monkeypatch.setattr(app.cold_display,'PROBE_BATCH',2)
+    for row in [*busy,last]:app.cold_display.recent[row['id']]=0
+    app.cold_display.last_sweep=0
+    assert app.cold_display.retire()==set()
+    app.cold_display.last_sweep=0
+    assert last['id'] in app.cold_display.retire()
+
+
+def test_cold_configuration_does_not_skip_live_turn_anchor_normalization(app,monkeypatch):
+    row=add_history(app,'cold-config-anchor')
+    row['configuration']={'plan':{'padding':'x'*20000}}
+    app._publish()
+    monkeypatch.setattr(app.cold_display,'RECENT_LIMIT',0)
+    app.cold_display.retire(force=True)
+    row['messages']  # only message body needed by this writer
+    row['execution']={'nodes':[],'turns':[{'id':'new-turn','inputId':'anchor-input','startedAt':100}]}
+    row['messages'].append({'id':'anchor-message','inputId':'anchor-input','role':'user','text':'new','createdAt':99})
+    app._publish(session_ids={row['id']})
+    assert row['execution']['turns'][0]['anchorMessageId']=='anchor-message'
+    assert not dict.__contains__(row,'configuration')

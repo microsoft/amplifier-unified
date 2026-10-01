@@ -126,6 +126,8 @@ class ColdRecord(dict):
         dict.__setitem__(self, key, value)
         if key != MARKER:
             dict.get(self, MARKER, {}).pop(key, None)
+            if self.touch and key in SESSION_FIELDS | CONTROL_FIELDS:
+                self.touch()
 
     def __delitem__(self, key):
         references = dict.get(self, MARKER, {})
@@ -223,12 +225,16 @@ class ColdDisplay:
     RECENT_LIMIT = 8
     IDLE_SECONDS = 60
     MIN_BYTES = 16000
+    RETIRE_BATCH = 4
+    PROBE_BATCH = 64
+    SLICE_SECONDS = 0.025
 
     def __init__(self, service):
         self.service = service
         self.recent = OrderedDict()
         self.last_sweep = 0
         self.persisting = False
+        self.probe_cursor = 0
 
     def touch(self, identity):
         self.recent[identity] = time.monotonic()
@@ -238,7 +244,16 @@ class ColdDisplay:
         identity = value['id']
         if not value.get('historyManaged') or value.get('historyLoaded'):
             self.touch(identity)
-        return ColdRecord(value, self.service.db, lambda: self.touch(identity))
+        record = ColdRecord(value, self.service.db)
+        record.touch = lambda: self.touch(dict.__getitem__(record, 'id'))
+        return record
+
+    def track_restored(self):
+        for row in self.service._state.get('sessions', []):
+            if isinstance(row, ColdRecord):
+                row.touch = lambda sid=row['id']: self.touch(sid)
+                if any(dict.__contains__(row, key) for key in SESSION_FIELDS):
+                    self.recent.setdefault(row['id'], 0)
 
     @staticmethod
     def is_cold(row):
@@ -281,12 +296,33 @@ class ColdDisplay:
         from .history_demand import subscribed_sessions
         protected = subscribed_sessions(service) | {service._state.get('voice', {}).get('sessionId')}
         rows = service._state.get('sessions', [])
+        index = None
+        if not force:
+            index = service.projections.sessions(service._state)
+            for sid in tuple(self.recent):
+                if sid not in index.by_id:
+                    self.recent.pop(sid, None)  # deleted/remapped records do not starve the queue
         selected = service._state.get('selectedSessionId')
         if not service.queue_clients:
             protected.add(selected)  # legacy foreground compatibility
         protected.update(list(self.recent)[-self.RECENT_LIMIT:] if self.RECENT_LIMIT else ())
         eligible = []
-        for row in rows:
+        if force:
+            candidates = rows
+        else:
+            # The complete catalog starts unloaded. Only recently touched body
+            # records need retirement; idle sweeps never walk 24k cold summaries.
+            ids = [sid for sid in self.recent if sid not in protected]
+            start = self.probe_cursor % len(ids) if ids else 0
+            ordered = ids[start:] + ids[:start]
+            ids = ordered[:self.PROBE_BATCH]
+            candidates = [index.by_id[sid] for sid in ids if sid in index.by_id]
+        began = time.monotonic()
+        for row in candidates:
+            if not force:
+                self.probe_cursor += 1
+                if time.monotonic() - began >= self.SLICE_SECONDS:
+                    break
             if (not isinstance(row, ColdRecord) or row['id'] in protected
                     or row.get('status') in {'working','running','starting','stopping','ready'}
                     or row.get('configurationBusy') or row.get('historyLoading')
@@ -310,6 +346,9 @@ class ColdDisplay:
             control_refs = self._cool(control, CONTROL_FIELDS) if control is not None else {}
             if body_refs != dict.get(row, MARKER, {}) or control_refs != dict.get(control or {}, MARKER, {}):
                 eligible.append((row, control, body_refs, control_refs))
+            if not force and (len(eligible) >= self.RETIRE_BATCH
+                              or time.monotonic() - began >= self.SLICE_SECONDS):
+                break  # deadline checked between records, not inside a payload
         if not eligible:
             return set()
         # Commit resource bodies before removing mutable resident values. A
@@ -353,6 +392,7 @@ class ColdDisplay:
                 event.projected.pop(row['id'], None)
                 event.read_paths.pop(row['id'], None)
                 event.read_revisions.pop(row['id'], None)
+            self.recent.pop(row['id'], None)
         service._browser_snapshot = None
         service._client_snapshots.clear()
         return changed
