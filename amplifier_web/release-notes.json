@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.41",
+      "title": "Bound history recovery and update only affected clients",
+      "changes": [
+        "Reconcile missed native-history changes in bounded background slices instead of repeated whole-library scans. Keep hot session changes responsive during recovery, retain removed history without resurrecting stale records, and update catalog totals incrementally.",
+        "Persist and publish affected session records and client details without rebuilding unrelated conversation bodies on each streamed reply. Preserve independent drafts, approvals, durable receipts and restored client selections.",
+        "Keep history discovery alive after storage failures, retry transient catalog faults even while the watcher is quiet, and coordinate shutdown with active scans. Disposable caches never replace canonical transcript or resume authority.",
+        "These changes target history, recovery and projection overhead. Isolated architecture checks and CPU measurements do not establish a causal reduction in total live-host CPU usage."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.40",
       "title": "Process changed history without copying the whole library",
       "changes": [

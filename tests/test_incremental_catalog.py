@@ -106,6 +106,121 @@ def test_transient_catalog_retry_deadline_wakes_quiet_watcher(tmp_path, monkeypa
     index.close()
 
 
+def test_incremental_aggregates_match_full_catalog_through_removal_and_recreation(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    root = session(home, workspace, 'saved-root', {'working_dir': str(workspace), 'bundle': 'anchors'})
+    child = session(home, workspace, 'saved-child',
+                    {'working_dir': str(workspace), 'bundle': 'anchors', 'parent_id': 'saved-root'})
+    index = NativeHistory(home, watch=True)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    assert (initial['sessionCount'], initial['workerSessionCount']) == (1, 1)
+    project = root.parent.parent
+    retained = tmp_path / 'retained'
+    project.rename(retained)
+    monkeypatch.setattr(index, '_invalidations',
+                        lambda: (True, {(project.name, 'saved-root', 'transcript')}))
+    base, removed = index.scan_changes(since=base)
+    assert (removed['sessionCount'], removed['workerSessionCount']) == (0, 0)
+    retained.rename(project)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, {project.name}))
+    for _ in range(12):
+        base, restored = index.scan_changes(since=base)
+        if restored['projectCount'] == 1:
+            break
+    assert (restored['sessionCount'], restored['workerSessionCount']) == (1, 1)
+    # Repeat the acknowledged base: counting is not repeated on consumer retries.
+    _, repeated = index.scan_changes(since=base)
+    assert (repeated['sessionCount'], repeated['workerSessionCount']) == (1, 1)
+    index.close()
+
+
+def test_aggregate_cache_tracks_reclassification_retry_and_old_consumers(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    metadata = {'working_dir': str(workspace), 'bundle': 'anchors'}
+    path = session(home, workspace, 'saved-root', metadata)
+    cache = tmp_path / 'cache.sqlite3'
+    first = NativeHistory(home, cache_path=cache)
+    first.scan_changes(force=True)
+    first.close()
+    index = NativeHistory(home, watch=True, cache_path=cache)
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    oldest, initial = index.scan_changes()
+    assert (initial['sessionCount'], initial['workerSessionCount'], initial['internalSessionCount']) == (1, 0, 0)
+    base = oldest
+    variants = [
+        ({'parent_id': 'other-root'}, (0, 1, 0)),
+        ({'session_visibility': 'internal'}, (0, 0, 1)),
+        ({}, (1, 0, 0)),
+        ({'parent_id': 'other-root'}, (0, 1, 0)),
+        ({}, (1, 0, 0)),
+    ]
+    for number, (extra, expected) in enumerate(variants):
+        write_json(path / 'metadata.json', {**metadata, **extra, 'name': f'Change {number}'})
+        monkeypatch.setattr(index, '_invalidations',
+                            lambda: (True, {(project_slug(workspace), 'saved-root', 'metadata')}))
+        if number == 1:
+            def failed_save(*args):
+                raise sqlite3.OperationalError('database is locked')
+            monkeypatch.setattr(index._catalog, 'save', failed_save)
+        base, changed = index.scan_changes(since=base)
+        fields = ('sessionCount', 'workerSessionCount', 'internalSessionCount')
+        assert tuple(changed[field] for field in fields) == expected
+        if number == 1:
+            assert index._catalog is None
+            index._cache_retry_at = 0
+            base, changed = index.scan_changes(since=base)
+            assert index._catalog is not None
+            assert tuple(changed[field] for field in fields) == expected
+        _, retry = index.scan_changes(since=oldest)
+        assert tuple(retry[field] for field in fields) == expected
+        rows = [row for project in index._projects.values() for row in project['sessions']]
+        assert expected == tuple(sum(row['sessionKind'] == kind for row in rows)
+                                 for kind in ('root', 'worker', 'internal'))
+    assert retry['reset']  # The old consumer exceeded the bounded base journal.
+    _, forced = index.scan_changes(force=True)
+    assert tuple(forced[field] for field in fields) == (1, 0, 0)
+    index.close()
+
+
+def test_suspended_unreadable_leaf_keeps_revision_rows_immutable(tmp_path, monkeypatch):
+    home, workspace = tmp_path / 'native', tmp_path / 'workspace'
+    workspace.mkdir()
+    path = session(home, workspace, 'saved-root', {'bundle': 'anchors'})
+    index = NativeHistory(home, watch=True, cache_path=tmp_path / 'cache.sqlite3')
+    monkeypatch.setattr(index, '_invalidations', lambda: (True, set()))
+    base, initial = index.scan_changes(force=True)
+    assert initial['sessions'][0]['workspace'] is None
+    original_row = dict(initial['sessions'][0])
+    retained_row = index._projects[path.parent.parent.name]['sessions'][0]
+    index._recovery_budget = 3
+    index._reconcile_at = 0
+    index.scan_changes(since=base, known_workspaces=[str(workspace)])
+    # Pause after the iterator selected this leaf, before its safety check.
+    retained = path.parent / '.retained-root'
+    path.rename(retained)
+    observed = []
+    for _ in range(12):
+        token, delta = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+        observed.extend(delta['sessions'])
+        if delta['reconciliation']['phase'] == 'complete':
+            break
+    assert retained_row == original_row
+    assert any(row['workspace'] == str(workspace) and row['canResume'] for row in observed)
+    with sqlite3.connect(index._catalog.path) as db:
+        stored = json.loads(db.execute('SELECT value FROM native_rows').fetchone()[0])
+    assert stored['workspace'] == str(workspace) and stored['canResume']
+    # A second consumer still using the original revision receives the same row.
+    _, retry = index.scan_changes(since=base, known_workspaces=[str(workspace)])
+    assert any(row['workspace'] == str(workspace) for row in retry['sessions'])
+    retained.rename(path)
+    _, restored = index.scan_changes(since=token, known_workspaces=[str(workspace)], force=True)
+    assert restored['sessions'][0]['workspace'] == str(workspace)
+    index.close()
+
+
 def test_due_recovery_does_not_make_one_dirty_session_probe_whole_project(tmp_path, monkeypatch):
     home, workspace = tmp_path / 'native', tmp_path / 'workspace'
     workspace.mkdir()
@@ -295,7 +410,8 @@ def test_cached_load_can_cooperatively_stop_without_partial_snapshot(tmp_path, m
     restarted.close()
 
 
-async def test_refresh_error_publication_failure_does_not_terminate_discovery(tmp_path, app_factory, monkeypatch):
+@pytest.mark.parametrize('failure', [OSError, sqlite3.OperationalError])
+async def test_refresh_error_publication_failure_does_not_terminate_discovery(tmp_path, app_factory, monkeypatch, failure):
     workspace = tmp_path / 'cli'
     native_session(workspace, 'saved-root')
     app = app_factory()
@@ -303,7 +419,7 @@ async def test_refresh_error_publication_failure_does_not_terminate_discovery(tm
     attempts = []
     def refused(**kwargs):
         attempts.append(kwargs)
-        raise OSError('Presentation file unavailable')
+        raise failure('Presentation storage unavailable')
     monkeypatch.setattr(app, '_publish', refused)
     # Both the ordinary save and the error report encounter the same disk fault.
     await app.history.refresh(force=False)
@@ -313,6 +429,32 @@ async def test_refresh_error_publication_failure_does_not_terminate_discovery(tm
     monkeypatch.setattr(app, '_publish', publish)
     await app.history.refresh(force=False)
     assert app.history._native_revision is not None
+    assert app.state['sharedHistory']['error'] is None
+    assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
+
+
+async def test_actual_save_failure_retains_discovery_dirty_union(tmp_path, app_factory, monkeypatch):
+    workspace = tmp_path / 'cli'
+    native_session(workspace, 'saved-root')
+    app = app_factory()
+    original = app._save
+    attempts = []
+    def refused(**kwargs):
+        attempts.append(kwargs)
+        raise sqlite3.OperationalError('Presentation database is locked')
+    monkeypatch.setattr(app, '_save', refused)
+    try:
+        await app.history.refresh(force=False)
+    finally:
+        monkeypatch.setattr(app, '_save', original)
+    assert len(attempts) == 2
+    assert app.history._native_revision is None
+    assert app._progress_dirty and app._progress_scope_known
+    assert app._progress_session_ids is None  # Unknown full scope survives both errors.
+    assert app.state['sharedHistory']['error']
+    await app.history.refresh(force=False)
+    assert app.history._native_revision is not None
+    assert not app._progress_dirty
     assert app.state['sharedHistory']['error'] is None
     assert any(row.get('nativeIdentity') == 'saved-root' for row in app.state['sessions'])
 

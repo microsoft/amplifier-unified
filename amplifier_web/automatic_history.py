@@ -6,6 +6,7 @@ from collections import deque
 import copy
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 import time
 import uuid
@@ -672,7 +673,7 @@ class AutomaticHistory:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
                         try:
                             self.service._publish()
-                        except (OSError, ValueError):
+                        except (OSError, ValueError, sqlite3.Error):
                             # The error report shares the failed persistence
                             # boundary. Keep the error and dirty union for retry;
                             # a second disk error must not kill discovery.

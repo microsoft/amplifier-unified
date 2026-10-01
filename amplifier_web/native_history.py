@@ -129,6 +129,8 @@ class NativeHistory:
         self._reads = 0
         self._project_inputs = {}
         self._working_dirs = {}
+        self._working_dir_slugs = {}
+        self._totals = None
         self._reconcile_at = 0
         self._watch_enabled = watch
         self._watch = None
@@ -381,7 +383,9 @@ class NativeHistory:
                 if key not in self._working_dirs:
                     self._working_dirs[key] = str(candidate.resolve())
                 resolved = self._working_dirs[key]
-                if project_slug(resolved) == slug:
+                if resolved not in self._working_dir_slugs:
+                    self._working_dir_slugs[resolved] = project_slug(resolved)
+                if self._working_dir_slugs[resolved] == slug:
                     return resolved
             except (OSError, ValueError, RuntimeError):
                 continue
@@ -493,7 +497,10 @@ class NativeHistory:
                 issues.append({'kind': 'unreadable', 'nativeProject': slug,
                                'nativeIdentity': directory.name})
                 if directory.name in previous_rows:
-                    rows.append(previous_rows[directory.name])
+                    # Workspace resolution below may change this summary.
+                    # Retained revision bases and SQLite comparisons must keep
+                    # the old row immutable even while a leaf is unreadable.
+                    rows.append(dict(previous_rows[directory.name]))
                 continue
             # CLI worker IDs can contain ':' and '_'. All existing basenames
             # are safe to index; root execution has a narrower ID contract.
@@ -802,6 +809,7 @@ class NativeHistory:
             previous_projects = self._projects
             self._reads = 0
             self._working_dirs = {}
+            self._working_dir_slugs = {}
             watching, dirty = self._invalidations()
             reconcile = force or time.monotonic() >= self._reconcile_at
             if reconcile:
@@ -928,13 +936,24 @@ class NativeHistory:
                 issues = ([{'kind': 'unavailable-catalog-cache'}] if self._cache_error else [])
                 issues.extend(issue for _, project_issues in self._project_inputs.values()
                               for issue in project_issues)
+            changed_projects = {key for key in self._projects.keys() | previous_projects.keys()
+                                if self._projects.get(key) is not previous_projects.get(key)}
+            count_fields = ('sessionCount', 'workerSessionCount', 'internalSessionCount')
+            if self._totals is None:
+                self._totals = {field: sum(project['workspace'].get(field, 0)
+                                          for project in self._projects.values())
+                                for field in count_fields}
+            else:
+                for name in changed_projects:
+                    before = previous_projects.get(name, {}).get('workspace', {})
+                    after = self._projects.get(name, {}).get('workspace', {})
+                    for field in count_fields:
+                        self._totals[field] += after.get(field, 0) - before.get(field, 0)
             if self._catalog is not None:
                 try:
-                    names = {key for key in self._projects.keys() | previous_projects.keys()
-                             if self._projects.get(key) is not previous_projects.get(key)}
                     self._catalog.save(
-                        {key: self._projects[key] for key in names if key in self._projects},
-                        {key: previous_projects[key] for key in names if key in previous_projects},
+                        {key: self._projects[key] for key in changed_projects if key in self._projects},
+                        {key: previous_projects[key] for key in changed_projects if key in previous_projects},
                         self._files, self._dirty_files)
                     self._dirty_files.clear()
                 except Exception as exc:
@@ -977,12 +996,10 @@ class NativeHistory:
                     removed.extend((name, key) for key in old_rows.keys() - new_rows.keys())
                 removed_projects = old.keys() - self._projects.keys()
                 removed.extend((name, row['nativeIdentity']) for name in removed_projects for row in old[name]['sessions'])
-                totals = {field: sum(project['workspace'].get(field, 0) for _, project in projects)
-                          for field in ('sessionCount', 'workerSessionCount', 'internalSessionCount')}
                 changes = copy.deepcopy({
                     'reset': reset, 'workspaces': workspaces, 'sessions': upserts,
                     'removed': removed, 'removedProjects': sorted(removed_projects),
-                    'issues': issues, 'projectCount': len(projects), **totals,
+                    'issues': issues, 'projectCount': len(projects), **self._totals,
                     'metadataReads': self._reads, 'reconciled': reconcile})
                 changes['reconciliation'] = copy.deepcopy(self._recovery_status)
                 changes['base'] = since
