@@ -48,6 +48,16 @@ but record counts and oldest/newest timestamps publish in the background only
 while a connected client is inspecting Diagnostics. Errors and dropped-record
 changes are still published when that panel is closed.
 
+Publication still checks every saved generation for canonical changes. Root
+classification and root counts are reused from the generation's SessionIndex;
+this does not allow caches to survive a save with changed semantics. Empty
+question/worktree projections retain independent per-session lists instead of
+allocating new empty views. Worktree source files are reread and grouped once per
+sync, and attention counts group unread outcomes by workspace once rather than
+scanning all outcomes for each registration. No canonical event/transcript,
+receipt durability, freshness interval, ownership fence or publication boundary
+is weakened by these CPU-path changes.
+
 ## Acceptance
 
 `npm run test:state-transport-browser` starts a disposable real HTTP/SSE server

@@ -7,6 +7,7 @@ import copy
 import hashlib
 import inspect
 import json
+import logging
 from pathlib import Path
 
 from .host.config import write_private
@@ -28,6 +29,7 @@ class ContextContinuity:
         self.status = {"supported": bool(coordinator.get_capability("context.checkpoint.export")), "status": "pending"}
         coordinator.register_capability("context.checkpoint_identity", lambda: copy.deepcopy(self._identity))
         coordinator.register_capability("context.preserve_evidence", self.preserve)
+        coordinator.register_capability("context.persist_checkpoint", self.save)
         coordinator.register_capability("web.continuity.status", self.public)
 
     def public(self):
@@ -72,6 +74,15 @@ class ContextContinuity:
                     self.status.update(restore(record, self._identity))
                 except (ValueError, OSError, TypeError) as exc:
                     self.status.update(status="rejected", reason=str(exc), originalsAvailable=True)
+                if self.coordinator.hooks:
+                    try:
+                        await self.coordinator.hooks.emit("context:checkpoint_restored", {
+                            key: value for key, value in self.status.items()
+                            if key in {"status", "reason", "throughMessage", "completedParts", "originalsAvailable"}})
+                    except Exception as exc:
+                        # Observability cannot invalidate an accepted checkpoint
+                        # or turn successful recovery into a conversation fault.
+                        logging.getLogger(__name__).warning("Context checkpoint restore observer failed (%s)", type(exc).__name__)
         # References identify exact original content in the canonical transcript.
         # Process tool output can additionally contain operation_output references
         # supplied by its operation journal; do not copy that archive here.
@@ -87,7 +98,7 @@ class ContextContinuity:
         record = export(self._identity)
         if record is not None:
             write_private(self.path, json.dumps(record, ensure_ascii=False))
-            self.status = {"supported": True, "status": "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
+            self.status = {"supported": True, "status": "progress_saved" if record.get("progress") else "saved", "sourceRevision": record["sourceRevision"], "originalsAvailable": True}
 
 
 def install(coordinator, session_id, directory, checkpoint):
