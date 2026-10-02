@@ -114,6 +114,9 @@ async def test_inventory_reuses_index_and_invalidates_on_configuration_change(
     (shared / "settings.yaml").write_text("bundle: {active: foundation}")
     await inventory(manager, scan)
     assert scan.await_count == 2
+    monkeypatch.setattr("amplifier_web.__version__", "next-fixture-release")
+    await inventory(manager, scan)
+    assert scan.await_count == 3  # New inventory rules cannot reuse old app results.
 
 
 def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):

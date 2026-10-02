@@ -16,6 +16,7 @@ RECONCILE_SECONDS = 4 * 3600
 
 
 def signature(manager):
+    from . import __version__
     from .session_files import amplifier_home
     from .updates import active_release, foundation_home
 
@@ -44,6 +45,7 @@ def signature(manager):
     return hashlib.sha256(
         json.dumps(
             [
+                __version__,
                 active_release(home),
                 stamps,
                 tools,
