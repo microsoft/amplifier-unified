@@ -39,6 +39,7 @@ class WorkerRetention:
         self.sweep_lock = asyncio.Lock()
         self.reply_timeout = 30
         self.retirements = set()
+        self.protected = lambda sid: False
 
     def wake(self):
         if self.manager._closed:
@@ -61,23 +62,30 @@ class WorkerRetention:
             ttl = self.settings["idle_timeout_hours"] * 3600
             now = self.clock()
             for index, (sid, row) in enumerate(candidates):
-                if index >= excess and now - row["parked_at"] < ttl:
+                if self.protected(sid):
+                    continue
+                if not row.get("update_pending") and index >= excess and now - row["parked_at"] < ttl:
                     continue
                 # Serialize the final idle check with command admission/start.
                 async with self.manager._locks.setdefault(sid, asyncio.Lock()):
                     if self.manager.workers.get(sid) is not row or not self.eligible(row):
                         continue
-                    row["closing"] = True
-                    task = asyncio.create_task(self.retire(sid, row))
-                    row['retirement_task'] = task
-                    self.retirements.add(task)
-                    task.add_done_callback(self.retirements.discard)
+                    task = self.schedule(sid, row)
                 try:
                     await asyncio.wait_for(asyncio.shield(task), self.reply_timeout)
                 except TimeoutError:
                     # Keep the intent and reply reader alive. Admission waits
                     # for reconciliation; a timeout is not a refusal to retire.
                     continue
+
+    def schedule(self, sid, row):
+        # Caller holds the per-session admission lock.
+        row['closing'] = True
+        task = asyncio.create_task(self.retire(sid, row))
+        row['retirement_task'] = task
+        self.retirements.add(task)
+        task.add_done_callback(self.retirements.discard)
+        return task
 
     async def retire(self, sid, row):
         try:

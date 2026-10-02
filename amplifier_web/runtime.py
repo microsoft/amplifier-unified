@@ -19,6 +19,8 @@ from typing import Any, Awaitable, Callable
 
 from .runtime_protocol import MAX_MESSAGE_BYTES, encode_message
 
+_CURRENT_GENERATION = object()
+
 Emitter = Callable[[str, dict], Awaitable[None]]
 
 class RuntimeOperationPending(RuntimeError):
@@ -158,6 +160,7 @@ class RuntimeManager:
         self._closed = False
         self._retired = {}
         self._execution_state = None
+        self.home = None
         from .runtime_retention import WorkerRetention
         self.retention = WorkerRetention(self, retention)
 
@@ -186,6 +189,23 @@ class RuntimeManager:
             for row in self.workers.values()
         )
 
+    def promote_generation(self, generation, *, protected=None):
+        """A host promotion changes future starts, never mounted code in place.
+
+        Old workers remain leased until their own park/retire handshake proves
+        there are no active jobs, approvals, queued inputs or uncertain effects.
+        This boundary is usable by future host/agent protocol adapters as well.
+        """
+        self.retention.protected = protected or (lambda sid: False)
+        for sid, row in self.workers.items():
+            row['update_pending'] = row.get('generation') != generation
+        self.retention.wake()
+
+    def generation_usage(self):
+        return [{'sessionId': sid, 'generation': row.get('generation'),
+                 'updatePending': bool(row.get('update_pending'))}
+                for sid, row in self.workers.items() if row['process'].returncode is None]
+
     def configure_retention(self, settings):
         from .runtime_retention import validate_retention
         updated = validate_retention(settings)
@@ -194,7 +214,7 @@ class RuntimeManager:
         self.retention.settings = updated
         self.retention.wake()
 
-    def _command(self, release=None, *, home=None):
+    def _command(self, release=_CURRENT_GENERATION, *, home=None):
         if self.command:
             return list(self.command)
         worker = Path(__file__).with_name("runtime_worker.py")
@@ -205,8 +225,8 @@ class RuntimeManager:
         # directories may be read-only and uv creates its lock and .venv there.
         from .updates import active_release
         from .runtime_environment import prepare_project, receipt_directory
-        home = Path(home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
-        generation = release if release is not None else active_release(home).get("current")
+        home = Path(home or self.home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"))
+        generation = active_release(home).get("current") if release is _CURRENT_GENERATION else release
         cache = prepare_project(home, generation)
         recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
         return [uv, "run", *(["--locked"] if recorded else []), *(["--no-sync"] if (receipt_directory(home, generation) / "runtime-project.json").exists() else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
@@ -240,6 +260,10 @@ class RuntimeManager:
                     pending = stopping
                 elif retirement is not None and not retirement.done():
                     pending = retirement
+                elif row and row.get('update_pending') and self.retention.eligible(row) and not self.retention.protected(sid):
+                    # Admission wins races with the periodic retirement sweep.
+                    # Wait for the same acknowledged handshake before new work.
+                    pending = self.retention.schedule(sid, row)
                 else:
                     yield
                     return
@@ -271,14 +295,42 @@ class RuntimeManager:
         await emit("runtime.status", {"sessionId": sid, "status": "starting", "phase": "runtime-setup",
             "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies.", "elapsedSeconds": 0})
         from .host.config import worker_environment
-        proc = await asyncio.create_subprocess_exec(*self._command(), stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
-            start_new_session=os.name != "nt", env=worker_environment())
-        row = {"process": proc, "emit": emit, "ready": asyncio.get_running_loop().create_future(),
+        from .updates import active_release
+        from .host.config import app_home
+        home = self.home or app_home()
+        generation = active_release(home).get('current')
+        from .generation_leases import acquire
+        reservation = acquire(home, generation, os.getpid())
+        source_reservation = None
+        try:
+            source_generation = generation
+            if not self.command:
+                from .runtime_profiles import ensure
+                source_generation = await ensure(home, generation, session)
+            source_reservation = acquire(home, source_generation, os.getpid())
+            environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
+                           'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
+            if source_generation and (Path(home)/'updates/releases'/source_generation/'profiles-qualified.json').exists():
+                environment['AMPLIFIER_RUNTIME_IMMUTABLE'] = '1'
+            proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
+                start_new_session=os.name != "nt", env=environment)
+            try:
+                lease = acquire(home, source_generation, proc.pid)
+            except BaseException:
+                proc.terminate()
+                await proc.wait()
+                raise
+        finally:
+            reservation.unlink(missing_ok=True)
+            if source_reservation:
+                source_reservation.unlink(missing_ok=True)
+        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": generation != active_release(home).get("current"), "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
         self.workers[sid] = row
+        row['generation_lease'] = lease
         row["reader"] = asyncio.create_task(self._read(sid, row))
         row["stderr_task"] = asyncio.create_task(self._drain_stderr(row))
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
@@ -861,6 +913,8 @@ class RuntimeManager:
                           {"sessionId": session_id, "status": "cold" if row.get("retiring") else "stopped"})
         if self.workers.get(session_id) is row:
             self.workers.pop(session_id, None)
+            if row.get('generation_lease'):
+                row['generation_lease'].unlink(missing_ok=True)
 
     async def close(self):
         self._closed = True

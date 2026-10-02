@@ -3,6 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_shared_session_files(tmp_path, monkeypatch):
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'unified-home'))
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'amplifier-home'))
     monkeypatch.setenv('AMPLIFIER_SESSION_STATE_HOME', str(tmp_path / 'shared-session-state'))
     monkeypatch.setenv('AMPLIFIER_TERMINAL_HOME', str(tmp_path / 'terminal-home'))

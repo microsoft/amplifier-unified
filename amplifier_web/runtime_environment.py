@@ -121,7 +121,47 @@ def installed_sources(project, *, graph=None, tracked=()):
     return result
 
 
-def inventory(home, *, installed=None):
+def shared_build_policies(home, generation, graph):
+    """A shared build's commit marker is identity, not its update policy.
+
+    Restore only an unambiguous binding in this generation, for an owned clean
+    build view at that exact revision. Never infer a branch from a package name,
+    the app default, another generation, or a user's ordinary local checkout.
+    """
+    from .update_sources import store_environment
+    environment = store_environment(home)
+    if not environment:
+        return {}
+    builds = Path(environment['AMPLIFIER_SOURCE_STORE']).resolve() / 'builds'
+    bindings = {}
+    base = receipt_directory(home, generation) / 'foundation/cache/.source-bindings'
+    for path in base.glob('*.json'):
+        if path.is_symlink():
+            raise ValueError('External shared source binding')
+        data = json.loads(path.read_text())
+        bindings.setdefault((data['git_url'], data['commit']), set()).add(data['ref'])
+    result = {}
+    for record in graph:
+        cached = record.get('cacheSource')
+        if not cached or cached.get('dirty') or not record.get('path'):
+            continue
+        root = Path(record['path']).resolve()
+        for _ in Path(cached['subdirectory']).parts:
+            root = root.parent
+        if root.parent != builds or root.is_symlink():
+            continue
+        metadata = json.loads((root / '.amplifier_cache_meta.json').read_text())
+        if not metadata.get('buildInput'):
+            continue
+        refs = bindings.get((cached['url'], cached['revision']), set())
+        if len(refs) == 1:
+            result[record['name']] = {'url': cached['url'], 'ref': next(iter(refs)),
+                'revision': cached['revision'],
+                'subdirectory': '' if cached['subdirectory'] == '.' else cached['subdirectory']}
+    return result
+
+
+def inventory(home, *, installed=None, graph=None):
     from .updates import active_release, safe_label, pinned
     generation = active_release(home).get('current')
     project = project_path(home, generation)
@@ -131,6 +171,11 @@ def inventory(home, *, installed=None):
     sources = {package_name(name): source for name, source in sources.items()}
     policies = receipt_directory(home, generation) / 'runtime-sources.json'
     recorded_policies = json.loads(policies.read_text()) if policies.exists() else {}
+    from .runtime_qualification import installed_graph
+    graph = installed_graph(project) if graph is None else graph
+    # Earlier shared-build receipts did not preserve branch policy. Recover it
+    # from their exact private binding without rewriting the recorded graph.
+    effective_policies = {**shared_build_policies(home, generation, graph), **recorded_policies}
     observed = {}
     for name, resolved in locked.items():
         name = package_name(name)
@@ -143,10 +188,10 @@ def inventory(home, *, installed=None):
                           'ref': policy.get('ref') or next(iter(query.get('branch') or query.get('rev') or query.get('tag') or ['']), '') or source.get('branch') or source.get('rev') or '',
                           'current': resolved.fragment, 'subdirectory': next(iter(query.get('subdirectory', [''])), ''),
                           'provenance': 'worker resolution lock'}
-    for name, source in (installed_sources(project, tracked=locked) if installed is None else installed).items():
+    for name, source in (installed_sources(project, graph=graph, tracked=locked) if installed is None else installed).items():
         resolved = locked.get(name)
-        policy = recorded_policies.get(name)
-        if (policy and resolved and source.get('current') == resolved.fragment
+        policy = effective_policies.get(name)
+        if (policy and source.get('current') == (policy.get('revision') or (resolved.fragment if resolved else None))
                 and source.get('url') == policy.get('url') and source.get('subdirectory', '') == policy.get('subdirectory', '')):
             source['ref'] = policy['ref']
         observed[name] = source
@@ -252,7 +297,7 @@ async def update_inventory(home):
                 raise ProtectedRuntimeSource('', 'runtime-source-changed')
     if active_release(home).get('current') != generation:
         raise ProtectedRuntimeSource('', 'runtime-source-changed')
-    return inventory(home, installed=policy)
+    return inventory(home, installed=policy, graph=graph)
 
 
 async def update_manifest(home):

@@ -43,9 +43,19 @@ def active_release(home):
     return value
 
 
+def selected_release(home):
+    # Workers capture their source generation at spawn; the serving host follows
+    # the current pointer. Never change a running worker's resolver underneath it.
+    selected = os.environ.get('AMPLIFIER_UNIFIED_RELEASE')
+    identity = (selected or None) if selected is not None else active_release(home).get('current')
+    if identity is not None and not re.fullmatch(r'[a-f0-9]{32}', identity):
+        raise ValueError('Invalid worker source generation')
+    return identity
+
+
 def foundation_home(home):
     home = Path(home)
-    identity = active_release(home).get('current')
+    identity = selected_release(home)
     return home / 'updates' / 'releases' / identity / 'foundation' if identity else home / 'foundation'
 
 
@@ -145,23 +155,24 @@ def configured_sources(service):
     selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
     # Native child/legacy history can be viewable without a resumable identity.
     # Its workspace is still inspected below; it is not a broken root selection.
-    selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
-                      for s in state['sessions']
-                      if not (s.get('historyManaged') and s.get('historyReadOnlyReason')))
-    for workspace in state.get('workspaces', []):
-        # Native history retains an unavailable, pathless workspace placeholder.
-        # It is not a source-selection error, unlike malformed workspace rows.
-        if (isinstance(workspace, Mapping)
-                and isinstance(workspace.get('nativeProject'), str)
-                and workspace.get('nativeProject')
-                and 'path' in workspace and workspace['path'] is None
-                and workspace.get('available') is False):
-            continue
-        path = workspace.get('path') if isinstance(workspace, Mapping) else None
-        if not isinstance(path, str) or not path.strip():
-            incomplete = True
-            continue
-        selections.add((path, None, None))
+    if not getattr(service, 'app_only', False):
+        selections.update((s['workspace'], s['bundle'], s.get('runtimeSessionId') or s.get('nativeIdentity') or s['id'])
+                          for s in state['sessions']
+                          if not (s.get('historyManaged') and s.get('historyReadOnlyReason')))
+        for workspace in state.get('workspaces', []):
+            # Native history retains an unavailable, pathless workspace placeholder.
+            # It is not a source-selection error, unlike malformed workspace rows.
+            if (isinstance(workspace, Mapping)
+                    and isinstance(workspace.get('nativeProject'), str)
+                    and workspace.get('nativeProject')
+                    and 'path' in workspace and workspace['path'] is None
+                    and workspace.get('available') is False):
+                continue
+            path = workspace.get('path') if isinstance(workspace, Mapping) else None
+            if not isinstance(path, str) or not path.strip():
+                incomplete = True
+                continue
+            selections.add((path, None, None))
 
     for workspace, selected, session_id in selections:
         try:
@@ -169,7 +180,8 @@ def configured_sources(service):
             # history. Their unavailable directories are not configuration errors.
             if not workspace:continue
             if not Path(workspace).expanduser().is_dir():continue
-            config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache)
+            config = read_config(workspace, home=home, session_id=session_id, settings_cache=settings_cache,
+                                 global_only=getattr(service, "app_only", False))
             # Use the same settings authority as session startup. Retained
             # imported registry aliases must not masquerade as configured use.
             registrations = dict(config.registrations)
@@ -198,7 +210,13 @@ def configured_sources(service):
                     issue('This bundle name is not registered. Choose an available bundle in this conversation, or restore its source in workspace settings.', workspace=workspace, session_id=session_id, reference=reference, historical=evidence == 'Selected bundle')
 
             # Do not walk added/registered bundle lists: those are catalogs.
-            resolve(selected or config.active_bundle, 'Selected bundle')
+            if getattr(service, 'app_only', False):
+                from .bundles import offered_profiles
+                for profile in offered_profiles(config):
+                    resolve(profile, 'Offered app profile')
+                resolve(selected or config.active_bundle, 'Selected app profile')
+            else:
+                resolve(selected or config.active_bundle, 'Selected bundle')
             for reference in config.app_bundles:
                 resolve(reference, 'Enabled app bundle')
             for reference in config.module_sources.values():
@@ -490,7 +508,14 @@ class UpdateManager:
             if any(w.get('status') in {'starting','running','stopping','queued'} or (w.get('persistent') and w.get('status') == 'idle') for w in session.get('workers',[])): return True
         return False
 
-    async def inventory_sources(self):
+    async def inventory_sources(self, *, indexed=False):
+        """Checks use the app index; an explicit audit also inspects saved scopes."""
+        if not indexed:
+            return await self._scan_inventory()
+        from .update_inventory_index import inventory
+        return await inventory(self, lambda: self._scan_inventory(app_only=True))
+
+    async def _scan_inventory(self, *, app_only=False):
         base = foundation_home(self.home)
         # Capture only selection metadata before yielding. The history catalog
         # can change while filesystem/settings reads run outside the event loop.
@@ -506,6 +531,7 @@ class UpdateManager:
                            if isinstance(row, Mapping) else row
                            for row in state.get('workspaces', [])],
         })
+        snapshot.app_only = app_only
         snapshot.source_issues = []
         snapshot.settings_cache = self.settings_cache
         configured, incomplete = await asyncio.to_thread(configured_sources, snapshot)
@@ -647,8 +673,8 @@ class UpdateManager:
                         return
                     tier = 'included'
                 started = time.monotonic()
-                rows = await self.inventory_sources()
-                await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000))
+                rows = await self.inventory_sources(indexed=True)
+                await self.publish(inventoryTimingMs=round((time.monotonic()-started)*1000), inventoryEvidence=getattr(self, 'inventory_evidence', None))
                 remote_tasks = {}
                 from .update_checks import git_revision
                 async def remote(url, ref):
@@ -786,6 +812,10 @@ class UpdateManager:
                     elif original.is_file():await asyncio.to_thread(shutil.copy2,original,shared_stage/name)
                 for config_file in (stage/'config').rglob('*.yaml'):
                     config_file.write_text(config_file.read_text().replace(str(source),str(stage/'foundation')))
+                shared_settings = shared_stage/'settings.yaml'
+                if shared_settings.exists():
+                    write_private(shared_settings, shared_settings.read_text().replace(str(source),str(stage/'foundation'))
+                                  .replace(str(self.home/'foundation'),str(stage/'foundation')))
                 registry=stage/'foundation/registry.json'
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
                 # Snapshot shared configuration, never CLI registry or caches.
@@ -822,11 +852,18 @@ class UpdateManager:
                     meta.write_text(json.dumps(data))
                 await self.publish(phase='validating',detail='Preparing dependencies in a separate runtime…')
                 phase='ecosystem-validation'
-                await self.validate(stage,release)
-                write_private(stage/'validated.json',json.dumps({'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
+                from .update_plan import build, reuse_runtime
+                plan = await build(self, stage, candidates)
+                write_private(stage/'plan.json', json.dumps(plan))
+                await self.publish(plan={key: plan[key] for key in ('mode', 'reason', 'activation')})
+                if plan['mode'] == 'data':
+                    await self.diagnostics.run('ecosystem-runtime-reuse', reuse_runtime, self, stage, plan)
+                else:
+                    await self.validate(stage,release)
+                write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
-                await self.publish(phase='staged',pendingRelease=release,detail='Update validated; waiting for conversations and calls to be idle.')
+                await self.publish(phase='staged',pendingRelease=release,detail='Update prepared; making it available to new conversation work.')
             except BaseException as error:
                 from .update_diagnostics import exception_type
                 interrupted=isinstance(error,asyncio.CancelledError)
@@ -849,12 +886,21 @@ class UpdateManager:
         fresh=not (receipt/'runtime.lock').exists()
         project=await stage_runtime(self, release, [row for row in self.inventory if row.get('eligible') and (row.get('status') == 'update' or
             (row.get('kind') == 'runtime dependency' and row.get('status') == 'current'))], finalize=not fresh)
-        state=self.service.get_state()
-        # Browsing historical CLI projects does not opt their old bundles into
-        # this application's update validation or mount missing workspaces.
-        configs={(s['workspace'],s['bundle']) for s in state['sessions']
-                 if not s.get('historyManaged') and s.get('workspace') and s.get('bundle')}
-        configs.add((state['settings']['workspace'],state['settings']['bundle']))
+        # Profile preparation follows the current app offering. Saved chats and
+        # workspace-specific overlays qualify lazily when explicitly resumed.
+        # Scanning historical workspace/bundle pairs made a catalog-only update
+        # run dozens of identical dependency installers. Do not restore that loop.
+        from .bundles import offered_profiles
+        from .host.config import read_config
+        workspace = stage / 'qualification-workspace'
+        workspace.mkdir(exist_ok=True)
+        config = read_config(workspace, home=stage, shared_home=stage/'shared-config', global_only=True)
+        profiles = offered_profiles(config)
+        if not profiles:
+            raise ValueError('No app-level conversation profiles are configured')
+        configs = [(str(workspace), profile) for profile in profiles]
+        profiles_file = stage / 'profiles.json'
+        write_private(profiles_file, json.dumps(profiles))
         from .update_sources import store_environment, worker_supports_shared, adopt_clean_sources
         if fresh:
             # Materialize the candidate lock once, rather than uv-syncing before
@@ -872,7 +918,13 @@ class UpdateManager:
             overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
             command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
-            if refresh:flags.append('--refresh-dependencies')
+            flags.append('--global-only')
+            if refresh:
+                # One collection pass and one resolver transaction for the shared
+                # graph, followed by fresh read-only compatibility processes.
+                await self.diagnostics.run('ecosystem-prepare', process, *command, str(workspace), profiles[0],
+                    *flags, '--profiles', str(profiles_file), env={**env, 'UV_OVERRIDE': str(overrides)}, timeout=900)
+                return
             completed=0
             progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
                       'phase':'prepare' if refresh else 'compatibility','total':len(configs),
@@ -906,10 +958,13 @@ class UpdateManager:
             await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
-            verify_recorded(project,receipt)
-        await self.publish(detail=f'Checking compatibility for {len(configs)} workspace/bundle configurations…')
+            await asyncio.to_thread(verify_recorded,project,receipt)
+        await self.publish(detail=f'Checking {len(configs)} offered conversation profiles…')
         await probe(project)
-        verify_recorded(project,receipt)
+        await asyncio.to_thread(verify_recorded,project,receipt)
+        from .runtime_profiles import configuration_key
+        write_private(stage/'profiles-qualified.json', json.dumps({'profiles': profiles,
+            'configuration': configuration_key(config.settings, self.home, stage)}))
 
     async def activate(self, rollback=False):
         async with self.service.runtime_lifecycle():
@@ -937,10 +992,12 @@ class UpdateManager:
                     await self.validate(self.directory/'releases'/target,target)
                     marker['hostVersion']=__import__('amplifier_web').__version__
                     write_private(self.directory/'releases'/target/'validated.json',json.dumps(marker))
+            hot = bool(target and marker.get('generationSchema') == 1 and marker.get('workerProtocol') == 1
+                       and callable(getattr(self.service.runtime, 'promote_generation', None)))
             async with self.service.lock:
                 if self.service.closed:
                     return
-                if self.busy():
+                if not hot and self.busy():
                     self.service.state['updates'].update(detail='Waiting for active work and calls to finish. Try rollback again when idle.' if rollback else 'Update ready; it will activate when work and calls finish.')
                     self.service._publish()
                     return
@@ -957,7 +1014,7 @@ class UpdateManager:
                 # durable.  The pointer is committed only after replacement
                 # construction succeeds, and the live manager is replaced before
                 # its terminal close can leave this host unable to admit work.
-                candidate = self.service.runtime_candidate()
+                candidate = None if hot else self.service.runtime_candidate()
                 # A promotion may have committed before a runtime replacement
                 # or state publication failed.  Its durable pointer already
                 # retains the rollback identity, so finish it without
@@ -971,7 +1028,13 @@ class UpdateManager:
                         async with self.service.lock:
                             self.service.state['updates'].pop('pendingRollback', None)
                             self.service._publish()
-                await self.service.replace_runtime(candidate)
+                if hot:
+                    def protected(sid):
+                        voice = self.service.state.get('voice', {})
+                        return voice.get('sessionId') == sid and voice.get('status') not in {None, 'idle', 'ended', 'error', 'disconnected'}
+                    self.service.runtime.promote_generation(target, protected=protected)
+                else:
+                    await self.service.replace_runtime(candidate)
                 if rollback:
                     async with self.service.lock:
                         self.service.state['settings']['updates']['autoInstall'] = False
@@ -993,7 +1056,7 @@ class UpdateManager:
                         sequence.update(stage='complete', install=False, other=tier_summary)
                 await self.publish(phase='installed',release=target,pendingRelease=None,canRollback=True,items=items,error=None,
                     **({'sequence': sequence} if sequence else {}),
-                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update installed. Conversations will resume with the new ecosystem.')
+                    available=sum(row.get('status')=='update' for row in items),installedAt=time.time(),detail='Previous ecosystem restored. Automatic installation is now off.' if rollback else 'Update ready for new work. Active conversations adopt it after their current work finishes.')
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
@@ -1091,6 +1154,13 @@ class UpdateManager:
         settings=self.service.state['settings'].get('updates',{})
         state=self.service.state['updates']
         if self.awaiting_restart():return
+        usage = getattr(self.service.runtime, 'generation_usage', lambda: [])()
+        adoption = {'activeWorkers': len(usage), 'pendingWorkers': sum(row['updatePending'] for row in usage)}
+        if state.get('adoption') != adoption:
+            if state.get('adoption', {}).get('pendingWorkers') and not adoption['pendingWorkers']:
+                if not self.cleanup_task or self.cleanup_task.done():
+                    self.cleanup_task = asyncio.create_task(self.retire_storage())
+            await self.publish(adoption=adoption)
         if state.get('pendingSmartTools'):
             if state.get('phase') != 'error': await self.activateSmartTools()
             return
@@ -1131,13 +1201,13 @@ class UpdateManager:
             await asyncio.sleep(delay)
 
     async def retire_storage(self):
-        # Storage maintenance is outside the critical activation request. Wait
-        # for an idle window and preserve everything if new work has started.
+        # Storage maintenance is outside the activation request. Worker leases
+        # protect active generations; unrelated work need not delay reclamation.
         await asyncio.sleep(10)
-        if self.closed or self.busy() or self.awaiting_restart():
+        if self.closed or self.awaiting_restart():
             return
         async with self.service.runtime_lifecycle():
-            if self.closed or self.busy() or self.awaiting_restart():
+            if self.closed or self.awaiting_restart():
                 return
             try:
                 from .update_retention import reclaim

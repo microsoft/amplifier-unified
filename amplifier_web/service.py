@@ -349,6 +349,8 @@ class AppService:
         self.surface_context = SurfaceContext(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
+        if runtime is not None and hasattr(runtime, "home"):
+            runtime.home = self.data_dir
         self.voice_service = None
         self.voice_visual = VoiceVisual(self)
         self.computer_visual = ComputerVisuals(self)
@@ -1094,6 +1096,8 @@ class AppService:
                 await runtime.close()
             raise RuntimeError("The runtime host is closing.")
         self.runtime = runtime
+        if runtime is not None and hasattr(runtime, "home"):
+            runtime.home = self.data_dir
         self.worktrees.bind_runtime()
         self.state["runtime"]["available"] = runtime is not None
         if hasattr(runtime, "retention"):

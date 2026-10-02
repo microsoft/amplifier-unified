@@ -127,7 +127,7 @@ test('application and component updates have separate effects and no duplicate a
  assert.match(html,/1 available/);
  assert.match(html,/Community bundle/);
  assert.match(html,/One request handles everything in order/);
- assert.match(html,/an app update may restart the server/);
+ assert.match(html,/an app update waits for work and calls before restarting the server/);
  assert.match(html,/Show all 1 source/);
 });
 
@@ -380,7 +380,7 @@ test('main update box summarizes ordered component phases without the source inv
  assert.match(banner,/Included components/);
  assert.match(banner,/3 component updates are ready/);
  assert.match(banner,/Other components/);
- assert.match(banner,/install automatically when work is idle/);
+ assert.match(banner,/Component updates prepare automatically/);
  assert.doesNotMatch(banner,/a-source-list/);
  assert.match(html,/Update Amplifier/);
 });

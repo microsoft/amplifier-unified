@@ -283,6 +283,7 @@ async def test_freeze_captures_post_preparation_graph_and_preserves_future_branc
     before = installed_graph(current)
     final = await freeze(manager, generation, current)
     verify_recorded(final, receipt)
+    assert current.exists()  # The baseline is a rollback target, not disposable.
     assert json.loads((receipt / 'runtime-installed.json').read_text()) == installed_graph(final)
     assert before and final != current
     (manager.home / 'updates/active.json').write_text(json.dumps({'current': generation}))
@@ -389,6 +390,20 @@ async def test_nonprefixed_installed_override_blocks_stale_git_lock_staging(envi
     assert {path: path.read_bytes() for path in before} == before
     assert not (receipt / 'runtime.lock').exists()
     assert not active_release(manager.home)
+
+
+async def test_successful_freeze_reclaims_only_its_disposable_preparation(installed_transitive):
+    from amplifier_web.runtime_qualification import freeze, verify_recorded
+    manager, current, *_ = installed_transitive
+    generation = 'ab' * 16
+    receipt = environments.receipt_directory(manager.home, generation)
+    receipt.mkdir(parents=True)
+    preparation = current.with_name('prepare-' + generation)
+    current.rename(preparation)
+    final = await freeze(manager, generation, preparation)
+    assert not preparation.exists()
+    assert final.exists()
+    verify_recorded(final, receipt)
 
 
 async def test_identical_qualified_graph_reuses_environment_without_reinstallation(installed_transitive, monkeypatch):

@@ -398,7 +398,7 @@ async def test_old_legacy_failure_does_not_permanently_block_repairs(tmp_path,mo
     async def handle(request):return web.json_response(health(manager))
     runner,site,sock=await listener(manager,handle)
     calls=[]
-    async def inventory():calls.append('inventory');return []
+    async def inventory(**kwargs):calls.append('inventory');return []
     async def application():return {'id':'application','current':__version__,'status':'current'}
     monkeypatch.setattr(manager,'inventory_sources',inventory)
     monkeypatch.setattr('amplifier_web.app_updates.check',application)

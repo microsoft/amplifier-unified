@@ -20,20 +20,36 @@ async def main():
     parser.add_argument("--refresh-dependencies", action="store_true")
     parser.add_argument("--install-overrides", type=Path)
     parser.add_argument("--read-only", action="store_true")
+    parser.add_argument("--profiles", type=Path)
+    parser.add_argument("--global-only", action="store_true")
+    parser.add_argument("--runtime-plan", type=Path)
     args = parser.parse_args()
+    runtime_plan = json.loads(args.runtime_plan.read_text()) if args.runtime_plan else None
     started = time.monotonic()
     async def deny(*args): return 'deny'
     facts={'ok':False,'stage':'prepare'}
     session=None
     try:
-        if args.refresh_dependencies:
+        if args.profiles:
+            from amplifier_foundation.modules.batch import DependencyBatch
             from amplifier_web.host.session import prepare_dependencies
-            await prepare_dependencies(args.workspace,bundle=args.bundle,install_overrides=args.install_overrides)
+            batch = DependencyBatch()
+            profiles = json.loads(args.profiles.read_text())
+            if not isinstance(profiles, list) or not profiles or any(not isinstance(p, str) for p in profiles):
+                raise ValueError('Invalid qualification profiles')
+            for profile in profiles:
+                await prepare_dependencies(args.workspace, bundle=profile,
+                    install_overrides=args.install_overrides, dependency_batch=batch, global_only=True, runtime_plan=runtime_plan)
+            report = await batch.install()
+            facts.update(ok=True, stage='prepared', dependenciesPrepared=True, **report)
+        elif args.refresh_dependencies:
+            from amplifier_web.host.session import prepare_dependencies
+            await prepare_dependencies(args.workspace,bundle=args.bundle,install_overrides=args.install_overrides, global_only=args.global_only, runtime_plan=runtime_plan)
             facts.update(ok=True,stage='prepared',dependenciesPrepared=True)
         else:
             from amplifier_web.host.session import prepare_manager
             session,runtime,report=await prepare_manager(args.workspace,bundle=args.bundle,resume=False,ask=deny,
-                install_overrides=args.install_overrides, qualification_readonly=args.read_only)
+                install_overrides=args.install_overrides, qualification_readonly=args.read_only, global_only=args.global_only, runtime_plan=runtime_plan)
             facts.update(stage='capabilities',standalone=bool(report.get('standalone')),providersPresent=bool(report.get('providers')))
             if not facts['standalone'] or not facts['providersPresent']:raise RuntimeError('Incomplete staged runtime')
             facts['cliAbsent']=not any(importlib.util.find_spec(name) for name in ('amplifier_app_cli','amplifier_loop_live_cli','amplifier_workspace'))

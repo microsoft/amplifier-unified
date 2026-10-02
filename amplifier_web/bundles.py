@@ -176,6 +176,19 @@ def sanitize_export(value, path=(), secrets=None):
     return copy.deepcopy(value)
 
 
+def offered_profiles(config, registry=None):
+    """The picker and updater share one current, app-level profile authority."""
+    if registry is None:
+        path = config.registry_home / 'registry.json'
+        registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
+    available = set(registry) | set(config.registrations)
+    names = (STANDALONE_PROFILES & available) | set(config.settings.get('bundle', {}).get('added', {}))
+    entries = BundleManager.entries(config.settings)
+    disabled = {row.get('name') for row in entries
+                if row.get('role') == 'standalone' and row.get('enabled') is False}
+    return sorted(names - disabled)
+
+
 class BundleManager:
     def __init__(self, home: Path, *, store=None):
         if store is None:
@@ -345,13 +358,9 @@ class BundleManager:
                 # describe an add-on, so neither cache flag admits picker rows.
                 # Source overrides also name dependencies; they are not standalone
                 # registrations. Keep the capability catalog below unfiltered.
-                available = set(registry) | set(config.registrations)
-                names = STANDALONE_PROFILES & available
-                names.update(config.settings.get('bundle', {}).get('added', {}))
-
-                disabled = {row['name'] for row in self.entries(settings) if row.get('role')=='standalone' and row.get('enabled') is False}
+                names = offered_profiles(config, registry)
                 from .bundle_selection import catalog_entry
-                catalog = sorted((catalog_entry(name, catalog_metadata(config, registry, name)) for name in names-disabled),
+                catalog = sorted((catalog_entry(name, catalog_metadata(config, registry, name)) for name in names),
                                  key=lambda row: (row['label'].casefold(), row['name'].casefold(), row['name']))
                 return {"bundles": self.public_entries(settings), "registeredBundles": catalog}
             def mutate(current):

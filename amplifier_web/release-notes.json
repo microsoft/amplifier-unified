@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.46",
+      "title": "Prepare shared component generations and adopt updates between work",
+      "changes": [
+        "Prepare the currently offered app profiles together in one dependency installation, then check each profile in a fresh process. Historical chats and workspace combinations no longer multiply routine update preparation.",
+        "Reuse indexed source inventories and coalesced availability checks. Proven catalog-data-only changes reuse a qualified runtime; code, dependency and configuration changes still receive isolated qualification.",
+        "Share qualified component environments and exact source revisions across compatible conversation workers. Custom configurations prepare separately when first used, and conflicting requirements stop a candidate without changing the running environment.",
+        "Make compatible component updates available to new workers immediately. Active workers finish on their existing generation and adopt the update after safe retirement; active voice, queued input, approvals and uncertain operations remain protected.",
+        "Retain rollback and referenced generations, and reclaim only proven unused owned environments. Application updates still use the coordinated restart boundary. CLI caches and registries remain separate, and native history is preserved without replay."
+      ],
+      "notices": [
+        {
+          "id": "shared-component-generations",
+          "title": "Use shared component generations",
+          "detail": "Component updates now prepare the current app offerings together. Already running conversation workers keep their loaded version until their work can safely retire.",
+          "action": "Let the included-components update finish once after installing this release. New work then uses the qualified generation automatically; application updates still require their normal restart."
+        }
+      ]
+    },
+    {
       "version": "0.20.45",
       "title": "Save changed conversation records and reuse unaffected client views",
       "changes": [
