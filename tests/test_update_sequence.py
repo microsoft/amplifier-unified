@@ -34,7 +34,7 @@ def source(tier, current='a'*40):
 async def test_app_is_checked_before_any_component_inventory(manager, monkeypatch, status):
     events=[]
     async def application():events.append('app');return {'id':'application','status':status}
-    async def inventory():pytest.fail('The old app must not inspect component declarations')
+    async def inventory(**kwargs):pytest.fail('The old app must not inspect component declarations')
     monkeypatch.setattr(app_updates,'check',application)
     monkeypatch.setattr(manager,'inventory_sources',inventory)
     await manager.check()
@@ -46,7 +46,7 @@ async def test_app_is_checked_before_any_component_inventory(manager, monkeypatc
 @pytest.mark.parametrize('included_changed',[False, True])
 async def test_check_skips_current_tiers_but_stops_at_included_updates(manager, monkeypatch, included_changed):
     calls=[]
-    async def inventory():return [source('included'),source('other')]
+    async def inventory(**kwargs):return [source('included'),source('other')]
     async def process(*args,**kwargs):
         calls.append(args[2].rsplit('/',1)[-1])
         return ('b' if included_changed or calls[-1]=='other' else 'a')*40+' refs/heads/main'
@@ -62,7 +62,7 @@ async def test_check_skips_current_tiers_but_stops_at_included_updates(manager, 
 
 async def test_included_check_error_does_not_install_or_check_optional_sources(manager,monkeypatch):
     calls=[]
-    async def inventory():return [source('included'),source('other')]
+    async def inventory(**kwargs):return [source('included'),source('other')]
     async def process(*args,**kwargs):calls.append(args[2]);raise RuntimeError('offline')
     monkeypatch.setattr(manager,'inventory_sources',inventory)
     monkeypatch.setattr(updates,'process',process)

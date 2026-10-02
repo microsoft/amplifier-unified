@@ -567,7 +567,24 @@ class ResolvedRoot:
         return root
 
 
-async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None):
+def apply_runtime_plan(loaded, edited, config, execution_workspace):
+    from ..runtime_controls import validate_plan
+    validate_plan(edited)
+    for key in ("providers", "tools", "hooks"):
+        if key in edited:
+            setattr(loaded, key, [{k:v for k,v in row.items() if k != "enabled"}
+                for row in edited[key] if row.get("enabled", True)])
+    for key in ("session", "agents", "context", "instruction"):
+        if key in edited:
+            setattr(loaded, key, edited[key])
+    loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
+    for key in ("providers", "tools", "hooks", "session", "agents"):
+        if key in edited:
+            setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    return loaded
+
+
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None):
     """Prepare a fresh qualification worker before importing its live runtime.
 
     This first probe only installs configured dependencies. A separate process
@@ -575,7 +592,7 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     already imported wheel runtime with an editable cache in one interpreter.
     No conversation, history store, job recovery or model execution is opened.
     """
-    config = load_config(workspace)
+    config = load_config(workspace, global_only=global_only)
     from .config import prepare_registry
     prepare_registry(config)
     execution_workspace = Path(config.workspace).expanduser().resolve(strict=True)
@@ -583,6 +600,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     _, loaded, _ = await load_root_bundle(config, bundle or config.active_bundle,
                                           execution_workspace=execution_workspace)
     snapshot = is_snapshot(loaded)
+    if runtime_plan is not None:
+        loaded = apply_runtime_plan(loaded, runtime_plan, config, execution_workspace)
     adapted, _ = live_plan(loaded.to_mount_plan())
     components = getattr(loaded, '_host_components', None) or required_components()
     loaded.session = adapted['session']
@@ -590,7 +609,8 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     components.apply(loaded)
     from .config import configure_skill_cache
     configure_skill_cache(loaded, config.registry_home)
-    await loaded.prepare(strict=True, refresh_dependencies=True,
+    return await loaded.prepare(strict=True, refresh_dependencies=True,
+        **({"dependency_batch": dependency_batch} if dependency_batch is not None else {}),
         **({'install_overrides': Path(install_overrides)} if install_overrides is not None else {}),
         cache_dir=config.registry_home / 'cache',
         source_resolver=lambda module, source: module_source(config, snapshot, module, source, components))
@@ -601,7 +621,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None,
-                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, **kwargs):
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, **kwargs):
     if refresh_dependencies and resume:
         raise ValueError("Dependency refresh is limited to a new isolated qualification session.")
     from amplifier_foundation import SessionConfigurator
@@ -613,7 +633,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .storage import SessionStore
 
     runtime = runtime or Runtime()
-    config = load_config(workspace, session_id=runtime.session_id)
+    config = load_config(workspace, session_id=runtime.session_id, global_only=global_only)
     from .config import prepare_registry
     prepare_registry(config)
     # Registry/cache ownership is passed explicitly below. AMPLIFIER_HOME must
@@ -663,22 +683,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
                                else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
     snapshot = is_snapshot(loaded)
-    from ..runtime_controls import override_path, validate_plan
+    from ..runtime_controls import override_path
     edited_path = override_path(runtime.session_id)
-    if edited_path.exists():
-        edited = json.loads(edited_path.read_text())
-        validate_plan(edited)
-        for key in ("providers", "tools", "hooks"):
-            if key in edited:
-                setattr(loaded, key, [{k:v for k,v in row.items() if k != "enabled"}
-                    for row in edited[key] if row.get("enabled", True)])
-        for key in ("session", "agents", "context", "instruction"):
-            if key in edited:
-                setattr(loaded, key, edited[key])
-        loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
-        for key in ("providers", "tools", "hooks", "session", "agents"):
-            if key in edited:
-                setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    if runtime_plan is not None or edited_path.exists():
+        edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
+        loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
     if not snapshot:
         from .mentions import include_instruction_files
         loaded = include_instruction_files(loaded)
@@ -712,7 +721,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         preparation_policy["install_overrides"] = Path(install_overrides)
     # Activate modules from the same generation as the bundle registry. The
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
-    prepared = await loaded.prepare(strict=True, install_deps=not qualification_readonly, **preparation_policy,
+    prepared = await loaded.prepare(strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
         cache_dir=config.registry_home / "cache",
         source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
         progress_callback=progress)

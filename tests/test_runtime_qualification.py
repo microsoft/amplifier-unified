@@ -41,7 +41,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
                 calls.append('runtime-sync')
                 return
             assert command[command.index('--project') + 1] in {str(first), str(frozen)}
-            calls.append(('probe', '--refresh-dependencies' in command))
+            calls.append(('probe', '--profiles' in command))
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
     monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
@@ -49,7 +49,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -218,7 +218,7 @@ def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('fail', [False, True])
-async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path, monkeypatch, fail):
+async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail):
     import asyncio
     counts = {'prepare': 0, 'check': 0}
     peaks = dict(counts)
@@ -240,7 +240,7 @@ async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path,
             key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
             assert ('--read-only' in command) == (key == 'check')
             assert '--no-sync' in command  # Both probes reuse the one-time sync.
-            assert ('--refresh-dependencies' in command) == (key == 'prepare')
+            assert ('--profiles' in command) == (key == 'prepare')
             counts[key] += 1
             peaks[key] = max(peaks[key], counts[key])
             try:
@@ -261,13 +261,31 @@ async def test_preparation_serial_and_readonly_checks_bounded_parallel(tmp_path,
         with pytest.raises(ValueError, match='incompatible'): await UpdateManager.validate(manager, receipt, release)
     else:
         await UpdateManager.validate(manager, receipt, release)
-        assert completed.count('check') == 8 and peaks['check'] == 4
-    assert completed.count('prepare') == 8 and peaks['prepare'] == 1
+        assert completed.count('check') == 3 and peaks['check'] == 3
+    assert completed.count('prepare') == 1 and peaks['prepare'] == 1
     assert completed.count('sync')==1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
     preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']
     checks=[row['probeProgress'] for row in published if row.get('probeProgress',{}) is not None and row.get('probeProgress',{}).get('phase')=='compatibility']
-    assert [row['completed'] for row in preparation]==list(range(9))
-    assert all(row['total']==8 for row in preparation+checks)
-    assert checks[-1]['completed']==(0 if fail else 8)
+    assert not preparation  # One dependency batch, no historical preparation loop.
+    assert all(row['total']==3 for row in checks)
+    assert checks[-1]['completed']==(0 if fail else 3)
     assert str(tmp_path) not in json.dumps(preparation+checks)
+
+
+def test_package_payload_verification_keeps_content_and_symlink_boundaries(tmp_path):
+    from amplifier_web.runtime_qualification import package_content
+    root=tmp_path/'.venv/lib/python3.13/site-packages';root.mkdir(parents=True)
+    metadata=root/'fixture-1.dist-info';metadata.mkdir()
+    (metadata/'METADATA').write_text('Metadata-Version: 2.1\nName: fixture\nVersion: 1\n')
+    payload=root/'fixture';payload.mkdir()
+    (payload/'code.py').write_text('version=1')
+    outside=tmp_path/'outside';outside.mkdir()
+    (outside/'ignored.py').write_text('external=1')
+    (payload/'external').symlink_to(outside,target_is_directory=True)
+    (metadata/'RECORD').write_text('fixture/code.py,,\nfixture/external/ignored.py,,\n')
+    first=package_content(tmp_path)
+    (outside/'ignored.py').write_text('external=2')
+    assert package_content(tmp_path)==first
+    (payload/'code.py').write_text('version=2')
+    assert package_content(tmp_path)!=first

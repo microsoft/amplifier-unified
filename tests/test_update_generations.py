@@ -1,0 +1,363 @@
+"""Generation activation preserves work and shares prepared artifacts."""
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from test_runtime_retention import SCRIPT
+
+from amplifier_web.runtime import RuntimeManager
+from amplifier_web.updates import foundation_home
+
+
+@pytest.fixture
+async def manager(tmp_path):
+    events = []
+
+    async def emit(kind, data):
+        events.append((kind, data))
+
+    manager = RuntimeManager(command=[sys.executable, "-c", SCRIPT])
+    manager.home = tmp_path / "app"
+    manager.home.mkdir()
+    manager.retention.wake = lambda: None
+    manager.emit = emit
+    manager.events = events
+    yield manager
+    await manager.close()
+
+
+def promote(manager, value):
+    root = manager.home / "updates"
+    root.mkdir(exist_ok=True)
+    (root / "active.json").write_text(json.dumps({"current": value}))
+    manager.promote_generation(value)
+
+
+async def test_running_work_keeps_generation_idle_adopts_before_send(manager):
+    session = {"id": "chat", "workspace": "/tmp"}
+    await manager.send(session, "first", "one", manager.emit)
+    first = manager.workers["chat"]["process"]
+    promote(manager, "a" * 32)
+    await manager.retention.sweep()
+    assert first.returncode is None
+    assert manager.generation_usage()[0]["updatePending"]
+    await manager._request("chat", "park")
+    # No periodic sweep: admission itself must observe the pending generation.
+    assert (await manager.send(session, "second", "two", manager.emit))["accepted"]
+    assert first.returncode == 0
+    assert manager.workers["chat"]["generation"] == "a" * 32
+    assert not manager.generation_usage()[0]["updatePending"]
+
+
+async def test_active_voice_defers_only_its_worker(manager):
+    for sid in ("voice", "idle"):
+        await manager.prewarm({"id": sid, "workspace": "/tmp"}, manager.emit)
+    voice = manager.workers["voice"]["process"]
+    idle = manager.workers["idle"]["process"]
+    promote(manager, "b" * 32)
+    manager.retention.protected = lambda sid: sid == "voice"
+    await manager.retention.sweep()
+    assert voice.returncode is None and idle.returncode == 0
+    manager.retention.protected = lambda sid: False
+    await manager.retention.sweep()
+    assert voice.returncode == 0
+
+
+async def test_lease_exists_until_acknowledged_retirement(manager):
+    from amplifier_web.generation_leases import references
+
+    promote(manager, "a" * 32)
+    await manager.prewarm({"id": "chat", "workspace": "/tmp"}, manager.emit)
+    assert references(manager.home) == {"a" * 32}
+    promote(manager, "b" * 32)
+    await manager.retention.sweep()
+    assert references(manager.home) == set()
+
+
+def test_pinned_worker_sources_ignore_new_host_pointer(tmp_path, monkeypatch):
+    (tmp_path / "updates").mkdir()
+    (tmp_path / "updates/active.json").write_text(json.dumps({"current": "b" * 32}))
+    monkeypatch.setenv("AMPLIFIER_UNIFIED_RELEASE", "a" * 32)
+    assert (
+        foundation_home(tmp_path)
+        == tmp_path / "updates/releases" / ("a" * 32) / "foundation"
+    )
+    monkeypatch.setenv("AMPLIFIER_UNIFIED_RELEASE", "")
+    assert foundation_home(tmp_path) == tmp_path / "foundation"
+
+
+async def test_inventory_reuses_index_and_invalidates_on_configuration_change(
+    tmp_path, monkeypatch
+):
+    from amplifier_web.update_inventory_index import inventory
+
+    home = tmp_path / "app"
+    (home / "updates").mkdir(parents=True)
+    manager = SimpleNamespace(
+        home=home,
+        directory=home / "updates",
+        service=SimpleNamespace(state={"settings": {"bundle": "work"}}),
+    )
+    scan = AsyncMock(return_value=[{"id": "one"}])
+    assert await inventory(manager, scan) == [{"id": "one"}]
+    assert await inventory(manager, scan) == [{"id": "one"}]
+    assert scan.await_count == 1 and manager.inventory_evidence["source"] == "index"
+    shared = Path(os.environ["AMPLIFIER_HOME"])
+    shared.mkdir(exist_ok=True)
+    (shared / "settings.yaml").write_text("bundle: {active: foundation}")
+    await inventory(manager, scan)
+    assert scan.await_count == 2
+
+
+def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):
+    from amplifier_web.bundles import offered_profiles
+
+    config = SimpleNamespace(
+        registry_home=tmp_path,
+        registrations={"work": "source", "foundation": "source", "addon": "source"},
+        settings={
+            "bundle": {"added": {"custom": "file:///bundle"}, "app": []},
+            "web_bundles": {
+                "entries": [
+                    {"name": "foundation", "role": "standalone", "enabled": False}
+                ]
+            },
+        },
+    )
+    assert offered_profiles(config, {"work": {}, "old-chat-only": {}, "addon": {}}) == [
+        "custom",
+        "work",
+    ]
+
+
+@pytest.mark.parametrize(
+    "changed,expected",
+    [
+        ("tools/example/source.json", "data"),
+        ("scripts/install.py", "worker"),
+        ("bundle.md", "worker"),
+    ],
+)
+async def test_only_proven_catalog_data_bypasses_preparation(
+    tmp_path, changed, expected
+):
+    from amplifier_web.update_plan import CATALOG, build
+
+    home = tmp_path / "app"
+    old = "a" * 32
+    stage = home / "updates/releases" / ("b" * 32)
+    receipt = home / "updates/releases" / old
+    before = receipt / "foundation/cache/catalog"
+    after = stage / "foundation/cache/catalog"
+    for folder in (before, after):
+        folder.mkdir(parents=True)
+    (home / "updates/active.json").write_text(json.dumps({"current": old}))
+    (receipt / "runtime-project.json").write_text("{}")
+    (receipt / "runtime-installed.json").write_text("[]")
+    from amplifier_web.runtime_profiles import configuration_key
+
+    (receipt / "profiles-qualified.json").write_text(
+        json.dumps(
+            {
+                "profiles": ["anchors", "foundation", "work"],
+                "configuration": configuration_key({}),
+            }
+        )
+    )
+
+    def git(folder, *args):
+        return subprocess.check_output(
+            ["git", *args], cwd=folder, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+
+    for folder, value in ((before, "{}"), (after, '{"new":true}')):
+        git(folder, "init", "-b", "main")
+        git(folder, "config", "user.email", "test@example.invalid")
+        git(folder, "config", "user.name", "Fixture")
+        target = folder / changed
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value)
+        git(folder, "add", ".")
+        git(folder, "commit", "-m", "fixture")
+    row = {
+        "url": CATALOG,
+        "ref": "main",
+        "kind": "bundle / module",
+        "path": "cache/catalog",
+    }
+    plan = await build(SimpleNamespace(home=home), stage, [row])
+    assert plan["mode"] == expected
+
+
+def test_runtime_configuration_key_ignores_credentials_models_and_connection_ids():
+    from amplifier_web.runtime_profiles import configuration_key
+
+    def settings(identity, key, model):
+        return {
+            "config": {
+                "providers": [
+                    {
+                        "module": "provider-openai",
+                        "id": identity,
+                        "config": {"api_key": key, "default_model": model},
+                    }
+                ]
+            }
+        }
+
+    assert configuration_key(settings("one", "old", "first")) == configuration_key(
+        settings("two", "new", "second")
+    )
+    assert configuration_key(
+        {"sources": {"modules": {"tool-one": "new"}}}
+    ) != configuration_key({})
+
+
+async def test_offered_profile_reuses_generation_after_host_pointer_changes(
+    tmp_path, monkeypatch
+):
+    from amplifier_web import runtime_profiles
+    from amplifier_web.host import config as config_module
+
+    home = tmp_path / "app"
+    generation = "a" * 32
+    receipt = home / "updates/releases" / generation
+    receipt.mkdir(parents=True)
+    (receipt / "profiles-qualified.json").write_text(
+        json.dumps(
+            {
+                "profiles": ["work"],
+                "configuration": runtime_profiles.configuration_key({}),
+            }
+        )
+    )
+    captured = {}
+
+    def read(workspace, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            settings={},
+            workspace=tmp_path,
+            home=home,
+            registry_home=kwargs["registry_home"],
+            config_home=tmp_path / "shared",
+            active_bundle="work",
+            module_sources={},
+            bundle_sources={},
+        )
+
+    monkeypatch.setattr(config_module, "read_config", read)
+    # A later host promotion cannot silently redirect this admission's registry.
+    (home / "updates/active.json").write_text(json.dumps({"current": "b" * 32}))
+    assert (
+        await runtime_profiles.ensure(
+            home, generation, {"id": "chat", "workspace": str(tmp_path)}
+        )
+        == generation
+    )
+    assert captured["registry_home"] == receipt / "foundation"
+
+
+async def test_custom_profile_qualification_is_coalesced_and_installed_outside_serving_runtime(
+    tmp_path, monkeypatch
+):
+    from amplifier_web import (
+        runtime_environment,
+        runtime_profiles,
+        runtime_qualification,
+        updates,
+    )
+    from amplifier_web.host import config as config_module
+
+    home = tmp_path / "app"
+    generation = "a" * 32
+    receipt = home / "updates/releases" / generation
+    (receipt / "foundation").mkdir(parents=True)
+    (receipt / "profiles-qualified.json").write_text(
+        json.dumps(
+            {
+                "profiles": ["work"],
+                "configuration": runtime_profiles.configuration_key({}),
+            }
+        )
+    )
+    parent = home / "runtime" / ("q-" + "b" * 32)
+    parent.mkdir(parents=True)
+    (parent / "pyproject.toml").write_text("project = {}")
+    (parent / "uv.lock").write_text("version = 1")
+    (receipt / "runtime-project.json").write_text(json.dumps({"project": parent.name}))
+    shared = tmp_path / "shared"
+    shared.mkdir()
+
+    def read(workspace, **kwargs):
+        return SimpleNamespace(
+            settings={
+                "sources": {
+                    "modules": {
+                        "tool-example": "git+https://example.invalid/module@main"
+                    }
+                }
+            },
+            workspace=tmp_path,
+            home=home,
+            config_home=shared,
+            active_bundle="work",
+            module_sources={},
+            bundle_sources={},
+        )
+
+    monkeypatch.setattr(config_module, "read_config", read)
+    calls = []
+
+    async def process(*args, **kwargs):
+        calls.append(args)
+        await asyncio.sleep(0.01)
+        return ""
+
+    monkeypatch.setattr(updates, "process", process)
+
+    async def overrides(project, path):
+        path.write_text("")
+        return path
+
+    monkeypatch.setattr(runtime_qualification, "prepare_overrides", overrides)
+
+    async def freeze(manager, selected, project):
+        final = home / "runtime" / ("q-" + selected)
+        final.mkdir()
+        target = runtime_environment.receipt_directory(home, selected)
+        (target / "runtime-project.json").write_text(
+            json.dumps({"project": final.name})
+        )
+        return final
+
+    monkeypatch.setattr(runtime_qualification, "freeze", freeze)
+    monkeypatch.setattr(runtime_qualification, "verify_recorded", lambda *args: None)
+    session = {
+        "id": "chat",
+        "runtimeSessionId": "native-chat",
+        "workspace": str(tmp_path),
+    }
+    edit = home / "sessions/native-chat/configuration.json"
+    edit.parent.mkdir(parents=True)
+    edit.write_text(json.dumps({"changes": []}))
+    first, second = await asyncio.gather(
+        *(runtime_profiles.ensure(home, generation, session) for _ in range(2))
+    )
+    assert first == second and first != generation
+    assert len(calls) == 3  # One uv sync, one union install, one read-only mount.
+    assert str(parent) not in calls[0]
+    assert "--runtime-plan" in calls[1] and "--runtime-plan" in calls[2]
+    assert "--read-only" in calls[2]
+    assert json.loads(
+        (home / "updates/releases" / first / "runtime-plan.json").read_text()
+    ) == {"changes": []}
+    assert await runtime_profiles.ensure(home, generation, session) == first
+    assert len(calls) == 3

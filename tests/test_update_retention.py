@@ -50,3 +50,28 @@ async def test_unknown_references_or_modified_receipts_never_trigger_removal(tmp
     (manager.directory / 'releases' / names[3] / 'validated.json').write_text('unknown receipt')
     assert (await retention.reclaim(manager))['removed'] == 0
     assert project.exists()
+
+
+async def test_live_generation_lease_prevents_cleanup_while_unrelated_work_continues(tmp_path, monkeypatch):
+    import os
+    from amplifier_web.generation_leases import acquire
+    manager, names, project = manager_fixture(tmp_path, monkeypatch)
+    manager.busy = lambda: True
+    folder=manager.directory/'releases'/names[3]
+    marker=json.loads((folder/'validated.json').read_text())
+    marker['generationSchema']=1
+    (folder/'validated.json').write_text(json.dumps(marker))
+    lease=acquire(manager.home,names[3],os.getpid())
+    assert (await retention.reclaim(manager))['removed']==0
+    lease.unlink()
+    assert (await retention.reclaim(manager))['removed']==1
+    assert project.exists()
+
+
+async def test_retained_environment_keeps_earlier_editable_sources(tmp_path, monkeypatch):
+    manager,names,project=manager_fixture(tmp_path,monkeypatch)
+    current=manager.directory/'releases'/names[0]
+    earlier=manager.directory/'releases'/names[3]
+    (current/'runtime-installed.json').write_text(json.dumps([{'path':str(earlier/'foundation/cache/module')}]))
+    assert (await retention.reclaim(manager))['removed']==0
+    assert earlier.exists()

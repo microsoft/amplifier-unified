@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -63,14 +64,25 @@ def package_content(project):
     roots += [Path(project) / '.venv/Lib/site-packages']
     digest = hashlib.sha256()
     files = {}
+    resolved_parents = {}
     for root in roots:
         if not root.is_dir():
             continue
+        resolved_root = root.resolve()
         for dist in importlib.metadata.distributions(path=[str(root)]):
             for entry in dist.files or ():
                 file = dist.locate_file(entry)
-                if (file.suffix == '.pyc' or file.name in {'RECORD', 'direct_url.json', 'INSTALLER', 'REQUESTED'}
-                        or not file.resolve().is_relative_to(root.resolve())):
+                if file.suffix == '.pyc' or file.name in {'RECORD', 'direct_url.json', 'INSTALLER', 'REQUESTED'}:
+                    continue
+                # RECORD can list tens of thousands of files. Resolving every
+                # ancestor for every entry turned this check into repeated
+                # filesystem walks. Resolve each containing directory once;
+                # still resolve file symlinks and reject external payloads.
+                parent = resolved_parents.get(file.parent)
+                if parent is None:
+                    parent = resolved_parents[file.parent] = file.parent.resolve()
+                actual = file.resolve() if file.is_symlink() else parent / file.name
+                if not actual.is_relative_to(resolved_root):
                     continue
                 files[str(file.relative_to(root))] = file
     for name, file in sorted(files.items()):
@@ -333,6 +345,14 @@ async def freeze(manager, generation, project):
     receipt.joinpath('runtime-sources.json').write_text(json.dumps(policies, indent=2) + '\n')
     await manager.diagnostics.run('ecosystem-runtime-policy', prepare_overrides, final, receipt / 'runtime-install-overrides.txt')
     receipt.joinpath('runtime-installed.json').write_text(json.dumps(actual, indent=2) + '\n')
+    # Qualification owns this disposable preparation environment. Keep only
+    # the frozen graph after every installer has exited; never accumulate a
+    # second venv per successful update. Unusual editable references preserve it.
+    original = Path(project)
+    if (original != final and not original.is_symlink()
+            and original.parent.resolve() == (Path(manager.home) / 'runtime').resolve()
+            and str(original.resolve()) not in json.dumps(actual)):
+        await asyncio.to_thread(shutil.rmtree, original)
     return final
 
 
@@ -356,8 +376,8 @@ def active_install_overrides(home, current_override=None):
     An explicit user override remains authoritative. Legacy generations have no
     new policy. Validate an existing graph before mounting another conversation.
     """
-    from .updates import active_release
-    generation = active_release(home).get('current')
+    from .updates import selected_release
+    generation = selected_release(home)
     receipt = environments.receipt_directory(home, generation)
     if not (receipt / 'runtime-installed.json').exists():
         return None

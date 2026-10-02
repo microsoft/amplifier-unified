@@ -61,7 +61,7 @@ async def reclaim(manager):
     from .updates import active_release, process
 
     state = manager.service.state["updates"]
-    if manager.busy() or manager.awaiting_restart():
+    if manager.awaiting_restart():
         return {"removed": 0, "retained": 0}
     try:
         references = await asyncio.to_thread(process_references, manager.home)
@@ -79,7 +79,33 @@ async def reclaim(manager):
         state.get("pendingRelease"),
         state.get("pendingRollback"),
     }
+    from .generation_leases import references as worker_references
+    try:
+        protected.update(worker_references(manager.home))
+        for path in (Path(manager.home)/'updates/profiles').glob('*.json'):
+            entry = json.loads(path.read_text())
+            if entry.get('parentGeneration') in protected:
+                protected.add(entry['generation'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'removed': 0, 'retained': 0, 'reason': 'Worker references could not be verified.'}
     root = Path(manager.directory) / "releases"
+    # A retained environment may contain an explicit editable source from an
+    # earlier generation. Follow those edges before deleting any source tree.
+    # Shared immutable store objects are outside generation deletion entirely.
+    changed = True
+    while changed:
+        changed = False
+        for identity in tuple(protected):
+            if not identity:
+                continue
+            graph = root / identity / 'runtime-installed.json'
+            if not graph.exists():
+                continue
+            text = graph.read_text()
+            for source in re.findall(re.escape(str(root)) + r'/([a-f0-9]{32})/', text):
+                if source not in protected:
+                    protected.add(source)
+                    changed = True
     removed, retained = 0, 0
     candidates = []
     for folder in sorted(root.iterdir()) if root.exists() else []:
@@ -104,7 +130,8 @@ async def reclaim(manager):
             ):
                 raise TypeError("Unknown generation receipt")
             project = project_path(manager.home, folder.name)
-            if str(project) in references or project.is_symlink():
+            modern = data.get("generationSchema") == 1
+            if (not modern and (manager.busy() or str(project) in references)) or project.is_symlink():
                 raise ValueError("Runtime remains referenced")
             # Exact qualification still has to hold before retiring its files.
             if not (folder / "runtime-installed.json").exists():
@@ -161,8 +188,14 @@ async def reclaim(manager):
     for folder, project in candidates:
         # No new work is admitted by the caller's lifecycle lock. Recheck busy
         # before each removal. Never delete baseline, shared sources or uv tools.
-        if manager.busy():
-            break
+        # Legacy generations have no explicit worker leases. Modern generations
+        # can retire while unrelated workers remain busy on other generations.
+        modern = json.loads((folder/'validated.json').read_text()).get('generationSchema') == 1
+        if not modern and manager.busy():
+            continue
+        if folder.name in worker_references(manager.home):
+            retained += 1
+            continue
         await asyncio.to_thread(shutil.rmtree, folder)
         if (
             project.resolve() not in surviving_projects

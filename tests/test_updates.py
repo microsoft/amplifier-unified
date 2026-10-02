@@ -287,6 +287,8 @@ for line in sys.stdin:
     bridge = app.app_bridge
     runtime = RuntimeManager(bridge, command=[sys.executable, '-c', script, str(log)],
                              startup_timeout=3, progress_interval=.01)
+    # Exercise the coordinated-restart path for a host without generation adoption.
+    runtime.promote_generation = None
     await app.install_runtime(runtime)
     session = app.state['sessions'][0]
     assert (await app.dispatch('conversation.send', {'text': 'before update'}, command_id='before-update'))['delivery'] == 'accepted'
@@ -634,7 +636,7 @@ async def test_phased_install_waits_for_idle_then_continues_to_other_sources(app
     await manager.tick()
     assert app.state['updates']['sequence']['nextStage']=='other'
     assert git(foundation_home(app.data_dir)/'cache/optional','rev-parse','HEAD')==repo[1]
-    async def inventory():return [other.copy()]
+    async def inventory(**kwargs):return [other.copy()]
     monkeypatch.setattr(manager,'inventory_sources',inventory)
     from amplifier_web import updates
     original=updates.process
