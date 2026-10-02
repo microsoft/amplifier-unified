@@ -1,6 +1,12 @@
 # Shared-client direction and coordination
 
-**Status: proposal for review.** This packet establishes an Amplifier-specific
+**Forward direction updated 2026-10-02:** [the architecture packet](../architecture/README.md)
+now defines AHP clients, a generic durable host and ACP agents, local private UI
+state, bounded discovery/residency and separate repository ownership. The amended
+client promises were ratified with the architecture direction on 2026-10-02.
+This is a design update, not an announcement that the released transport changed.
+
+**Historical September packet:** This packet establishes an Amplifier-specific
 destination, draft promises, a source assessment and an implementation sequence.
 Publishing it does not ratify the contracts or change a release. A connected TUI
 has since been implemented; see the [progress note](assessment.md#progress-since-the-assessment)
@@ -18,30 +24,40 @@ explicitly historical instead of being presented as today's missing-work list.
 | [State scope map](state-scopes.md) | Concrete examples of shared, host-local and client-local state. |
 | [Baseline assessment](assessment.md) | Pinned historical observations and separately recorded implementation progress. |
 | [Development plan](development-plan.md) | Ordered work, existing owners, acceptance journeys and change template. |
+| [Architecture delivery plan](../architecture/delivery-plan.md) | Current proposed migration lanes and acceptance gates; supersedes D1–D7 as the forward sequence. |
+| [HP / AP / WS / CB](../architecture/README.md#read-the-packet) | Host, agent, working-set and component contracts. |
 
 The [existing wire contract](live-sessions.md) remains the reference for current
 endpoint names, payloads, retry identity and snapshot behavior. The
-[TUI handoff](tui-handoff.md) remains the transport integration guide. These drafts
-describe additional behavioral goals, not undocumented capabilities in wire v1.
+[TUI handoff](tui-handoff.md) remains the transport integration guide. The ratified target contracts
+describe the intended behavior, not undocumented capabilities in wire v1.
 
 ## One home for each kind of decision
 
 | Boundary | Home | Consumers |
 | --- | --- | --- |
 | Shared client experience/state | This contract set, initially in Unified | Web, connected TUI, future native clients, agent adapters |
-| HTTP/SSE and public action schemas | Unified wire guide and service schemas | Every connected client |
+| Target AHP/ACP wire semantics | Upstream specifications; HP/AP delegate to them | Every target client, host and agent adapter |
+| Legacy HTTP/SSE and action schemas | Unified wire guide and service schemas during migration | Existing clients |
 | Storage/configuration/ownership mechanisms | Foundation's APIs and contracts | Unified, standalone CLI/TUI, other hosting apps |
 | Execution admission, lifecycle, update generation | Unified host/runtime contracts | Connected clients and runtime integrations |
 | Terminal rendering, scrollback, keybindings | TUI's own vision/contracts | TUI frontends and its host adapter |
-| Web layout and widgets | Unified frontend | Browser/embedded-web experiences |
+| Web layout and widgets | Proposed separate web client repo | Browser/embedded-web experiences |
 | Current implementation and release status | Assessment, work plan and validation records | Maintainers and release reviewers |
 
-Shared contracts can move to a dedicated repository when there are independent
-consumers maintaining adoption records. Creating that repository is not a
-prerequisite for the first adapter. Until then, TUI references the reviewed
-Unified contract commit and retains its own DRAFT direction documents.
+This is the bootstrap home of the product contracts. The [repository map](../architecture/repositories.md)
+assigns the target owners; upstream law stays upstream and extension schemas get
+one small owner. Until extraction, consumers reference the reviewed Unified commit
+and retain their own direction documents. No duplicate normative copy is required.
 
-## What we learned from the references
+## Historical references and refreshed method
+
+The 2026-10-02 packet refreshed Converge and its related repos; exact revisions are
+in [the source manifest](../architecture/evidence/upstream-revisions.json). It uses
+small explicit promises, one rule per home, bounded lane briefs and independent
+seam checks. The user ratified the plan on 2026-10-02; implementation verdicts
+require actual evidence and are not implied by approval.
+The earlier references below explain the September packet, not latest source.
 
 Converge Method contributes the distinction between destination, observable
 promises and evidence; explicit document state; stable clause references; and
@@ -67,12 +83,10 @@ Reference revisions reviewed:
 
 ## Adoption and decisions
 
-The review should settle the actual promises and first-release capability floor,
-then record the accepted contract revision in each consumer. Implementers may
-prepare reversible adapter work while drafts are discussed, but may not infer
-new approved product semantics from it.
+The user approved the plan and direction on 2026-10-02. Implementers record the
+ratified contract revision in each consumer. Capability gaps remain explicit work
+and may not silently change the approved behavior or count as completed parity.
 
-The [assessment](assessment.md) and [plan](development-plan.md) identify the
-remaining decisions: stop semantics, rich-artifact fallback, scoped subscription
-evolution, portable controls and measurable performance budgets. None requires
-copying a whole product specification or stopping unrelated ongoing work.
+The [current plan](../architecture/delivery-plan.md) records the remaining
+capability, compatibility and measured-budget decisions. The original assessment
+and D1–D7 plan remain historical evidence rather than today's missing-work list.

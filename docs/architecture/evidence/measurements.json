@@ -1,0 +1,252 @@
+{
+  "review_date": "2026-10-02",
+  "source_repository": "https://github.com/microsoft/amplifier-unified",
+  "source_revision": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+  "source_version": "0.20.45",
+  "environment": "Local macOS; current application source with existing release-02031-charlie dependency environment. Not a production or freshly resolved release environment.",
+  "method": "Three sequential timing samples per operation per fixture. Synthetic metadata catalog and tiny message bodies. Real AppService, client projections and persistence; fixture runtime performs no model calls. Sessions/workspaces vary together; see probe source. No HTTP, SSE encoding, browser rendering, active model execution, or production-host measurements.",
+  "results": [
+    {
+      "saved_chats": 100,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          12.33,
+          14.42,
+          11.08
+        ],
+        "median_ms": 12.33
+      },
+      "global_publication": {
+        "ms": [
+          12.19,
+          6.16,
+          5.94
+        ],
+        "median_ms": 6.16
+      },
+      "private_draft_action": {
+        "ms": [
+          23.14,
+          3.94,
+          3.96
+        ],
+        "median_ms": 3.96
+      },
+      "agent_scalar_read": {
+        "ms": [
+          19.27,
+          1.13,
+          1.08
+        ],
+        "median_ms": 1.13
+      }
+    },
+    {
+      "saved_chats": 5000,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          7.53,
+          7.97,
+          8.04
+        ],
+        "median_ms": 7.97
+      },
+      "global_publication": {
+        "ms": [
+          30.78,
+          30.45,
+          31.12
+        ],
+        "median_ms": 30.78
+      },
+      "private_draft_action": {
+        "ms": [
+          34.22,
+          34.3,
+          33.47
+        ],
+        "median_ms": 34.22
+      },
+      "agent_scalar_read": {
+        "ms": [
+          34.33,
+          34.78,
+          34.41
+        ],
+        "median_ms": 34.41
+      }
+    },
+    {
+      "saved_chats": 22500,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          12.46,
+          13.59,
+          9.55
+        ],
+        "median_ms": 12.46
+      },
+      "global_publication": {
+        "ms": [
+          167.16,
+          137.51,
+          125.09
+        ],
+        "median_ms": 137.51
+      },
+      "private_draft_action": {
+        "ms": [
+          198.75,
+          155.21,
+          156.68
+        ],
+        "median_ms": 156.68
+      },
+      "agent_scalar_read": {
+        "ms": [
+          221.1,
+          177.26,
+          214.91
+        ],
+        "median_ms": 214.91
+      }
+    },
+    {
+      "saved_chats": 22500,
+      "clients": 8,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          9.58,
+          10.95,
+          10.77
+        ],
+        "median_ms": 10.77
+      },
+      "global_publication": {
+        "ms": [
+          161.36,
+          213.45,
+          152.01
+        ],
+        "median_ms": 161.36
+      },
+      "private_draft_action": {
+        "ms": [
+          182.28,
+          235.87,
+          180.44
+        ],
+        "median_ms": 182.28
+      },
+      "agent_scalar_read": {
+        "ms": [
+          225.57,
+          178.91,
+          227.7
+        ],
+        "median_ms": 225.57
+      }
+    }
+  ],
+  "earlier_publication_only_run": [
+    {
+      "saved_chats": 100,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          5.32,
+          5.39,
+          5.45
+        ],
+        "median_ms": 5.39
+      },
+      "global_publication": {
+        "ms": [
+          6.65,
+          4.39,
+          4.16
+        ],
+        "median_ms": 4.39
+      }
+    },
+    {
+      "saved_chats": 5000,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          7.54,
+          7.28,
+          6.56
+        ],
+        "median_ms": 7.28
+      },
+      "global_publication": {
+        "ms": [
+          29.68,
+          27.63,
+          28.0
+        ],
+        "median_ms": 28.0
+      }
+    },
+    {
+      "saved_chats": 22500,
+      "clients": 1,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          10.54,
+          9.4,
+          9.23
+        ],
+        "median_ms": 9.4
+      },
+      "global_publication": {
+        "ms": [
+          119.74,
+          126.55,
+          157.92
+        ],
+        "median_ms": 126.55
+      }
+    },
+    {
+      "saved_chats": 22500,
+      "clients": 8,
+      "source": "e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6",
+      "scoped_detail": {
+        "ms": [
+          20.88,
+          15.22,
+          14.94
+        ],
+        "median_ms": 15.22
+      },
+      "global_publication": {
+        "ms": [
+          148.96,
+          148.56,
+          203.57
+        ],
+        "median_ms": 148.96
+      }
+    }
+  ],
+  "validation": "4 completed fixture cases in final run. Initial attempt using amplifier-web environment could not start because amplifier_foundation.settings was missing; timings are exclusively from the working release-02031-charlie dependency environment.",
+  "operations": {
+    "scoped_detail": "One session streaming field updated; _publish with session_ids, detail_only=True, record_only=True.",
+    "global_publication": "One tiny management status changed; general _publish path.",
+    "private_draft_action": "Client 0 view.update for its session draft, include_state=False, no command ID. Persistence and publication included; HTTP receipt overhead excluded.",
+    "agent_scalar_read": "Client 0 app_bridge get_state with JSON pointer /revision."
+  },
+  "status": "Investigation only. No production source, installed service, host configuration, or canonical user history changed."
+}

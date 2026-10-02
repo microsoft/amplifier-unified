@@ -1,4 +1,4 @@
-# Shared client experience — v1 (DRAFT)
+# Shared client experience — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CX**. Parent: [shared-client vision](../docs/clients/VISION.md).
 These are proposed observable behaviors, not a claim of current parity.
@@ -19,6 +19,7 @@ Ownership blocked -> Continue here -> acquiring -> acquired / still blocked
 
 The state and delivery meanings come from [CS](client-state.v1.md).
 The current HTTP/SSE spelling remains in [the wire contract](../docs/clients/live-sessions.md).
+The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-protocol.v1.md).
 
 ## The promises
 
@@ -67,7 +68,7 @@ CX3 forbids misleading equivalence while that work is incomplete.
 
 Use the [acceptance journeys](../docs/clients/development-plan.md), with browser and actual
 terminal evidence, delayed responses, failed/unknown delivery and keyboard operation.
-Document/link checks establish structure only; drafts receive no formal conformance verdict.
+Document/link checks establish structure only; ratification establishes no implementation verdict.
 
 ## Open questions
 
@@ -78,4 +79,6 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
+| 2026-10-02 | Link target protocol owners; preserve existing experience promises. | [Architecture direction](../docs/architecture/README.md). |
 | 2026-09-20 | Initial draft, CX1–7. | User journeys and current implementation assessment. |

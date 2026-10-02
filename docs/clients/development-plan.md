@@ -1,5 +1,10 @@
 # Shared-client development plan
 
+**2026-10-02 successor:** the [architecture delivery plan](../architecture/delivery-plan.md)
+now owns the forward AHP/ACP migration, repo extractions, scale gates and work lanes.
+The earlier D1–D7 sequence and ownership statements below are retained as dated
+history and reusable journeys, not current assignments or the new implementation plan.
+
 **Proposed work derived from DRAFT contracts.** This is a coordination note,
 not a new source of behavioral promises. Implementation progress is recorded
 separately below; this roadmap does not certify contract conformance.

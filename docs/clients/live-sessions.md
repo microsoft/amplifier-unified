@@ -1,5 +1,10 @@
 # Unified live session contract, version 1
 
+This documents the existing HTTP/SSE transport. The [AHP/ACP design](../architecture/README.md)
+defines its proposed successor, including client-local draft storage. Those changes
+are not implemented by this documentation update; the behavior below remains the
+legacy integration reference during migration.
+
 TUI implementers: start with the [integration handoff](tui-handoff.md) for the
 supported release, client lifecycle, retry rules and acceptance checklist.
 

@@ -103,6 +103,11 @@ For the complete setup—including certificate transfer and trust, reverse-proxy
 
 ## Contributing
 
+The [AHP/ACP architecture design packet](docs/architecture/README.md) describes
+the proposed protocol boundaries, client-local state, bounded history discovery
+and repository decomposition. It includes ratified vision/contracts and parallel
+implementation lanes; it is not a claim about current release capabilities.
+
 > [!NOTE]
 > This project is not currently accepting external contributions, but we're actively working toward opening this up. We value community input and look forward to collaborating in the future. For now, feel free to fork and experiment!
 
