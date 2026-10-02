@@ -6,6 +6,7 @@ import pytest
 from amplifier_web.service import AppError, AppService
 from amplifier_web.resource_files import collect
 from amplifier_web.state_storage import resource
+from test_scoped_state_records import committed_session_payloads
 
 
 @pytest.fixture
@@ -91,6 +92,7 @@ async def test_file_versions_replace_content_storage_mode_and_survive_restart(ap
         await reopened.close()
 
 
+@pytest.mark.usefixtures('committed_session_payloads')
 async def test_exact_links_latest_followers_cas_restore_and_restart(app, tmp_path):
     original = (await call(app, 'canvas.show', {'kind': 'markdown', 'title': 'Plan', 'content': '# One'}))['result']
     identity = original['id']
@@ -112,7 +114,8 @@ async def test_exact_links_latest_followers_cas_restore_and_restart(app, tmp_pat
     await call(app, 'canvas.select', {'id': identity, 'version': 2}, 'two')
     assert canvas(app, 'two')['content'] == '# Two'
     app._save()
-    assert not collect(app.db, app._state)
+    from test_scoped_state_records import assert_only_superseded_session_payloads_collected
+    assert_only_superseded_session_payloads_collected(app)
     await app.close()
     reopened = AppService(app.data_dir, workspace=tmp_path)
     try:

@@ -34,7 +34,11 @@ def hydrate(home, state, db):
             continue
         path = view_path(home, session)
         # Fail visibly rather than silently replacing lost chat history.
-        value = json.loads(path.read_text())
+        if session.get('$viewPayload'):
+            from .cold_display import load
+            value = load(db, session['$viewPayload'])
+        else:
+            value = json.loads(path.read_text())
         if value.get('id') != session['id'] or not (isinstance(value.get('messages'), list)
                 or isinstance(value.get(MARKER, {}).get('messages'), dict)):
             raise ValueError('A saved conversation view is invalid; its files were preserved.')
@@ -114,7 +118,8 @@ def accounting_projection(tree):
     return list(saved.values())
 
 
-def persist(home, state, cache, *, session_ids=None, by_id=None, references=None):
+def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
+            undo=None, db=None):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -168,11 +173,25 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 'nodes': [row for row in value['execution'].get('nodes', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
                 'turns': [row for row in value['execution'].get('turns', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
         text = json.dumps(value, ensure_ascii=False)
+        prior = references.get(session['id'], {}) if references is not None else {}
+        payload = prior.get('$viewPayload') if cache.get(str(path)) == text else None
+        if payload is None and db is not None:
+            from .resource_files import put
+            # SQLite's committed pointer owns the exact immutable projection.
+            # view.json remains a compatible presentation, never the authority
+            # for a newer transaction that failed before its pointer committed.
+            payload = put(db, value)
         if cache.get(str(path)) != text:
+            if undo is not None:
+                # Restore the pre-transaction presentation if SQLite rejects its
+                # matching manifest. Canonical transcript/event files are never
+                # part of this rollback list.
+                undo.append((path, path.read_text() if path.exists() else None))
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             SessionStore._atomic(path, text)
             cache[str(path)] = text
         result['sessions'].append({**{key: session[key] for key in ('id', 'workspace', 'runtimeSessionId') if key in session}, '$view': 1,
+                                   **({'$viewPayload': payload} if payload else {}),
                                    **({MARKER: copy.deepcopy(value[MARKER])} if value.get(MARKER) else {})})
     if references is not None:
         if session_ids is not None:
@@ -180,5 +199,6 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             for identity in session_ids - retained_ids:
                 references.pop(identity, None)
         references.update((row['id'], row) for row in result['sessions'])
-        result['sessions'] = list(references.values())
+        if not scoped_result:
+            result['sessions'] = list(references.values())
     return result

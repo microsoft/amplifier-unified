@@ -251,8 +251,9 @@ class ClientViews:
             self.dirty.add(identity)
         return record.get('selectionRevision', 0)
 
-    def save(self, identity=None):
+    def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
+        written = {}
         for identity in pending:
             self.selection_revision(identity)
             value = copy.deepcopy(self.records[identity])
@@ -268,5 +269,11 @@ class ClientViews:
             encoded = json.dumps(value)
             if self.saved.get(identity) != encoded:
                 self.service.db.execute("INSERT OR REPLACE INTO client_views VALUES (?,?)", (identity, encoded))
-                self.saved[identity] = encoded
-        self.dirty.difference_update(pending)
+            written[identity] = encoded
+        if not defer_ack:
+            self.acknowledge(written)
+        return written
+
+    def acknowledge(self, written):
+        self.saved.update(written)
+        self.dirty.difference_update(written)

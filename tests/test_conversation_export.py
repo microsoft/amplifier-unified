@@ -10,6 +10,7 @@ from amplifier_web.automatic_history import display_message
 from amplifier_web.host.storage import SessionStore
 from test_automatic_history import app_factory, native_session, native_rows, files_snapshot
 from test_service import Runtime
+from test_scoped_state_records import committed_session_payloads
 
 
 def exported(app, receipt):
@@ -120,6 +121,7 @@ def test_canonical_voice_delegation_is_readable_without_replaying_or_duplicate_u
     assert 'Read that file' in native_only and '## User (voice)' in native_only
 
 
+@pytest.mark.usefixtures('committed_session_payloads')
 async def test_snapshot_endpoint_requires_authentication_and_survives_restart(tmp_path, authenticated_client):
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(), voice=False, background_updates=False)
     client = await authenticated_client(app); service = app['service']
@@ -133,7 +135,8 @@ async def test_snapshot_endpoint_requires_authentication_and_survives_restart(tm
     assert denied.status == 401
     assert (await client.get('/api/conversation/exports/missing')).status == 404
     from amplifier_web.resource_files import collect
-    assert collect(service.db, service.state) == []
+    from test_scoped_state_records import assert_only_superseded_session_payloads_collected
+    assert_only_superseded_session_payloads_collected(service)
     service._save()
     from amplifier_web.service import AppService
     expected = exported(service, result)

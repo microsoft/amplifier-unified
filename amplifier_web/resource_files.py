@@ -56,10 +56,12 @@ def retained_references(db, state):
     pending = list(references(state))
     # A hydrated mutable field can drop its in-memory cold reference before its
     # next save. The last committed global manifest still owns that exact blob.
-    saved_rows = (db.execute('SELECT value FROM state') if db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else ())
-    for (text,) in saved_rows:
-        saved = json.loads(text)
+    from .state_records import load
+    saved = load(db) if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else None
+    if saved:
+        pending.extend(references(saved.get('sessions', [])))
+        pending.extend(references(saved.get('runtimeControl', {})))
         for row in [*saved.get('sessions', []), *saved.get('runtimeControl', {}).values()]:
             pending.extend(references(row.get('_coldFields', {})))
     # Persisted client records remain roots even before ClientViews is loaded
@@ -98,6 +100,9 @@ def restore(db, state, identity, value):
 
 def collect(db, state):
     """Mark all retained state/receipt references, including nested references."""
+    states = state if isinstance(state, list) else [state]
+    if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in states):
+        return []  # a failed presentation rollback can retain unknown blob roots
     from .state_storage import resource
     pending = retained_references(db, state)
     marked = set()

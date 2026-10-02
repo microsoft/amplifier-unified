@@ -118,7 +118,17 @@ async def test_saved_bodies_are_paged_on_demand_not_repeated_in_overview(app):
     assert len(json.dumps(overview))<20000
     result=await app.app_bridge('get_state',{'path':'/canvasArtifacts/0/body/content','offset':0,'limit':100},app._session()['id'])
     assert result['value']==body[:100] and result['nextOffset']==100
-    assert app.db.execute('SELECT count(*) FROM state_resources').fetchone()[0]==1
+    from amplifier_web.state_records import load
+    from amplifier_web.state_storage import resource
+    saved = load(app.db)
+    session_payloads = [row['$viewPayload']['$resource'] for row in saved['sessions']
+                        if '$viewPayload' in row]
+    assert len(session_payloads) == 1
+    assert resource(app.db, session_payloads[0])['id'] == app._session()['id']
+    # Three identical Canvas bodies still deduplicate to one payload, separate
+    # from the immutable committed session projection.
+    assert len({row['body']['$resource'] for row in saved['canvasArtifacts']}) == 1
+    assert app.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 1+len(session_payloads)
 
 
 async def test_large_html_snapshot_stays_out_of_state_and_survives_file_deletion(app,tmp_path):

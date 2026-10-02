@@ -370,7 +370,7 @@ class ColdDisplay:
         try:
             # Persist references while values still exist; persistence explicitly
             # prefers committed refs. Failure must not evict resident bodies.
-            service._save(session_ids=changed)
+            service._save(session_ids=changed, record_only=True)
         except BaseException:
             for row, control, *_ in eligible:
                 row[MARKER] = row._previous_cold_refs
@@ -394,7 +394,7 @@ class ColdDisplay:
                 event.read_revisions.pop(row['id'], None)
             self.recent.pop(row['id'], None)
         service._browser_snapshot = None
-        service._client_snapshots.clear()
+        service._advance_client_snapshots(changed, True, service._state['revision'])
         return changed
 
 
