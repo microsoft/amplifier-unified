@@ -112,7 +112,8 @@ async def test_exact_links_latest_followers_cas_restore_and_restart(app, tmp_pat
     await call(app, 'canvas.select', {'id': identity, 'version': 2}, 'two')
     assert canvas(app, 'two')['content'] == '# Two'
     app._save()
-    assert not collect(app.db, app._state)
+    from test_scoped_state_records import assert_only_superseded_session_payloads_collected
+    assert_only_superseded_session_payloads_collected(app)
     await app.close()
     reopened = AppService(app.data_dir, workspace=tmp_path)
     try:

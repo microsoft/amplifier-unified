@@ -133,7 +133,8 @@ async def test_snapshot_endpoint_requires_authentication_and_survives_restart(tm
     assert denied.status == 401
     assert (await client.get('/api/conversation/exports/missing')).status == 404
     from amplifier_web.resource_files import collect
-    assert collect(service.db, service.state) == []
+    from test_scoped_state_records import assert_only_superseded_session_payloads_collected
+    assert_only_superseded_session_payloads_collected(service)
     service._save()
     from amplifier_web.service import AppService
     expected = exported(service, result)

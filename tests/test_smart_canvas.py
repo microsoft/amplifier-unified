@@ -173,7 +173,8 @@ async def test_explicit_presentation_identity_reuses_tab_and_retains_exact_resul
         await service.dispatch('smartTools.context', {'canvasId': first['canvasId'], 'context': {}, 'expectedRevision': 1})
     # Dropping the rolling operation summary cannot erase the saved result.
     service.state['smartTools']['operations'] = []
-    assert not collect(service.db, service._state)
+    from test_scoped_state_records import assert_only_superseded_session_payloads_collected
+    assert_only_superseded_session_payloads_collected(service)
     await service.dispatch('canvas.select', {'id':first['canvasId'],'version':1})
     assert 'Independent' in source(service,first['canvasId'])
     assert inspect(service,first['canvasId'])['status'] == 'saved_version'

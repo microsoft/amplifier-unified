@@ -10,6 +10,33 @@ from amplifier_web.service import AppService
 from test_automatic_history import app_factory
 
 
+def assert_only_superseded_session_payloads_collected(app):
+    """GC may prune old immutable session views, never saved result bodies."""
+    from amplifier_web.resource_files import collect, remove_files
+    from amplifier_web.state_records import load
+    from amplifier_web.state_storage import resource
+    committed = load(app.db)
+    current = {row['$viewPayload']['$resource'] for row in committed['sessions']
+               if '$viewPayload' in row}
+    sessions = {row['id']: row for row in app._state['sessions']}
+    before = {identity: resource(app.db, identity)
+              for (identity,) in app.db.execute('SELECT id FROM state_resources')}
+    stale = collect(app.db, app._state)
+    assert not current.intersection(stale)
+    for identity in stale:
+        payload = before[identity]
+        assert isinstance(payload, dict) and payload.get('id') in sessions
+        owner = sessions[payload['id']]
+        assert payload.get('workspace') == owner['workspace']
+        assert 'status' in payload and 'bundle' in payload
+        assert isinstance(payload.get('messages'), list) or 'messages' in payload.get('_coldFields', {})
+    app.db.commit()
+    remove_files(app.db, stale)
+    for identity in current:
+        assert resource(app.db, identity) == before[identity]
+    return stale
+
+
 def chats(app_factory):
     app = app_factory()
     for queue in list(app.queues):
