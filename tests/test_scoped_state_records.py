@@ -10,6 +10,22 @@ from amplifier_web.service import AppService
 from test_automatic_history import app_factory
 
 
+@pytest.fixture
+def committed_session_payloads(monkeypatch):
+    """Independent observations made only after successful durable saves."""
+    from amplifier_web.state_records import load
+    original = AppService._save
+    def observe(app, *args, **kwargs):
+        result = original(app, *args, **kwargs)
+        committed = load(app.db)
+        observed = getattr(app, '_test_committed_view_payloads', set())
+        observed.update(row['$viewPayload']['$resource'] for row in committed['sessions']
+                        if '$viewPayload' in row)
+        app._test_committed_view_payloads = observed
+        return result
+    monkeypatch.setattr(AppService, '_save', observe)
+
+
 def assert_only_superseded_session_payloads_collected(app):
     """GC may prune old immutable session views, never saved result bodies."""
     from amplifier_web.resource_files import collect, remove_files
@@ -22,6 +38,7 @@ def assert_only_superseded_session_payloads_collected(app):
     before = {identity: resource(app.db, identity)
               for (identity,) in app.db.execute('SELECT id FROM state_resources')}
     stale = collect(app.db, app._state)
+    assert set(stale) <= (app._test_committed_view_payloads - current)
     assert not current.intersection(stale)
     for identity in stale:
         payload = before[identity]
@@ -32,7 +49,7 @@ def assert_only_superseded_session_payloads_collected(app):
         assert isinstance(payload.get('messages'), list) or 'messages' in payload.get('_coldFields', {})
     app.db.commit()
     remove_files(app.db, stale)
-    for identity in current:
+    for identity in before.keys() - set(stale):
         assert resource(app.db, identity) == before[identity]
     return stale
 
@@ -378,3 +395,20 @@ async def test_overlay_global_deletion_and_full_checkpoint_do_not_resurrect_key(
     assert 'transientFixture' not in load(app.db)
     app._save()
     assert 'transientFixture' not in load(app.db)
+
+
+@pytest.mark.usefixtures('committed_session_payloads')
+async def test_gc_helper_requires_prior_committed_pointer_not_only_session_shape(app_factory):
+    from amplifier_web.resource_files import put
+    from amplifier_web.cold_display import saved
+    app, rows = chats(app_factory)
+    rows[0]['messages'][0]['text'] = 'A new committed version'
+    app._publish()
+    assert assert_only_superseded_session_payloads_collected(app)
+    fake = {**saved(rows[0]), 'title': 'Never committed'}
+    reference = put(app.db, fake)
+    app.db.commit()
+    assert reference['$resource'] not in app._test_committed_view_payloads
+    with pytest.raises(AssertionError):
+        assert_only_superseded_session_payloads_collected(app)
+    app.db.rollback()

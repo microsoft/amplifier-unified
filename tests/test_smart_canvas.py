@@ -4,6 +4,7 @@ import pytest
 from amplifier_web.service import AppService, AppError
 from amplifier_web.smart_canvas import SmartCanvas, configuration_key
 from amplifier_web.canvas_library import load
+from test_scoped_state_records import committed_session_payloads
 
 
 class Tools:
@@ -144,6 +145,7 @@ async def test_accepted_app_call_closed_before_execution_is_terminal(service):
     assert operation['status']=='failed' and 'no longer active' in operation['error']
 
 
+@pytest.mark.usefixtures('committed_session_payloads')
 async def test_explicit_presentation_identity_reuses_tab_and_retains_exact_results(service):
     from amplifier_web.mcp_view_recovery import source, inspect
     from amplifier_web.resource_files import collect
