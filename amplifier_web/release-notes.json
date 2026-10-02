@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.45",
+      "title": "Save changed conversation records and reuse unaffected client views",
+      "changes": [
+        "Persist admitted runtime-progress and inactive-payload changes as scoped records instead of serializing the whole app state. Keep complete checkpoints for unknown, global and topology changes.",
+        "Reuse unaffected browser snapshots during scoped streaming updates while preserving private drafts, current revisions and previously delivered frames. Shared summary and navigation changes continue to invalidate conservatively.",
+        "Keep an exact immutable payload reference for each committed conversation view. Restart reads the last committed payload rather than a newer presentation file left by a failed save.",
+        "Preserve pending writer scopes and private client changes through SQL failures, failed presentation rollback and retries. Resource cleanup and reviewed deletion follow committed ownership without changing canonical transcripts or event logs.",
+        "Verify the scoped streaming path at a 24,000-session library scale with two independent clients. Controlled callback CPU fell by 63–69%; peak process memory was essentially unchanged. Total live-app CPU, broader global writers and full recovery cost remain separate follow-up work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.44",
       "title": "Explain update progress and retire inactive display payloads",
       "changes": [
