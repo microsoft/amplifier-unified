@@ -223,6 +223,10 @@ def test_native_association_keeps_live_input_turn_and_one_work_group(source, alr
     ingest(session, completed)
     append(path, 'llm:response', completed, 12)
     session['execution'] = view.read(session)
+    assert page(session, 'nodes')['segments'][0]['phase'] == 'running'
+    from amplifier_web.execution import finish
+    session['status']='idle';finish(session)
+    session['execution'] = view.read(session)
     assert page(session, 'nodes')['segments'][0]['phase'] == 'completed'
     assert page(session, 'nodes')['segments'][0]['aggregateUsage']['totalTokens'] == 42
 
@@ -372,11 +376,14 @@ def test_observed_tool_stays_live_across_refreshes_and_prior_errors_remain_histo
         assert session['execution']['turns'][0]['phase'] == 'running'
         assert page(session, 'nodes')['segments'][0]['phase'] == 'running'
     ingest(session, {**live, 'phase':terminal, 'endedAt':20})
+    from amplifier_web.execution import finish
+    session['status']='idle';finish(session)
     for _ in range(2):
         session['execution'] = view.read(session)
         assert next(n for n in session['execution']['nodes'] if n.get('toolCallId') == 'sleep')['phase'] == terminal
         assert session['execution']['turns'][0]['phase'] == 'completed'
-        assert page(session, 'nodes')['segments'][0]['phase'] == 'error'  # The genuine prior failure is retained.
+        assert page(session, 'nodes')['segments'][0]['phase'] == 'completed'
+        assert next(n for n in session['execution']['nodes'] if n.get('toolCallId') == 'failed')['phase'] == 'error'
 
 
 @pytest.mark.parametrize('status,observed', [('idle',True),('stopped',True),('error',True),('working',False)])
@@ -655,6 +662,8 @@ def test_delayed_transcript_link_and_live_completion_keep_model_and_tools_togeth
     completed = {**call, 'phase':'completed', 'endedAt':12.6, 'revision':2,
                  'usage':{'totalTokens':42, 'costUsd':.01, 'costType':'reported'}}
     ingest(session, completed)
+    from amplifier_web.execution import finish
+    session['status']='idle';finish(session)
     for _ in range(3):
         projected = page(session, 'nodes')
         assert [segment['id'] for segment in projected['segments']] == ['new@new-user']
@@ -777,6 +786,39 @@ def test_unfinished_history_does_not_reopen_a_terminal_turn(source, session_stat
     assert turn['phase'] == 'completed' and turn['endedAt'] == 11
     assert session['execution']['nodes'][1]['phase'] == 'recorded'
     assert session['status'] == session_status
+
+
+def test_current_admitted_turn_stays_running_between_calls_and_across_reads(source):
+    session,path=source
+    session.update(status='working',execution={'currentTurnId':'current','turns':[
+        {'id':'old','phase':'completed','endedAt':3},
+        {'id':'current','phase':'running','startedAt':10}], 'nodes':[]})
+    append(path,'llm:response',{'id':'old-call','kind':'llm','turnId':'old','phase':'completed','startedAt':2,'endedAt':3},3)
+    append(path,'llm:response',{'id':'current-call','kind':'llm','turnId':'current','phase':'completed','startedAt':10,'endedAt':11},11)
+    view=EventLogView(None)
+    for _ in range(3):
+        session['execution']=view.read(session)
+        old,current=session['execution']['turns']
+        assert old['phase']=='completed' and old['endedAt']==3
+        assert current['phase']=='running' and 'endedAt' not in current
+    from amplifier_web.execution import finish
+    session['status']='idle';finish(session)
+    session['execution']=view.read(session)
+    assert session['execution']['turns'][1]['phase']=='completed'
+
+
+@pytest.mark.parametrize('phase', ['error','failed','cancelled','interrupted'])
+def test_host_terminal_failure_survives_successful_calls_and_native_reconciliation(source, phase):
+    session,path=source
+    session.update(status='error',execution={'currentTurnId':'failed','turns':[
+        {'id':'failed','phase':phase,'startedAt':1,'endedAt':15}], 'nodes':[]})
+    append(path,'llm:response',{'id':'successful-call','kind':'llm','turnId':'failed','phase':'completed','startedAt':1,'endedAt':10},10)
+    view=EventLogView(None)
+    for _ in range(3):
+        session['execution']=view.read(session)
+        assert session['execution']['turns'][0]['phase']==phase
+        assert session['execution']['turns'][0]['endedAt']==15
+        assert session['execution']['nodes'][0]['phase']=='completed'
 
 
 @pytest.mark.parametrize("host_log", ["native", "app"])

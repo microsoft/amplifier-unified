@@ -67,3 +67,27 @@ test('background naming never creates working rows, failures or costs in chat wo
   assert.equal(source.nodes.at(-1),naming);
  }
 });
+
+for(const [kind,phase] of [['tool','error'],['worker','failed'],['llm','error'],['llm','cancelled']])test(`${kind} ${phase} stays on the action without failing a completed turn`,()=>{
+ const source={...data,nodes:[{...data.nodes[0],kind,phase},...data.nodes.slice(1)]};
+ const before=JSON.stringify(source),grouped=splitWork(messages,source);
+ assert.ok(grouped.turns.every(turn=>turn.phase==='completed'));
+ assert.equal(grouped.nodes[0].phase,phase);assert.equal(JSON.stringify(source),before);
+});
+test('latest segment stays active between calls, including after a tool error',()=>{
+ const source={...data,turns:[{...data.turns[0],phase:'running',endedAt:undefined}],
+  nodes:[{...data.nodes[0],kind:'tool',phase:'error'},...data.nodes.slice(1)]};
+ const grouped=splitWork(messages,source);
+ assert.equal(grouped.turns[0].phase,'completed');assert.equal(grouped.turns[1].phase,'running');
+ assert.equal(grouped.turns[1].endedAt,undefined);assert.equal(grouped.nodes[0].phase,'error');
+ source.turns[0].phase='completed';source.turns[0].endedAt=22;
+ assert.ok(splitWork(messages,source).turns.every(turn=>turn.phase==='completed'));
+});
+test('an unknown turn outcome stays neutral after a failed tool',()=>{
+ const grouped=splitWork(messages,{turns:[{id:'unknown'}],nodes:[{id:'tool',turnId:'unknown',kind:'tool',phase:'error',startedAt:2,endedAt:3}]});
+ assert.equal(grouped.turns[0].phase,'recorded');assert.equal(grouped.nodes[0].phase,'error');
+});
+test('admitted work is active before its first action',()=>{
+ const grouped=splitWork(messages,{turns:[{id:'new',anchorMessageId:'user',phase:'running',startedAt:2}],nodes:[]});
+ assert.equal(grouped.turns[0].phase,'running');assert.equal(grouped.turns[0].endedAt,undefined);
+});
