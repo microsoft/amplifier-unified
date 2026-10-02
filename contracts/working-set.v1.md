@@ -1,4 +1,4 @@
-# Catalog and working set — v1 (DRAFT)
+# Catalog and working set — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **WS**. Parent: [family vision](../docs/architecture/VISION.md).
 Governs discovery, residency and durable-history boundaries.
@@ -76,4 +76,5 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial WS1–6. | [Scale requirements and measurements](../docs/architecture/evidence.md). |

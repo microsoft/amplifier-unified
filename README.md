@@ -105,7 +105,7 @@ For the complete setup—including certificate transfer and trust, reverse-proxy
 
 The [AHP/ACP architecture design packet](docs/architecture/README.md) describes
 the proposed protocol boundaries, client-local state, bounded history discovery
-and repository decomposition. It includes draft vision/contracts and parallel
+and repository decomposition. It includes ratified vision/contracts and parallel
 implementation lanes; it is not a claim about current release capabilities.
 
 > [!NOTE]

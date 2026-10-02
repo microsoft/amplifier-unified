@@ -2,11 +2,11 @@
 
 **Forward direction updated 2026-10-02:** [the architecture packet](../architecture/README.md)
 now defines AHP clients, a generic durable host and ACP agents, local private UI
-state, bounded discovery/residency and separate repository ownership. The original
-client promises remain draft and are amended to follow those protocol boundaries.
+state, bounded discovery/residency and separate repository ownership. The amended
+client promises were ratified with the architecture direction on 2026-10-02.
 This is a design update, not an announcement that the released transport changed.
 
-**Status: proposal for review.** This packet establishes an Amplifier-specific
+**Historical September packet:** This packet establishes an Amplifier-specific
 destination, draft promises, a source assessment and an implementation sequence.
 Publishing it does not ratify the contracts or change a release. A connected TUI
 has since been implemented; see the [progress note](assessment.md#progress-since-the-assessment)
@@ -29,8 +29,8 @@ explicitly historical instead of being presented as today's missing-work list.
 
 The [existing wire contract](live-sessions.md) remains the reference for current
 endpoint names, payloads, retry identity and snapshot behavior. The
-[TUI handoff](tui-handoff.md) remains the transport integration guide. These drafts
-describe additional behavioral goals, not undocumented capabilities in wire v1.
+[TUI handoff](tui-handoff.md) remains the transport integration guide. The ratified target contracts
+describe the intended behavior, not undocumented capabilities in wire v1.
 
 ## One home for each kind of decision
 
@@ -55,7 +55,8 @@ and retain their own direction documents. No duplicate normative copy is require
 The 2026-10-02 packet refreshed Converge and its related repos; exact revisions are
 in [the source manifest](../architecture/evidence/upstream-revisions.json). It uses
 small explicit promises, one rule per home, bounded lane briefs and independent
-seam checks. These detailed drafts create no formal conformance ledger entries.
+seam checks. The user ratified the plan on 2026-10-02; implementation verdicts
+require actual evidence and are not implied by approval.
 The earlier references below explain the September packet, not latest source.
 
 Converge Method contributes the distinction between destination, observable
@@ -82,10 +83,9 @@ Reference revisions reviewed:
 
 ## Adoption and decisions
 
-The review should settle the actual promises and first-release capability floor,
-then record the accepted contract revision in each consumer. Implementers may
-prepare reversible adapter work while drafts are discussed, but may not infer
-new approved product semantics from it.
+The user approved the plan and direction on 2026-10-02. Implementers record the
+ratified contract revision in each consumer. Capability gaps remain explicit work
+and may not silently change the approved behavior or count as completed parity.
 
 The [current plan](../architecture/delivery-plan.md) records the remaining
 capability, compatibility and measured-budget decisions. The original assessment

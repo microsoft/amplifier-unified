@@ -3,14 +3,15 @@
 **Design packet, 2026-10-02. Implementation pending.** The product direction is
 authorized: adopt AHP/ACP, preserve Amplifier modularity, move private UI state
 to clients, bound working sets, and develop across independently owned repos.
-The detailed contracts and acceptance budgets below remain DRAFT proposals.
+The vision and contracts are ratified by user approval on 2026-10-02.
+Numeric performance budgets remain candidate targets pending measurement.
 This packet changes documentation; it does not establish protocol conformance.
 
 ## Decision
 
 Use **AHP between clients and a durable host**, and **ACP between that host and
 agents, including Amplifier**. Put an ACP adapter around the native application
-runtime that manages `AmplifierSession`, rather than replacing the kernel or
+runtime that manages `AmplifierSession`, using Core + Foundation and the existing ecosystem, rather than replacing the kernel or
 allowing a permanent native bypass. Use upstream SDKs, schemas and reducers where
 available. Prefer standard capabilities before negotiating extensions.
 
@@ -37,6 +38,10 @@ Bind a conversation to its **agent implementation and native session identity**,
 not its originating browser or terminal. An authorized compatible UI can attach
 later. Cross-engine continuation is out of scope. Agent replacement is supported
 for new conversations; UI replacement is supported within negotiated capabilities.
+
+**Native backend clarification:** Unified uses Core `AmplifierSession` through
+Foundation prepared bundles today. `microsoft/amplifier-agent` is a separate
+building block and is excluded from this migration.
 
 ## Read the packet
 

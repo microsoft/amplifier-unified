@@ -1,9 +1,10 @@
 # Delivery plan and parallel work lanes
 
-Proposed work derived from DRAFT HP/AP/WS/CB and existing CS/CX/CD contracts.
-The user has approved the architectural direction. New detailed clauses, exact
-budgets and repository names are proposed here, not already ratified or shipped.
-No formal Converge verdict ledger rows are created for draft contracts.
+Implementation work derived from ratified HP/AP/WS/CB and CS/CX/CD contracts.
+The user approved the plan and direction on 2026-10-02 and explicitly excluded
+`microsoft/amplifier-agent`; retain Core/Foundation and the modular native runtime.
+Numeric budgets and repository names remain implementation choices; ratification
+is not evidence that any runtime behavior is complete or shipped.
 
 ## Sequence and gates
 
@@ -48,7 +49,7 @@ for editors that should access hosted sessions but do not speak AHP themselves.
 
 ```yaml
 lane: L1
-status: proposed-work-on-draft-contracts
+status: implementation-active
 contract_clauses: [AP1, AP2, AP3, AP4, AP5, AP6]
 source_revisions: [exact-shas-before-work]
 writable_repositories_and_paths: [resolved-owned-adapter-checkout]
@@ -65,8 +66,8 @@ handoff: exact-commit-package-version-capabilities-known-gaps
 
 Evidence records include setup, commands, scenario, expected and observed outcome,
 source/package versions, environment, raw artifacts and limitations. “Not run” is
-not a pass. A future formal ledger starts only after the owning contract is
-ratified, using the selected Converge Method version. Keep detailed work in lanes;
+not a pass. Record each ratified promise against actual implementation evidence; do not
+convert the design approval into a conformance pass. Keep detailed work in lanes;
 do not grow the concise contracts into implementation checklists.
 
 ## Required acceptance scenarios

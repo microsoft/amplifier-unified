@@ -1,4 +1,4 @@
-# Component boundaries — v1 (DRAFT)
+# Component boundaries — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CB**. Parent: [family vision](../docs/architecture/VISION.md).
 Governs how independently owned repositories compose into Amplifier Unified.
@@ -75,4 +75,5 @@ Which existing packages already own a suitable implementation, avoiding duplicat
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial CB1–6. | [Refreshed Converge references](../docs/architecture/evidence.md). |

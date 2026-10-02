@@ -1,4 +1,4 @@
-# Host protocol — v1 (DRAFT)
+# Host protocol — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **HP**. Parent: [family vision](../docs/architecture/VISION.md).
 Governs the generic host and its AHP consumers; upstream owns the wire semantics.
@@ -66,7 +66,7 @@ ownership and recovery contracts. No private replacement for AHP's reconciliatio
 - HP4: disconnect every viewer during work; deny an unauthorized operation.
 - HP6: kill around admission/dispatch and lose replies; count accepted turns and effects.
 
-These checks are proposed. [The plan](../docs/architecture/delivery-plan.md) records delivery gates.
+Implementation is not yet verified. [The plan](../docs/architecture/delivery-plan.md) records delivery gates.
 
 ## Open questions
 
@@ -77,4 +77,5 @@ Which command receipts can be recovered with upstream identities alone before an
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial HP1–6. | [Protocol review](../docs/architecture/protocol-fit.md). |

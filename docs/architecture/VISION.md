@@ -1,9 +1,9 @@
-# Amplifier Unified family — Vision (DRAFT)
+# Amplifier Unified family — Vision (RATIFIED 2026-10-02)
 
 This vision describes the intended destination of the Unified family.
 It is not a description of the currently released implementation.
 The architecture direction was requested on 2026-10-02.
-Detailed promises live in the linked contracts and remain draft.
+The linked contracts were approved for implementation on 2026-10-02.
 Evidence and adoption records determine what has been demonstrated.
 Change this destination before deriving work that changes its meaning.
 

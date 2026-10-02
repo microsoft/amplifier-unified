@@ -1,4 +1,4 @@
-# Shared client state — v1 (DRAFT)
+# Shared client state — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CS**. Parent: [shared-client vision](../docs/clients/VISION.md).
 This specifies proposed ownership and synchronization behavior, not a new wire format.
@@ -76,7 +76,7 @@ Existing wire-v1 snapshots remain supported during migration; target AHP replica
 
 Exercise [the acceptance journeys](../docs/clients/development-plan.md) with two conversations,
 multiple clients, overridden configuration, a slow subscriber, disconnects and an owner handoff.
-Measure publication work as well as bytes; no draft receives a formal conformance verdict.
+Measure publication work as well as bytes; ratification alone establishes no conformance verdict.
 
 ## Open questions
 
@@ -87,5 +87,6 @@ Which advanced controls need negotiated extensions beyond standard AHP/ACP?
 
 | Date | Change | Basis |
 | --- | --- | --- |
-| 2026-10-02 | Client-local persistence, AHP recovery and generic native ownership. | [Protocol architecture](../docs/architecture/README.md); user-approved direction, detailed promises still draft. |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
+| 2026-10-02 | Client-local persistence, AHP recovery and generic native ownership. | [Protocol architecture](../docs/architecture/README.md); user-approved direction, ratified below. |
 | 2026-09-20 | Initial draft, CS1–8. | Shared-state discussion and source/owner boundary review. |

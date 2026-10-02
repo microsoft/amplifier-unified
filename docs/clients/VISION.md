@@ -1,4 +1,4 @@
-# Amplifier shared clients — Vision (DRAFT)
+# Amplifier shared clients — Vision (RATIFIED 2026-10-02)
 
 This is a proposed destination for Unified and its connected clients.
 It does not describe the current release or replace a client's own direction.

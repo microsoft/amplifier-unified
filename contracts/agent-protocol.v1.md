@@ -1,4 +1,4 @@
-# Agent protocol — v1 (DRAFT)
+# Agent protocol — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **AP**. Parent: [family vision](../docs/architecture/VISION.md).
 Governs ACP agent adapters and the host that calls them.
@@ -69,10 +69,11 @@ Inspect the full control inventory before declaring native feature parity.
 ## Open questions
 
 Which advanced loop controls need extensions beyond current upstream capabilities?
-Can the separate `amplifier-agent` engine satisfy our composition requirements in a later lane?
+Which extracted native policies need separate reusable packages to keep the agent boundary small?
 
 ## Changelog
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial AP1–6. | [Native runtime and external adapter review](../docs/architecture/evidence.md). |

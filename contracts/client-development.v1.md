@@ -1,4 +1,4 @@
-# Shared client development — v1 (DRAFT)
+# Shared client development — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CD**. Parent: [shared-client vision](../docs/clients/VISION.md).
 This proposes coordination for shared behavior, without importing another project's governance.
@@ -61,7 +61,7 @@ governance. The target decomposition is governed by [CB](component-boundaries.v1
 
 Review an example shared change using the [impact record](../docs/clients/development-plan.md).
 Check references, consumer revisions, ownership and evidence at integration/release review.
-These draft documents alone add no CI enforcement or formal verdict ledger.
+Ratification does not establish implementation conformance or deployed adoption.
 
 ## Open questions
 
@@ -72,5 +72,6 @@ Which actual peer combinations become release-blocking after initial qualificati
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Delegate wire ownership to upstream and decomposition to CB. | [Architecture delivery plan](../docs/architecture/delivery-plan.md). |
 | 2026-09-20 | Initial draft, CD1–6. | Converge Method principles adapted to existing Amplifier ownership. |
