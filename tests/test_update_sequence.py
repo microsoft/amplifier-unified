@@ -97,7 +97,7 @@ async def test_after_activation_tick_checks_next_tier_without_waiting_for_interv
     monkeypatch.setattr(manager,'check',check)
     monkeypatch.setattr(manager,'install',apply)
     await manager.tick()
-    assert calls==[{'tier':'other','install':install}]+(['install'] if install else [])
+    assert calls==[{'tier':'other','install':install,'fresh':False}]+(['install'] if install else [])
 
 
 async def test_completed_sequence_has_no_repeated_background_check(manager,monkeypatch):

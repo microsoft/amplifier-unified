@@ -882,6 +882,8 @@ class AppService:
             queue.put_nowait(snapshot)
         if hasattr(self, "coordination"):
             self.coordination.notify()
+        if self.update_manager:
+            self.update_manager.notify_idle()
         # Only after the publication committed and its snapshots were handed
         # out. Dirty/error retries remain hot; retirement itself emits no work.
         try:

@@ -82,3 +82,23 @@ async def test_failure_report_remains_available_when_runtime_cannot_be_inspected
     assert report['runtime']['unavailable']
     assert report['lastFailure']['reason'] == 'protected-runtime-source'
     assert all(value not in json.dumps(report) for value in ('secret', '/private/path', 'private exception'))
+
+
+async def test_report_contains_bounded_scheduler_state_and_check_history(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    from test_service import Runtime
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = service.update_manager = UpdateManager(service)
+    service.state['updates'].update(phase='installed', detail='private path', available=0, lastCheck=123,
+        sequence={'stage':'included', 'nextStage':'other', 'install':True, 'private':'secret'},
+        recentChecks=[{'startedAt': n, 'finishedAt': n+1, 'elapsedMs':1000, 'requests':2, 'secret':'private path'} for n in range(8)])
+    monkeypatch.setattr(update_report, 'runtime_report', lambda home: {})
+    report = await update_report.collect(manager)
+    assert report['updateState']['nextStage'] == 'other'
+    assert report['updateState']['installRequested'] is True
+    assert report['updateState']['revision'] == service.state['revision']
+    assert len(report['recentChecks']) == 5
+    assert report['recentChecks'][0]['startedAt'] == 3
+    assert 'private path' not in json.dumps(report) and 'secret' not in json.dumps(report)
+    await service.close()

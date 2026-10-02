@@ -414,6 +414,7 @@ class UpdateManager:
         self.readiness_task = None
         self.closed = False
         self.cleanup_task = None
+        self.wakeup = asyncio.Event()
         from .update_readiness import running_identity,valid_target
         self.running_identity = running_identity()
         state = service.state.setdefault('updates', {})
@@ -487,6 +488,15 @@ class UpdateManager:
         async with self.service.lock:
             self.service.state['updates'].update(values)
             self.service._publish()
+
+    def notify_idle(self):
+        state = self.service.state['updates']
+        if (not self.closed and not self.lock.locked() and state.get('phase') in {'staged', 'app-staged'}
+                and any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools'))
+                and not self.busy()):
+            # Work finishing is an event too. Do not add another timer wait
+            # after the user has already waited for the idle safety gate.
+            self.wakeup.set()
 
     def busy(self):
         state = self.service.state
@@ -594,6 +604,17 @@ class UpdateManager:
                 await self.featureInstall(args['feature'], args['hostInstanceId'], command_id)
             elif action == 'smartToolRollback':
                 await self.smartToolRollback(args['id'])
+            elif action == 'install':
+                # A click during a check must not disappear at install()'s
+                # busy guard. Join that check, then re-evaluate its inventory.
+                if self.check_task and not self.check_task.done():
+                    await asyncio.shield(self.check_task)
+                    if self.service.state['updates'].get('phase') in {'error', 'interrupted'}:
+                        return
+                async with self.lock:
+                    pass
+                if not self.closed and not self.awaiting_restart():
+                    await self.install()
             else:
                 await getattr(self, action)()
         except asyncio.CancelledError: raise
@@ -607,6 +628,11 @@ class UpdateManager:
             phase=last.get('phase',action)
             if last.get('status')!='failed':self.diagnostics.record(phase,'failed',errorType=exception_type(error))
             await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Update failed during '+phase.replace('-',' ')+'. Review the diagnostic receipt; no conversation work was replayed.')
+        finally:
+            # Manual actions used to leave ready work behind a 60-second
+            # polling sleep. Wake the owner; keep all admission/idle checks in
+            # tick(), rather than installing in parallel with another update.
+            self.wakeup.set()
 
     async def check(self, *, tier='application', install=False, fresh=True):
         state = self.service.state['updates']
@@ -625,9 +651,13 @@ class UpdateManager:
             from .update_checks import checking
             ttl = self.service.state['settings']['updates'].get('intervalHours', DEFAULT_CHECK_INTERVAL_HOURS) * 3600
             started = time.monotonic()
+            started_at = time.time()
             async with checking(self.check_cache, fresh=fresh, ttl=ttl):
                 await self._check(tier=tier, install=install)
-            await self.publish(checkTiming={'elapsedMs': round((time.monotonic()-started)*1000), **self.check_cache.stats})
+            timing = {'startedAt': started_at, 'finishedAt': time.time(),
+                      'elapsedMs': round((time.monotonic()-started)*1000), **self.check_cache.stats}
+            await self.publish(checkTiming=timing,
+                               recentChecks=[*self.service.state['updates'].get('recentChecks', [])[-4:], timing])
         self.check_request = (tier, install, fresh)
         self.check_task = asyncio.create_task(run())
         return await asyncio.shield(self.check_task)
@@ -820,6 +850,7 @@ class UpdateManager:
                 if registry.exists(): registry.write_text(registry.read_text().replace(str(source),str(stage/'foundation')))
                 # Snapshot shared configuration, never CLI registry or caches.
                 # Candidate preparation resolves declarations into its own store.
+                cache_rows = []
                 for row in candidates:
                     if row.get('kind') == 'included source':
                         from .update_sequence import stage_missing
@@ -831,25 +862,8 @@ class UpdateManager:
                         from .update_sources import stage_binding
                         await self.diagnostics.run('ecosystem-fetch', stage_binding, self, stage, row)
                         continue
-                    target=stage/'foundation'/row['path']
-                    if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
-                    phase='ecosystem-source-preflight'
-                    current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
-                    dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
-                    if dirty or current!=row['current']: raise ValueError('Source changed since check')
-                    meta=target/'.amplifier_cache_meta.json'
-                    data=json.loads(meta.read_text())
-                    if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
-                        raise ValueError('Source identity changed since check')
-                    if artifacts:
-                        # Restore only verified tracked artifacts in this copy.
-                        # Rechecking here also protects edits made after check.
-                        await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
-                    await self.publish(detail='Downloading '+row['label']+'…')
-                    await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
-                    await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
-                    data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
-                    meta.write_text(json.dumps(data))
+                    cache_rows.append(row)
+                await self.stage_cache_sources(stage, cache_rows)
                 await self.publish(phase='validating',detail='Preparing dependencies in a separate runtime…')
                 phase='ecosystem-validation'
                 from .update_plan import build, reuse_runtime
@@ -878,6 +892,56 @@ class UpdateManager:
                 if not isinstance(error,Exception):raise
                 return
         await self.activate()
+
+    async def stage_cache_sources(self, stage, rows):
+        # Each checkout belongs to the inactive candidate. Independent Git
+        # downloads may overlap, but writes to the same checkout serialize.
+        # Dependency resolution, qualification and promotion still follow them.
+        semaphore = asyncio.Semaphore(4)
+        targets = {}
+        async def stage_one(row):
+            target = (stage / 'foundation' / row['path']).resolve()
+            lock = targets.setdefault(target, asyncio.Lock())
+            async with semaphore, lock:
+                try:
+                    await prepare(row)
+                except Exception as error:
+                    # Policy/identity checks between subprocesses also need a
+                    # primary receipt before sibling cancellation is recorded.
+                    failure = self.diagnostics.state.get('lastFailure', {})
+                    if failure.get('attemptId') != self.diagnostics.state.get('attemptId'):
+                        from .update_diagnostics import exception_type
+                        self.diagnostics.record('ecosystem-source-preflight', 'failed', errorType=exception_type(error))
+                    raise
+        async def prepare(row):
+            target=stage/'foundation'/row['path']
+            if not target.resolve().is_relative_to((stage/'foundation').resolve()): raise ValueError('Invalid cache path')
+            phase='ecosystem-source-preflight'
+            current=await self.diagnostics.run(phase,process,'git','rev-parse','HEAD',cwd=target)
+            dirty,artifacts=await self.diagnostics.run(phase,cache_changes,target)
+            if dirty or current!=row['current']: raise ValueError('Source changed since check')
+            meta=target/'.amplifier_cache_meta.json'
+            data=json.loads(meta.read_text())
+            if source_key(data['git_url'], data.get('ref') or 'HEAD') != source_key(row['url'], row['ref']):
+                raise ValueError('Source identity changed since check')
+            if artifacts:
+                # Restore only verified tracked artifacts in this copy.
+                # Rechecking here also protects edits made after check.
+                await self.diagnostics.run(phase,process,'git','--literal-pathspecs','-c','core.hooksPath=/dev/null','restore','--source=HEAD','--worktree','--',*artifacts,cwd=target)
+            await self.publish(detail='Downloading '+row['label']+'…')
+            await self.diagnostics.run('ecosystem-fetch',process,'git','-c','core.hooksPath=/dev/null','fetch','--depth=1',row['url'],row['latest'],cwd=target)
+            await self.diagnostics.run('ecosystem-checkout',process,'git','-c','core.hooksPath=/dev/null','checkout','--detach',row['latest'],cwd=target)
+            data.update(commit=row['latest'],cached_at=time.strftime('%Y-%m-%dT%H:%M:%S'))
+            meta.write_text(json.dumps(data))
+        tasks = [asyncio.create_task(stage_one(row)) for row in rows]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def validate(self,stage,release):
         from .runtime_environment import stage as stage_runtime, receipt_directory
@@ -1173,7 +1237,10 @@ class UpdateManager:
             return
         sequence = state.get('sequence', {})
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
-            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False))
+            # This is the continuation of the same update, not a new manual
+            # check. Reuse its availability results; staging still verifies
+            # exact revisions and inputs before activation.
+            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False), fresh=False)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check(fresh=False)
         state=self.service.state['updates']
@@ -1181,9 +1248,16 @@ class UpdateManager:
         if not managed_preview and (settings.get('autoInstall',True) or state.get('sequence', {}).get('install')) and state.get('phase')=='available' and state.get('available',0):
             await self.install()
 
+    async def wait_for_work(self, delay):
+        try:
+            await asyncio.wait_for(self.wakeup.wait(), delay)
+        except TimeoutError:
+            pass
+
     async def loop(self):
-        await asyncio.sleep(3)
+        await self.wait_for_work(3)
         while not self.closed:
+            self.wakeup.clear()
             try:
                 await self.tick()
             except asyncio.CancelledError: raise
@@ -1195,10 +1269,13 @@ class UpdateManager:
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error='Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
             sequence = self.service.state['updates'].get('sequence', {})
-            # Continue promptly, with a bounded wait even if another command
-            # holds the update lock. Ordinary checks retain their cadence.
-            delay = 1 if sequence.get('nextStage') and self.service.state['updates'].get('phase') == 'installed' else 60
-            await asyncio.sleep(delay)
+            # A finished stage can continue on the next event-loop turn.
+            # External commands interrupt the ordinary background cadence;
+            # never make a user wait for its next timer tick.
+            if (sequence.get('nextStage') and self.service.state['updates'].get('phase') == 'installed'
+                    and not self.lock.locked() and not (self.check_task and not self.check_task.done())):
+                self.wakeup.set()
+            await self.wait_for_work(60)
 
     async def retire_storage(self):
         # Storage maintenance is outside the activation request. Worker leases

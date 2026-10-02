@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.48",
+      "title": "Start requested updates promptly and download components together",
+      "changes": [
+        "Start eligible updates immediately after a manual check, retain Install requests made during a running check, and resume staged updates as soon as blocking work finishes.",
+        "Download independent component checkouts concurrently with a bounded limit. Follow-up checks reuse recent availability results; new manual checks still refresh sources.",
+        "Include recent check timings, server update state and the browser\u2019s displayed state in copied or saved update diagnostics, without including private paths or conversation content."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.47",
       "title": "Update configured bundles and copy useful diagnostics",
       "changes": [
