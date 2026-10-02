@@ -1,0 +1,180 @@
+{
+  "review_date": "2026-10-02",
+  "qualification": "source inspection only; not installed or runtime-tested",
+  "sources": [
+    {
+      "repository": "microsoft/amplifier-converge",
+      "sha": "c63f1e6bea6d93e5ffb86b0e3dbcc698391cbe9c",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge/tree/c63f1e6bea6d93e5ffb86b0e3dbcc698391cbe9c"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-method",
+      "sha": "86b9a4a457df22c48b80a4c423b3e421dd309292",
+      "date": "2026-09-21T03:54:18Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-method/tree/86b9a4a457df22c48b80a4c423b3e421dd309292"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-agents",
+      "sha": "7e315d9b47150fe4b87b36fc7298698704cb2e6d",
+      "date": "2026-09-24T01:37:38Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-agents/tree/7e315d9b47150fe4b87b36fc7298698704cb2e6d"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-service",
+      "sha": "e6bd965fdb69297d79f6858b71674c4dcca4a898",
+      "date": "2026-09-21T03:54:09Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-service/tree/e6bd965fdb69297d79f6858b71674c4dcca4a898"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-queue",
+      "sha": "1e4c3eaf0690a0210898fb17b1560bb8ea834819",
+      "date": "2026-09-21T03:54:12Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-queue/tree/1e4c3eaf0690a0210898fb17b1560bb8ea834819"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-onramp",
+      "sha": "3ea9fd6356b615a22120c4a47d47307bc76ed608",
+      "date": "2026-09-23T14:17:44Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-onramp/tree/3ea9fd6356b615a22120c4a47d47307bc76ed608"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-direction",
+      "sha": "1ea1568d7afd59e7391ac98b4f15b9cc3af1c981",
+      "date": "2026-09-23T14:46:05Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-direction/tree/1ea1568d7afd59e7391ac98b4f15b9cc3af1c981"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-operation",
+      "sha": "3c6cc9cdd50937c73eaf946279861d3e9dd311dd",
+      "date": "2026-09-24T01:37:43Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-operation/tree/3c6cc9cdd50937c73eaf946279861d3e9dd311dd"
+    },
+    {
+      "repository": "microsoft/amplifier-converge-experience-sdk",
+      "sha": "0ada84f9248236eef35e0b1c6c97ee5d6a9a12e0",
+      "date": "2026-09-22T05:17:31Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-converge-experience-sdk/tree/0ada84f9248236eef35e0b1c6c97ee5d6a9a12e0"
+    },
+    {
+      "repository": "microsoft/amplifier-bundle-converge",
+      "sha": "41679679fd449ecc16b6af58d0ce8ec2cb2d29ad",
+      "date": "2026-09-23T23:24:54Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-bundle-converge/tree/41679679fd449ecc16b6af58d0ce8ec2cb2d29ad"
+    },
+    {
+      "repository": "microsoft/amplifier-bundle-unified-converge",
+      "sha": "d07e710067e45abaffc662fdffa9b5a7fe21a898",
+      "date": "2026-09-24T01:37:08Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-bundle-unified-converge/tree/d07e710067e45abaffc662fdffa9b5a7fe21a898"
+    },
+    {
+      "repository": "bkrabach/amplifier-converge-app",
+      "sha": "b2f76a8d88664ff788ecb4d78d3ca4eab1470513",
+      "date": "2026-09-08T15:09:46Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/bkrabach/amplifier-converge-app/tree/b2f76a8d88664ff788ecb4d78d3ca4eab1470513"
+    },
+    {
+      "repository": "bkrabach/amplifier-converge-reader",
+      "sha": "cde662fa73e66517b557f7c586ee54b5e5a331eb",
+      "date": "2026-09-08T15:01:19Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/bkrabach/amplifier-converge-reader/tree/cde662fa73e66517b557f7c586ee54b5e5a331eb"
+    },
+    {
+      "repository": "bkrabach/amplifier-converge-sessions",
+      "sha": "57f6aa504d2ec71d02fa92bfe130934553cf611d",
+      "date": "2026-09-08T15:14:05Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/bkrabach/amplifier-converge-sessions/tree/57f6aa504d2ec71d02fa92bfe130934553cf611d"
+    },
+    {
+      "repository": "microsoft/amplifier-core",
+      "sha": "e78bcad13f82c64c8f84243a00c8d9f90d8b876a",
+      "date": "2026-09-24T06:46:46Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-core/tree/e78bcad13f82c64c8f84243a00c8d9f90d8b876a"
+    },
+    {
+      "repository": "microsoft/amplifier-foundation",
+      "sha": "18546f64709df8d737b851fada431466b124b359",
+      "date": "2026-10-02T15:01:44Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-foundation/tree/18546f64709df8d737b851fada431466b124b359"
+    },
+    {
+      "repository": "microsoft/amplifier-agent",
+      "sha": "0ad11943a31c1225776dcb2b2910ec4273a0572a",
+      "date": "2026-10-02T14:09:58Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-agent/tree/0ad11943a31c1225776dcb2b2910ec4273a0572a"
+    },
+    {
+      "repository": "microsoft/amplifier-app-tui",
+      "sha": "96b3d13867581e1450ca6cc21eec2cfad2357657",
+      "date": "2026-09-23T13:42:08Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-app-tui/tree/96b3d13867581e1450ca6cc21eec2cfad2357657"
+    },
+    {
+      "repository": "microsoft/amplifier-app-cli",
+      "sha": "cef71e0ee7ac8f0ece243508187a90aaccd1b45e",
+      "date": "2026-10-01T13:27:41Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-app-cli/tree/cef71e0ee7ac8f0ece243508187a90aaccd1b45e"
+    },
+    {
+      "repository": "microsoft/amplifier-module-loop-live",
+      "sha": "36d242ed2a3a061e2e670779ca646edf85f006be",
+      "date": "2026-09-28T14:01:46Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifier-module-loop-live/tree/36d242ed2a3a061e2e670779ca646edf85f006be"
+    },
+    {
+      "repository": "microsoft/amplifierd",
+      "sha": "1fc03f18dfd95b26d68a4140a4a549b711ee9fe4",
+      "date": "2026-07-13T18:49:49Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/amplifierd/tree/1fc03f18dfd95b26d68a4140a4a549b711ee9fe4"
+    },
+    {
+      "repository": "microsoft/agent-host-protocol",
+      "sha": "9f940395ce287572d1f0ab72b9a195545b1ef998",
+      "date": "2026-10-01T17:13:32Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/microsoft/agent-host-protocol/tree/9f940395ce287572d1f0ab72b9a195545b1ef998"
+    },
+    {
+      "repository": "agentclientprotocol/agent-client-protocol",
+      "sha": "59172bafdf4bb283e9f2b5baf8aa7724c9f2c65b",
+      "date": "2026-10-02T13:24:30Z",
+      "status": "read-only-reference",
+      "url": "https://github.com/agentclientprotocol/agent-client-protocol/tree/59172bafdf4bb283e9f2b5baf8aa7724c9f2c65b"
+    },
+    {
+      "repository": "agentclientprotocol/codex-acp",
+      "sha": "ca1d97173ad37b471d5a4e5847725a4657d34e29",
+      "date": "2026-10-02T13:32:34Z",
+      "status": "README-source-review",
+      "url": "https://github.com/agentclientprotocol/codex-acp/tree/ca1d97173ad37b471d5a4e5847725a4657d34e29"
+    },
+    {
+      "repository": "agentclientprotocol/claude-agent-acp",
+      "sha": "23b8ebf8c2f2a8d22cfdbfa6b71931262b0ba91a",
+      "date": "2026-10-02T15:20:13Z",
+      "status": "README-source-review",
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/tree/23b8ebf8c2f2a8d22cfdbfa6b71931262b0ba91a"
+    }
+  ]
+}
