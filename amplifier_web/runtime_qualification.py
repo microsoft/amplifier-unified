@@ -5,6 +5,7 @@ import importlib.metadata
 import asyncio
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -68,25 +69,33 @@ def package_content(project):
     for root in roots:
         if not root.is_dir():
             continue
-        resolved_root = root.resolve()
+        resolved_root = os.path.realpath(root)
         for dist in importlib.metadata.distributions(path=[str(root)]):
             for entry in dist.files or ():
-                file = dist.locate_file(entry)
-                if file.suffix == '.pyc' or file.name in {'RECORD', 'direct_url.json', 'INSTALLER', 'REQUESTED'}:
+                file = os.fspath(dist.locate_file(entry))
+                if file.endswith('.pyc') or os.path.basename(file) in {'RECORD', 'direct_url.json', 'INSTALLER', 'REQUESTED'}:
                     continue
                 # RECORD can list tens of thousands of files. Resolving every
                 # ancestor for every entry turned this check into repeated
                 # filesystem walks. Resolve each containing directory once;
                 # still resolve file symlinks and reject external payloads.
-                parent = resolved_parents.get(file.parent)
+                directory = os.path.dirname(file)
+                parent = resolved_parents.get(directory)
                 if parent is None:
-                    parent = resolved_parents[file.parent] = file.parent.resolve()
-                actual = file.resolve() if file.is_symlink() else parent / file.name
-                if not actual.is_relative_to(resolved_root):
+                    parent = resolved_parents[directory] = os.path.realpath(directory)
+                actual = os.path.realpath(file) if os.path.islink(file) else os.path.join(parent, os.path.basename(file))
+                try:
+                    contained = os.path.commonpath((actual, resolved_root)) == resolved_root
+                except ValueError:  # Different Windows drives cannot share a root.
+                    contained = False
+                if not contained:
                     continue
-                files[str(file.relative_to(root))] = file
+                files[os.path.relpath(file, root)] = file
     for name, file in sorted(files.items()):
-        digest.update(name.encode() + b'\0' + file.read_bytes())
+        digest.update(name.encode() + b'\0')
+        with open(file, 'rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -260,7 +269,9 @@ async def freeze(manager, generation, project):
     receipt = environments.receipt_directory(manager.home, generation)
     if (receipt / 'runtime.lock').exists():
         raise ValueError('A recorded worker generation cannot be refreshed.')
-    graph = installed_graph(project)
+    # Filesystem scans and payload hashing must not stall the serving event
+    # loop while existing conversations continue on their pinned generation.
+    graph = await asyncio.to_thread(installed_graph, project)
     policies = {}
     for row in graph:
         vcs = row.get('directUrl', {}).get('vcs_info', {})
@@ -299,7 +310,7 @@ async def freeze(manager, generation, project):
     python_config = Path(project) / '.venv/pyvenv.cfg'
     python_version = next((line.partition('=')[2].strip() for line in python_config.read_text().splitlines()
                            if line.partition('=')[0].strip() == 'version'), None) if python_config.exists() else None
-    payload = package_content(project)
+    payload = await asyncio.to_thread(package_content, project)
     contract = {'manifest': content.decode(), 'graph': identity(graph), 'payload': payload,
                 'python': python_version or list(sys.version_info[:2]), 'platform': platform.system(), 'machine': platform.machine()}
     key = hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest()[:32]
@@ -311,9 +322,10 @@ async def freeze(manager, generation, project):
         if marker.exists() and not final.is_symlink():
             try:
                 saved = json.loads(marker.read_text())
+                actual = await asyncio.to_thread(installed_graph, final)
                 reusable = (saved.get('key') == key and (final / 'pyproject.toml').read_bytes() == content
-                            and identity(installed_graph(final)) == identity(graph)
-                            and package_content(final) == payload
+                            and identity(actual) == identity(graph)
+                            and await asyncio.to_thread(package_content, final) == payload
                             and saved.get('lockSha256') == hashlib.sha256((final / 'uv.lock').read_bytes()).hexdigest())
             except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
                 reusable = False  # Preserve uncertain environments and qualify a fresh one.
@@ -328,14 +340,13 @@ async def freeze(manager, generation, project):
             shutil.copy2(Path(project) / 'uv.lock', final / 'uv.lock')
             await manager.diagnostics.run('ecosystem-runtime-freeze', process, uv, 'lock', '--project', str(final), '--python', '3.13', timeout=900)
             await manager.diagnostics.run('ecosystem-runtime-freeze-install', process, uv, 'sync', '--locked', '--project', str(final), '--python', '3.13', timeout=900)
-            actual = installed_graph(final)
-            if identity(actual) != identity(graph) or package_content(final) != payload:
+            actual = await asyncio.to_thread(installed_graph, final)
+            if identity(actual) != identity(graph) or await asyncio.to_thread(package_content, final) != payload:
                 raise ValueError('The frozen worker installation differs from its prepared source graph.')
             from .deployment import write_private
             write_private(final / 'qualification.json', json.dumps({'key': key,
                 'lockSha256': hashlib.sha256((final / 'uv.lock').read_bytes()).hexdigest()}))
         else:
-            actual = installed_graph(final)
             manager.diagnostics.record('ecosystem-runtime-reuse', 'succeeded')
     from .deployment import write_private
     write_private(receipt / 'runtime-project.json', json.dumps({'project': final.name}))
@@ -351,6 +362,8 @@ async def freeze(manager, generation, project):
     original = Path(project)
     if (original != final and not original.is_symlink()
             and original.parent.resolve() == (Path(manager.home) / 'runtime').resolve()
+            and original != environments.project_path(manager.home)
+            and not original.name.startswith('q-')
             and str(original.resolve()) not in json.dumps(actual)):
         await asyncio.to_thread(shutil.rmtree, original)
     return final

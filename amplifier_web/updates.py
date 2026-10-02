@@ -958,10 +958,10 @@ class UpdateManager:
             await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
-            verify_recorded(project,receipt)
+            await asyncio.to_thread(verify_recorded,project,receipt)
         await self.publish(detail=f'Checking {len(configs)} offered conversation profiles…')
         await probe(project)
-        verify_recorded(project,receipt)
+        await asyncio.to_thread(verify_recorded,project,receipt)
         from .runtime_profiles import configuration_key
         write_private(stage/'profiles-qualified.json', json.dumps({'profiles': profiles,
             'configuration': configuration_key(config.settings, self.home, stage)}))
