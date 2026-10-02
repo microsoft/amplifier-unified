@@ -20,7 +20,12 @@ export function executionData(session){
   const parentWorker=workersBySession.get(worker.parentSessionId);
   nodes.push({id:`worker:${id}`,kind:'worker',turnId,routing:worker.routing,provider:worker.provider,model:worker.model,label:worker.name||worker.agent||worker.title||'Worker',status:worker.status,phase:worker.phase,summary:worker.detail||worker.report||worker.result,summaryDetail:worker.detail?worker.detailDetail:worker.report?worker.reportDetail:worker.resultDetail,startedAt:worker.startedAt,endedAt:worker.endedAt,workerId:worker.id||id,parentId:tools.has(call)?`tool:${call}`:parentWorker?`worker:${parentWorker.sessionId||parentWorker.id}`:null});
  }
- return {nodes,turns:[{id:turnId,label:'Recent execution activity',status:nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed'}]};
+ // Older records contain only action observations. A known host lifecycle
+ // still owns its outcome; tool errors must not invent a failed turn or settle
+ // active work between calls. Independently live children stay inspectable.
+ const status=['error','failed','cancelled','interrupted'].includes(session?.status)?session.status:
+  ['working','starting','running','stopping'].includes(session?.status)||nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed';
+ return {nodes,turns:[{id:turnId,label:'Recent execution activity',status}]};
 }
 export function messageTurnId(message,turns){
  if(message.role!=='user')return null;
