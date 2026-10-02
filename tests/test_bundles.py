@@ -155,7 +155,7 @@ async def test_picker_lists_standalone_registrations_not_namespace_roots(tmp_pat
     }}))
     result=await manager.perform('bundles.list',{'workspace':str(tmp_path)})
     names={row['name'] for row in result['registeredBundles']}
-    assert names == {'anchors','foundation','anchors-amp-dev','my-root','work','anchors-work'}
+    assert names == {'anchors','foundation','my-root','work','anchors-work'}
     assert any(row['role']=='behavior' and row['uri']=='foundation:behaviors/addon' for row in result['bundles'])
 
 

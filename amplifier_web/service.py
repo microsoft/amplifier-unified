@@ -184,6 +184,7 @@ ACTION_DEFINITIONS = {
     "updates.featureInstall": ("Explicitly add native-desktop to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not grant OS permission or desktop control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
     "updates.check": ("Check published application releases and ecosystem sources for updates", schema()),
+    "updates.diagnostics": ("Collect a sanitized update support report, including source provenance, without credentials, chat content or private paths.", schema()),
     "updates.install": ("Stage and validate available application or ecosystem updates; activate when idle. Application updates restart the host.", schema()),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
@@ -1242,6 +1243,12 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 404) from None
                 return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
+        if action == 'updates.diagnostics':
+            if not self.update_manager:
+                raise AppError('Update service is unavailable.')
+            from .update_report import collect
+            result = await collect(self.update_manager)
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'smartTools.readResult':
             if not self.smart_tools:
                 raise AppError('Smart Tools service is unavailable.')

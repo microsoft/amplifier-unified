@@ -8,6 +8,7 @@ import React from 'react';
 import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3} from 'lucide-react';
 import './updates.css';
 import {UpdateDiagnostics,UpdateIssueSummary} from './update-diagnostics.jsx';
+import {UpdateSupport} from './update-support.jsx';
 import {ReleaseHistory,ReleaseNotices} from './release-notes.jsx';
 const sourceName=row=>row.label.split('/').pop().replace(/^amplifier-(bundle-|module-)/,'');
 const alphabetical=(a,b)=>sourceName(a).localeCompare(sourceName(b),undefined,{sensitivity:'base',numeric:true})||a.label.localeCompare(b.label)||String(a.ref||'').localeCompare(String(b.ref||''))||String(a.current||'').localeCompare(String(b.current||''));
@@ -67,6 +68,7 @@ export function UpdateSettings({state,act}){
   <AppReloadNotice/>
   {application.canInstall===false&&<p className="a-ai-hint" role="status">This is a development preview. App updates are deployed by its owner; this preview cannot replace the installed app.</p>}
   {updates.checkTiming&&<p className="a-caption">Last check: {(updates.checkTiming.elapsedMs/1000).toFixed(1)}s · {updates.checkTiming.requests||0} lookups · {updates.checkTiming.cached||0} cached results</p>}
+  <UpdateSupport state={state} act={act}/>
   <div className="a-update-controls" data-part="update-controls">
   <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={controlsBusy||!!pending} aria-describedby={disabledReason?"update-action-status":undefined} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw className={controlsBusy?"a-progress-spinner":undefined}/>{controlsBusy?(updates.phase==='checking'?'Checking…':'Update in progress…'):pending?'Waiting for update…':'Check for updates'}</button>{overview.installable&&(!overview.continuing||overview.tone==='error')&&<button className="a-primary" disabled={controlsBusy||overview.blocked} aria-describedby={disabledReason?"update-action-status":undefined} data-action="updates.install" onClick={()=>act('updates.install')}><Download/>Update Amplifier</button>}</div>
   {disabledReason&&<p id="update-action-status" role="status" className="a-caption">{disabledReason} {controlsBusy?'You can keep working; this page will update automatically.':''}</p>}

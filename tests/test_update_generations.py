@@ -134,10 +134,18 @@ def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):
             },
         },
     )
-    assert offered_profiles(config, {"work": {}, "old-chat-only": {}, "addon": {}}) == [
+    stale = {"work": {}, "old-chat-only": {}, "addon": {}, "amplifier-dev": {}, "exp-delegation": {}}
+    (tmp_path / 'registry.json').write_text(json.dumps({'bundles': stale}))
+    assert offered_profiles(config, stale) == [
         "custom",
         "work",
     ]
+    assert offered_profiles(config) == ["custom", "work"]
+    # An explicit registration still offers these names; only historical cache
+    # entries are excluded. The cache is evidence and must stay untouched.
+    config.registrations['amplifier-dev'] = 'configured-source'
+    assert offered_profiles(config) == ["amplifier-dev", "custom", "work"]
+    assert json.loads((tmp_path / 'registry.json').read_text())['bundles'] == stale
 
 
 @pytest.mark.parametrize(
