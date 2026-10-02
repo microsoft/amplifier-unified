@@ -199,3 +199,155 @@ async def test_committed_sparse_cold_manifest_owns_blob_through_other_session_sa
     rows[1]['streaming'] = 'B'
     app._publish(session_ids={rows[1]['id']}, detail_only=True, record_only=True)
     assert reference['$resource'] not in collect(app.db, app._state)
+
+
+def fail_after_record_staging(original):
+    def fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise sqlite3.OperationalError('after staging records')
+    return fail
+
+
+async def test_retry_preserves_new_provenance(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    from amplifier_web.state_storage import resource
+    app, rows = chats(app_factory)
+    row = rows[0]
+    payload = {'source': 'new provenance '+'x'*20000}
+    row['configuration'] = {'plan': {'tools': []}, 'provenance': copy.deepcopy(payload)}
+    with monkeypatch.context() as m:
+        m.setattr(state_records, 'save', fail_after_record_staging(state_records.save))
+        with pytest.raises(sqlite3.OperationalError):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    app._commit_pending_progress()
+    identity = row['configuration']['provenance']['$resource']
+    assert resource(app.db, identity) == payload
+
+
+async def test_failed_retirement_view_survives_gc(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    from amplifier_web.cold_display import MARKER, materialize
+    from amplifier_web.resource_files import collect, remove_files
+    from amplifier_web.session_projection import view_path
+    app, rows = chats(app_factory)
+    row = rows[0]
+    row['messages'][0]['text'] = 'app-only history '+'x'*20000
+    expected = copy.deepcopy(row['messages'])
+    app._publish()
+    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+    with monkeypatch.context() as m:
+        m.setattr(state_records, 'save', fail_after_record_staging(state_records.save))
+        with pytest.raises(sqlite3.OperationalError):
+            app.cold_display.retire(force=True)
+    disk = json.loads(view_path(app.data_dir, row).read_text())
+    assert 'messages' not in dict.get(row, MARKER, {})
+    stale = collect(app.db, app._state)
+    app.db.commit()
+    remove_files(app.db, stale)
+    assert materialize(disk, app.db)['messages'] == expected
+
+
+async def test_failed_view_restore_then_full_repair_and_gc_keep_exact_body(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    from amplifier_web.cold_display import MARKER, notifications, materialize
+    from amplifier_web.resource_files import collect, remove_files
+    from amplifier_web.session_projection import view_path
+    from amplifier_web.host.storage import SessionStore
+    app, rows = chats(app_factory)
+    row = rows[0]
+    row['messages'][0]['text'] = 'retained history '+'x'*20000
+    row[MARKER] = {}
+    row['_coldMessageCount'] = len(row['messages'])
+    row['_coldNotifications'] = notifications(row)
+    expected = copy.deepcopy(row['messages'])
+    app._publish()
+    path = view_path(app.data_dir, row)
+    old_text = path.read_text()
+    atomic = SessionStore._atomic
+    def reject_restore(candidate, text):
+        if candidate == path and text == old_text:
+            raise OSError('rollback write refused')
+        return atomic(candidate, text)
+    monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+    with monkeypatch.context() as m:
+        m.setattr(state_records, 'save', fail_after_record_staging(state_records.save))
+        m.setattr(SessionStore, '_atomic', staticmethod(reject_restore))
+        with pytest.raises(sqlite3.OperationalError):
+            app.cold_display.retire(force=True)
+    app._save()
+    stale = collect(app.db, app._state)
+    app.db.commit()
+    remove_files(app.db, stale)
+    assert materialize(json.loads(path.read_text()), app.db)['messages'] == expected
+
+
+async def test_failed_view_restore_restart_uses_last_committed_payload_not_dangling_provenance(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    from amplifier_web.session_projection import view_path
+    from amplifier_web.host.storage import SessionStore
+    app, rows = chats(app_factory)
+    row = rows[0]
+    path = view_path(app.data_dir, row)
+    old_text = path.read_text()
+    row['configuration'] = {'plan': {'tools': []}, 'provenance': {'source': 'x'*20000}}
+    atomic = SessionStore._atomic
+    def reject_restore(candidate, text):
+        if candidate == path and text == old_text:
+            raise OSError('rollback write refused')
+        return atomic(candidate, text)
+    with monkeypatch.context() as m:
+        m.setattr(state_records, 'save', fail_after_record_staging(state_records.save))
+        m.setattr(SessionStore, '_atomic', staticmethod(reject_restore))
+        with pytest.raises(sqlite3.OperationalError):
+            app._publish(session_ids={row['id']}, detail_only=True, record_only=True)
+    await app.publishing.close()
+    restored = app_factory(home=app.data_dir)
+    assert restored._session(row['id']).get('configuration') == json.loads(old_text).get('configuration')
+    assert restored._session(row['id'])['messages'] == json.loads(old_text)['messages']
+
+
+async def test_explicit_changed_globals_commit_without_serializing_unchanged_segments(app_factory, monkeypatch):
+    from amplifier_web.state_records import load
+    app, rows = chats(app_factory)
+    checkpoint = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    unrelated = app._state['runtimeControl'][rows[1]['id']]
+    app._state['sharedHistory']['error'] = 'A changed global fact'
+    original = json.dumps
+    encoded_unrelated = []
+    def observe(value, *args, **kwargs):
+        if value is unrelated or isinstance(value, dict) and 'runtimeControl' in value:
+            encoded_unrelated.append(value)
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(json, 'dumps', observe)
+    app._publish(session_ids=set(), record_only=True, global_keys={'sharedHistory'})
+    assert encoded_unrelated == []
+    assert app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0] == checkpoint
+    assert load(app.db)['sharedHistory']['error'] == 'A changed global fact'
+    with app.clients.bind('1'):
+        assert app.browser_state()['sharedHistory']['error'] == 'A changed global fact'
+
+
+async def test_failed_named_global_and_later_scoped_change_preserve_both_on_retry(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    app, rows = chats(app_factory)
+    app._state['sharedHistory']['issueCount'] = 43
+    with monkeypatch.context() as m:
+        m.setattr(state_records, 'save', fail_after_record_staging(state_records.save))
+        with pytest.raises(sqlite3.OperationalError):
+            app._publish(session_ids=set(), record_only=True, global_keys={'sharedHistory'})
+    rows[1]['streaming'] = 'B with retained global'
+    app._publish(session_ids={rows[1]['id']}, detail_only=True, record_only=True)
+    assert state_records.load(app.db)['sharedHistory']['issueCount'] == 43
+    assert app._progress_dirty is False
+
+
+async def test_overlay_global_deletion_and_full_checkpoint_do_not_resurrect_key(app_factory):
+    from amplifier_web.state_records import load
+    app, rows = chats(app_factory)
+    app._state['transientFixture'] = {'before': True}
+    app._save()
+    del app._state['transientFixture']
+    app._publish(session_ids=set(), record_only=True, global_keys={'transientFixture'})
+    assert 'transientFixture' not in load(app.db)
+    app._save()
+    assert 'transientFixture' not in load(app.db)

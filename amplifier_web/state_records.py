@@ -10,7 +10,7 @@ import json
 
 def initialize(db):
     db.execute('''CREATE TABLE IF NOT EXISTS state_records (
-        kind TEXT NOT NULL CHECK(kind IN ('session','runtime','revision')),
+        kind TEXT NOT NULL CHECK(kind IN ('session','runtime','revision','global')),
         id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,id))''')
 
 
@@ -43,6 +43,13 @@ def load(db):
                 controls.pop(identity, None)
             else:
                 controls[identity] = value
+        elif kind == 'global':
+            if identity in {'sessions', 'runtimeControl', 'revision'} or not isinstance(value, dict) or set(value) != {'present', 'value'} or type(value['present']) is not bool:
+                raise ValueError('Invalid saved global record; original records were preserved.')
+            if value['present']:
+                state[identity] = value['value']
+            else:
+                state.pop(identity, None)
     state['sessions'] = list(sessions.values())
     return state
 
@@ -53,7 +60,7 @@ def checkpoint(db, state):
     db.execute('DELETE FROM state_records')
 
 
-def save(db, state, references, session_ids):
+def save(db, state, references, session_ids, global_keys=()):
     """Replace only the latest changed references and runtime records.
 
     The owning service commits these with its revision and dirty private client
@@ -66,5 +73,9 @@ def save(db, state, references, session_ids):
     for identity in session_ids:
         values.append(('session', identity, references.get(identity)))
         values.append(('runtime', identity, saved(controls[identity]) if identity in controls else None))
+    for key in global_keys:
+        if key in {'sessions', 'runtimeControl', 'revision'}:
+            raise ValueError('Global records cannot replace scoped session authority.')
+        values.append(('global', key, {'present': key in state, 'value': state.get(key)}))
     db.executemany('INSERT OR REPLACE INTO state_records VALUES(?,?,?)',
                    ((kind, identity, json.dumps(value)) for kind, identity, value in values))

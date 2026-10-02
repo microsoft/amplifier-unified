@@ -136,7 +136,14 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         assert (home / 'backups/shared-storage-v1/app.sqlite3').is_file()
         assert restored.db.execute('SELECT count(*) FROM smart_tool_operations').fetchone()[0] == 20
         assert restored.db.execute("SELECT count(*) FROM smart_tool_operations WHERE json_extract(value,'$.resultExpired')=1").fetchone()[0] == 18
-        assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3
+        # Three migration surfaces plus the exact immutable session projection.
+        from amplifier_web.state_records import load
+        from amplifier_web.state_storage import resource
+        projections = [row['$viewPayload']['$resource'] for row in load(restored.db)['sessions']
+                       if '$viewPayload' in row]
+        assert len(projections) == 1
+        assert resource(restored.db, projections[0])['id'] == sid
+        assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
         assert (home / 'app.sqlite3').stat().st_size < old_size / 3
         from amplifier_web.canvas_library import remember
         restored.state['canvas'] = {'id': 'surface', 'kind': 'mcp-app', 'sessionId': sid, 'content': body, 'mcp': {}}
@@ -145,7 +152,7 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
             remember(restored.state, restored.db)
         from amplifier_web.resource_files import collect
         collect(restored.db, restored.state)
-        assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3
+        assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
     finally:
         await restored.close()
 

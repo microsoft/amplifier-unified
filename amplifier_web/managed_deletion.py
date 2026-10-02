@@ -323,6 +323,8 @@ def _cold_roots(app, ids):
         records.extend(state.get('runtimeControl', {}).items())
         for identity, row in records:
             manifest = dict.get(row, '_coldFields', {})
+            if row.get('$viewPayload'):
+                manifest = {**manifest, '$viewPayload': row['$viewPayload']}
             if manifest:
                 (removed if identity in ids else retained).append(copy.deepcopy(manifest))
     return removed, retained

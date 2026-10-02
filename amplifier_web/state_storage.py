@@ -3,7 +3,7 @@ import hashlib
 import json
 
 
-def normalize_state(state, db):
+def normalize_state(state, db, *, undo=None):
     from .canvas_library import remember
     remember(state, db)
     legacy=state.pop('sessionConfiguration', {})
@@ -28,11 +28,15 @@ def normalize_state(state, db):
             text=json.dumps(provenance,ensure_ascii=False)
             if len(text)>16000:
                 from .resource_files import put
+                if undo is not None:
+                    undo.append((config, 'provenance', provenance))
                 config['provenance']={**put(db,provenance),'summary':{key:len(value) if isinstance(value,(list,dict)) else 1 for key,value in provenance.items()}}
         session['configuration']=config
         for op in ['configuration.inspect','configuration.apply','configuration.toggle']:
             result=runtime.get(op)
             if isinstance(result,dict) and ('plan' in result or 'configuration' in result):
+                if undo is not None:
+                    undo.append((runtime, op, result))
                 runtime[op]={'configurationSessionId':sid,**{key:result[key] for key in ('requiresRestart','applied','accepted') if key in result}}
 
 

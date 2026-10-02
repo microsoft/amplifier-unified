@@ -661,6 +661,7 @@ class AppService:
         detail_only = getattr(self, '_publish_detail_only', False)
         record_only = bool(session_ids is not None and
                            (record_only or getattr(self, '_publish_record_only', False)))
+        global_keys = getattr(self, '_publish_global_keys', set())
         if not detail_only and not record_only:
             self.questions.sync()
             self.schedules.sync()
@@ -676,6 +677,7 @@ class AppService:
         facts = {sid: detail_facts(index.by_id[sid]) for sid in session_ids or () if sid in index.by_id}
         prior_facts = getattr(self, '_saved_detail_facts', {})
         narrow = bool(record_only and detail_only and session_ids is not None
+                      and not global_keys
                       and all(prior_facts.get(sid) == facts.get(sid) for sid in session_ids))
         self._publish_client_narrow = narrow
         if getattr(self, '_projections', None) is not None:
@@ -688,22 +690,24 @@ class AppService:
             'sessions': [index.by_id[key] for key in session_ids if key in index.by_id],
             'runtimeControl': {key: self._state.get('runtimeControl', {}).get(key, {})
                                for key in session_ids} if record_only else self._state.get('runtimeControl', {})}
-        normalize_state(normalized, self.db)
         from .session_projection import persist
         pending_views = dict(self._view_cache)
         pending_references = dict(self._session_projection_refs)
-        saved = persist(self.data_dir, self._state, pending_views,
-                        session_ids=session_ids, by_id=index.by_id if index else None,
-                        references=pending_references, scoped_result=record_only)
+        normalization_undo, view_undo = [], []
         from .cold_display import saved as saved_cold
         from .state_records import save as save_records, checkpoint
         # File replacement may precede SQLite commit; it is not rolled back.
         # Private client acknowledgements and SQLite overlays become current
         # only after commit. A failed transaction retains all retry scopes.
         try:
+            normalize_state(normalized, self.db, undo=normalization_undo)
+            saved = persist(self.data_dir, self._state, pending_views,
+                            session_ids=session_ids, by_id=index.by_id if index else None,
+                            references=pending_references, scoped_result=record_only,
+                            undo=view_undo, db=self.db)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
-                save_records(self.db, self._state, pending_references, session_ids)
+                save_records(self.db, self._state, pending_references, session_ids, global_keys)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
@@ -711,6 +715,21 @@ class AppService:
             self.db.commit()
         except BaseException:
             self.db.rollback()
+            for record, key, value in reversed(normalization_undo):
+                record[key] = value
+            from .host.storage import SessionStore
+            for path, text in reversed(view_undo):
+                try:
+                    if text is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        SessionStore._atomic(path, text)
+                except OSError:
+                    # This presentation may already contain new blob roots.
+                    # Mark storage uncertain until a successful save repairs it;
+                    # GC below refuses collection while recovery is unresolved.
+                    self._state['_viewRecoveryPending'] = True
+                    self._view_cache.pop(str(path), None)
             self._browser_snapshot = None
             self._client_snapshots.clear()
             self._client_snapshot_preferences = {}
@@ -720,6 +739,8 @@ class AppService:
         self.clients.acknowledge(pending_clients)
         self._view_cache = pending_views
         self._session_projection_refs = pending_references
+        if session_ids is None:
+            self._state.pop('_viewRecoveryPending', None)
         self._saved_revision = self._state['revision']
         if session_ids is None:
             # Disposable facts, not another unbounded hot library. First update
@@ -789,7 +810,7 @@ class AppService:
                         if row['id'] in session_ids else row for row in rows]
             self._client_snapshots[client] = {**frame, 'revision': self._state['revision'], 'sessions': rows}
 
-    def _publish(self, *, session_ids=None, detail_only=False, record_only=False):
+    def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
         if getattr(self, '_progress_dirty', False):
@@ -799,6 +820,7 @@ class AppService:
                            if session_ids is not None and pending is not None else None)
             detail_only = detail_only and getattr(self, '_progress_detail_only', False)
             record_only = record_only and getattr(self, '_progress_record_only', False)
+            global_keys = set(global_keys) | getattr(self, '_progress_global_keys', set())
         task = getattr(self, '_progress_publish_task', None)
         if task and task is not asyncio.current_task():
             task.cancel()
@@ -808,6 +830,7 @@ class AppService:
         self._publish_save_scope = session_ids
         self._publish_detail_only = detail_only and session_ids is not None
         self._publish_record_only = record_only and session_ids is not None
+        self._publish_global_keys = set(global_keys)
         try:
             # Keep the original no-argument boundary for host save hooks and
             # error-injection checks. The owned scope is visible only while
@@ -823,11 +846,13 @@ class AppService:
             self._progress_session_ids = set(session_ids) if session_ids is not None else None
             self._progress_detail_only = detail_only and session_ids is not None
             self._progress_record_only = record_only and session_ids is not None
+            self._progress_global_keys = set(global_keys)
             raise
         finally:
             self._publish_save_scope = None
             self._publish_detail_only = False
             self._publish_record_only = False
+            self._publish_global_keys = set()
         published = {}
         affected_detail = self._affected_detail(session_ids) if session_ids is not None else set()
         if detail_only and session_ids is not None:
@@ -867,14 +892,16 @@ class AppService:
         self._progress_scope_known = False
         self._progress_detail_only = True
         self._progress_record_only = True
+        self._progress_global_keys = set()
         self._progress_publish_error = None
 
-    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False):
+    def _publish_progress(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
         """Batch stream/progress updates; final responses and approvals flush now."""
         if not getattr(self, '_progress_dirty', False):
             self._progress_session_ids = set(session_ids) if session_ids is not None else None
             self._progress_detail_only = detail_only
             self._progress_record_only = record_only
+            self._progress_global_keys = set(global_keys)
         else:
             pending = (getattr(self, '_progress_session_ids', None)
                        if getattr(self, '_progress_scope_known', False) else None)
@@ -882,6 +909,7 @@ class AppService:
                                          if pending is not None and session_ids is not None else None)
             self._progress_detail_only = getattr(self, '_progress_detail_only', False) and detail_only
             self._progress_record_only = getattr(self, '_progress_record_only', False) and record_only
+            self._progress_global_keys = getattr(self, '_progress_global_keys', set()) | set(global_keys)
         self._progress_dirty = True
         self._progress_scope_known = True
         if getattr(self, '_progress_publish_task', None) is None:
@@ -937,7 +965,8 @@ class AppService:
         else:
             self._publish(session_ids=scope,
                           detail_only=getattr(self, '_progress_detail_only', False),
-                          record_only=getattr(self, '_progress_record_only', False))
+                          record_only=getattr(self, '_progress_record_only', False),
+                          global_keys=getattr(self, '_progress_global_keys', set()))
 
     def subscribe(self, session_id=None):
         queue = asyncio.Queue(maxsize=4)
