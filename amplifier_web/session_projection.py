@@ -114,7 +114,7 @@ def accounting_projection(tree):
     return list(saved.values())
 
 
-def persist(home, state, cache, *, session_ids=None, by_id=None, references=None):
+def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False):
     """SQLite keeps only the session list; presentation files change on demand."""
     from .automatic_history import INDEX_FIELDS
     result = dict(state)
@@ -180,5 +180,6 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
             for identity in session_ids - retained_ids:
                 references.pop(identity, None)
         references.update((row['id'], row) for row in result['sessions'])
-        result['sessions'] = list(references.values())
+        if not scoped_result:
+            result['sessions'] = list(references.values())
     return result

@@ -56,10 +56,10 @@ def retained_references(db, state):
     pending = list(references(state))
     # A hydrated mutable field can drop its in-memory cold reference before its
     # next save. The last committed global manifest still owns that exact blob.
-    saved_rows = (db.execute('SELECT value FROM state') if db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else ())
-    for (text,) in saved_rows:
-        saved = json.loads(text)
+    from .state_records import load
+    saved = load(db) if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='state'").fetchone() else None
+    if saved:
         for row in [*saved.get('sessions', []), *saved.get('runtimeControl', {}).values()]:
             pending.extend(references(row.get('_coldFields', {})))
     # Persisted client records remain roots even before ClientViews is loaded

@@ -11,6 +11,24 @@ from collections import OrderedDict
 from copy import deepcopy
 
 
+def detail_facts(row):
+    """Bounded shared facts: change means conservative all-client invalidation.
+
+    Streaming recency is patched as a scalar. Settled ordering, notifications,
+    membership and attention cannot be silently forwarded under a new revision.
+    """
+    from .browser_state import SUMMARY_FIELDS
+    from .chat_navigation import navigation_activity
+    from .cold_display import notifications
+    fields = {key: row.get(key) for key in SUMMARY_FIELDS
+              if key not in {'recentActivityAt', 'navigationActivityAt'}}
+    fields.update({key: row.get(key) for key in
+                   ('error', 'completion', 'approvals', 'questions', 'ownership', 'unreadCompletion')})
+    fields['navigationActivity'] = navigation_activity(row)
+    fields['notifications'] = notifications(row)
+    return json.dumps(fields, sort_keys=True, separators=(',', ':'))
+
+
 class StateProjections:
     def __init__(self):
         self.values = {}

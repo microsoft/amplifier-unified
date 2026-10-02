@@ -313,7 +313,10 @@ def _cold_roots(app, ids):
     the same confirmed conversation scope. Unrelated chats retain shared blobs.
     """
     states = [app._state]
-    states.extend(json.loads(text) for (text,) in app.db.execute('SELECT value FROM state'))
+    from .state_records import load
+    committed = load(app.db)
+    if committed:
+        states.append(committed)
     removed, retained = [], []
     for state in states:
         records = [(row['id'], row) for row in state.get('sessions', [])]
@@ -551,7 +554,8 @@ def recover(home, db, state):
         value = json.loads(plan_value)
         scrub_state(state, value)
         _cleanup_db(db, value)
-        db.execute('UPDATE state SET value=? WHERE id=1', (_json(state),))
+        from .state_records import checkpoint
+        checkpoint(db, state)
         db.commit()
         held = []
         try:
