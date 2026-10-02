@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {executionData,messageTurnId,treeForTurn,usageLabel} from '../src/timeline-data.js';
+
+for(const [status,expected] of [['working','running'],['starting','running'],['idle','completed'],['error','error'],['failed','failed']])test(`legacy tool errors respect the host ${status} lifecycle`,()=>{
+ const session={status,runtimeEvents:[{type:'runtime.tool',phase:'error',callId:'failed-fetch',tool:'web_fetch',at:100,error:'HTTP 404: Not Found'}]};
+ const before=JSON.stringify(session),data=executionData(session);
+ assert.equal(data.turns[0].status,expected);assert.equal(data.nodes[0].status,'error');assert.equal(JSON.stringify(session),before);
+});
 test('turns attach to their user input and preserve tool-worker-subtool hierarchy',()=>{
  const data={turns:[{id:'input-1'}],nodes:[{id:'tool-a',turnId:'input-1',kind:'tool'},{id:'worker-a',parentId:'tool-a',turnId:'input-1',kind:'worker'},{id:'tool-b',parentId:'worker-a',turnId:'input-1',kind:'tool'},{id:'llm-b',parentId:'tool-b',turnId:'input-1',kind:'llm'}]};
  assert.equal(messageTurnId({role:'user',inputId:'input-1'},data.turns),'input-1');

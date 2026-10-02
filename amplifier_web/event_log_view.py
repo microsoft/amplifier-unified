@@ -711,7 +711,14 @@ class EventLogView:
             starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
             ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
             if starts:turn['startedAt'] = min(starts)
-            if any(row.get('phase') in LIVE_PHASES and not row.get('endedAt') for row in members):
+            # Call outcomes cannot overwrite a manager failure, or settle the
+            # currently admitted input between calls. Logs enrich action rows;
+            # the host lifecycle owns when its current turn has stopped.
+            if turn['id'] in host_turns and (turn.get('status') or turn.get('phase')) in {'error','failed','cancelled','interrupted'}:
+                continue
+            current_live = (turn['id'] in host_turns and turn['id'] == live.get('currentTurnId')
+                            and session.get('status') in {'working','starting','running','stopping'})
+            if current_live or any(row.get('phase') in LIVE_PHASES and not row.get('endedAt') for row in members):
                 # A later observed call can continue this input after an earlier
                 # projection saw only completed members. Discard that old end.
                 turn['phase'] = 'running'

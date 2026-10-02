@@ -20,7 +20,12 @@ export function executionData(session){
   const parentWorker=workersBySession.get(worker.parentSessionId);
   nodes.push({id:`worker:${id}`,kind:'worker',turnId,routing:worker.routing,provider:worker.provider,model:worker.model,label:worker.name||worker.agent||worker.title||'Worker',status:worker.status,phase:worker.phase,summary:worker.detail||worker.report||worker.result,summaryDetail:worker.detail?worker.detailDetail:worker.report?worker.reportDetail:worker.resultDetail,startedAt:worker.startedAt,endedAt:worker.endedAt,workerId:worker.id||id,parentId:tools.has(call)?`tool:${call}`:parentWorker?`worker:${parentWorker.sessionId||parentWorker.id}`:null});
  }
- return {nodes,turns:[{id:turnId,label:'Recent execution activity',status:nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed'}]};
+ // Older records contain only action observations. A known host lifecycle
+ // still owns its outcome; tool errors must not invent a failed turn or settle
+ // active work between calls. Independently live children stay inspectable.
+ const status=['error','failed','cancelled','interrupted'].includes(session?.status)?session.status:
+  ['working','starting','running','stopping'].includes(session?.status)||nodes.some(n=>['running','working','starting','queued','pending','retrying','idle'].includes(n.status))?'running':'completed';
+ return {nodes,turns:[{id:turnId,label:'Recent execution activity',status}]};
 }
 export function messageTurnId(message,turns){
  if(message.role!=='user')return null;
@@ -122,15 +127,20 @@ export function splitWork(messages,data){
    const order=Number.isFinite(at)?at:-Infinity;
    if(lastGroup===undefined||order>=lastAt){lastAt=order;lastGroup=id}
   }
-  if(!source.length&&isRunning(turn))groups.set(`${turn.id}@${turn.anchorMessageId||'start'}`,{id:`${turn.id}@${turn.anchorMessageId||'start'}`,anchor:turn.anchorMessageId,nodes:[]});
+  if(!source.length&&isRunning(turn)){
+   lastGroup=`${turn.id}@${turn.anchorMessageId||'start'}`;
+   groups.set(lastGroup,{id:lastGroup,anchor:turn.anchorMessageId,nodes:[]});
+  }
   for(const group of groups.values()){
    const starts=group.nodes.map(node=>node.startedAt).filter(Number.isFinite),ends=group.nodes.map(node=>node.endedAt).filter(Number.isFinite);
    const turnFailure=group.id===lastGroup&&['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase)?turn.status||turn.phase:null;
-   const running=!turnFailure&&(group.nodes.some(isRunning)||(!starts.length&&!ends.length&&isRunning(turn)));
-   const failure=group.nodes.find(node=>['error','failed','cancelled','interrupted'].includes(node.status||node.phase));
+   // Tool/worker errors and recovered model attempts stay on their action rows.
+   // Only the manager outcome fails a work header. Its current segment remains
+   // active between calls, even when every action so far has already settled.
+   const running=!turnFailure&&(group.nodes.some(isRunning)||(group.id===lastGroup&&isRunning(turn)));
    if(turnFailure&&Number.isFinite(turn.endedAt))ends.push(turn.endedAt);
    turns.push({...turn,id:group.id,originalTurnId:turn.id,anchorMessageId:group.anchor,startedAt:starts.length?Math.min(...starts):turn.startedAt,
-    endedAt:running?undefined:ends.length?Math.max(...ends):turn.endedAt,phase:running?'running':turnFailure||(failure?(failure.status||failure.phase):ends.length||turn.endedAt?'completed':'recorded'),status:undefined,
+    endedAt:running?undefined:ends.length?Math.max(...ends):turn.endedAt,phase:running?'running':turnFailure||((turn.status||turn.phase)&&(ends.length||turn.endedAt)?'completed':'recorded'),status:undefined,
     aggregateUsage:segmentUsage(group.nodes),nodeCounts:{tools:group.nodes.filter(n=>n.kind==='tool').length,models:group.nodes.filter(n=>n.kind==='llm').length},
     ...(data.segments||[]).find(segment=>segment.id===group.id)});
    nodes.push(...group.nodes);

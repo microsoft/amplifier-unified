@@ -111,12 +111,47 @@ def test_segment_totals_cover_all_calls_when_actions_are_paged():
     assert earlier['segments']==groups[:1]
 
 
-def test_group_summary_keeps_failures_visible_and_unknown_completion_honest():
+def test_unknown_turn_does_not_infer_failure_or_success_from_a_tool_result():
     session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn'}],
              'nodes':[{'id':'one','turnId':'turn','kind':'tool','phase':'error','startedAt':1,'endedAt':2}]}}
-    assert project(session)['execution']['segments'][0]['phase']=='error'
+    view=project(session)['execution']
+    assert view['segments'][0]['phase']=='recorded'
+    assert view['nodes'][0]['phase']=='error'
     node=session['execution']['nodes'][0];node.update(phase='recorded');node.pop('endedAt')
     assert project(session)['execution']['segments'][0]['phase']=='recorded'
+
+
+@pytest.mark.parametrize('kind,phase', [('tool','error'),('worker','failed'),('llm','error'),('llm','cancelled')])
+def test_failed_actions_remain_visible_without_failing_a_successful_turn(kind, phase):
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn','phase':'completed','endedAt':5}],
+        'nodes':[{'id':'failed-action','turnId':'turn','kind':kind,'phase':phase,'startedAt':1,'endedAt':2},
+                 {'id':'follow-up','turnId':'turn','kind':'llm','phase':'completed','startedAt':3,'endedAt':5}]}}
+    original=copy.deepcopy(session)
+    view=project(session)['execution']
+    assert view['segments'][0]['phase']=='completed'
+    assert view['nodes'][0]['phase']==phase
+    assert session==original
+
+
+def test_current_segment_stays_running_between_actions_and_settles_from_manager():
+    session={'id':'chat','messages':[{'id':'input','createdAt':1},{'id':'interim','createdAt':10}],
+        'execution':{'turns':[{'id':'turn','phase':'running','startedAt':2}],
+        'nodes':[{'id':'failed','turnId':'turn','kind':'tool','phase':'error','startedAt':2,'endedAt':3},
+                 {'id':'follow-up','turnId':'turn','kind':'tool','phase':'completed','startedAt':11,'endedAt':12}]}}
+    assert [row['phase'] for row in project(session)['execution']['segments']]==['completed','running']
+    assert project(session)['execution']['segments'][-1]['endedAt'] is None
+    session['execution']['turns'][0].update(phase='completed',endedAt=15)
+    assert [row['phase'] for row in project(session)['execution']['segments']]==['completed','completed']
+
+
+def test_paged_failed_actions_do_not_fail_the_complete_segment_summary():
+    session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn','phase':'completed','endedAt':250}],
+        'nodes':[{'id':str(i),'turnId':'turn','kind':'tool','phase':'error' if i==1 else 'completed',
+                  'startedAt':i+1,'endedAt':i+2} for i in range(200)]}}
+    assert page(session,'nodes')['segments'][0]['phase']=='completed'
+    earlier=page(session,'nodes','100')
+    assert earlier['items'][1]['phase']=='error'
+    assert earlier['segments'][0]['phase']=='completed'
 
 
 @pytest.mark.parametrize('phase', ['error', 'failed', 'cancelled', 'interrupted'])
