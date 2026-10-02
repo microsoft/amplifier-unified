@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-02",
+  "applicationSource": "microsoft/amplifier-unified",
+  "applicationRevision": "95e96851b799b2e63c44344d69457ca044572c45",
+  "policySource": "https://github.com/microsoft/amplifier-bundle-memory",
+  "policyRevision": "b011380b2edd2e7038051ab8ba7d665f752d8cc7",
+  "policyLicense": "MIT",
+  "verified": "GitHub main API equals Unified uv.lock native dependency revision; no unmerged helper source used",
+  "files": {
+    "src/amplifier_memory/consolidation.py": "dd0ce3fac5cd84d9571c388149d2ed3984637de4ad5b2869a10f95d6c3c6710e",
+    "src/amplifier_memory/suggest.py": "aaf12d0a481f409a70ab3a0754eb32ccde4e520b51fa40a7aca36468528bd68a"
+  },
+  "boundary": "Only pure evidence and consolidation policy functions copied. No engine/CLI/filesystem/model implementation imports."
+}
