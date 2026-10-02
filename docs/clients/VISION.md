@@ -12,10 +12,10 @@ A person reaches that work through a browser, terminal, desktop or mobile client
 The interface fits the device; the conversation, its meaning and its progress
 remain recognizable when the person changes interfaces.
 
-Unified hosts execution and exposes the same public operations to clients and
-agents. The web and TUI are the first two connected experiences. Future clients
-join through those boundaries without needing to reproduce an existing frontend
-or embed the execution runtime.
+The target Unified host exposes AHP to clients and uses ACP for every agent,
+including Amplifier. The web and TUI are independently developed experiences.
+Other clients and agents join through those standards and optional negotiated
+capabilities, without importing the host or embedding its execution runtime.
 
 Several people’s windows and devices can observe authorized work concurrently.
 Opening another view neither creates another execution nor takes another view
@@ -39,9 +39,10 @@ a browser uses its panels and rich views well. Neither imitates the other's
 layout at the expense of being useful on its own device.
 
 ### 3. Independent attention, shared work
-A person's selection, unfinished input and reading position belong to that view.
-Accepted work belongs to the conversation. Clients follow only the information
-they need, while the host continues unattended work and preserves its results.
+A person's selection, unfinished input and reading position persist locally in
+that client with no routine backend synchronization. Shared drafting or agent
+inspection is explicit. Accepted work is shared; AHP owns its replication and
+recovery while the host continues unattended work and preserves its results.
 
 ### 4. Feedback makes the next action clear
 People can tell whether input is pending, work is running, a connection is lost,
@@ -61,7 +62,8 @@ agents the same meaningful actions and outcomes available through client control
 ### 7. Clients can advance independently
 A shared behavioral change has a clear home and named consumers. Teams can improve
 rendering, accessibility and platform interaction independently while testing the
-same journeys. Compatibility is checked against specific revisions and releases.
+same journeys in separate repos. Compatibility is checked against actual peers
+and specific revisions. The [family vision](../architecture/VISION.md) owns decomposition.
 
 ### 8. Evidence stays honest
 Source inspection, simulated transport, a real terminal and a released device
@@ -71,6 +73,7 @@ the assessment says how much of it has actually been demonstrated.
 ## What this deliberately resists
 
 - A second execution runtime for every connected window.
+- Loading historical catalogs, child histories or dormant agents just to browse.
 - A browser-shaped specification that makes the terminal a lesser client.
 - Implicit replication of credentials, files or execution between hosts.
 - Different authoritative names or histories for the same stored session.
@@ -96,4 +99,5 @@ the assessment says how much of it has actually been demonstrated.
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
 | 2026-09-20 | Initial draft. | Shared-client design discussion and the sources in the direction index. |

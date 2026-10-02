@@ -22,8 +22,9 @@ The contracts hold the promises; [the assessment](../docs/clients/assessment.md)
 ## The promises
 
 1. **CD1 — Give shared meaning one home.** This contract set owns cross-client promises;
-   the wire document owns API spelling, Foundation owns shared mechanisms, and each
-   client owns its internals. Consumers reference a reviewed revision instead of copying the rules. Draft publication is not ratification.
+   upstream AHP/ACP own target wire semantics, native owners own storage mechanisms,
+   and clients own their internals. Consumers reference reviewed revisions instead of
+   copying rules. Legacy wire v1 remains documented; draft publication is not ratification.
    Broken: two repos redefine Stop differently or a draft is reported as an agreed standard. Affected: client builders and product owners.
 
 2. **CD2 — Declare behavioral impact before implementation diverges.** A shared semantic
@@ -53,8 +54,8 @@ The contracts hold the promises; [the assessment](../docs/clients/assessment.md)
 
 ## Not in v1
 
-A required new repository, mandatory agent/session topology, a family-wide approval
-for every PR, or enforcement of Converge Method's own operational rules in other repos.
+A family-wide approval for every PR, or automatic imposition of another project's
+governance. The target decomposition is governed by [CB](component-boundaries.v1.md).
 
 ## How the kit checks it
 
@@ -64,11 +65,12 @@ These draft documents alone add no CI enforcement or formal verdict ledger.
 
 ## Open questions
 
-When should the shared contract set move into an independent repository?
-Which compatibility checks should become required CI as connected clients advance?
+When should cross-repository contract ownership move from this bootstrap packet?
+Which actual peer combinations become release-blocking after initial qualification?
 
 ## Changelog
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Delegate wire ownership to upstream and decomposition to CB. | [Architecture delivery plan](../docs/architecture/delivery-plan.md). |
 | 2026-09-20 | Initial draft, CD1–6. | Converge Method principles adapted to existing Amplifier ownership. |

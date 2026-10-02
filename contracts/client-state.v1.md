@@ -18,7 +18,8 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
 ```
 
 [The scope map](../docs/clients/state-scopes.md) assigns data to these boundaries.
-[Wire v1](../docs/clients/live-sessions.md) defines the currently available operations.
+[Wire v1](../docs/clients/live-sessions.md) defines current operations; the target
+[HP contract](host-protocol.v1.md) delegates replication to upstream AHP.
 
 ## The promises
 
@@ -28,8 +29,9 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    Broken: switching selection retargets pending input or a second viewer creates a second runtime. Affected: concurrent users.
 
 2. **CS2 — Separate shared state from each view.** Accepted work, questions and durable
-   conversation properties are shared; selection, drafts and reading state belong to
-   the client. An authorized agent may inspect a targeted nonsecret view without making it global.
+   conversation properties are shared; ordinary selection, drafts, unsaved edits and
+   reading state persist on the client with no backend sync. Shared drafts or targeted
+   nonsecret agent inspection are explicit capabilities using upstream semantics.
    Broken: another window overwrites unfinished input or a secret becomes public view state. Affected: people and agents sharing a host.
 
 3. **CS3 — Publish by interest and dependency.** Detailed conversation updates go only
@@ -39,7 +41,8 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
 
 4. **CS4 — Reconcile without repeating work.** Retain command identity and payload
    before sending; distinguish rejected, unknown, accepted and completed. Exact retries
-   follow the wire receipt rules and original identity; reconnect restores authoritative state without replaying commands or device effects.
+   follow negotiated receipt rules and original identity. AHP recovery follows HP3;
+   the durable intent journal survives clearing optimistic pending actions, without automatic command or device-effect replay.
    Broken: a missing reply means failure, a snapshot duplicates messages, or reconnect repeats a tool. Affected: users recovering connectivity.
 
 5. **CS5 — Name configuration scope and provenance.** A setting identifies its host/root,
@@ -52,9 +55,10 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    pending/restart requirement; unrelated sessions and explicitly overridden fields remain unaffected. Refreshing a catalog is not editing configuration or mounting a provider.
    Broken: saved defaults are labelled active in an unchanged worker. Affected: operators choosing runtime behavior.
 
-7. **CS7 — Preserve canonical storage and exclusive execution.** Foundation mechanisms
-   coordinate cooperating hosts using configurable roots. Connected clients mutate through
-   Unified; standalone apps acquire ownership before loading writable state. Reacquisition reloads newer history/configuration; lock release does not prove external effects stopped.
+7. **CS7 — Preserve canonical storage and exclusive execution.** Native adapters own
+   canonical history and coordinate writers using their mechanisms (Foundation for
+   native Amplifier). Connected clients mutate through the host; independent apps acquire
+   ownership before writable loading. Reacquisition reloads current data; release does not prove effects stopped.
    Broken: two owners write, a stale worker overwrites history, or a second store controls the name. Affected: all shared-session participants.
 
 8. **CS8 — Target device effects explicitly.** Microphone, camera, clipboard, local files,
@@ -66,7 +70,7 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
 
 Execution migration, shared filesystem locking across independent machines, automatic
 credential replication, event-log-only recovery, pruning, or exactly-once remote tool effects.
-Current snapshot reconciliation remains valid; CS3 does not require incremental event replay.
+Existing wire-v1 snapshots remain supported during migration; target AHP replication follows HP.
 
 ## How the kit checks it
 
@@ -76,11 +80,12 @@ Measure publication work as well as bytes; no draft receives a formal conformanc
 
 ## Open questions
 
-What scoped revision and capability envelopes extend wire v1 without breaking old clients?
-Which session controls become Foundation-portable versus host-private capabilities?
+Which legacy clients need the temporary facade and for how long?
+Which advanced controls need negotiated extensions beyond standard AHP/ACP?
 
 ## Changelog
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Client-local persistence, AHP recovery and generic native ownership. | [Protocol architecture](../docs/architecture/README.md); user-approved direction, detailed promises still draft. |
 | 2026-09-20 | Initial draft, CS1–8. | Shared-state discussion and source/owner boundary review. |

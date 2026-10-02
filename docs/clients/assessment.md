@@ -1,5 +1,10 @@
 # Shared clients: historical source baseline and progress
 
+**New source assessment, 2026-10-02:** see [architecture evidence](../architecture/evidence.md)
+for Unified v0.20.45, scoped-update improvements, remaining global work, synthetic
+measurements and current upstream protocol/Converge references. The observations
+below remain pinned to their original dates; neither assessment proves deployment.
+
 **Historical assessment pinned on 2026-09-20; progress checked on 2026-09-21.**
 This is a source assessment, not conformance certification.
 The draft clauses are not ratified. Tests cited below are inspected test coverage,

@@ -19,6 +19,7 @@ Ownership blocked -> Continue here -> acquiring -> acquired / still blocked
 
 The state and delivery meanings come from [CS](client-state.v1.md).
 The current HTTP/SSE spelling remains in [the wire contract](../docs/clients/live-sessions.md).
+The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-protocol.v1.md).
 
 ## The promises
 
@@ -78,4 +79,5 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-02 | Link target protocol owners; preserve existing experience promises. | [Architecture direction](../docs/architecture/README.md). |
 | 2026-09-20 | Initial draft, CX1–7. | User journeys and current implementation assessment. |

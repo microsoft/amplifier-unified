@@ -3,6 +3,8 @@
 Design note supporting [CS](../../contracts/client-state.v1.md), not an additional
 contract or a statement that every synchronization channel exists today.
 "Local" always needs a qualifier: execution host, workspace, device or client view.
+The [2026-10-02 storage design](../architecture/state-and-storage.md) adds concrete
+client persistence, AHP recovery, catalog filtering and runtime-residency guidance.
 
 ## Proposed ownership and subscriptions
 
@@ -18,17 +20,19 @@ contract or a statement that every synchronization channel exists today.
 | Effective merged config | Derived from the supported scope chain | Consumers whose resolved inputs changed | Keep separate from persisted source documents |
 | Mounted runtime config | Actual prepared worker | That conversation's viewers/operator | Show current applied revision independently of saved defaults |
 | Catalog results and refresh status | Host cache/probe owner | Viewers of that catalog | Show freshness/updating state; a result is not a mounted or reachable provider |
-| Selection, per-chat/pre-chat draft, pending attachments, scroll, open panels | One independent client view; storage may be on host | That view and explicitly targeted authorized agent inspection | Copy on resume when requested; never couple concurrent windows |
-| Unsaved settings fields and ordering previews | Targeted editor view | That editor; authorized agent-visible nonsecret fields where supported | Preserve across remote saves; expose a conflict instead of overwriting |
+| Selection, private per-chat/pre-chat draft, pending attachments, scroll, open panels | One independent client view, persisted on that client | That view only by default; explicit bounded agent inspection if needed | No routine backend mutation; never couple concurrent windows |
+| Intentionally shared draft | Optional standard AHP chat draft | Authorized chat subscribers using the explicit shared feature | Initialize a clean editor; preserve dirty local input; debounce shared edits |
+| Unsaved settings fields and ordering previews | Local persistent editor state | That editor; explicit nonsecret inspection where supported | Preserve across remote saves; expose a conflict instead of overwriting |
 | Theme/layout preference | Explicitly declared shared preference or client override | Consumers of that declared scope | Do not assume all presentation preferences are private; current shared theme differs from local preview |
 | Credentials, raw secret form values | Host/device credential store or transient local input | Secret-aware mutation path only | Publish configured/available metadata, never raw values in snapshots |
 | Mic, clipboard, camera, notification permission | Specific device/client | Targeted effect handler | Permission and effect outcome stay local; accepted session content may be shared |
 | Uncertain command/outbox entry | Originating command identity + client recovery storage | Originating client and host receipt lookup | Preserve exact retry identity; do not transfer it by copying a view |
 
-Browser and TUI storage implementations may differ. A draft saved in a host DB
-can still be client-scoped; it does not become shared conversation content merely
-because it is persisted. Likewise, an agent-visible editor is not automatically
-public to every connected client. Authentication remains separate from client IDs.
+Browser and TUI storage implementations differ. The current backend-persisted
+private view records are a migration source, not the target storage location.
+Use IndexedDB for meaningful browser drafts/outbox/cache, tiny preferences in
+localStorage, and local disk for TUI. An agent-visible editor is not automatically
+public to every client. Authentication remains separate from client IDs.
 
 ## Configuration example
 
@@ -58,7 +62,8 @@ An assistant update in A produces A detail for its three viewers and a bounded
 summary change for catalog consumers. It does not rebuild B's transcript or
 unrelated settings. Closing A's three viewers removes their subscriptions, while
 A keeps working and saving. Returning obtains a current snapshot before following
-new updates. A slow viewer can receive coalesced snapshots without slowing A.
+new updates. A slow viewer uses bounded buffering and upstream AHP recovery without
+slowing A; arbitrary state-action loss or private reconciliation is not permitted.
 
 This is a target for scoped publication. The pinned baseline performed broad
 publication; [CS3's assessment](assessment.md) records that observation. A current
