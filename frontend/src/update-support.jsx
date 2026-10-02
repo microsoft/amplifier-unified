@@ -1,12 +1,14 @@
 import React from 'react';
 import {Copy,Download} from 'lucide-react';
+import {updateClientDiagnostics} from './update-diagnostics.js';
 
 export function UpdateSupport({state,act}){
  const [report,setReport]=React.useState(null),[busy,setBusy]=React.useState(false),[notice,setNotice]=React.useState(''),[manual,setManual]=React.useState(false);
  async function collect(){
+  const client=updateClientDiagnostics(state);
   const reply=await act('updates.diagnostics');
   if(!reply?.accepted||!reply.result)throw Error('Diagnostics could not be collected. Try again.');
-  setReport(reply.result);return reply.result;
+  const value={...reply.result,client};setReport(value);return value;
  }
  async function deliver(destination){
   setBusy(true);setNotice('Collecting diagnostics…');setManual(false);

@@ -126,9 +126,29 @@ async def collect(manager):
               'lastFailure': event(diagnostics.get('lastFailure', {})),
               'pending': {key: bool(state.get(key)) for key in ('pendingApp', 'pendingRelease', 'pendingRestart', 'pendingSmartTools')},
               'busy': manager.lock.locked()}
+    sequence = state.get('sequence') or {}
+    phases = {'idle', 'checking', 'available', 'checked', 'staging', 'validating', 'staged', 'app-staged', 'activating', 'installed', 'error', 'interrupted'}
+    stages = {'application', 'included', 'other', 'complete'}
+    report['updateState'] = {
+        'phase': state.get('phase') if state.get('phase') in phases else 'unknown',
+        'stage': sequence.get('stage') if sequence.get('stage') in stages else None,
+        'nextStage': sequence.get('nextStage') if sequence.get('nextStage') in stages else None,
+        'installRequested': sequence.get('install') is True,
+        'hasError': bool(state.get('error')),
+        'checkInProgress': bool(getattr(manager, 'check_task', None) and not manager.check_task.done()),
+    }
+    for name, value in [('revision', manager.service.state.get('revision')), ('lastCheck', state.get('lastCheck')),
+                        ('lastAttempt', state.get('lastAttempt')), ('available', state.get('available'))]:
+        if type(value) in (int, float) and 0 <= value < 10**15:
+            report['updateState'][name] = value
     for key in ('checkTiming', 'adoption'):
         report[key] = {name: value for name, value in (state.get(key) or {}).items()
-                       if name in {'elapsedMs', 'requests', 'cached', 'joined', 'pendingWorkers', 'activeWorkers'} and type(value) is int}
+                       if name in {'elapsedMs', 'requests', 'cached', 'joined', 'pendingWorkers', 'activeWorkers', 'startedAt', 'finishedAt'}
+                       and type(value) in (int, float) and 0 <= value < 10**15}
+    report['recentChecks'] = [{name: value for name, value in row.items()
+                             if name in {'elapsedMs', 'requests', 'cached', 'joined', 'startedAt', 'finishedAt'}
+                             and type(value) in (int, float) and 0 <= value < 10**15}
+                            for row in state.get('recentChecks', [])[-5:] if isinstance(row, dict)]
     try:
         report['runtime'] = await asyncio.to_thread(runtime_report, manager.home)
     except Exception as error:

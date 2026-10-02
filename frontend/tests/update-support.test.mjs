@@ -13,7 +13,7 @@ test('one click collects and copies a complete report through the shared action'
  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:async text=>copied.push(text)}}});
  await renderAct(async()=>{root=create(React.createElement(UpdateSupport,{state:{updates:{}},act:async(name,args)=>{calls.push([name,args]);return {accepted:true,result:report}}}))});
  await renderAct(async()=>root.root.findAll(n=>n.type==='button'&&n.props['data-action']==='updates.diagnostics')[0].props.onClick());
- assert.deepEqual(calls,[['updates.diagnostics',undefined]]);assert.deepEqual(JSON.parse(copied[0]),report);
+ assert.deepEqual(calls,[['updates.diagnostics',undefined]]);const value=JSON.parse(copied[0]);assert.deepEqual(value.runtime,report.runtime);assert.equal(value.client.updates.phase,'unknown');
  assert.match(JSON.stringify(root.toJSON()),/Diagnostics copied/);
  await renderAct(async()=>root.unmount());
 });
@@ -24,7 +24,7 @@ test('blocked clipboard retains a report without changing installed sources',asy
  await renderAct(async()=>{root=create(React.createElement(UpdateSupport,{state:{updates:{phase:'error'}},act}))});
  assert.equal(calls.length,0);
  await renderAct(async()=>root.root.findAll(n=>n.type==='button'&&n.props['data-action']==='updates.diagnostics')[0].props.onClick());
- assert.deepEqual(JSON.parse(root.root.findByType('textarea').props.value),report);
+ const value=JSON.parse(root.root.findByType('textarea').props.value);assert.deepEqual(value.runtime,report.runtime);assert.equal(value.client.updates.phase,'error');
  assert.deepEqual(calls,[['updates.diagnostics',undefined]]);
  await renderAct(async()=>root.unmount());
 });
