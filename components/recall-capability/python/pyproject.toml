@@ -16,3 +16,6 @@ dev=["pytest>=8","pytest-asyncio>=0.25"]
 [tool.pytest.ini_options]
 asyncio_mode="auto"
 testpaths=["tests"]
+
+[tool.uv.sources]
+amplifier-recall={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/recall"}

@@ -10,3 +10,6 @@ dependencies = ["amplifier-worktrees>=0.1.0,<0.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/amplifier_unified_worktrees"]
+
+[tool.uv.sources]
+amplifier-worktrees={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/worktrees"}

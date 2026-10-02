@@ -13,7 +13,7 @@ amplifier-unified-publishing="amplifier_unified_publishing.server:main"
 [tool.hatch.build.targets.wheel]
 packages=["amplifier_unified_publishing"]
 [tool.uv.sources]
-amplifier-publishing={path="../../../../../repos/amplifier-publishing/dist/amplifier_publishing-0.1.0-py3-none-any.whl"}
+amplifier-publishing={git="https://github.com/microsoft/amplifier-publishing",branch="main"}
 [dependency-groups]
 dev=["pytest>=8","pytest-asyncio>=0.25"]
 [tool.pytest.ini_options]
