@@ -18,7 +18,7 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
 }
 const METHODS=new Set(['inspectSession','beginTransfer','commitTransfer','cancelTransfer','adoptTransferredSession','nativeTransfer','exportTransferEvidence','stageTransferEvidence','activateTransferEvidence','authorizeTransfer']);
-const actions=['inspect','export','stage','release','activate','cancel','discard','evidence','receipt','command','reconcile'].map(name=>'portability.'+name);
+const actions=['inspect','review','export','stage','release','activate','cancel','discard','evidence','receipt','command','reconcile'].map(name=>'portability.'+name);
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void}>();
@@ -80,7 +80,9 @@ export class PortabilityCapabilities {
  };
  action=async(request:Json,context:Context)=>{
   if(request.version!==1||request.topic!=='portability'||!this.manifest.actions[request.operation])throw Error('Unadvertised portability operation');
-  const scope=await this.scope(request.channel,context);
+  const selected=request.args?.sessionId;
+  const channel=(request.channel==='ahp-root://' || request.channel==='host') && selected!==undefined ? selected : request.channel;
+  const scope=await this.scope(channel,context);
   const result=await this.owner.request('action',{session:scope,operation:request.operation,args:request.args??{},commandId:request.commandId,origin:context.origin??'ui',clientId:context.clientId});
   if(scope!=='host')this.options.onInvalidate?.('portability','host');
   return {accepted:true,result,updates:[],invalidate:['portability']};

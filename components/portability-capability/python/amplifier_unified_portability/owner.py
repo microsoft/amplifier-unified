@@ -18,11 +18,13 @@ def definitions():
     for name in ('portability.activate','portability.discard','portability.evidence'):
         rows[name][1]['required']=[key for key in rows[name][1]['required'] if key!='sessionId']
     rows['portability.inspect'][1]['properties'].update(limit={'type':'integer','minimum':1,'maximum':100},cursor=string(2048))
-    rows['portability.export'][1]['properties']['acceptOmissions']={'type':'boolean'}
-    rows['portability.stage'][1]['properties']['acceptOmissions']={'type':'boolean'}
+    rows['portability.review']=('Review one authenticated signed capsule, including exact omissions, before staging or source release.',schema({'sessionId':string(8192),'path':string(4000),'id':string(100)},[]))
+    for name in ('portability.stage','portability.release'):
+        rows[name][1]['properties']['reviewedCapsuleHash']={'type':'string','pattern':'^[a-f0-9]{64}$'}
+        rows[name][1]['required'].append('reviewedCapsuleHash')
     rows['portability.receipt']=('Inspect one exact transfer receipt without replay.',schema({'sessionId':string(8192),'id':string(100)},['id']))
     rows['portability.reconcile']=('Inspect committed destination activation and recover host adoption using its original admission; never repeat a probe or native write.',schema({'id':string(100)}))
-    rows['portability.command']=('Inspect the original capability command after a lost response.',schema({'commandId':string(200)}))
+    rows['portability.command']=('Inspect the original capability command after a lost response.',schema({'commandId':string(200),'sessionId':string(8192)},['commandId']))
     rows['portability.evidence'][1]['properties']['section']={'type':'string','maxLength':100}
     return {name:{'description':description,'schema':spec} for name,(description,spec) in rows.items()}
 
@@ -78,7 +80,9 @@ class Owner:
         value={'host':self.node.identity,'peers':list(self.node.peers().values()),'receipts':[self.projection(row) for row in page['items']],'nextCursor':page['nextCursor'],'revision':page['revision']}
         if selected:
             cwd=selected.get('executionDirectory') or selected.get('workingDirectory');self.local(cwd)
-            try:value['source']=await asyncio.to_thread(lambda:snapshot(Path(cwd))[0])
+            try:
+                value['source']=await asyncio.to_thread(lambda:snapshot(Path(cwd))[0])
+                value['source']['expectedExecutionRevision']=selected['executionRevision']
             except ValueError as error:value['sourceError']=str(error)
             value['fenced']=self.node.fenced(selected['nativeSessionId'])
         return value
@@ -98,6 +102,7 @@ class Owner:
         Draft202012Validator(self.schemas[op]['schema']).validate(args)
         if args.get('sessionId') and args['sessionId']!=scope:raise ValueError('Session selector disagrees with trusted scope')
         if op=='portability.inspect':return await self.inspect(scope,args)
+        if op=='portability.review':return self.review(scope,args)
         if op=='portability.command':return {'receipt':self.command(scope,args['commandId'])}
         if op in {'portability.receipt','portability.evidence'}:
             binding=self.binding(args['id'],scope);row=self.node.get(args['id'])
@@ -135,9 +140,8 @@ class Owner:
             await self.native(binding,'source.fence',identity)
             capture=await self.native(binding,'source.capture',identity)
             exported=await self.host('exportTransferEvidence',{'session':scope,'transferId':identity,'limitBytes':MAX_OWNER_BYTES})
-            evidence=self.evidence(exported['evidence'],args.get('acceptOmissions',False))
+            evidence=self.evidence(exported['evidence'],True)
             omissions=[*capture.get('omissions',[]),*exported.get('omissions',[])]
-            if omissions and not args.get('acceptOmissions'):raise ValueError('Transfer has explicit omissions; inspect preview and explicitly accept them')
             files={}
             for name,metadata in capture['files'].items():
                 chunks=[];offset=0
@@ -150,13 +154,37 @@ class Owner:
                 files[name]={**metadata,'data':base64.b64encode(raw).decode()}
             if (await asyncio.to_thread(capture_workspace,cwd,args['sourceRevision'],args['mode']))!=workspace:raise ValueError('Source workspace changed during capture')
             row=self.node.prepared(identity,{'version':1,'originSession':scope,'nativeIdentity':sid,'native':files,'intent':capture['intent'],'origin':capture['origin'],'workspace':workspace,'evidence':evidence,'omissions':omissions,'session':{'title':selected.get('title','Imported conversation')},'engineId':selected['engineId']})
-            return self.projection(row)
+            return {**self.projection(row),'review':self.review(scope,{'id':identity})}
         except BaseException:self.node.unknown(identity);raise
+    def review_package(self,package,local_row=None):
+        if local_row is None:
+            body=self.node.verify(package,kind='capsule')
+            if body.get('source')!=package.get('signer') or body.get('destination')!=self.node.identity['id']:raise ValueError('Signed capsule belongs to different execution hosts')
+        else:
+            if package.get('signer')!=self.node.identity['id']:raise ValueError('Local capsule signer changed')
+            try:self.node.key.public_key().verify(base64.b64decode(package['signature'],validate=True),encoded(package['body']))
+            except Exception as error:raise ValueError('Local signed capsule authentication failed') from error
+            body=package['body']
+            if body.get('kind')!='capsule' or body.get('source')!=self.node.identity['id'] or body.get('id')!=local_row['id'] or digest(encoded(body))!=local_row['capsuleHash']:raise ValueError('Local capsule changed after preparation')
+        payload=body['payload'];evidence=self.evidence(payload.get('evidence',[]),True)
+        result={'version':1,'transferId':body['id'],'capsuleHash':digest(encoded(body)),'source':body['source'],'destination':body['destination'],'nativeSessionId':body['sessionId'],'omissions':payload.get('omissions',[]),'executionAuthority':False,
+            'evidence':[{key:item[key] for key in ('owner','version','revision','bytes','sha256','disposition','omissions','executionAuthority')} for item in evidence],
+            'nativeFiles':[{'name':name,'bytes':item['bytes'],'sha256':item['sha256']} for name,item in payload['native'].items()],
+            'workspace':{key:payload['workspace'][key] for key in ('head','sourceRevision','mode')}}
+        if len(encoded(result))>256*1024:raise ValueError('Signed review exceeds256KiB; no omissions were silently truncated')
+        return result
+    def review(self,scope,args):
+        if bool(args.get('path'))==bool(args.get('id')):raise ValueError('Review requires exactly one capsule path or transfer identity')
+        if args.get('path'):return self.review_package(read_capsule(self.local(args['path'],exchange=True)))
+        self.binding(args['id'],scope);row=self.node.get(args['id'])
+        package=read_capsule(Path(row.get('package') or row['destinationState']['package']))
+        return self.review_package(package,row if row['direction']=='outgoing' else None)
     async def stage(self,scope,args,command):
         package=read_capsule(self.local(args['path'],exchange=True));body=self.node.verify(package,kind='capsule');payload=body['payload'];sid=body['sessionId']
         if payload['nativeIdentity']!=sid:raise ValueError('Signed native identity disagrees with transfer')
-        evidence=self.evidence(payload.get('evidence',[]),args.get('acceptOmissions',False))
-        if payload.get('omissions') and not args.get('acceptOmissions'):raise ValueError('Signed transfer omissions require explicit preview acceptance')
+        review=self.review_package(package)
+        if args['reviewedCapsuleHash']!=review['capsuleHash']:raise ValueError('Reviewed signed capsule changed; review exact contents before staging')
+        evidence=self.evidence(payload.get('evidence',[]),True)
         repository=self.local(args['repository']);target=self.stages/body['id'];row=self.node.receive(package,args)
         if row.get('duplicate'):return self.projection(row)
         try:
@@ -165,13 +193,16 @@ class Owner:
             local=self.node.directory/'packages'/(row['id']+'.json');write_capsule(local,package)
             await self.native(binding,'destination.fence',row['id'])
             policy=await self.native(binding,'destination.policy',row['id']);row.update(readinessPolicy=policy['policy'],readinessPolicyHash=policy['policyHash']);self.node.save(row)
-            await self.host('stageTransferEvidence',{'transferId':row['id'],'nativeSessionId':sid,'sourceHost':row['source'],'evidence':evidence,'acceptPartial':args.get('acceptOmissions',False)})
+            await self.host('stageTransferEvidence',{'transferId':row['id'],'nativeSessionId':sid,'sourceHost':row['source'],'evidence':evidence,'acceptPartial':True})
             checks=await self.native(binding,'destination.check',row['id'])
             row=self.node.ready(row['id'],{'workspace':str(target),'package':str(local),'nativeIdentity':sid,'engineId':payload['engineId'],'checkout':restored},checks)
             receipt=self.exchange/(row['id']+'.ready.json');write_capsule(receipt,row['readyReceipt']);row['receiptPath']=str(receipt);self.node.save(row);return self.projection(row)
         except BaseException:self.node.unknown(row['id']);raise
     async def release(self,scope,args,command):
-        binding=self.binding(args['id'],scope);row=self.node.get(args['id']);ready=read_capsule(self.local(args['path'],exchange=True))
+        binding=self.binding(args['id'],scope);row=self.node.get(args['id'])
+        review=self.review(scope,{'id':row['id']})
+        if args['reviewedCapsuleHash']!=review['capsuleHash']:raise ValueError('Reviewed signed capsule changed; review exact contents before release')
+        ready=read_capsule(self.local(args['path'],exchange=True))
         body=self.node.verify(ready,kind='ready',signer=row['destination']);self.node.match(row,body)
         if row['phase']=='released':return self.projection(row)
         await self.native(binding,'source.verify',row['id'])

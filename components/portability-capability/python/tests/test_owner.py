@@ -19,9 +19,9 @@ class Host:
         if method=='inspectSession':return {**self.session,'uri':p['session']}
         if method=='authorizeTransfer':return {'approved':True,'fixture':True}
         if method in {'beginTransfer','commitTransfer','cancelTransfer'}:return {'admitted':True,'fixture':True}
-        if method=='exportTransferEvidence':return {'evidence':[envelope('operations',1,{'records':[{'status':'unknown','input':'retained'}]})],'omissions':[]}
+        if method=='exportTransferEvidence':return {'evidence':[envelope('operations',1,{'records':[{'status':'unknown','input':'retained'}]},omissions=[{'kind':'fixture-history-window','omitted':2}])],'omissions':[{'kind':'external-attachment-bodies','included':False}]}
         if method=='stageTransferEvidence':
-            for value in p['evidence']:assert decode_body(value)['records'][0]['status']=='unknown'
+            for value in p['evidence']:assert decode_body(value,accept_partial=p['acceptPartial'])['records'][0]['status']=='unknown'
             return {'receipts':[{'owner':'operations','executionAuthority':False,'staged':True}]}
         if method=='activateTransferEvidence':return {'receipts':[{'owner':'operations','executionAuthority':False,'replayed':False}]}
         if method=='adoptTransferredSession':
@@ -30,7 +30,7 @@ class Host:
             return self.adoptions[p['commandId']]
         if method=='nativeTransfer':
             op=p['operation'];args=p['args'];identity=args['transferId']
-            if op=='source.capture':return {'files':{name:{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()} for name,data in self.files.items()},'intent':{'bundle':'fixture','selection':{'provider':'fixture','model':'offline'}},'origin':{'historyHome':self.session['historyHome'],'executionDirectory':self.session['executionDirectory']},'omissions':[]}
+            if op=='source.capture':return {'files':{name:{'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()} for name,data in self.files.items()},'intent':{'bundle':'fixture','selection':{'provider':'fixture','model':'offline'}},'origin':{'historyHome':self.session['historyHome'],'executionDirectory':self.session['executionDirectory']},'omissions':[{'kind':'external-attachment-bodies','included':False}]}
             if op=='source.read':
                 data=self.files[args['name']];offset=args['offset'];chunk=data[offset:offset+args['limit']]
                 return {'data':base64.b64encode(chunk).decode(),'nextOffset':offset+len(chunk) if offset+len(chunk)<len(data) else None}
@@ -56,10 +56,17 @@ async def test_two_signed_owners_real_git_and_lost_adoption_reconcile_no_effect_
         revision=snapshot(source)[0]['sourceRevision'];args={'sessionId':uri,'destination':b.node.identity['id'],'sourceRevision':revision,'expectedExecutionRevision':0,'mode':'clean','reviewedContent':True}
         outgoing=await action(a,uri,'export',args,'export1');assert outgoing['phase']=='prepared'
         package=b.exchange/'package.json';shutil.copyfile(outgoing['package'],package)
-        incoming=await action(b,'host','stage',{'path':str(package),'repository':str(destination)},'stage1');assert incoming['phase']=='ready'
+        reviewed=await action(b,'host','review',{'path':str(package)},'preview');assert reviewed['capsuleHash']==outgoing['review']['capsuleHash'];assert reviewed['omissions'];assert reviewed['evidence'][0]['disposition']=='partial';assert reviewed['evidence'][0]['omissions'][0]['omitted']==2
+        before=len(hb.calls)
+        with pytest.raises(ValueError,match='Reviewed signed capsule'):await action(b,'host','stage',{'path':str(package),'repository':str(destination),'reviewedCapsuleHash':'0'*64},'stale-stage')
+        assert not any(m=='nativeTransfer' for m,_ in hb.calls[before:])
+        incoming=await action(b,'host','stage',{'path':str(package),'repository':str(destination),'reviewedCapsuleHash':outgoing['review']['capsuleHash']},'stage1');assert incoming['phase']=='ready'
         target=Path(b.node.get(incoming['id'])['destinationState']['workspace']);assert (target/'a.txt').read_text()=='preserved source\n'
         ready=a.exchange/'ready.json';shutil.copyfile(incoming['receiptPath'],ready)
-        released=await action(a,uri,'release',{'sessionId':uri,'id':outgoing['id'],'expectedRevision':outgoing['revision'],'path':str(ready)},'release1');assert released['phase']=='released'
+        before=len(ha.calls)
+        with pytest.raises(ValueError,match='Reviewed signed capsule'):await action(a,uri,'release',{'sessionId':uri,'id':outgoing['id'],'expectedRevision':outgoing['revision'],'path':str(ready),'reviewedCapsuleHash':'0'*64},'stale-release')
+        assert not any(m in {'commitTransfer','nativeTransfer'} for m,_ in ha.calls[before:])
+        released=await action(a,uri,'release',{'sessionId':uri,'id':outgoing['id'],'expectedRevision':outgoing['revision'],'path':str(ready),'reviewedCapsuleHash':outgoing['review']['capsuleHash']},'release1');assert released['phase']=='released'
         proof=b.exchange/'release.json';shutil.copyfile(released['receiptPath'],proof);hb.fail_adoption=True
         with pytest.raises(ConnectionError):await action(b,'host','activate',{'id':incoming['id'],'expectedRevision':incoming['revision'],'path':str(proof)},'activate1')
         assert b.node.get(incoming['id'])['phase']=='active'
@@ -68,7 +75,7 @@ async def test_two_signed_owners_real_git_and_lost_adoption_reconcile_no_effect_
         ops=[p['operation'] for method,p in hb.calls if method=='nativeTransfer'];assert ops.count('destination.check')==2 and ops.count('destination.install')==1 and ops.count('destination.activate')==1
         assert len(hb.adoptions)==1
         assert a.node.fenced(sid) and not b.node.fenced(sid)
-        inspected=await action(a,uri,'inspect',{'sessionId':uri,'limit':1},'inspect1');assert len(inspected['receipts'])==1 and inspected['fenced']
+        inspected=await action(a,uri,'inspect',{'sessionId':uri,'limit':1},'inspect1');assert len(inspected['receipts'])==1 and inspected['fenced'];assert inspected['source']['sourceRevision']==revision and inspected['source']['expectedExecutionRevision']==0
         # All provider callbacks here are named fixtures. The native package's
         # actual Core/Foundation tests qualify real fence/probe implementation.
     finally:await a.close();await b.close()
@@ -78,7 +85,7 @@ async def test_unconfigured_exchange_path_has_no_native_effect(tmp_path):
     cfg=config(tmp_path/'owner');workspace=repo(Path(cfg['workspaceRoots'][0])/'repo');host=Host(str(uuid.uuid4()),workspace,'ahp-session:///one');owner=Owner(cfg,host,notify)
     try:
         outside=tmp_path/'outside.json';outside.write_text('{}')
-        with pytest.raises(ValueError,match='authority'):await action(owner,'host','stage',{'path':str(outside),'repository':str(workspace)},'bad1')
+        with pytest.raises(ValueError,match='authority'):await action(owner,'host','stage',{'path':str(outside),'repository':str(workspace),'reviewedCapsuleHash':'0'*64},'bad1')
         assert owner.node.page()['items']==[]
         assert not any(m=='nativeTransfer' for m,_ in host.calls)
         assert (await action(owner,'host','command',{'commandId':'bad1'},'read'))['receipt']['state']=='unknown'

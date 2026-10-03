@@ -8,7 +8,7 @@ test('installed Python owner advertises bounded reads and command receipts throu
  try{
   const schemas=await owner.actionSchemas();assert.ok(schemas['portability.export'].schema);assert.ok(schemas['portability.reconcile']);
   const page=await owner.read({uri:'amplifier-capability://portability/portability?scope=host',topic:'portability',scope:'host',clientId:'fixture'});assert.deepEqual(page.data.portability.receipts,[]);assert.match(page.data.portability.host.id,/^[0-9a-f]{64}$/);
-  await assert.rejects(owner.action({version:1,topic:'portability',channel:'ahp-root://',operation:'portability.stage',commandId:'agent1',args:{path:'/absent',repository:workspace}},{clientId:'fixture',origin:'agent'}),/approval/);
+  await assert.rejects(owner.action({version:1,topic:'portability',channel:'ahp-root://',operation:'portability.stage',commandId:'agent1',args:{path:'/absent',repository:workspace,reviewedCapsuleHash:'0'.repeat(64)}},{clientId:'fixture',origin:'agent'}),/approval/);
   const receipt=await owner.action({version:1,topic:'portability',channel:'ahp-root://',operation:'portability.command',commandId:'read1',args:{commandId:'agent1'}},{clientId:'fixture',origin:'ui'});assert.equal(receipt.result.receipt,null);assert.deepEqual(receipt.invalidate,['portability']);
  }finally{await owner.close();await rm(directory,{recursive:true,force:true});}
 });

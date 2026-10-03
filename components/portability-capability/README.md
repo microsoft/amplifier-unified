@@ -9,7 +9,12 @@ history writes in this product owner.
 `inspectSession`, public host `beginTransfer`/`commitTransfer`/`cancelTransfer` and
 `adoptTransferredSession`, `nativeTransfer`, three evidence callbacks, optional
 `authorizeTransfer` and `onInvalidate`. It publishes one host-scoped portability
-topic; selected-session actions remain scoped to their authenticated AHP URI.
+topic. Root-channel actions may carry an explicit `args.sessionId` AHP URI; the
+bridge resolves it through authenticated session inspection and checks any trusted
+selected-session context. Selected-channel actions also work. Incoming actions
+omit sessionId; a native UUID is never a channel. Selected inspection returns
+`source.sourceRevision` and `source.expectedExecutionRevision` without requiring
+a worktree capability.
 Agent requests require an actual authorizer; explicit UI actions are the default
 human approval boundary. No approval is derived from transcript prose.
 
@@ -45,7 +50,9 @@ and source jobs/schedules/questions/approvals never gain executable authority.
 
 Retained actions include inspect/export/stage/release/activate/cancel/discard and
 evidence. Added receipt/command reads recover exact outcomes without reissuing
-mutations. inspect accepts cursor/limit<=100. Explicit `reconcile {id}` only
+mutations. `command {commandId,sessionId?}` accepts the original selected AHP
+session even after navigation; omit sessionId only for an original host-scoped
+command. inspect accepts cursor/limit<=100. Explicit `reconcile {id}` only
 inspects a committed activated native proof and recovers the original host
 adoption and evidence import; it never repeats provider probes or native writes.
 If native activation itself is unknown, reconciliation refuses. Activation's
@@ -68,3 +75,18 @@ not automatically mounted UI canvases or live work. Native provider/model
 selection is preserved; other native settings remain independently owned by the
 destination. Full real-account, remote host transport, browser transfer flow and
 all-component latest-source acceptance remain distribution qualifications.
+
+Nested host mutations must use a separate durable command domain from the outer
+capability action. For example, composition maps an outer command to
+`portability:<command>:begin`, `:commit`, `:cancel`, and `:adopt`. Preserve that
+mapping during explicit recovery; never generate new child IDs for a retry.
+
+Source export is reversible preparation and returns its actual signed `review`.
+`portability.review {path|id,sessionId?}` verifies a paired incoming capsule or
+an exact locally signed receipt without creating a checkout or calling a provider.
+It returns the capsule hash, exact signed omissions, bounded per-owner evidence
+summaries, native file hashes and workspace identity. The entire review is at most
+256KiB; oversized review fails explicitly. `stage` and irreversible `release`
+require `reviewedCapsuleHash` matching the displayed package. A blanket omission
+flag is not accepted. Clients should discard approval when the path or hash
+changes and never restore approval from draft storage.
