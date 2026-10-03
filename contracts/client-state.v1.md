@@ -32,6 +32,10 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    conversation properties are shared; ordinary selection, drafts, unsaved edits and
    reading state persist on the client with no backend sync. Shared drafts or targeted
    nonsecret agent inspection are explicit capabilities using upstream semantics.
+   Editing actions and late storage reads retain their original conversation scope;
+   they cannot replace a newer selection's buffer. Existing local editing actions use
+   the same private store as the rendered editor. Destructive confirmations are
+   transient and are never restored from a saved draft.
    Broken: another window overwrites unfinished input or a secret becomes public view state. Affected: people and agents sharing a host.
 
 3. **CS3 — Publish by interest and dependency.** Detailed conversation updates go only
@@ -94,6 +98,7 @@ Which advanced controls need negotiated extensions beyond standard AHP/ACP?
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-03 | Clarify private editing identity, local action compatibility and transient confirmations. | Causal selected-session draft races and the web control qualification; no added backend draft synchronization. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Client-local persistence, AHP recovery and generic native ownership. | [Protocol architecture](../docs/architecture/README.md); user-approved direction, ratified below. |
 | 2026-09-20 | Initial draft, CS1–8. | Shared-state discussion and source/owner boundary review. |

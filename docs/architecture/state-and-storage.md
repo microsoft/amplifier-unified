@@ -122,6 +122,14 @@ changes, including identity, workspace, parent link, storage locator and revisio
 The host indexes hints idempotently. They are not copies of full transcripts and
 do not become the authority for resuming execution.
 
+Reconstruction pauses and joins admitted discovery hints before seeding retained
+identities. A bounded durable outbox coalesces observations while repair runs;
+overflow makes discovery explicitly incomplete. A timed-out writer may still be
+writing, so reconstruction requires the original response or observed process exit.
+Replacing its process is not settlement evidence. Exact-ID access and unrelated
+execution remain available. Independent scanners and legacy inbox writers require
+the same exclusion policy; a host-local queue cannot prove those writers quiet.
+
 Modify the legacy CLI through shared Foundation persistence hooks where possible:
 emit the same small hint or append to a per-writer durable change journal. A killed
 writer can miss the post-commit hint, so background reconciliation remains necessary.

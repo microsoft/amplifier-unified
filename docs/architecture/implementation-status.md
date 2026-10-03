@@ -8,6 +8,36 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
+The next assembled candidate is `afd5c804`: host `3d413aa` orders native discovery
+hints around presentation reconstruction, and native bridge `8d89364` updates mode
+projections from confirmed native results. Its fresh consumer matches all 2,681
+archive files and 694 component files across 20 component archives. The host's
+exact installed package passes six focused cases on each of Node 22 and 25,
+including the reproduced alias race and actual catalog process-exit observation.
+All nine affected assembled presentation/launcher cases now pass on Node 22,
+with every installed archive file unchanged before and after testing. This package
+is not the live Spark-2 preview. The exact paired web `2368b2e` installed browser
+also passes selected hide/restore/rebuild and lost-reply recovery, preserving all
+78 canonical fixture files with zero agent starts or model calls. See [the candidate receipt](evidence/catalog-mode-candidate-20261003.json).
+
+Web control runtime `b0d3116` has 793 passing repository tests and a passing source
+browser gate against the mode-only assembled `b315812f` and native `3c5acc1`.
+Private goal/mode/tool buffers remain local and retain their conversation identity;
+lost tool replies retain the original request without inventing a result body.
+The exact installed-static repeat also passes with 97 assets matching web
+`2368b2e` (a test-only successor). History-preserving context clear has a
+reviewed native/bridge/composition contract under implementation and remains
+unavailable in this qualified web checkpoint. Eleven F25 rows are now qualified
+for this offline browser boundary; F25.08 remains partial. The ledger totals are
+111 qualified offline/browser, 136 implemented but unqualified, 75 partial and six
+decision-pending. See [the per-control evidence](evidence/runtime-controls-browser-20261003.json).
+
+An inactive Linux successor separately resolves all 122 Python distributions with
+Portability 0.1.2 and the corrected Operations dependency; four targeted installed
+transfer/admission checks pass. The full-owner launcher and authenticated ingress
+are still under independent review and combined Linux qualification. No signed
+service authority or live adoption is inferred from staging.
+
 The owned Spark-2 preview serves distribution `b8552477`, host `721c7af`,
 native ACP `3c5acc1` and web `4bfdd9cc` on process 593654. The provider correction
 `1a753c5` is an explicit, candidate-owned development override; its PR is still
@@ -220,8 +250,8 @@ path-identity correction is merged after 114 source and 114 installed checks. Op
 hosted CI is blocked on read access to its private portability dependency, separate
 from passing installed local checks.
 
-The 328-row inventory records 100 qualified offline browser rows, 148 implemented
-but unqualified rows, 74 partial rows and six pending decisions. No
+The 328-row inventory records 111 qualified offline browser rows, 136 implemented
+but unqualified rows, 75 partial rows and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, live managed
 file removal, remaining app-local reset scopes, external-account/device checks and client
 parity still require their stated gates. The CSV and per-control receipts retain

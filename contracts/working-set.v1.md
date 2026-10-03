@@ -62,6 +62,11 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 6. **WS6 — Discover without rereading history.** New native writers publish incremental
    discovery hints after durable changes. Bounded reconciliation recovers missed hints;
    initial migration can scan in the background with visible progress and throttling.
+   Metadata reconstruction excludes concurrent discovery writers before seeding
+   retained identities. Pending hints are bounded and durable; overflow requires
+   explicit reconciliation. An unresolved writer requires its original response or
+   observed exit evidence, not a replacement process or timeout. This discovery hold
+   does not block unrelated execution or authorized exact-ID recovery.
    Broken: every refresh parses every events file or missing a watcher loses a session forever. Affected: legacy users.
 
 ## Not in v1
@@ -83,6 +88,8 @@ decision. Cross-machine path equivalence is not inferred from a matching path st
   sources without blocking; verify mismatched peer limits never silently truncate.
 - WS5: compare update work as stored sessions grow with the active set fixed.
 - WS6: duplicate/drop hints, interrupt rebuild and restart the legacy writer.
+- WS6: race native and startup hints with retained mapping reconstruction; inject a
+  late writer and require exact settlement before repair without aliasing identities.
 
 Numeric candidate budgets and fixture composition live in the delivery plan, not as passes here.
 
@@ -95,6 +102,7 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Require discovery writer ordering and exact settlement during reconstruction. | Actual host/catalog race created an alternate URI; bounded host correction and installed checks are recorded separately. |
 | 2026-10-03 | Clarify visibility versus authority and selected-row transaction ownership. | Independent review of host d8508cfe found visibility admission and global maintenance coupling; correction and qualification remain in progress. |
 | 2026-10-03 | Clarify WS1 reconstruction visibility and WS4 pre-I/O payload bounds. | Catalog projection review and reproduced payload aggregate/FIFO defects; host composition remains separately qualified. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
