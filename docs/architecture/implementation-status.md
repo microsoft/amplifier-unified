@@ -47,15 +47,31 @@ coalesced, reopened cached panels resubscribe, and stale chat/draft selections
 cannot overwrite newer private state. This later web is not deployed to Spark-2.
 See [cache qualification](evidence/cache-browser-qualification.json).
 
+Web `af015ed` also qualifies whole-allocation managed-file removal with nineteen
+actual owners and two historical children: 738 frontend tests, plus source and
+independently installed static browser checks. Canonical history and events remain
+byte-identical; reference/future-work/viewer/stale-review guards refuse, and lost
+acknowledgements recover the exact original receipt. Individual filenames are not
+an offered manifest view. See [the browser receipt](evidence/managed-files-browser-qualification.json).
+
+Distribution `c4968233` qualifies reviewed app-local bundle-default/notification
+reset and fresh undo through all twenty configured owners, with exact receipt
+recovery after restart and zero agent starts. Shared Amplifier settings and keys
+are preserved; private originals stay with each owner. This is source and immutable
+installed integration, not browser or live acceptance. Supervisor preferences,
+host policy and conversation presentation are separate remaining reset scopes.
+See [reset integration](evidence/app-reset-integration-qualification.json).
+
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
 The managed-file disposal integration now passes against an immutable distribution
 with nineteen real owners, catalog `36fe815` and native `71bdf38`, including receipt
 recovery after a full restart. It includes real historical child sessions. The
 first assembled run found and corrected a catalog parent-identity defect and a
-native incomplete-family check; both corrected packages are required. Four
-pre-existing steering tests still fail on the frozen native dependency graph and
-are tracked separately. This is offline integration, not browser/live acceptance.
+native incomplete-family check; both corrected packages are required. The
+frozen test dependency graph initially failed four steering tests; qualifying the
+current loop makes all seven steering cases pass. The refreshed complete runtime
+still requires its separate full-suite gate. This is offline integration, not browser/live acceptance.
 All18-owner history hiding already passes the actual Core/Foundation distribution
 fixture and a fresh installed Linux consumer without skips or agent warmup;
 rendered cleanup controls passed source and independently installed static browser checks on web `8e63e81` (700 tests, zero skips). Native history, event logs and
@@ -71,10 +87,10 @@ history/lease after a workspace is removed, without recreating it. It conveys no
 operation authority. Spark-2 remains on the Foundation revision qualified for its
 checkpoint; the next candidate will qualify the new merged dependency.
 
-The 328-row inventory records 94 qualified offline browser rows, 151 implemented
-but unqualified rows, 74 partial rows, three gaps and six pending decisions. No
-pending decision authorizes retiring behavior. Full-product recovery, managed
-file removal, app-local product resets, external-account/device checks and remaining client
+The 328-row inventory records 96 qualified offline browser rows, 151 implemented
+but unqualified rows, 74 partial rows, one gap and six pending decisions. No
+pending decision authorizes retiring behavior. Full-product recovery, live managed
+file removal, remaining app-local reset scopes, external-account/device checks and client
 parity still require their stated gates. The CSV and per-control receipts retain
 those narrower limits.
 
