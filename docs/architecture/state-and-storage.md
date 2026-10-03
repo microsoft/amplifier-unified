@@ -2,7 +2,9 @@
 
 Design supporting [CS](../../contracts/client-state.v1.md),
 [HP](../../contracts/host-protocol.v1.md) and [WS](../../contracts/working-set.v1.md).
-This describes the target, not completed changes to current persistence.
+This describes the target and its selected storage boundaries. The
+[implementation status](implementation-status.md) records which exact paths and
+packages have passed qualification; it does not imply production migration.
 
 ## Ownership and durability
 
@@ -16,7 +18,8 @@ This describes the target, not completed changes to current persistence.
 | `events.jsonl` and historical logs | Retained native files on disk | Targeted inspection/export or background indexing when required; no ordinary catalog parse |
 | Workspace/session summaries and parent links | Rebuildable disk index over native facts | Query pages and incremental invalidations; not a global in-memory model |
 | AHP projected chat/session state | Derived host resource projection over native facts plus host-owned fields | Subscribed/active resources and bounded cache; explicit upstream snapshot semantics |
-| Host-owned scheduling, command receipts, pending decisions, protocol/native ID mapping | Scoped durable host records | Active requests and indexed lookups; survive viewer loss and host restart |
+| Scheduling, operation receipts and pending decisions | Their independent capability owners' scoped durable records | Active requests and indexed lookups; survive viewer loss and process restart |
+| Admission receipts and protocol/native ID mapping | Scoped durable host records | Indexed exact lookups; independent of subscribers and native resume storage |
 | Active model context, modules, hooks, provider connections | Agent execution process | Executing/protected sessions plus deliberately bounded idle reuse |
 | Catalogs of providers, modules and capabilities | Disk/package metadata and independently invalidated caches | Requested settings/agent preparation; no mount/test/login during a listing |
 | Attachments, tool bodies, artifacts | Stable durable resource references and native ownership | Content on demand; previews/cache bounded by bytes, no inline global replication |
@@ -79,7 +82,7 @@ of all panels and drafts. Shared work still uses the host's authoritative comman
 
 Target the user's roughly 4,000 historical projects and 25,000 native sessions,
 with many fewer existing directories and relevant root conversations. Index small
-metadata on disk (SQLite is a proposed implementation, not a new canonical store):
+metadata in the SQLite catalog (an implemented derived index, not a new canonical store):
 
 ```text
 workspace: host, stable identity, canonical path, existence status, checked_at

@@ -217,17 +217,17 @@ The ratified [Q1–Q12 gates](delivery-plan.md) still apply. In particular:
    them the new architecture's performance claims.
 
 
-## Current composed intake qualification
+## Earlier twelve-owner recovery qualification
 
-The later assembled recovery check uses actual Core/Foundation with 12 configured
+The earlier assembled recovery check used actual Core/Foundation with 12 configured
 capability owners: native administration, resources, workspaces, media, MCP,
 operations, coordination, worktrees, publishing, Recall, feedback and recovery.
 It retired the native worker, held all owner intake gates, exported reviewed native
 bytes, checked the archive SHA and reopened intake using durable native lease
 release evidence. It made no model call and does not qualify full-product backup.
 The independently lived application-update facade has separate held-forwarding,
-process ownership and exact release tests; final signed CLI replacement remains
-an integration gate.
+process ownership and exact release tests. The later signed-launch qualification
+below supersedes the then-outstanding CLI replacement gate.
 
 Web `85ef2cb` passed 537 unit tests and actual-native source/unpacked-static browser
 checks for bounded workspace and root-chat pages, missing-directory/child

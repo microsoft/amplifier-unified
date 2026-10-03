@@ -66,7 +66,9 @@ ownership and recovery contracts. No private replacement for AHP's reconciliatio
 - HP4: disconnect every viewer during work; deny an unauthorized operation.
 - HP6: kill around admission/dispatch and lose replies; count accepted turns and effects.
 
-Implementation is not yet verified. [The plan](../docs/architecture/delivery-plan.md) records delivery gates.
+Qualification is tracked by exact implementation in
+[the status ledger](../docs/architecture/implementation-status.md).
+[The plan](../docs/architecture/delivery-plan.md) records the remaining delivery gates.
 
 ## Open questions
 

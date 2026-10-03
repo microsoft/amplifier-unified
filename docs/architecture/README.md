@@ -55,6 +55,7 @@ building block and is excluded from this migration.
 | [Agent protocol contract](../../contracts/agent-protocol.v1.md) | ACP boundary and preservation of native runtime behavior |
 | [Working-set contract](../../contracts/working-set.v1.md) | Discovery, residency, history preservation and bounded work |
 | [Component contract](../../contracts/component-boundaries.v1.md) | Independently runnable, replaceable parts |
+| [Maintenance contract](../../contracts/maintenance.v1.md) | Actual owner intake, signed replacement and reviewed recovery |
 | [Existing client contracts](../clients/direction.md) | Experience, state ownership and coordinated development |
 | [State and storage design](state-and-storage.md) | Client caches, catalog, history, memory and recovery |
 | [Protocol fit and interoperability](protocol-fit.md) | Standard versus extension, tradeoffs and external candidates |

@@ -18,7 +18,7 @@ distribution -> selected component releases + tested integration + adoption rece
 implementation lane -> owning repo/paths + clause + falsifier + independent check
 ```
 
-[The repository map](../docs/architecture/repositories.md) proposes names and owners.
+[The repository map](../docs/architecture/repositories.md) records approved names and owners.
 [CD](client-development.v1.md) owns evidence discipline and coordinated changes.
 
 ## The promises
@@ -52,6 +52,13 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
    public producer/consumer seam, dependencies and falsifiable acceptance before
    integration. Independent work uses owned checkouts, state roots and service ports.
    Broken: agents overwrite shared contracts or restart another lane's service. Affected: parallel contributors.
+
+7. **CB7 — Compose actual maintenance coverage.** Every configured effect owner
+   supplies its own intake/lifetime participant. The distribution derives the
+   required coverage; callers cannot declare an omitted owner idle. Follow
+   [MA](maintenance.v1.md) for held proofs, process replacement and recovery.
+   Broken: an update restarts over a live publisher or native transfer process.
+   Affected: operators and all accepted work.
 
 ## Not in v1
 

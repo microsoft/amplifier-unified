@@ -1,7 +1,7 @@
 # Shared client state — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CS**. Parent: [shared-client vision](../docs/clients/VISION.md).
-This specifies proposed ownership and synchronization behavior, not a new wire format.
+This specifies ratified ownership and synchronization behavior, not a new wire format.
 
 ## Who builds against this
 
@@ -65,6 +65,13 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    notification permission and similar effects target a capable authorized client/device.
    Their delivery is separate from shared conversation updates and has an explicit unavailable/unknown result.
    Broken: every viewer opens a microphone or reconnect repeats a clipboard write. Affected: people with several devices attached.
+
+9. **CS9 — Keep optional failures scoped.** An unavailable capability or refused
+   client-tool registration does not discard the confirmed core conversation or
+   prevent exact receipt inspection. Show the affected control as unavailable and
+   allow an explicit read retry. Do not turn registration, reconnect or topic retry
+   into an automatic uncertain mutation replay.
+   Broken: held voice intake closes the recovery UI. Affected: clients during recovery or partial owner outages.
 
 ## Not in v1
 

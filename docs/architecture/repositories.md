@@ -1,8 +1,9 @@
 # Repository and ownership map
 
 Ownership map supporting [CB](../../contracts/component-boundaries.v1.md).
-Names marked **new** identify the extraction boundaries. Fourteen targets now
-have landed source; access to `amplifier-unified-capability-mcp` is unresolved.
+Names marked **new** identify the extraction boundaries. All fifteen targets
+contain landed source. The created MCP repository is currently spelled
+`amplifier-unified-capabilty-mcp`; correcting that name requires repository admin access.
 See [implementation status](implementation-status.md) for the current acceptance boundary.
 Use existing ownership and public APIs where they fit. Independent repositories
 may publish libraries, executables or optional capabilities; not all are services.
