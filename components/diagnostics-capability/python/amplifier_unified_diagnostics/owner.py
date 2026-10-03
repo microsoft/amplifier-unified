@@ -249,7 +249,7 @@ class Owner:
     async def request(self,method,args):
         if self.closed:raise ValueError('Diagnostics owner closed')
         if method=='initialize':
-            self.kick();return {'protocolVersion':1,'quiescence':{'heldIntake':True,'durableRelease':True}}
+            self.kick();return {'protocolVersion':1,'quiescence':{'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':
             self.pausing=True

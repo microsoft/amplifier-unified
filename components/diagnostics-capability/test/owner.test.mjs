@@ -54,3 +54,12 @@ test('native observations ignore streaming deltas and have no history or session
  const page=await action('records');assert.equal(page.items[0].stream,'tools');assert.equal(page.items[0].data.tool,'fixture');assert.ok(!JSON.stringify(page).includes('PRIVATE'));
  assert.equal((await action('get')).capture.historicalScan,false);
 });
+
+
+test('known pre-acquisition refusal leaves live diagnostics capture available',async t=>{
+ const {owner,action}=await fixture(t),state=await action('get');await action('configure',{expectedRevision:0,config:{...state.config,enabled:true}});
+ await assert.rejects(owner.quiescenceParticipant.acquire({...fence,purpose:'service-stop'}),/service identity/);
+ assert.equal(owner.observe({stream:'app',session:'ahp-session:/one',workspace:'/owned',event:'app:after-refusal',data:{status:'ready'}}),true);
+ await until(()=>action('get'),row=>row.local.records===1);
+ assert.equal((await owner.inspectQuiescence()).intakeClosed,false);
+});
