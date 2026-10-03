@@ -1,10 +1,10 @@
 {
   "components": {
     "@amplifier/ahp-client-kit": {
-      "artifact": "vendor/ahp-client-kit-0495e17458e1.tgz",
+      "artifact": "vendor/ahp-client-kit-c5782631b221.tgz",
       "repository": "microsoft/amplifier-ahp-client-kit",
-      "revision": "de17dde1a432d133a93ebc4d587a0bce945c70aa",
-      "sha256": "0495e17458e1850454cab3818ff48eddc62d93d25582a03f1c1adf80d23d3fda",
+      "revision": "cb2fb5a6dc4844e1763de0282cec9836dacafd55",
+      "sha256": "c5782631b2214987b9437f5979dc2603c51f6bb5fad44172d66d92f8381ccfc6",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
