@@ -1,7 +1,7 @@
 # Twenty-owner installed ingress and service acceptance
 
 These tests extend the nineteen-owner managed-files gate with the actual
-`createManualIngressGate` from supervisor0.15.1. They use public installed
+`createManualIngressGate` from supervisor0.16.1. They use public installed
 distribution and owner APIs, not replacement participants. No live application,
 credentials, existing service or workspace is used.
 

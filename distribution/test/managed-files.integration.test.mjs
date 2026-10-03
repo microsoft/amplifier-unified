@@ -70,7 +70,7 @@ test('installed '+(withIngress?'twenty':'nineteen')+'-owner public disposal prot
    access=await createCountedIngress(ingress);
    const entry=process.env.UNIFIED_DISTRIBUTION_ENTRY?pathToFileURL(process.env.UNIFIED_DISTRIBUTION_ENTRY):new URL('../src/index.js',import.meta.url);
    const components=JSON.parse(await readFile(new URL('../components.json',entry),'utf8')).components;
-   const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.15.1');
+   const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.16.1');
    completePorts.runtimeOwnerBindings=[{owner:ingress.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:completeConfig.manualIngress.stateDirectory}}];
   }
   app=await createDistribution(completeConfig,completePorts);

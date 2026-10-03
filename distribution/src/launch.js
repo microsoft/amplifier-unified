@@ -101,7 +101,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    verifyQuiescenceRelease:runtime?updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
   });
   if(supervision){
-   control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,
+   control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
     token:await controlToken(supervision.hostControl.tokenFile),
     discovery:{file:supervision.hostControl.discoveryFile,tokenFile:supervision.hostControl.tokenFile,dataScope:runtime.dataScope},
     onMayBeIdle:notify=>{idleListeners.add(notify);return ()=>idleListeners.delete(notify);},

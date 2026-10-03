@@ -21,7 +21,7 @@ if(source){
 const serviceLifecycle=source?wrapper.serviceLifecycle:{identity:expected,verifyRelease:api.createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>api.inspectRuntimeService(runtime)})};
 gate=await api.createManualIngressGate({directory:c.application.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:mayBeIdle}).catch(diagnostic);
 const components=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components;
-const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.15.1');
+const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.16.1');
 const close=()=>{
  if(!closing)closing=(async()=>{ready=false;await control?.close();await access?.close();await app?.close();gate.close();supervisor.close();})();
  return closing;
@@ -35,7 +35,7 @@ try{
  });
  assert.deepEqual([...app.quiescence.requiredOwners].sort(),[...c.expectedOwners].sort());
  access=await createCountedIngress(gate);access.forward(app.url);
- control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,token:c.hostToken,
+ control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,token:c.hostToken,
   discovery:{file:c.hostFile,tokenFile:c.hostTokenFile,dataScope:runtime.dataScope},
   onMayBeIdle:callback=>{idle.add(callback);return ()=>idle.delete(callback);}});
  const paths=await app.storageInventory({externalCoverage:{'manual-preview-ingress':'declared'},externalRoots:[{id:'ingress',ownerIds:['manual-preview-ingress'],path:c.application.manualIngress.stateDirectory,coverage:'authoritative',capture:'tree'}]});
