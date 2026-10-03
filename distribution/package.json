@@ -69,7 +69,7 @@
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-34afd6097bdb.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-a6e8490b84b8.tgz",
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-5ccdc33ab6ab.tgz",
-    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-4795222dc04b.tgz",
+    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-51502f7788f2.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-f52fbc61d619.tgz",
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-30d22ce4517f.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-a5e43754fb84.tgz",

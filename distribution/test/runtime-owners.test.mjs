@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,realpath,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,realpath,rm,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {bindRuntimeOwners,runtimeOwnerProvenance} from '../src/runtime-owners.js';
 import {composeQuiescence} from '../src/quiescence.js';
 import {createConfiguredStorageInventory} from '../src/storage-inventory.js';
 import {createDistribution} from '../src/index.js';
+import {createManualIngressGate} from '@amplifier/unified-distribution-update-owner';
 
 const owner=()=>({id:'manual-preview-ingress',acquire:async()=>{throw Error('Inventory cannot acquire a lease');}});
 const component={'@amplifier/unified-distribution-update-owner':{version:'0.15.0',revision:'a'.repeat(40)}};
@@ -57,4 +58,24 @@ test('actual composition registers launcher infrastructure and leaves lifecycle 
   const inventory=await app.storageInventory();assert.ok(inventory.owners.some(o=>o.id===participant.id&&o.revision==='unresolved'));assert.equal(inventory.completeEligible,false);
   assert.equal(app.host.diagnostics().activeAgents,0);
  }finally{await app?.close();await f.close();}
+});
+
+test('installed ingress retains its own authentic markers, canonical source and private storage scope',async()=>{
+ const f=await fixture();let app,gate;try{
+  f.config.manualIngress.stateDirectory=join(f.config.manualIngress.stateDirectory,'gate');
+  gate=await createManualIngressGate({directory:f.config.manualIngress.stateDirectory,id:'manual-preview-ingress'});
+  const components=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components;
+  const source=components['@amplifier/unified-distribution-update-owner'],b=binding(gate.participant,f.config.manualIngress.stateDirectory);
+  b.storage.packageVersion=source.version;b.storage.revision=source.revision;
+  const config={...f.config,defaultWorkspace:f.root,allowedWorkspaceRoots:[f.root],webDirectory:f.root,quiescence:{instanceId:'i',dataScope:'s'},engines:[{id:'unused',command:process.execPath,args:['-e','throw Error("never start")']}]};
+  app=await createDistribution(config,{runtimeOwnerBindings:[b]});
+  assert.equal(app.quiescence.participants.find(p=>p.id===gate.participant.id),gate.participant);
+  assert.deepEqual(gate.participant.managedFiles,{version:1,preservesCanonical:true});
+  const missing=await app.storageInventory();assert.ok(missing.omissions.some(o=>o.id==='runtime-root:'+gate.participant.id));
+  const inventory=await app.storageInventory({externalCoverage:{[gate.participant.id]:'declared'},externalRoots:[{id:'ingress',ownerIds:[gate.participant.id],path:f.config.manualIngress.stateDirectory,coverage:'authoritative',capture:'tree'}]});
+  const declared=inventory.owners.find(o=>o.id===gate.participant.id);assert.equal(declared.revision,source.revision);assert.deepEqual(declared.rootIds,['application','ingress']);
+  assert.equal(inventory.omissions.some(o=>o.id.includes(gate.participant.id)),false);
+  assert.deepEqual(gate.inspect(),{active:0,held:null});assert.equal(app.host.diagnostics().activeAgents,0);
+  await app.close();assert.deepEqual(gate.inspect(),{active:0,held:null},'The launcher still owns the gate lifetime');
+ }finally{await app?.close();gate?.close();await f.close();}
 });
