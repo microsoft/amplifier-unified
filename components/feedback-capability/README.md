@@ -56,5 +56,30 @@ disclosure approval. No agent request is executed in these component tests.
 
 Qualification: installed Python owner tests, an installed subprocess/public-resource
 integration test and explicit fixture GitHub failures. Browser interactions,
-actual GitHub identity, legacy receipt imports and deployed-worker adoption are
+actual GitHub identity and deployed-worker adoption are
 separate acceptance boundaries. This owner does not run a model to prepare feedback.
+
+## Explicit legacy receipt import
+
+Stop the independent feedback owner, then use its installed Python to import one
+bounded page from an explicitly chosen legacy application database:
+
+```sh
+python -I -m amplifier_unified_feedback.migrate \
+  --source /retained/legacy/app.sqlite3 \
+  --destination /owned/unified/capabilities/feedback \
+  --table feedback_requests --limit 50
+```
+
+Continue with `--after` set to `nextCursor`, then repeat for `feedback_followups`.
+The importer takes the destination owner's exclusive lock and a read-only source
+snapshot. It retains exact accepted payload/receipt evidence in its private audit
+journal and leaves the original database and attachment files untouched. Confirmed
+receipts remain historical; queued/sending effects become unknown and cannot be
+replayed. Existing IDs are never overwritten. Invalid, oversized or conflicting
+rows are classified for explicit recovery rather than silently discarded.
+
+This imports receipt history only. It does not import client drafts, restage local
+files, submit feedback, execute models, or contact GitHub. Imported reports still
+require current GitHub author/marker verification before later actions. Keep the
+legacy database and file store until any classified omissions are resolved.
