@@ -16,7 +16,7 @@ It is not a full-product acceptance claim, and Spark-1 is unchanged.
 
 The candidate graph now includes host `0768ccc`, native bridge `a439c95`,
 resources `21a81f2`, media `6f33a8b`, operations `647e2ad`, MCP `db53f5f`,
-and distribution supervisor 0.11. Service ownership binds installation, owner,
+and distribution supervisor 0.12. Service ownership binds installation, owner,
 scope, process instance and release identity. Restarted owners retain their intake
 fences until exact authenticated release proof arrives. Live partial-acquisition
 rollback is unavailable after restart or an unknown outcome. Foundation PR426
@@ -36,14 +36,14 @@ gate; no preview or published service was changed.
 
 Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
 Node 22 checks and nine installed Python checks pass, including uncertain private
-release acknowledgement after owner replacement. Web `6c63163` has 647 passing
+release acknowledgement after owner replacement. Web `0c4a522` has 654 passing
 tests and source/static browser diagnostics and update-settlement checks. Its
 diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
 no real-account forwarding claim. Exact source and installed graph receipts remain
 the authority for each acceptance boundary.
 
 The 328-row control inventory currently records 75 qualified offline browser rows,
-155 implemented but unqualified rows, 74 partial rows, 18 gaps and six pending
+155 implemented but unqualified rows, 76 partial rows, 16 gaps and six pending
 decisions. No pending decision authorizes retiring behavior. Native owner archive
 coverage has grown to include import records, voice preferences, maintenance
 receipts and retained archives; full configured-product backup and restore remain
@@ -72,6 +72,13 @@ of those new controls is pending. The private storage inventory uses actual conf
 owner identities; installer augmentation declares both frozen supervisor ledgers and
 requires explicit review for credential-bearing configuration. These declarations are
 inputs to archive validation, not proof of a complete backup.
+
+The offline installed archive CLI is now composed from supervisor 0.12. Its
+independently installed 17-owner fixture captures and restores an inactive copy,
+rejecting changed inventory before publishing bytes. The exact native artifact
+roundtrip also passes independently. Coherent complete-product capture across
+native and product authorities remains a distinct qualification gate; separate
+passing captures do not establish that boundary.
 
 ## Landed boundaries
 

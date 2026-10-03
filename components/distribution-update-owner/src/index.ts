@@ -16,3 +16,4 @@ export * from "./service-types.js";
 export * from "./service-owner.js";
 
 export * from "./release-notes.js";
+export * from "./offline-snapshot.js";

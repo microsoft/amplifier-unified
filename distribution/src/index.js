@@ -177,3 +177,4 @@ export {readInstalledServiceConfiguration,openInstalledService,connectInstalledS
 export {createStorageInventory,createConfiguredStorageInventory,validateStorageInventory} from './storage-inventory.js';
 
 export {createInstalledStorageInventory} from './installed-storage-inventory.js';
+export {createInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from './installation-archive.js';

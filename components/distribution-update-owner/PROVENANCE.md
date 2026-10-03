@@ -32,9 +32,9 @@ Deliberate differences from the reference:
   availability cache without treating it as qualification.
 - Native generations, worker repair, prewarming, native selection and native
   source currency remain solely the native owner and its maintenance capability.
-- Backup, reset, AHP registration, release publication and production deployment
-  are outside this package. Offline snapshot coordination can consume the public
-  quiescence/readiness ports without moving those responsibilities here.
+- Archive membership/restore, reset, AHP registration, release publication and
+  production deployment are outside this package. Its offline snapshot primitive
+  qualifies stopped evidence and freezes/exports only its own supervisor ledgers.
 
 The installed fixture acceptance is deliberately separate from production
 service-manager acceptance; see the generated artifact receipt and README.
@@ -124,3 +124,12 @@ an explicit activation or successful direct install/rollback; it does not turn
 a saved candidate into process authority. Activation rechecks saved bytes and
 live source eligibility under held admission. Tests cover persisted staging,
 stale identities, supersession, admission, lost outcomes and receipt recovery.
+
+### 0.12 offline supervisor snapshot
+
+New offline-only coordination uses the package-owned SQLite ledgers and retained
+qualified stop evidence. It records authenticated host participant IDs at stop,
+refuses a live supervisor, holds both writer transactions through the caller's
+capture and exports standalone SQLite backup images. It never migrates native
+stores or treats absence as process ownership. Installer archive membership and
+new inactive restore remain separate public composition responsibilities.

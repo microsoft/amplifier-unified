@@ -33,7 +33,7 @@ test('installed actual signed distribution opts into owned stop and offline resu
  try{
   const result=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
   assert.equal(result.code,0,stdout+'\n'+stderr);
-  const receipt=JSON.parse(await readFile(receiptFile,'utf8'));assert.equal(receipt.authenticatedServiceRelease,true);assert.equal(receipt.applicationFacadeResumed,true);
+  const receipt=JSON.parse(await readFile(receiptFile,'utf8'));assert.equal(receipt.authenticatedServiceRelease,true);assert.equal(receipt.applicationFacadeResumed,true);assert.equal(receipt.installedOfflineArchive,true);assert.equal(receipt.inactiveArchiveRestore,true);assert.equal(receipt.archiveCompleteProduct,false);
   if(fullOwners){assert.equal(receipt.allConfiguredOwnersServiceLifecycleQualified,true);assert.equal(receipt.nativeAgentAcceptance,'Core/Foundation initialization and graceful retirement; no inference');assert.equal(receipt.configuredOwners.length,17);}
   if(process.env.DISTRIBUTION_SERVICE_ACCEPTANCE_DIR){const out=process.env.DISTRIBUTION_SERVICE_ACCEPTANCE_DIR;await mkdir(out,{recursive:true});await copyFile(archive,join(out,packed.filename));await copyFile(receiptFile,join(out,'service-composition-acceptance.json'));}
  }finally{clearTimeout(timer);reap();}

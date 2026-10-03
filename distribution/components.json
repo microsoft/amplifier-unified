@@ -24,12 +24,12 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-distribution-update-owner": {
-      "artifact": "vendor/unified-distribution-update-owner-9bee8aa67c50.tgz",
+      "artifact": "vendor/unified-distribution-update-owner-aa7952b763d8.tgz",
       "path": "components/distribution-update-owner",
       "repository": "microsoft/amplifier-unified",
-      "revision": "f38ba4b55edcb3711d041b0ba3696fa9d40ea722",
-      "sha256": "9bee8aa67c504eb147da5170a4898c8dcf3f702a050461bf95f1db5ed560c7f2",
-      "version": "0.11.0"
+      "revision": "0bf3fec78b6fd60aaab0d23380b03b30c34c0407",
+      "sha256": "aa7952b763d8a67fc6bcced60de3cba5e58698a5b57650fa3eff9ddf18b77f5f",
+      "version": "0.12.0"
     },
     "@amplifier/unified-feedback-capability": {
       "artifact": "vendor/unified-feedback-capability-594d66520a8d.tgz",

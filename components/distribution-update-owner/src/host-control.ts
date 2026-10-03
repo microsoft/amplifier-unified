@@ -917,6 +917,12 @@ function serviceProjection(input: unknown): unknown {
       phase: f.phase,
       instanceId: token(f.instanceId),
       dataScope: token(f.dataScope),
+      // Retain the exact authenticated census for an offline archive after
+      // child exit. A caller's inventory alone cannot prove owner quiescence.
+      ...(Array.isArray(f.owners) && f.owners.length <= 128 &&
+        new Set(f.owners).size === f.owners.length
+        ? { owners: f.owners.map((id: unknown) => token(id)) }
+        : {}),
       ...(f.serviceIdentity
         ? { serviceIdentity: serviceIdentity(f.serviceIdentity as any) }
         : {}),

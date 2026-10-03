@@ -389,12 +389,49 @@ createInterface({input:process.stdin}).on('line',async line=>{
   assert.equal((await current.owner.waitFor('post-resume-intake')).status,'succeeded');
   await new Promise(r=>setTimeout(r,30));assert.ok(notifications.some(e=>e.serviceReceipt?.commandId==='resume'&&e.serviceReceipt.admissionSettlement?.state==='settled'));
   off();b.socket.terminate();b=undefined;
-  assert.equal((await current.stopService('cleanup')).status,'stopped');await current.close();reopened=undefined;
+  const finalStop=await current.stopService('cleanup');assert.equal(finalStop.status,'stopped');
+  const participantId=id=>({resources:'capability:attachments','native-administration':'native-admin',media:'capability:voice',mcp:'capability:connectors',operations:'capability:observations',coordination:'capability:coordination',worktree:'capability:worktrees',publishing:'capability:publishing',recall:'capability:recall',feedback:'capability:feedback',history:'history-import'})[id]??id;
+  assert.ok(configuredOwners.every(id=>finalStop.qualifiedOwners.includes(participantId(id))),JSON.stringify(finalStop.qualifiedOwners));
+  await current.close();reopened=undefined;
+  // Use only the installed CLI and independently packed owner. No source-tree
+  // imports, live snapshots, service re-launch or automatic work replay.
+  const {createStorageInventory}=await import(pathToFileURL(join(packageRoot,'src/storage-inventory.js')));
+  const {createInstalledStorageInventory}=await import(pathToFileURL(join(packageRoot,'src/installed-storage-inventory.js')));
+  const archivedRoots=[{id:'application',ownerIds:configuredOwners,path:join(dir,'application'),coverage:'authoritative',capture:'tree'}];
+  const compositionInventory=createStorageInventory({namespace:configuration.dataScope,account:app.account,applicationStateDirectory:join(dir,'application'),
+   owners:configuredOwners.map(id=>({id,schemaVersion:1,revision:'installed-fixture',participantId:participantId(id),rootIds:['application'],externalStorage:'none'})),
+   roots:archivedRoots,omissions:[{id:'native',reason:'This service fixture does not supply a full native artifact',blocksComplete:true}]});
+  const augmented=await createInstalledStorageInventory({inventory:compositionInventory,directory:dir,includeCredentials:true,credentialsReviewed:true});
+  const storage=augmented.inventory,compositionInventoryFile=join(root,'composition-inventory.json');
+  await writeFile(compositionInventoryFile,JSON.stringify(compositionInventory),{mode:0o600});
+  const inventoryFile=join(root,'inventory.json'),archiveRequest=join(root,'archive-request.json'),archiveFile=join(root,'installation.unified');
+  await writeFile(inventoryFile,JSON.stringify(storage),{mode:0o600});
+  await writeFile(archiveRequest,JSON.stringify({directory:dir,inventoryFile,compositionInventoryFile,captureRequirements:augmented.captureRequirements,inventoryDigest:storage.digest,expected:finalStop.expected,stoppedCommandId:'cleanup',outputFile:archiveFile,privateContentReviewed:true,includeCredentials:true,credentialsReviewed:true}),{mode:0o600});
+  const archiveEntry=join(packageRoot,'src/installation-archive-cli.js');
+  const archiveCLI=async args=>JSON.parse((await execute(process.execPath,[archiveEntry,...args],{maxBuffer:1024*1024})).stdout);
+  const archived=await archiveCLI(['create','--request',archiveRequest]);assert.equal(archived.completeProduct,false);
+  const reviewFile=join(root,'archive-review.json');
+  const reviewed=await archiveCLI(['review','--archive',archiveFile,'--output',reviewFile]);assert.equal(reviewed.archiveSha256,archived.archiveSha256);
+  // A new, unclassified installer entry invalidates the previously reviewed
+  // census even when the application and both supervisors are still stopped.
+  await writeFile(join(dir,'unclassified-authority.json'),'{}',{mode:0o600});
+  const staleRequest=join(root,'stale-request.json');
+  await writeFile(staleRequest,JSON.stringify({...JSON.parse(await readFile(archiveRequest,'utf8')),outputFile:join(root,'stale.unified')}),{mode:0o600});
+  await assert.rejects(archiveCLI(['create','--request',staleRequest]),e=>e.stderr.includes('archive_installer_review_changed'));
+  await assert.rejects(lstat(join(root,'stale.unified')),/ENOENT/);await rm(join(dir,'unclassified-authority.json'));
+
+  const restoreRequest=join(root,'restore-request.json'),destination=join(root,'inactive-restore');
+  await writeFile(restoreRequest,JSON.stringify({archiveFile,destination,archiveSha256:reviewed.archiveSha256,manifestDigest:reviewed.manifestDigest,privateContentReviewed:true}),{mode:0o600});
+  const restored=await archiveCLI(['restore','--request',restoreRequest]);assert.equal(restored.inactive,true);assert.equal(restored.automaticResume,false);
+  assert.equal((await lstat(join(destination,'roots/installed:ledger:updates'))).isFile(),true);
+  assert.equal((await lstat(join(destination,'roots/installed:ledger:service'))).isFile(),true);
+
   await writeFile(fixture.receiptFile,JSON.stringify({schema:'unified-service-composition-acceptance-v1',node:process.version,platform:process.platform,
    actualInstalledDistributionCLI:true,actualInstallerComposition:true,privateBindingPersisted:true,actualSignedUpdate:true,
    signedOfflineReleaseNotes:true,publicReviewAction:true,reviewReceiptSurvivesUpdateAndResume:true,
    busyStopRefused:true,actualChildExitProven:true,reopenedStoppedSupervisor:true,explicitOfflineResume:true,
    publicInstalledServiceCLI:true,duplicateRunnerRefused:true,explicitStagedActivation:true,
+   installedOfflineArchive:true,inactiveArchiveRestore:true,archiveCompleteProduct:false,archiveLedgerExports:true,
    authenticatedServiceRelease:true,applicationFacadeResumed:true,pushedProgress:true,noAdoption:true,
    configuredOwners,allConfiguredOwnersServiceLifecycleQualified:Boolean(fixture.fullOwners),managedSystemService:false,
    nativeAgentAcceptance:fixture.fullOwners?'Core/Foundation initialization and graceful retirement; no inference':false,manualCheckMs:checked.updatedAt-checked.createdAt,installMs:updated.updatedAt-updated.createdAt,graphSha256:fixture.assembledArchiveSha256,componentCount:first.components.length},null,2));

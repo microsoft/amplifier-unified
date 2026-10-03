@@ -31,6 +31,9 @@ export interface ServiceReceipt {
   stoppedCommandId?: string;
   resumeCommandId?: string;
   exitProof?: OwnedExitProof;
+  /** Authenticated held host-fence coverage, captured before child exit. Older
+   * receipts may resume, but cannot qualify an offline whole-owner snapshot. */
+  qualifiedOwners?: string[];
   noEffect?: true;
   errorCode?: string;
   admissionSettlement?: {

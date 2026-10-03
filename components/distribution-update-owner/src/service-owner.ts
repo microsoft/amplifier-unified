@@ -334,6 +334,10 @@ export class ServiceLifecycleOwner {
       )
         throw Error("service_admission_unconfirmed");
       op.fenceId = token(admitted.fenceId);
+      if (Array.isArray(held.owners) && held.owners.length <= 128 &&
+          new Set(held.owners).size === held.owners.length) {
+        op.qualifiedOwners = held.owners.map((id: unknown) => token(id));
+      }
       delete op.admissionSettlement;
       op.phase = "held";
       this.persist(op);
