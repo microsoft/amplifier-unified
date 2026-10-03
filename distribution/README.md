@@ -434,3 +434,73 @@ one private directory without mounting Core or warming a worker. The catalog hid
 allocation paths from the workspace picker and uses independent managed-session
 grants for discovery. Managed ownership is verified from durable host/native receipts
 before activation; a path or marker alone is not ownership proof.
+
+### Managed files protection and shared action facade
+
+`createManagedFilesProtection` in `src/managed-files-protection.js` owns only
+product-reference exclusion. Configure `{directory,instanceId,dataScope,
+participants,readEffectReceipt,onMayBeIdle?}`. `participants` is the exact composed
+owner census, using each factory's actual participant ID; exclude the initiating
+managed-files facade and duplicate native/admin/transfer gates. The host/native
+operation independently owns canonical-history and selected-family writer leases.
+An absent participant or missing `managedFiles:{version:1,preservesCanonical:true}`
+refuses before acquisition. A retention-hide marker grants no file-removal rights.
+
+The host calls `acquire({commandId,session,descendants,operation:'dispose-owned-files',
+reviewHash,allocation})`, where allocation has exactly
+`{allocationId,executionDirectory,allocationHash,treeHash,entryCount,bytes}` from
+its native-verified review. At most 100 descendants plus the root are accepted.
+Under each genuine held lease the coordinator calls
+`inspectManagedFilesReferences({sessions,limit:101,allocation})`. Only complete,
+empty protected/omissions results permit native admission. File, publication and
+artifact references remain relevant even when they would allow discovery hiding.
+All product records and canonical histories remain owned by their original owner.
+
+The returned `{ownerIds,release}` releases only after the trusted callback
+`readEffectReceipt(session,commandId)` reads the host's exact durable effect:
+matching command, session, review hash, operation, allocation and
+`preservesCanonical:true`, with `status:'completed'` or
+`status:'refused',executed:false`. No caller-provided proof or hidden-session result
+can substitute. The first terminal proof is persisted before any owner release;
+restart and lost acknowledgments retain that exact proof. Unknown outcomes remain
+held; `receipt(commandId)` is passive and `reconcile(commandId)` inspects original
+proof and releases gates only, never repeats removal. Original acquisition
+refusals unwind only confirmed, live, pre-effect leases. A separate SQLite OS lease
+prevents competing processes from recovering an active coordinator's journal.
+
+`createManagedFilesCapabilities` in `src/managed-files.js` accepts
+`{host:()=>host,protection:()=>coordinator,authorize,directory,onMayBeIdle?,onInvalidate?}`.
+The host-scoped `managed-files` topic is metadata-only and starts no agents or disk
+inventory. Actions have strict public schemas:
+
+- `managedFiles.preview {sessionId,protectSessionIds?}` returns the host review.
+- `managedFiles.dispose {sessionId,reviewId,reviewHash,expectedHistoryRevision,
+  protectSessionIds?}` uses the outer capability command ID, derives a deterministic
+  separate child ID and returns `{commandId,ownerCommandId,receipt,replayed:false}`.
+- `managedFiles.receipt {sessionId,commandId}` inspects that original child and
+  returns the same identities plus `receipt`, `protection`, and `replayed:false`.
+- `managedFiles.reconcile {sessionId,commandId}` passively inspects the native
+  outcome through the host, then reconciles protection without dispatching disposal.
+
+The nested host identity is `managed-files:` plus SHA256 of UTF-8
+`JSON.stringify([sessionId,outerCommandId])`; this avoids collisions with the
+host's outer capability command journal. Browser callers cannot supply native IDs,
+paths, allocation evidence or actor identities. `authorize(context,{operation,
+session})` must enforce the configured account and explicit action authority.
+Agents are restricted to their trusted current session. The facade accepts the
+root channel for authorized UI and the matching selected-session channel for a
+native agent, preserving the shared `app_control` path.
+
+Receipt and reconciliation actions are explicitly classified as passive under a
+held intake fence. All their actual forwarding promises still count toward owner
+lifetime and must settle before closing or acquiring another gate. The facade
+advertises independent service-stop and retention-hide support; it does not hold
+itself during its own disposal. Idle history-cleanup and application-updates
+facades separately advertise managed-files support, binding their no-deferred-file
+reference result to one exact held allocation/family. Their downstream authorities
+must still appear independently in the census.
+
+This module does not wire the distribution index or claim end-to-end native file
+removal acceptance. Integration must supply the current host/native managed-files
+implementation, the complete configured owner census, and source provenance for
+these new private journals. Unknown work is preserved, never replayed.

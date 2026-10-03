@@ -17,7 +17,7 @@ const bounded=value=>{if(Buffer.byteLength(JSON.stringify(value))>512*1024)throw
  * command outcomes; this facade stores only its own forwarding intake fence. */
 export function createHistoryCleanupCapabilities({host,protection,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){
  if(typeof host!=='function'||typeof authorize!=='function'||!directory)throw Error('Cleanup requires trusted host, authorization and owned intake storage');
- const gate=new FacadeFence({directory,id:'history-cleanup',onMayBeIdle,serviceStop:true});let revision=0,closed=false;
+ const gate=new FacadeFence({directory,id:'history-cleanup',onMayBeIdle,serviceStop:true,managedFiles:true});let revision=0,closed=false;
  const schemas=Object.fromEntries(Object.entries(definitions).map(([name,{description,input}])=>[name,{description,schema:z.toJSONSchema(input)}]));
  const check=async context=>{if(closed)throw Error('Cleanup facade closed');await authorize(context);};
  return {

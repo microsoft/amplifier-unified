@@ -19,7 +19,7 @@ const schemas={
 };
 export function createApplicationUpdateCapabilities({supervisor,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){
  if(supervisor?.outlivesDistribution!==true||!supervisor.owner||typeof supervisor.subscribe!=='function'||typeof authorize!=='function')throw Error('Application updates require an external supervisor and explicit authorization');
- const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle,serviceStop:true,retentionHide:true}):undefined;
+ const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle,serviceStop:true,retentionHide:true,managedFiles:true}):undefined;
  const owner=supervisor.owner,topic='application-updates',uri='amplifier-capability://application-updates';let revision=0,closed=false;
  const changed=()=>{if(!closed){revision++;onInvalidate(topic,'host');}};
  const unsubscribe=supervisor.subscribe(changed);

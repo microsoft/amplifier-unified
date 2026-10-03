@@ -91,3 +91,15 @@ test('unknown outcome invalidates a live partial-acquisition rollback token imme
   assert.equal(owner.fence(),null);
  }finally{owner.close();await rm(directory,{recursive:true,force:true})}
 });
+
+test('managed-file coverage is separately enabled and binds one exact allocation while held',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'managed-facade-binding-'));
+ const ctx={fenceId:'files',commandId:'dispose',purpose:'managed-files-disposal',instanceId:'old',dataScope:'scope'};
+ const selection={sessions:['ahp-session:/one'],limit:101,allocation:{allocationId:'01234567-1234-1234-1234-123456789abc',executionDirectory:'/owned/files',allocationHash:'a'.repeat(64),treeHash:'b'.repeat(64),entryCount:1,bytes:12}};
+ let owner=new FacadeFence({directory,id:'facade',retentionHide:true});
+ try{await assert.rejects(owner.participant.acquire(ctx),/not configured/);owner.close();owner=new FacadeFence({directory,id:'facade',managedFiles:true});assert.deepEqual(owner.participant.managedFiles,{version:1,preservesCanonical:true});const lease=await owner.participant.acquire(ctx);assert.deepEqual(await lease.inspectManagedFilesReferences(selection),{coverage:'complete',protected:[],omissions:[]});await assert.rejects(lease.inspectManagedFilesReferences({...selection,allocation:{...selection.allocation,treeHash:'c'.repeat(64)}}),/binding changed/);await assert.rejects(owner.participant.reconcileRelease({...ctx,outcome:'unchanged',proof:{kind:'admission-refused'}}),/Pre-effect/);await lease.release('unknown');await assert.rejects(lease.inspectManagedFilesReferences(selection),/held facade/);await assert.rejects(lease.release('unchanged',{kind:'admission-refused'}),/Pre-effect/);await lease.release('unchanged',{verified:true,...ctx,outcome:'unchanged',receiptId:'exact-managed-effect'});await assert.rejects(lease.inspectManagedFilesReferences(selection),/held facade/);}finally{owner.close();await rm(directory,{recursive:true,force:true});}
+});
+test('passive forwarding is allowed under hold but remains joined for lifetime and other acquisitions',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'facade-passive-')),owner=new FacadeFence({directory,id:'facade'});let finish;
+ try{const call=owner.run(true,()=>new Promise(r=>finish=r));assert.equal(await owner.participant.acquire({fenceId:'one',commandId:'one',purpose:'recovery',instanceId:'old',dataScope:'scope'}),null);assert.throws(()=>owner.close(),/active/);let drained=false;const closing=owner.drain().then(()=>drained=true);await new Promise(r=>setImmediate(r));assert.equal(drained,false);finish();await call;await closing;}finally{finish?.();owner.close();await rm(directory,{recursive:true,force:true});}
+});
