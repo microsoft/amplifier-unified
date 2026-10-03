@@ -11,6 +11,9 @@ test('JSON recovery policy is account bound and credential export needs launcher
  for(const origin of ['ui','agent'])assert.deepEqual(await authorize({account:'local',origin}),{accountId:'local'});
  await assert.rejects(authorize({account:'other',origin:'ui'}),/not authorized/);
  await assert.rejects(authorize({account:'local',origin:'ui'},'recovery.prepare',{includeCredentials:true,credentialsReviewed:true}),/launcher/);
+ for(const operation of ['recovery.appReset.prepare','recovery.appReset.apply','recovery.appReset.restore'])await assert.rejects(authorize({account:'local',origin:'ui'},operation,{parts:['notifications.credentials'],credentialsReviewed:true}),/launcher/);
+ const privateAuthority=localRecoveryAuthorization({account:'local',recovery:{authorization:'local-account',credentials:true}});
+ assert.deepEqual(await privateAuthority({account:'local',origin:'ui'},'recovery.appReset.prepare',{parts:['notifications.credentials'],credentialsReviewed:true}),{accountId:'local'});
 });
 
 test('unsigned local launcher owns a fresh instance and closes all local services',async()=>{

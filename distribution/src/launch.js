@@ -27,6 +27,7 @@ export function localRecoveryAuthorization(config){
  return async (context,_operation,args={})=>{
   if(context.account!==config.account||!['ui','agent'].includes(context.origin??'ui'))throw Error('Recovery account is not authorized');
   if(args.includeCredentials===true&&config.recovery.credentials!==true)throw Error('Credential export is not authorized by the launcher');
+  if(Array.isArray(args.parts)&&args.parts.includes('notifications.credentials')&&config.recovery.credentials!==true)throw Error('Retained app credential reset is not authorized by the launcher');
   return {accountId:config.account};
  };
 }
