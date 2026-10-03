@@ -94,9 +94,21 @@ test('missing authority, unverified artifacts and inherited external omissions r
  assert.ok(v.inventory.omissions.some(x=>x.id==='external-owner'));assert.ok(v.inventory.omissions.some(x=>x.id==='installed:missing:initial-provisioning.claim'));assert.ok(v.inventory.omissions.some(x=>x.id.startsWith('installed:artifact-unverified:')));
 });
 test('known WAL/SHM state is never read or raw-captured; the SQLite export requirement remains mandatory',async t=>{
- const f=await fixture(t);for(const s of ['-wal','-shm','-journal'])await writeFile(join(f.root,'supervisor/owner/updates.sqlite3'+s),'committed-or-transient',{mode:0o600});
+ const f=await fixture(t),before=await createInstalledStorageInventory(f.args);for(const s of ['-wal','-shm','-journal'])await writeFile(join(f.root,'supervisor/owner/updates.sqlite3'+s),'committed-or-transient',{mode:0o600});
  const v=await createInstalledStorageInventory(f.args);assert.equal(v.inventory.completeEligible,true);assert.equal(v.captureRequirements.sqliteExports.length,2);
+ assert.deepEqual(v,before,'Required lock acquisition may create companions without changing reviewed authority');
  assert.equal(v.inventory.roots.filter(x=>x.id.startsWith('installed:ledger:updates-')&&x.capture==='omit').length,3);
+});
+test('unsafe SQLite companions invalidate the reviewed inventory and block complete coverage',async t=>{
+ for(const kind of ['symlink','hardlink','directory']){
+  const f=await fixture(t),before=await createInstalledStorageInventory(f.args),path=join(f.root,'supervisor/owner/updates.sqlite3-wal');
+  if(kind==='symlink')await symlink(join(f.root,'host-token'),path);
+  if(kind==='hardlink')await link(join(f.root,'host-token'),path);
+  if(kind==='directory')await mkdir(path);
+  const after=await createInstalledStorageInventory(f.args);
+  assert.equal(after.inventory.completeEligible,false,kind);assert.notEqual(after.inventory.digest,before.inventory.digest,kind);
+  assert.ok(after.inventory.omissions.some(x=>x.id==='installed:unsafe:ledger:updates-wal'),kind);
+ }
 });
 test('linked authority and linked directory boundaries cannot authorize external reads or complete coverage',async t=>{
  const f=await fixture(t);await rm(join(f.root,'host-token'));await link(join(f.root,'supervisor-token'),join(f.root,'host-token'));

@@ -112,8 +112,11 @@ export async function createInstalledStorageInventory({inventory,directory,inclu
   const parent=p.slice(0,p.lastIndexOf('/')),base=p.slice(p.lastIndexOf('/')+1);
   await unknown(parent,new Set([base,base+'-wal',base+'-shm',base+'-journal']));
   for(const suffix of ['-wal','-shm','-journal']){
-   const side=p+suffix,st=await info(join(root,side));if(!st)continue;
-   if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1){omission('unsafe:'+id+suffix,'Unverified SQLite companion: '+side);continue;}
+   const side=p+suffix,st=await info(join(root,side));
+   // Required offline snapshots may create these companions. Their presence is
+   // not new authority and must not invalidate the already reviewed inventory.
+   // Unsafe present entries still block completeness without following them.
+   if(st&&(!st.isFile()||st.isSymbolicLink()||st.nlink!==1)){omission('unsafe:'+id+suffix,'Unverified SQLite companion: '+side);continue;}
    declare(id+suffix,side,'derived-rebuildable','omit','SQLite transactional companion; its committed authority must be included by the required frozen SQLite export');
   }
  }
