@@ -1,3 +1,8 @@
+import type {
+  ReleaseNotesPublication,
+  ReleaseNotesWarning,
+  NoticeReview,
+} from "./release-notes.js";
 /** All paths, credentials and execution authority belong to trusted adapters. */
 export interface ReleaseIdentity {
   id: string;
@@ -8,6 +13,8 @@ export interface ReleaseIdentity {
 export interface Catalog {
   releases: ReleaseIdentity[];
   recommendedId: string | null;
+  releaseNotes?: ReleaseNotesPublication;
+  releaseNotesWarning?: ReleaseNotesWarning;
 }
 export interface PreparedRelease {
   identity: ReleaseIdentity;
@@ -24,6 +31,13 @@ export interface OperationContext {
   signal: AbortSignal;
 }
 export interface ReleasePort {
+  /** Offline editorial information from an exact signed installed receipt. */
+  notes?(
+    target: PreparedRelease,
+  ): Promise<{
+    releaseNotes?: ReleaseNotesPublication;
+    releaseNotesWarning?: ReleaseNotesWarning;
+  }>;
   check(context: OperationContext & { fresh: boolean }): Promise<Catalog>;
   /** Inactive candidate only. Must preserve explicit pins and local source edits. */
   prepare(
@@ -101,7 +115,12 @@ export interface Preferences {
   autoInstall: boolean;
   intervalMs: number;
 }
-export type Command = "check" | "install" | "rollback" | "preferences";
+export type Command =
+  | "check"
+  | "install"
+  | "rollback"
+  | "preferences"
+  | "review-notice";
 export type Status =
   | "queued"
   | "running"
@@ -122,6 +141,7 @@ export interface Operation {
   previousInstanceId?: string | null;
   previous?: PreparedRelease | null;
   errorCode?: string;
+  noticeReview?: NoticeReview;
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
   activation?: { startedAt: number; completedAt?: number };
@@ -209,7 +229,7 @@ export function preferences(value: Preferences): Preferences {
     (value.autoInstall && !value.autoCheck) ||
     !Number.isSafeInteger(value.intervalMs) ||
     value.intervalMs < 1000 ||
-    value.intervalMs > 86400000
+    value.intervalMs > 604800000
   )
     throw Error("invalid_preferences");
   return {

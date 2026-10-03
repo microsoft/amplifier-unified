@@ -55,3 +55,17 @@ test('service gate is opt-in and definitive busy refusal restores only its uncha
   await another.release('unchanged',{kind:'admission-refused'});assert.equal(owner.fence(),null);
  }finally{owner.close();await rm(directory,{recursive:true,force:true});}
 });
+
+
+test('unknown outcome invalidates a live partial-acquisition rollback token immediately',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'facade-live-unknown-'));
+ const owner=new FacadeFence({directory,id:'updates'}),ctx={fenceId:'live-unknown',commandId:'command',purpose:'distribution-update',instanceId:'old',dataScope:'scope'};
+ try{
+  const lease=await owner.participant.acquire(ctx);await lease.release('unknown');
+  await assert.rejects(lease.release('unchanged',{kind:'admission-refused'}),/Pre-effect/);
+  await assert.rejects(owner.participant.reconcileRelease({...ctx,outcome:'unchanged',proof:{kind:'admission-refused'}}),/Pre-effect/);
+  assert.equal(owner.fence().phase,'unknown');await assert.rejects(owner.run(false,()=>42),/intake is closed/);
+  await lease.release('ready',{verified:true,...ctx,outcome:'ready',instanceId:'new',receiptId:'exact-authenticated-receipt'});
+  assert.equal(owner.fence(),null);
+ }finally{owner.close();await rm(directory,{recursive:true,force:true})}
+});

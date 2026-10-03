@@ -14,3 +14,5 @@ export * from "./posix-process.js";
 export * from "./posix-lifecycle.js";
 export * from "./service-types.js";
 export * from "./service-owner.js";
+
+export * from "./release-notes.js";

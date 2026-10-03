@@ -1,4 +1,9 @@
 import {
+  parseReleaseNotes,
+  type ReleaseNotesPublication,
+  type ReleaseNotesWarning,
+} from "./release-notes.js";
+import {
   createHash,
   createPublicKey,
   verify as verifySignature,
@@ -67,6 +72,8 @@ export interface ReleaseChannel {
   expiresAt: number;
   recommendedId: string | null;
   releases: ReleaseDescriptor[];
+  releaseNotes?: ReleaseNotesPublication;
+  releaseNotesWarning?: ReleaseNotesWarning;
 }
 export interface SourceObservation {
   repository: string;
@@ -319,6 +326,18 @@ export function readSignedChannel(
       !releases.some((r) => r.identity.id === parsed.recommendedId))
   )
     throw Error("channel_invalid");
+  // Optional editorial data must not disable an otherwise trusted update.
+  // The enclosing signature is already verified; never consume unsigned notes.
+  let releaseNotes: ReleaseNotesPublication | undefined;
+  let releaseNotesWarning: ReleaseNotesWarning = "release_notes_unavailable";
+  if (parsed.releaseNotes !== undefined) {
+    try {
+      releaseNotes = parseReleaseNotes(parsed.releaseNotes);
+      releaseNotesWarning = null;
+    } catch {
+      releaseNotesWarning = "release_notes_invalid";
+    }
+  }
   return {
     envelope: {
       schema: input.schema,
@@ -331,6 +350,8 @@ export function readSignedChannel(
       expiresAt: parsed.expiresAt,
       recommendedId: parsed.recommendedId,
       releases,
+      ...(releaseNotes ? { releaseNotes } : {}),
+      releaseNotesWarning,
     },
   };
 }
@@ -562,6 +583,10 @@ export class SignedReleaseAdapter implements ReleasePort {
     return {
       releases: this.cached.channel.releases.map((r) => r.identity),
       recommendedId: this.cached.channel.recommendedId,
+      ...(this.cached.channel.releaseNotes
+        ? { releaseNotes: this.cached.channel.releaseNotes }
+        : {}),
+      releaseNotesWarning: this.cached.channel.releaseNotesWarning,
     };
   }
   private async observeSources(
@@ -721,6 +746,30 @@ export class SignedReleaseAdapter implements ReleasePort {
     if (target.handle !== "release:" + target.identity.digest)
       throw Error("candidate_handle_invalid");
     return join(this.root, "releases", target.identity.digest);
+  }
+  async notes(target: PreparedRelease) {
+    const directory = this.location(target);
+    const receipt = JSON.parse(
+      (
+        await boundedFile(join(directory, "receipt.json"), MAX_CHANNEL)
+      ).toString("utf8"),
+    );
+    if (
+      receipt.schema !== "distribution-candidate-v1" ||
+      receipt.releaseId !== target.identity.id
+    )
+      throw Error("candidate_receipt_invalid");
+    const { channel } = readSignedChannel(
+      receipt.signed,
+      this.options.trustedKeys,
+      false,
+    );
+    if (!channel.releases.some((r) => same(r.identity, target.identity)))
+      throw Error("candidate_receipt_invalid");
+    return {
+      releaseNotes: channel.releaseNotes,
+      releaseNotesWarning: channel.releaseNotesWarning,
+    };
   }
   async installed(
     target: PreparedRelease,

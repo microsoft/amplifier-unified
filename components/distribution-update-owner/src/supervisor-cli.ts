@@ -351,6 +351,7 @@ export async function runSupervisor(
     onChange: (receipt) => transport?.publish(receipt),
   });
   try {
+    await owner.loadInstalledReleaseNotes();
     if (serviceBinding && lifecycle instanceof PosixOwnedProcessLifecycle) {
       service = new ServiceLifecycleOwner({
         directory: resolve(root, "service"),

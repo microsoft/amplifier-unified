@@ -57,6 +57,8 @@ export class FacadeFence {
   const prior=this.db.prepare('SELECT signature FROM releases WHERE id=?').get(binding.fenceId);
   if(prior){if(prior.signature!==signature)throw Error('Facade release proof changed');return;}
   const held=this.fence();if(!held||canonical(exact(held))!==canonical(binding))throw Error('Exact held facade fence required');
+  // An unknown effect invalidates even the original live pre-effect rollback.
+  // Only exact authenticated outcome evidence can reopen this held fence.
   if(outcome==='unknown'){this.db.prepare('UPDATE fence SET body=? WHERE id=1').run(canonical({...held,phase:'unknown'}));return;}
   if(!['ready','unchanged'].includes(outcome))throw Error('Invalid facade release outcome');
   if(proof?.kind!=='admission-refused'){

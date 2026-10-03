@@ -214,6 +214,7 @@ interface ReleaseChannel {
   expiresAt: number; // Unix milliseconds
   recommendedId: string | null;
   releases: ReleaseDescriptor[];
+  releaseNotes?: ReleaseNotesPublication; // optional signed editorial data
 }
 ```
 
@@ -404,3 +405,8 @@ checks the authenticated running identity and idempotently reconciles the held
 host fence; it never repeats a launch. Settled records are not downgraded by a
 late lost reply. A restarted owner retains pending or legacy unproven settlement
 as unknown rather than assuming that an earlier ready receipt opened intake.
+
+Optional release history is described in [RELEASE-NOTES.md](RELEASE-NOTES.md).
+The publisher includes it before signing the channel. Do not fetch or scrape
+unsigned release text during manual checks. Published links are fallback
+navigation only. Historical notes are not installable artifacts or source pins.

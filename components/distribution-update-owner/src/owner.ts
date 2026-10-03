@@ -1,3 +1,16 @@
+import {
+  parseReleaseNotes,
+  noticeReview,
+  noticeDigest,
+  acceptedNoticeDigests,
+  notesRevision,
+  notesPage,
+  PUBLISHED_RELEASES_URL,
+  type NoticeReview,
+  type ReleaseNotesQuery,
+  type ReleaseNotesSummary,
+  type ReviewedReleaseNotesEntry,
+} from "./release-notes.js";
 import { randomUUID } from "node:crypto";
 import { Store } from "./store.js";
 import {
@@ -25,6 +38,7 @@ export interface Receipt {
   updatedAt: number;
   target?: ReturnType<typeof identity>;
   errorCode?: string;
+  noticeReview?: NoticeReview;
   admission?: { activeWork: 0; intakeClosed: true; observedAt: number };
   activation?: { startedAt: number; completedAt?: number };
   admissionSettlement?: Operation["admissionSettlement"];
@@ -61,6 +75,7 @@ const receipt = (op: Operation): Receipt => ({
   updatedAt: op.updatedAt,
   ...(op.target ? { target: identity(op.target.identity) } : {}),
   ...(op.errorCode ? { errorCode: op.errorCode } : {}),
+  ...(op.noticeReview ? { noticeReview: { ...op.noticeReview } } : {}),
   ...(op.activation ? { activation: { ...op.activation } } : {}),
   ...(op.admissionSettlement
     ? { admissionSettlement: { ...op.admissionSettlement } }
@@ -122,6 +137,11 @@ export class DistributionUpdateOwner {
   private waiters = new Map<string, Set<(value: Receipt) => void>>();
   private idleRevision = 0;
   private readonly dataScope: string;
+  private notesCache: {
+    key: string;
+    summary: ReleaseNotesSummary;
+    entries: ReviewedReleaseNotesEntry[];
+  } | null = null;
 
   constructor(private readonly options: OwnerOptions) {
     this.dataScope = token(options.dataScope);
@@ -155,6 +175,138 @@ export class DistributionUpdateOwner {
   }
   setPreferences(commandId: string, value: Preferences): Receipt {
     return this.submit(commandId, "preferences", { ...preferences(value) });
+  }
+  /** Local publication metadata only. Never joins the install queue or waits for a poll. */
+  reviewNotice(commandId: string, value: NoticeReview): Receipt {
+    if (this.closing) throw Error("owner_closed");
+    const review = noticeReview(value),
+      now = Date.now();
+    let fresh = false;
+    const op = this.store.transaction(() => {
+      const accepted = this.store.accept({
+        id: token(commandId),
+        command: "review-notice",
+        args: { ...review },
+        status: "succeeded",
+        phase: "notice_reviewed",
+        createdAt: now,
+        updatedAt: now,
+        noticeReview: review,
+      });
+      if (!accepted.fresh) return accepted.operation;
+      fresh = true;
+      const found = this.store
+        .notes()
+        .publication.entries.find((e) => e.version === review.version)
+        ?.notices.find((n) => n.id === review.noticeId);
+      if (
+        !found ||
+        noticeDigest(review.version, found) !== review.contentDigest
+      ) {
+        accepted.operation.status = "failed";
+        accepted.operation.phase = "notice_review_refused";
+        accepted.operation.errorCode = found
+          ? "notice_changed"
+          : "notice_not_found";
+        this.store.write(accepted.operation);
+      } else this.store.saveReview(review, accepted.operation);
+      return accepted.operation;
+    });
+    if (fresh) this.record(op);
+    return receipt(op);
+  }
+  private notesView() {
+    const state = this.store.state();
+    const currentVersion = state.current?.identity.version ?? null;
+    const recommendedVersion =
+      state.catalog?.releases.find((r) => r.id === state.catalog?.recommendedId)
+        ?.version ?? null;
+    const key = JSON.stringify([
+      this.store.notesRevision(),
+      currentVersion,
+      recommendedVersion,
+    ]);
+    if (this.notesCache?.key === key) return this.notesCache;
+    const saved = this.store.notes(),
+      reviews = this.store.reviews();
+    const entries: ReviewedReleaseNotesEntry[] = saved.publication.entries.map(
+      (e) => ({
+        ...e,
+        notices: e.notices.map((n) => {
+          const reviewed = acceptedNoticeDigests(e.version, n)
+            .map((d) => reviews.get(d))
+            .find(Boolean);
+          return {
+            id: n.id,
+            title: n.title,
+            detail: n.detail,
+            action: n.action,
+            contentDigest: noticeDigest(e.version, n),
+            reviewedAt: reviewed?.reviewedAt ?? null,
+            reviewReceiptId: reviewed?.reviewReceiptId ?? null,
+          };
+        }),
+      }),
+    );
+    const summary: ReleaseNotesSummary = {
+      schema: "distribution-release-notes-v1",
+      revision: notesRevision([key, entries]),
+      currentVersion,
+      recommendedVersion,
+      publishedReleasesUrl: PUBLISHED_RELEASES_URL,
+      warning: saved.warning,
+      totalEntries: entries.length,
+      unreviewedCount: entries.reduce(
+        (count, e) =>
+          count + e.notices.filter((n) => n.reviewedAt === null).length,
+        0,
+      ),
+    };
+    return (this.notesCache = { key, summary, entries });
+  }
+  releaseNotes(query: ReleaseNotesQuery = {}) {
+    const view = this.notesView();
+    return notesPage(view.summary, view.entries, query);
+  }
+  /** Bootstrap offline notes from the exact signed installed receipt, once.
+   * Startup never crawls release history or invokes a network check for notes. */
+  async loadInstalledReleaseNotes(): Promise<void> {
+    const current = this.store.state().current;
+    if (
+      this.store.notesRevision() !== "empty" ||
+      !current ||
+      !this.options.releases.notes
+    )
+      return;
+    try {
+      const data = await this.options.releases.notes(current);
+      if (!this.closing && this.store.notesRevision() === "empty")
+        this.saveReleaseNotes(data);
+    } catch {
+      /* Optional editorial data cannot prevent the supervisor from opening. */
+    }
+  }
+  private saveReleaseNotes(data: {
+    releaseNotes?: unknown;
+    releaseNotesWarning?: unknown;
+  }): void {
+    let publication;
+    let warning: import("./release-notes.js").ReleaseNotesWarning =
+      "release_notes_unavailable";
+    if (data.releaseNotes !== undefined) {
+      try {
+        publication = parseReleaseNotes(data.releaseNotes);
+        warning = null;
+      } catch {
+        warning = "release_notes_invalid";
+      }
+    } else if (data.releaseNotesWarning === "release_notes_invalid")
+      warning = "release_notes_invalid";
+    this.store.saveNotes(
+      publication,
+      warning,
+      this.store.state().current?.identity.version ?? null,
+    );
   }
   receipt(commandId: string): Receipt | null {
     const op = this.store.read(token(commandId));
@@ -232,6 +384,7 @@ export class DistributionUpdateOwner {
       current: state.current?.identity ?? null,
       previous: state.previous?.identity ?? null,
       catalog: state.catalog,
+      releaseNotes: { ...this.notesView().summary },
       lastCheck: state.lastCheck,
       lastCheckSucceeded: state.lastCheckSucceeded,
       preferences: state.preferences,
@@ -536,14 +689,14 @@ export class DistributionUpdateOwner {
       }
       if (op.command === "check") {
         this.phase(op, "checking");
-        const result = catalog(
-          await this.options.releases.check({
-            ...this.context(op),
-            fresh: op.args.fresh === true,
-          }),
-        );
+        const checked = await this.options.releases.check({
+          ...this.context(op),
+          fresh: op.args.fresh === true,
+        });
+        const result = catalog(checked);
         this.controller.signal.throwIfAborted();
         const state = this.store.state();
+        this.saveReleaseNotes(checked);
         state.catalog = result;
         state.lastCheck = Date.now();
         state.lastCheckSucceeded = true;

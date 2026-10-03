@@ -203,6 +203,7 @@ try {
         expiresAt: Date.now() + 600000,
         recommendedId: release.identity.id,
         releases: [first, second],
+        releaseNotes:{schema:'distribution-release-notes-publication-v1',entries:[first,second].map(item=>({version:item.identity.version,title:'Immediate manual updates',changes:['Manual requests dispatch directly.'],notices:[{id:'immediate-checks',title:'Faster update checks',detail:'Manual checks bypass cached completed results.',action:'Use Check for updates.'}]}))},
       }),
     );
     resources.set(
@@ -303,6 +304,10 @@ createInterface({input:process.stdin}).on('line',async line=>{
   assert.deepEqual((await host.service.inspectServiceLifecycle()).identity,original);
   const notifications=[];let off=supervisor.subscribe(e=>notifications.push(e));
   a=await peer('http://127.0.0.1:'+port);
+  const notes=await a.action('releaseNotes',{limit:1},'notes');
+  assert.equal(notes.currentVersion,first.identity.version);assert.equal(notes.entries.length,1);
+  const note=notes.entries[0],review={version:note.version,noticeId:note.notices[0].id,contentDigest:note.notices[0].contentDigest};
+  assert.equal((await a.action('reviewNotice',review,'review-release-note')).receipt.status,'succeeded');
   if(fixture.fullOwners)await a.request('createSession',{channel:'ahp-session:/'+randomUUID(),provider:'native',workingDirectories:[pathToFileURL(workspace).href]});
   const session='ahp-session:/'+randomUUID(),chat=session.replace('ahp-session:','ahp-chat:');
   await a.request('createSession',{channel:session,provider:'unused',workingDirectories:[pathToFileURL(workspace).href]});
@@ -354,6 +359,10 @@ createInterface({input:process.stdin}).on('line',async line=>{
   const exact=await supervisor.service.reconcile('resume');assert.equal(exact.admissionSettlement.state,'settled');
   assert.equal((await host.inspect()).instanceId,resumed.observed.instanceId);
   b=await peer('http://127.0.0.1:'+port);assert.equal((await b.action('running')).instanceId,resumed.observed.instanceId);
+  const retainedReview=(await b.action('receipt',{commandId:'review-release-note'},'read-review')).receipt;
+  assert.deepEqual(retainedReview.noticeReview,review);assert.equal(retainedReview.status,'succeeded');
+  const retainedNotes=await b.action('releaseNotes',{},'retained-notes');
+  assert.equal(retainedNotes.currentVersion,second.identity.version);assert.equal(retainedNotes.unreviewedCount,1);
   await b.action('preferences',{autoCheck:false,autoInstall:false,intervalMs:3600000},'post-resume-intake');
   assert.equal((await current.owner.waitFor('post-resume-intake')).status,'succeeded');
   await new Promise(r=>setTimeout(r,30));assert.ok(notifications.some(e=>e.serviceReceipt?.commandId==='resume'&&e.serviceReceipt.admissionSettlement?.state==='settled'));
@@ -361,6 +370,7 @@ createInterface({input:process.stdin}).on('line',async line=>{
   assert.equal((await current.stopService('cleanup')).status,'stopped');await current.close();reopened=undefined;
   await writeFile(fixture.receiptFile,JSON.stringify({schema:'unified-service-composition-acceptance-v1',node:process.version,platform:process.platform,
    actualInstalledDistributionCLI:true,actualInstallerComposition:true,privateBindingPersisted:true,actualSignedUpdate:true,
+   signedOfflineReleaseNotes:true,publicReviewAction:true,reviewReceiptSurvivesUpdateAndResume:true,
    busyStopRefused:true,actualChildExitProven:true,reopenedStoppedSupervisor:true,explicitOfflineResume:true,
    authenticatedServiceRelease:true,applicationFacadeResumed:true,pushedProgress:true,noAdoption:true,
    configuredOwners,allConfiguredOwnersServiceLifecycleQualified:Boolean(fixture.fullOwners),managedSystemService:false,

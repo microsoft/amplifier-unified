@@ -169,13 +169,19 @@ export async function publisher() {
       sourceProtected = preserved;
       dropSources = disconnect;
     },
-    envelope(releases, recommendedId, expiresAt = Date.now() + 600000) {
+    envelope(
+      releases,
+      recommendedId,
+      expiresAt = Date.now() + 600000,
+      releaseNotes,
+    ) {
       const payload = Buffer.from(
         JSON.stringify({
           schema: "distribution-channel-v1",
           expiresAt,
           releases,
           recommendedId,
+          ...(releaseNotes ? { releaseNotes } : {}),
         }),
       );
       return {

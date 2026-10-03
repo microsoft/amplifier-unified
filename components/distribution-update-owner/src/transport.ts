@@ -1,3 +1,8 @@
+import type {
+  ReleaseNotesQuery,
+  ReleaseNotesPage,
+  NoticeReview,
+} from "./release-notes.js";
 import {
   createServer,
   type ServerResponse,
@@ -141,6 +146,16 @@ async function dispatch(
     case "inspect":
       keys(args, []);
       return owner.inspect();
+    case "release-notes":
+      keys(args, ["cursor", "limit"]);
+      return owner.releaseNotes(args as ReleaseNotesQuery);
+    case "review-notice":
+      keys(
+        args,
+        ["version", "noticeId", "contentDigest"],
+        ["version", "noticeId", "contentDigest"],
+      );
+      return owner.reviewNotice(id(), args as unknown as NoticeReview);
     case "running":
       keys(args, []);
       return owner.inspectRunning();
@@ -193,6 +208,10 @@ const publicErrors = new Set([
   "invalid_identifier",
   "invalid_fresh",
   "invalid_preferences",
+  "release_notes_query_invalid",
+  "release_notes_cursor_stale",
+  "release_notes_invalid",
+  "invalid_notice_review",
   "unknown_operation",
   "unknown_command",
   "command_identity_conflict",
@@ -373,6 +392,10 @@ export class SupervisorClient {
     }
     this.owner = {
       inspect: () => this.rpc("inspect"),
+      releaseNotes: (query: ReleaseNotesQuery = {}) =>
+        this.rpc("release-notes", { ...query }) as Promise<ReleaseNotesPage>,
+      reviewNotice: (id: string, review: NoticeReview) =>
+        this.rpc("review-notice", { ...review }, id) as Promise<Receipt>,
       inspectRunning: () => this.rpc("running"),
       diagnostics: () => this.rpc("diagnostics"),
       check: (id: string, fresh = true) =>

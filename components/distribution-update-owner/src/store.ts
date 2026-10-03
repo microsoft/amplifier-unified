@@ -1,3 +1,10 @@
+import {
+  acceptedNoticeDigests,
+  mergeReleaseNotes,
+  type ReleaseNotesPublication,
+  type ReleaseNotesWarning,
+  type NoticeReview,
+} from "./release-notes.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, lstatSync, chmodSync } from "node:fs";
 import { join } from "node:path";
@@ -23,7 +30,7 @@ export class Store {
     this.db = new DatabaseSync(path);
     chmodSync(path, 0o600);
     this.db.exec(
-      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, token TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL)",
+      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, token TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS release_notes (id INTEGER PRIMARY KEY, value TEXT NOT NULL, revision TEXT NOT NULL, warning TEXT); CREATE TABLE IF NOT EXISTS notice_reviews (digest TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, reviewed_at INTEGER NOT NULL)",
     );
     try {
       this.db.exec("BEGIN IMMEDIATE");
@@ -94,6 +101,100 @@ export class Store {
       this.db.close();
       throw error;
     }
+  }
+  transaction<T>(action: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const value = action();
+      this.db.exec("COMMIT");
+      return value;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  notesRevision(): string {
+    return (
+      (this.db.prepare("SELECT revision FROM release_notes WHERE id=1").get()
+        ?.revision as string) ?? "empty"
+    );
+  }
+  notes(): {
+    publication: ReleaseNotesPublication;
+    warning: ReleaseNotesWarning;
+  } {
+    const row = this.db
+      .prepare("SELECT value,warning FROM release_notes WHERE id=1")
+      .get();
+    return row
+      ? {
+          publication: JSON.parse(row.value as string),
+          warning: row.warning as ReleaseNotesWarning,
+        }
+      : {
+          publication: {
+            schema: "distribution-release-notes-publication-v1",
+            entries: [],
+          },
+          warning: "release_notes_unavailable",
+        };
+  }
+  saveNotes(
+    incoming: ReleaseNotesPublication | undefined,
+    warning: ReleaseNotesWarning,
+    currentVersion: string | null,
+  ): void {
+    const saved = this.notes(),
+      previous = saved.publication;
+    const publication = incoming
+      ? mergeReleaseNotes(previous, incoming, currentVersion)
+      : previous;
+    if (
+      this.notesRevision() !== "empty" &&
+      saved.warning === warning &&
+      JSON.stringify(previous) === JSON.stringify(publication)
+    )
+      return;
+    this.transaction(() => {
+      this.db
+        .prepare("INSERT OR REPLACE INTO release_notes VALUES (1,?,?,?)")
+        .run(JSON.stringify(publication), randomUUID(), warning);
+      const retained = new Set(
+        publication.entries.flatMap((e) =>
+          e.notices.flatMap((n) => acceptedNoticeDigests(e.version, n)),
+        ),
+      );
+      for (const row of this.db
+        .prepare("SELECT digest FROM notice_reviews")
+        .all())
+        if (!retained.has(row.digest as string))
+          this.db
+            .prepare("DELETE FROM notice_reviews WHERE digest=?")
+            .run(row.digest);
+    });
+  }
+  reviews(): Map<string, { reviewedAt: number; reviewReceiptId: string }> {
+    return new Map(
+      this.db
+        .prepare("SELECT * FROM notice_reviews")
+        .all()
+        .map((row) => [
+          row.digest as string,
+          {
+            reviewedAt: row.reviewed_at as number,
+            reviewReceiptId: row.receipt_id as string,
+          },
+        ]),
+    );
+  }
+  saveReview(review: NoticeReview, op: Operation): void {
+    const inserted = this.db
+      .prepare("INSERT OR IGNORE INTO notice_reviews VALUES (?,?,?)")
+      .run(review.contentDigest, op.id, op.updatedAt);
+    if (inserted.changes)
+      this.db
+        .prepare("UPDATE release_notes SET revision=? WHERE id=1")
+        .run(randomUUID());
   }
   state(): OwnerState {
     return JSON.parse(

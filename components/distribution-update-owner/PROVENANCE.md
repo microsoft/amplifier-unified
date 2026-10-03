@@ -100,3 +100,18 @@ The public source port carries an explicit fresh observation context. Tests cove
 advanced/protected/superseded sources, lost responses, unchanged activation,
 offline rollback, interrupted admission phases, and the installed signed CLI.
 This does not extend authority to native-generation or external Python inventory.
+
+### 0.10 application release information
+
+F12.03–.06 legacy behavior is owned by the supervisor: bounded current/history
+notes, useful high-impact notice titles, content-bound durable review receipts,
+and a published-release fallback link. Legacy sources were
+`amplifier_web/release_notes.py`, `frontend/src/release-notes.jsx`, and
+`tests/test_release_notes.py`. Explicit editorial title aliases preserve prior
+review; changed action/detail does not. Histories retain verified skipped
+releases without enumerating caches or joining native component state.
+
+Public API is in RELEASE-NOTES.md; client expansion/filter/draft state is absent.
+The signed channel optionally carries notes with no extra network request.
+Notes hydration reads only the current signed installed receipt. Weekly
+preferences are supported; manual dispatch does not wait for that interval.

@@ -13,6 +13,9 @@ Build and test with `npm ci && npm test` from this directory.
 The external supervisor, authenticated client/CLI and signed release adapter are
 documented in [SUPERVISOR.md](SUPERVISOR.md). The public host quiescence
 connection and authenticated release proof are in [HOST-CONTROL.md](HOST-CONTROL.md).
+Bounded signed release history, high-impact notices, and exact review receipts
+are documented in [RELEASE-NOTES.md](RELEASE-NOTES.md). Notes travel with the
+existing channel response; they add no availability lookup or session scan.
 
 ## Host composition
 
