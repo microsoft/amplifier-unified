@@ -1,0 +1,9 @@
+{
+  "component": "Amplifier Unified workspace capability",
+  "source": "microsoft/amplifier-unified",
+  "referenceRevision": "cb348bed",
+  "references": ["amplifier_web/workspace_placement.py", "amplifier_web/workspace_canvas.py", "docs/workspaces/contracts/placement.v1.md", "docs/workspaces/contracts/experience.v1.md"],
+  "retained": ["safe name-based placement", "explicit existing-directory attachment", "display-only rename", "history-preserving registration removal"],
+  "changed": ["client-local selection", "bounded indexed discovery", "independent durable registration owner", "repairable catalog projection"],
+  "license": "MIT"
+}
