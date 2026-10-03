@@ -8,6 +8,7 @@ import sqlite3
 from filelock import FileLock
 from jsonschema import Draft202012Validator
 from amplifier_publishing import Publisher, PublishingError
+from amplifier_operations.quiescence import DurableIntakeFence
 from amplifier_publishing.remote import canonical, digest, service_identity
 from .targets import PublishingTargets
 from .schemas import definitions as original_definitions
@@ -38,6 +39,7 @@ class Owner:
         if root.is_symlink():raise ValueError('Publishing owner storage cannot be a symlink')
         root=root.resolve();root.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(str(root/'owner.lock'));self.lease.acquire(timeout=0)
+        self.intake=DurableIntakeFence(root/'intake.sqlite3');self.awaiting_idle=False;self.closed=False;self.jobs=set()
         self.db=sqlite3.connect(root/'admission.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('CREATE TABLE IF NOT EXISTS scopes(id TEXT PRIMARY KEY,uri TEXT UNIQUE NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS builds(session TEXT,request TEXT,signature TEXT,source TEXT,PRIMARY KEY(session,request))')
@@ -60,10 +62,12 @@ class Owner:
             while len(self.captures)>=4:self.captures.pop(next(iter(self.captures))).close()
             self.captures[identity]=Publisher(self.root/'captures'/identity)
         return self.captures[identity]
-    def scope(self,uri):
+    def scope(self,uri,*,create=True):
         if not isinstance(uri,str) or not uri.startswith('ahp-session:/') or len(uri)>8192:raise ValueError('Trusted session URI required')
-        sid='ahp-'+hashlib.sha256(uri.encode()).hexdigest();self.db.execute('INSERT OR IGNORE INTO scopes VALUES (?,?)',(sid,uri));self.db.commit()
-        if self.db.execute('SELECT uri FROM scopes WHERE id=?',(sid,)).fetchone()[0]!=uri:raise ValueError('Scope collision')
+        sid='ahp-'+hashlib.sha256(uri.encode()).hexdigest()
+        if create:self.db.execute('INSERT OR IGNORE INTO scopes VALUES (?,?)',(sid,uri));self.db.commit()
+        prior=self.db.execute('SELECT uri FROM scopes WHERE id=?',(sid,)).fetchone()
+        if prior and prior[0]!=uri:raise ValueError('Scope collision')
         return sid
     async def inspect(self,uri):
         session=await self.host('inspectSession',{'session':uri})
@@ -199,11 +203,50 @@ class Owner:
         if name in {'publishing.deploy','publishing.rollback'}:return await asyncio.to_thread(getattr(store,name.split('.')[-1]),args['releaseId'],site_id=args['siteId'],expected_revision=args['expectedRevision'],**kw)
         if name in {'publishing.stop','publishing.remove'}:return await asyncio.to_thread(getattr(store,name.split('.')[-1]),args['siteId'],expected_revision=args['expectedRevision'],**kw)
         raise ValueError('Unknown publishing action')
+    def listener_count(self):
+        stores=([self.store] if self.store else [])+list(self.captures.values())
+        return sum(store.inspect_lifetime()['listeners'] for store in stores)
+    async def maybe_idle(self):
+        if self.awaiting_idle and not self.closed and not self.intake.calls and not self.listener_count():
+            self.awaiting_idle=False
+            await self.notify('owner/idle',{})
     async def request(self,method,params):
+        if method=='quiescence.acquire':
+            # Calls include queued work and threads until actual completion.
+            listeners=0 if self.intake.calls else self.listener_count()
+            value=self.intake.acquire(params,pending=listeners)
+            if not value['acquired']:
+                self.awaiting_idle=True
+                if listeners:value['reason']='Local publishing listeners are still serving; explicitly stop their sites before restart'
+            return value
+        if method=='quiescence.release':return self.intake.release(params)
+        if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls,'listeners':None if self.intake.calls else self.listener_count()}
+        # Other nominal reads reconcile remote receipts or refresh listener
+        # projections. Only exact configuration-command reads are passive here.
+        passive=method in {'initialize','actions'} or method=='action' and params.get('operation')=='publishing.command'
+        if self.closed:raise ValueError('Publishing owner is closing')
+        if self.intake.fence and not passive:raise ValueError('Publishing intake is closed; no operation was admitted')
+        if not passive:self.intake.calls+=1
+        async def run():
+            try:return await self._request(method,params)
+            finally:
+                if not passive:
+                    self.intake.calls-=1
+                    await self.maybe_idle()
+        task=asyncio.create_task(run());self.jobs.add(task)
+        try:
+            # Cancelling the RPC waiter cannot stop a running worker thread.
+            # Keep the operation owned and joined until its receipt settles.
+            try:return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await asyncio.shield(task)
+                raise
+        finally:self.jobs.discard(task) if task.done() else task.add_done_callback(self.jobs.discard)
+    async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1}
         if method=='actions':return self.schemas
         if method not in {'action','snapshot'}:raise ValueError('Unknown publishing owner method')
-        uri=params['session'];await self.inspect(uri);sid=self.scope(uri)
+        uri=params['session'];await self.inspect(uri);sid=self.scope(uri,create=not (method=='action' and params.get('operation')=='publishing.command'))
         async with self.lock:
             if method=='snapshot':return {'publishing':{uri:plain(await self.read(sid,'publishing.list',{'limit':10}),sid,uri)}}
             name=params['operation'];spec=self.schemas.get(name)
@@ -221,7 +264,10 @@ class Owner:
             finally:
                 if name not in READS:await self.notify('owner/changed',{'session':uri})
     async def close(self):
+        if self.closed:return
+        self.closed=True
+        await asyncio.gather(*list(self.jobs),return_exceptions=True)
         async with self.lock:
             if self.store:await asyncio.to_thread(self.store.close)
             for store in self.captures.values():await asyncio.to_thread(store.close)
-            self.db.close();self.lease.release()
+            self.db.close();self.intake.close();self.lease.release()

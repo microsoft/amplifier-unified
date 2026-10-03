@@ -7,13 +7,14 @@ from .owner import Owner
 MAX_FRAME=4_000_000
 
 class Peer:
-    def __init__(self,config):self.pending={};self.counter=0;self.tasks=set();self.owner=Owner(config,self.host,self.notify)
+    def __init__(self,config):self.closing=False;self.pending={};self.counter=0;self.tasks=set();self.owner=Owner(config,self.host,self.notify)
     async def write(self,row):
         text=json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n'
         if len(text.encode())>MAX_FRAME:raise ValueError('Owner frame exceeds4MB; narrow the requested page')
         sys.stdout.write(text);sys.stdout.flush()
     async def notify(self,method,params):await self.write({'jsonrpc':'2.0','method':method,'params':params})
     async def host(self,method,params):
+        if self.closing:raise ValueError("Host connection lost; no new callback was admitted")
         self.counter+=1;identity='host:'+str(self.counter);future=asyncio.get_running_loop().create_future();self.pending[identity]=future
         try:
             await self.write({'jsonrpc':'2.0','id':identity,'method':'host/'+method,'params':params});return await future
@@ -37,12 +38,12 @@ class Peer:
                 if len(self.tasks)>=128:raise ValueError('Owner request capacity reached')
                 task=asyncio.create_task(self.handle(row));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
         finally:
+            self.closing=True
             transport.close()
             for future in self.pending.values():
                 if not future.done():future.set_exception(ValueError('Host connection lost; uncertain work is not replayed'))
+            await asyncio.gather(*list(self.tasks),return_exceptions=True)
             await self.owner.close()
-            for task in self.tasks:task.cancel()
-            await asyncio.gather(*self.tasks,return_exceptions=True)
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--config',type=Path,required=True);args=parser.parse_args()

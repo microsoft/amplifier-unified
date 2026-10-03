@@ -8,6 +8,7 @@ export interface Options {
  withSessionWorkspace:<T>(uri:string,expected:Json,callback:(context:Json)=>Promise<T>)=>Promise<T>;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
  authorizePublication?:(request:{session:string;operation:string;args:Json;commandId:string;clientId:string})=>Promise<{approved:boolean;approvalId?:string}>;
+ onMayBeIdle?:()=>void;
  onInvalidate?:(topic:string,scope:string)=>void;
 }
 const METHODS=new Set(['inspectSession','authorizePublication']);
@@ -15,7 +16,7 @@ const actions=['list','build','preview','review','deploy','rollback','status','l
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void}>();
- constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void){}
+ constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private idle:()=>void=()=>{}){}
  private fail(message:string){this.closed=true;for(const entry of this.pending.values())entry.reject(Error(message));this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>4_000_000)throw Error('Owner frame exceeds4MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
  private start(){
@@ -30,6 +31,7 @@ export class OwnerConnection {
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(row.method==='owner/idle'){this.idle();return;}
   if(row.method==='owner/changed'){this.changed(row.params.session);return;}
   if(row.method){
    const method=String(row.method).replace(/^host\//,'');
@@ -52,7 +54,13 @@ export class PublishingCapabilities {
    return options.authorizePublication(params as any);
   }
   throw Error('Unknown publishing authority callback');
- },scope=>options.onInvalidate?.('publishing',scope));}
+ },scope=>options.onInvalidate?.('publishing',scope),()=>options.onMayBeIdle?.());}
+ readonly quiescenceAccess={'publishing.command':'read'} as const;
+ quiescenceParticipant=(ownerId:string)=>{
+  const release=async(context:Json,outcome:string,proof?:Json)=>{const value=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&value.released!==true)throw Error('Publishing owner release is unconfirmed');};
+  return {id:ownerId,acquire:async(context:Json)=>{const exact={...context},value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Publishing owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)};
+ };
+ inspectQuiescence=()=>this.owner.request('quiescence.inspect',{});
  private async authorize(scope:string,context:Context){
   if(!scope?.startsWith('ahp-session:/'))throw Error('Selected conversation required');
   const selected=typeof context.session==='string'?context.session:context.session?.uri;

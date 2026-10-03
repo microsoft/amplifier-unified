@@ -112,3 +112,9 @@ arguments or actor conflict. An unfinished command becomes unknown on restart
 and is never repeated. The client must retain its exact outer command locally
 and inspect this receipt after loss, rather than infer success from today's
 registry. Lifecycle requests continue to use `publishing.receipt {requestId}`.
+
+## Restart admission
+
+`quiescenceParticipant(ownerId)` holds the Foundation operations durable intake ledger under the existing process lease. Queued requests, capture/upload worker threads and callbacks remain counted through actual settlement, including after a caller cancels its wait. Unknown fences survive restart and require exact authenticated release proof. `onMayBeIdle` is advisory and fires after a prior busy observation becomes idle.
+
+A local publishing listener is live work even between requests. Restart admission refuses until the user explicitly stops its site (including previews); it does not stop or rebind a published URL on the user's behalf. Stored releases and remote hosted sites alone are passive historical state. Most browsing calls reconcile receipt or listener projections, so only `publishing.command` is classified as a passive action while fenced. The reusable Publisher exposes `inspect_lifetime()` without requiring product imports or historical scans.

@@ -132,3 +132,56 @@ async def test_target_command_receipt_exact_retry_conflict_and_unknown(owner):
     owner.db.execute('INSERT INTO commands VALUES (?,?,?,?)',(sid,'lost-target',signature,canonical(lost)));owner.db.commit()
     with pytest.raises(PublishingError,match='No replay'):await call(owner,'target.save',args,command='lost-target')
     assert (await call(owner,'command',{'commandId':'lost-target'}))['state']=='unknown'
+
+
+async def test_cancelled_waiter_retains_worker_and_busy_wakes_only_after_thread(owner):
+    import asyncio,threading
+    entered=threading.Event();finish=threading.Event();events=[]
+    async def notify(method,args):events.append(method)
+    owner.notify=notify
+    original=owner.publisher().build
+    def held(*args,**kwargs):
+        entered.set();finish.wait(5)
+        return original(*args,**kwargs)
+    owner.store.build=held
+    work=asyncio.create_task(build(owner,'held-build'))
+    await asyncio.to_thread(entered.wait,2)
+    assert entered.is_set()
+    context=dict(fenceId='fence',commandId='update',purpose='distribution-update',instanceId='host',dataScope='scope')
+    try:
+        work.cancel();await asyncio.sleep(0)
+        assert not (await owner.request('quiescence.acquire',context))['acquired']
+        assert owner.intake.calls==1
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):await work
+        assert events.count('owner/idle')==1
+        assert (await owner.request('quiescence.acquire',context))['acquired']
+        assert await call(owner,'command',{'commandId':'missing'}) is None
+        with pytest.raises(ValueError,match='intake is closed'):await build(owner,'blocked')
+        root=owner.root;host=owner.host
+        await owner.close()
+        replacement=Owner({'dataDir':str(root)},host,notify)
+        try:
+            assert (await replacement.request('quiescence.inspect',{}))['intakeClosed']
+            proof={**context,'verified':True,'outcome':'unchanged','receiptId':'trusted'}
+            params={**context,'outcome':'unchanged','proof':proof}
+            assert (await replacement.request('quiescence.release',params))['released']
+            assert (await replacement.request('quiescence.release',params))['released']
+            receipt=await call(replacement,'receipt',{'requestId':'held-build'})
+            assert receipt['state']=='succeeded'
+        finally:await replacement.close()
+    finally:finish.set()
+
+async def test_live_local_listener_blocks_restart_until_explicit_stop(owner):
+    events=[]
+    async def notify(method,args):events.append(method)
+    owner.notify=notify
+    release=await build(owner)
+    preview=await call(owner,'preview',{'releaseId':release['id'],'requestId':'preview'})
+    context=dict(fenceId='listener',commandId='update',purpose='distribution-update',instanceId='host',dataScope='scope')
+    value=await owner.request('quiescence.acquire',context)
+    assert not value['acquired'] and 'listeners' in value['reason']
+    assert urlopen(preview['result']['url']).read()==b'<h1>One</h1>'
+    await call(owner,'stop',{'siteId':'site','expectedRevision':0,'requestId':'stop'})
+    assert events.count('owner/idle')==1
+    assert (await owner.request('quiescence.acquire',context))['acquired']

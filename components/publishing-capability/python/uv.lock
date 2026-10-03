@@ -3,15 +3,21 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "amplifier-operations"
+version = "0.1.0"
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Foperations&branch=main#211f2fcc6287a1365564350c276080ee0cda7a2d" }
+
+[[package]]
 name = "amplifier-publishing"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-publishing?branch=main#8a6ec09c44ee95edcf10955bab2802abd9c22bca" }
+source = { git = "https://github.com/microsoft/amplifier-publishing?branch=main#74c7d393c0d527d3c9b0a22c85e049128399112e" }
 
 [[package]]
 name = "amplifier-unified-publishing"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "amplifier-operations" },
     { name = "amplifier-publishing" },
     { name = "filelock" },
     { name = "jsonschema" },
@@ -25,6 +31,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "amplifier-operations", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Foperations&branch=main" },
     { name = "amplifier-publishing", git = "https://github.com/microsoft/amplifier-publishing?branch=main" },
     { name = "filelock", specifier = ">=3.20,<4" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
