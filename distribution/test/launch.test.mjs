@@ -16,6 +16,19 @@ test('JSON recovery policy is account bound and credential export needs launcher
  assert.deepEqual(await privateAuthority({account:'local',origin:'ui'},'recovery.appReset.prepare',{parts:['notifications.credentials'],credentialsReviewed:true}),{accountId:'local'});
 });
 
+test('presentation-only launcher requires its own account policy without native credential authority',async()=>{
+ assert.equal(localRecoveryAuthorization({account:'local'}),undefined);
+ assert.throws(()=>localRecoveryAuthorization({account:'local',conversationPresentation:{}}),/authorization/);
+ const presentation={authorization:'local-account',credentials:true};
+ const authorize=localRecoveryAuthorization({account:'local',conversationPresentation:presentation});
+ for(const origin of ['ui','agent'])assert.deepEqual(await authorize({account:'local',origin},'recovery.presentation.prepare'),{accountId:'local'});
+ await assert.rejects(authorize({account:'other',origin:'ui'}),/not authorized/);
+ await assert.rejects(authorize({account:'local',origin:'untrusted'}),/not authorized/);
+ await assert.rejects(authorize({account:'local'},'recovery.snapshot',{includeCredentials:true}),/not authorized/);
+ await assert.rejects(authorize({account:'local'},'recovery.appReset.prepare',{parts:['notifications.credentials']}),/not authorized/);
+ assert.throws(()=>localRecoveryAuthorization({account:'local',recovery:{},conversationPresentation:presentation}),/authorization/);
+});
+
 test('unsigned local launcher owns a fresh instance and closes all local services',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'distribution-launch-')),workspace=join(directory,'workspace'),web=join(directory,'web');
  for(const path of [workspace,web])await mkdir(path);
