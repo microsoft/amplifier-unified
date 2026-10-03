@@ -79,9 +79,11 @@ evidence. Neither outcome runs Git effects. Unknown handoffs instead use the
 host's native-location reconciliation contract.
 
 The Python worker accepts one allowlisted 64 KiB request, returns at most 1 MiB,
-has a 6-minute deadline, and uses fixed Git argv through the library. Concurrent
-read workers are capped at eight; queued mutations are capped at 32. The owner
-has no filesystem watchers, historical record scan, polling loop, or warm runtime.
+has a 6-minute response deadline, and uses fixed Git argv through the library. Concurrent
+read workers are capped at eight; queued mutations are capped at 32. The owner has no workspace/history watchers, historical record scan, polling
+loop, or warm runtime. During a quiescence attempt blocked by an orphan worker,
+one temporary watcher on its private lifetime journal provides an advisory
+completion wakeup; that signal never substitutes for a held lease.
 
 ## Qualification
 
@@ -96,3 +98,53 @@ staged/unstaged/untracked source data, verify clean removal and history-home
 retention, fence unknown outcomes, enforce scope and provenance, and query an
 indexed 25,000-record fixture. Native relocation itself is qualified by the host
 and native adapter; the owner suite labels its host callbacks as fixtures.
+
+
+## Held quiescence and process ownership
+
+The factory accepts `onMayBeIdle()` and returns `quiescenceParticipant(ownerId =
+'worktrees')`, `inspectQuiescence()`, and `quiescenceAccess`. Only `worktree.list`
+is declared a read-only action: `worktree.status` refreshes shared projection
+records, and explicit repository inspection can acquire Git's own locks. Selected
+metadata topics, command/handoff lists, and immutable saved manifest pages remain
+readable during held/unknown intake. A custom injected Git worker must explicitly
+provide the same `quiescenceCoverage:1` lifetime contract; otherwise the participant
+refuses with `custom-git-worker-lifetime-unverified`.
+
+A private SQLite DELETE-journal lifetime exclusive lease excludes a second Node
+owner before opening/migrating any journal. The intake fence is durable, becomes
+unknown on restart, and closes complete async actions/queued mutations. Detached
+handoff jobs retain their own active admission until native relocation actually
+settles, even after the action returned a pending receipt. Closing awaits admitted
+actions/jobs and actual worker exit. No unknown operation is replayed.
+
+Git workers have a second cross-process lease and an indexed lifetime reservation
+made before spawn. Each actual Python worker holds a shared SQLite lease before
+checking intake and invoking the public Git library. Quiescence holds the exclusive
+side, so a worker cannot slip in after admission closes. A dead Node parent does
+not make its existing Python worker idle: that process records settlement only
+when the synchronous library call has joined its Git subprocesses. A response
+timeout/oversized frame reports unknown but retains the bounded live child slot
+and drains output; it never kills work just to permit an update. A proven spawn
+failure is known no-effect and clears only its exact lifetime reservation.
+
+Unexpected worker death leaves a separate unresolved lifetime reservation. The
+owner cannot prove a killed worker's descendants completed, so automatic
+quiescence refuses until an authoritative external process reconciliation exists.
+This compatibility limit is deliberately distinct from old unknown command
+receipts: ordinary lost acknowledgements with a settled worker lifetime do not
+block later quiescence. No generic PID polling or stale-file deletion claims
+absence of work.
+
+The participant uses `{fenceId,commandId,purpose,instanceId,dataScope}` (purpose
+`recovery` or `distribution-update`). Held lease release and `reconcileRelease`
+require exact fence/owner identity and the host's trusted proof
+`{verified:true,fenceId,commandId,outcome,instanceId,dataScope,receiptId}`.
+`unchanged` binds the prior host instance; `ready` binds a verified replacement.
+Unknown retains intake. A still-held lease may release after definitive aggregate
+admission refusal using `{kind:'admission-refused'}` plus `unchanged`.
+
+Tests exercise real Git, installed public wheels, parent SIGKILL with an existing
+worker, worker death uncertainty, retained durable fences, detached native handoff
+fixtures, and read availability. They do not claim production supervisor or
+cross-host recovery acceptance.

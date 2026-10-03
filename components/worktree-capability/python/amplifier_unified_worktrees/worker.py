@@ -6,6 +6,8 @@ manifests stay in the library's private durable files and are read by named ID.
 import json
 import sys
 import uuid
+import sqlite3
+from pathlib import Path
 
 from amplifier_worktrees import GitWorktrees
 
@@ -80,12 +82,41 @@ def run(request):
                 **({'record': partial} if partial else {})}
 
 
+def guarded_run(request):
+    """The shared lease outlives a dead Node viewer; no uncertain worker is replayed."""
+    identity=request.get('workerId')
+    if not identity:
+        if request.get('method')!='get':raise ValueError('Mutation worker lifetime identity required')
+        return run(request)
+    uuid.UUID(identity)
+    root=Path(request['gateDirectory'])
+    if root.resolve()!=Path(request['directory']).resolve().parent:raise ValueError('Worker lifetime scope differs')
+    lease=sqlite3.connect(root/'worktree-worker-lock.sqlite',timeout=0)
+    ledger=sqlite3.connect(root/'worktree-workers.sqlite',timeout=5)
+    try:
+        try:
+            lease.execute('BEGIN');lease.execute('SELECT count(*) FROM lease').fetchone()
+            gate=sqlite3.connect(f"file:{root/'worktree-quiescence.sqlite'}?mode=ro",uri=True)
+            try:held=gate.execute('SELECT 1 FROM fence WHERE id=1').fetchone()
+            finally:gate.close()
+            if held:raise ValueError('Worktree intake closed before Git admission')
+        except (sqlite3.OperationalError,ValueError):
+            ledger.execute("UPDATE workers SET state='settled' WHERE id=?",(identity,));ledger.commit()
+            return {'error':'Worktree intake is closed; no Git effect admitted','executed':False}
+        if not ledger.execute("SELECT 1 FROM workers WHERE id=? AND state='pending'",(identity,)).fetchone():raise ValueError('Exact worker lifetime reservation required')
+        response=run(request)
+        ledger.execute("UPDATE workers SET state='settled' WHERE id=?",(identity,));ledger.commit()
+        return response
+    finally:
+        ledger.close();lease.close()
+
+
 def main():
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise ValueError('Worktree request exceeds 64 KiB')
-        response = run(json.loads(raw))
+        response = guarded_run(json.loads(raw))
     except Exception as exc:
         response = {'error': str(exc)[:4000]}
     encoded = json.dumps(response).encode()

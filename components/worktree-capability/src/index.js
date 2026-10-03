@@ -10,9 +10,10 @@ const bounded=(value,name,max=8192)=>{if(typeof value!=='string'||!value||value.
 const recordURI=(session,id,offset=0)=>{const uri=new URL(`amplifier-worktree://records/${id}`);uri.searchParams.set('session',session);if(offset)uri.searchParams.set('offset',offset);return uri.href};
 
 /** Unified policy over public Git and host seams. No native runtime or global state imports. */
-export function createWorktreeCapability({directory,python,inspectSession,relocateSession,directoryInUse,withDirectoryGuard,readUserMessage,onChanged=()=>{},executionHost={id:hostname(),label:hostname(),scope:'local'},gitWorker}={}) {
-  const store=new WorktreeStore(directory),git=gitWorker||createGitWorker({python,directory:join(directory,'git'),executionHost});
-  const jobs=new Set();let serial=Promise.resolve(),closed=false,queued=0;
+export function createWorktreeCapability({directory,python,inspectSession,relocateSession,directoryInUse,withDirectoryGuard,readUserMessage,onChanged=()=>{},onMayBeIdle=()=>{},executionHost={id:hostname(),label:hostname(),scope:'local'},gitWorker}={}) {
+  const store=new WorktreeStore(directory,{onMayBeIdle}),git=gitWorker||createGitWorker({python,directory:join(directory,'git'),executionHost,onMayBeIdle});
+  store.quiescence.coverageGaps=()=>git.quiescenceCoverage===1?[]:['custom-git-worker-lifetime-unverified'];
+  const jobs=new Set(),inFlight=new Set();let serial=Promise.resolve(),closed=false,queued=0;
   const manifest={version:1,topics:{worktrees:{uri:'amplifier-capability://worktrees',version:1,watch:true}},actions:Object.fromEntries(Object.keys(actionSchemas).map(operation=>[operation,{topic:'worktrees',operation,method:'x-amplifier/capabilityAction'}]))};
   const changed=scope=>{onChanged('worktrees',scope)};
   async function context(session,caller={}) {
@@ -91,7 +92,7 @@ export function createWorktreeCapability({directory,python,inspectSession,reloca
     const receipt={id:identity,sessionId:ctx.session,operation,phase:'pending',revision:1,createdAt:now(),executionHost,source:ctx.executionDirectory,target:target||null,historyHome:ctx.historyHome,executionRevision:ctx.executionRevision,inputsReplayed:false,origin:caller.origin||'ui',...(['worktree.create','worktree.attach','worktree.remove'].includes(operation)?{gitRecordId:operation==='worktree.remove'?args.id:gitIdentity(operation,identity)}:{}),...(previous?{reconciles:previous.id,evidence:args.evidence,sourceMessageId:args.sourceMessageId}:{}),detail:handoffs.has(operation)?'Saving and releasing the native writer before changing execution directory.':'The operation was admitted; its result has not been confirmed.'};
     store.begin(receipt,signature);changed(ctx.session);
     if(operation==='worktree.resolve'){if(record)store.saveRecord(ctx.session,record);const resolved=settle({...previous,resolutionEvidence:args.evidence,reconciliation:receipt.id},args.resolution==='completed'?'applied':'abandoned',args.resolution==='completed'?'Completion verified from original durable Git evidence; no effect was replayed.':'User finding recorded. Original files and evidence were preserved; no effect was replayed.',record);const current=settle(receipt,'applied','Receipt finding recorded without Git effects.',{resolved});return {...current,resolved};}
-    if(handoffs.has(operation)){const job=finish(receipt,previous,caller).finally(()=>jobs.delete(job));jobs.add(job);return receipt;}
+    if(handoffs.has(operation)){const job=store.quiescence.effect(()=>finish(receipt,previous,caller)).finally(()=>jobs.delete(job));jobs.add(job);return receipt;}
     try {
       let result;
       if(operation==='worktree.create')result=await git.request('create',{source:ctx.executionDirectory,commandId:identity,sessionId:ctx.session,sourceRevision:args.sourceRevision,mode:args.mode||'clean',ref:args.ref||'HEAD',branch:args.branch});
@@ -104,7 +105,9 @@ export function createWorktreeCapability({directory,python,inspectSession,reloca
       throw Object.assign(error,{receipt:saved});
     }
   }
-  async function action(request,caller={}) {
+  const quiescenceAccess={'worktree.list':'read'};
+  const action=(request,caller={})=>{const pending=quiescenceAccess[request.operation]?performAction(request,caller):store.quiescence.effect(()=>performAction(request,caller));inFlight.add(pending);return pending.finally(()=>inFlight.delete(pending));};
+  async function performAction(request,caller={}) {
     if(closed)throw Error('Worktree owner is closed.');
     if(request.version!==1||request.topic!=='worktrees'||!manifest.actions[request.operation])throw Error('Unsupported worktree capability.');
     const args=request.args||{};validateArgs(request.operation,args);if(args.sessionId&&args.sessionId!==request.channel)throw Error('Worktree action cannot change conversation scope.');
@@ -121,5 +124,5 @@ export function createWorktreeCapability({directory,python,inspectSession,reloca
     return {accepted:true,result,...(request.operation!=='worktree.list'?{updates:[await snapshot(ctx.session)]}:{})};
   }
   const resourceProvider={scheme:'amplifier-worktree',async read(params){if(params.channel&&params.channel!=='ahp-root://')throw Error('Resources use the root channel.');const uri=new URL(params.uri);if(uri.hostname!=='records'||!/^\/[a-f0-9-]{36}$/.test(uri.pathname))throw Error('Unknown worktree resource.');const scope=uri.searchParams.get('session');await context(scope);const id=uri.pathname.slice(1);row(scope,id);const offset=Number(uri.searchParams.get('offset')||0);if(!Number.isSafeInteger(offset)||offset<0)throw Error('Invalid manifest cursor.');const value=await git.request('get',{id,offset,limit:100});return {encoding:'utf-8',contentType:'application/json',data:JSON.stringify({...value,...(value.manifest?.nextOffset?{nextPage:recordURI(scope,id,value.manifest.nextOffset)}:{})})}}};
-  return {manifest,actionSchemas,read,action,resourceProvider,store,async idle(){await serial;await Promise.all([...jobs])},async close(){closed=true;await serial;await Promise.all([...jobs]);await git.close();store.close()}};
+  return {manifest,actionSchemas,read,action,resourceProvider,store,quiescenceAccess,quiescenceParticipant:ownerId=>store.quiescence.participant(ownerId),inspectQuiescence:()=>store.quiescence.inspect(),async idle(){await serial;await Promise.all([...jobs])},async close(){closed=true;await Promise.allSettled([...inFlight]);await serial;await Promise.all([...jobs]);await git.close();store.close()}};
 }
