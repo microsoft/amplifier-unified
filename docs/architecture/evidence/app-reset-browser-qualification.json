@@ -1,0 +1,94 @@
+{
+  "schema": "app-reset-browser-qualification-v1",
+  "webSource": "4bfdd9cc1efd6d6e2d6ba53d984dd31aa7472e5a",
+  "webArchiveSha256": "783c60581865c223d94f8bcd1a591ce4614f240803e660630d0a8fdbc6debebc",
+  "verifiedAssets": 97,
+  "backend": {
+    "source": "6a459d791fbba233802a856a4254c2af0a4c221f",
+    "archiveSha256": "5a067f1f9863ede88c364641c4101ef50aaecd164662cdec51ef277d32741e86",
+    "nativeSource": "473d42f9e928caf53432aec805b47f2b819c4791",
+    "nativeWheelSha256": "91808798b4c47fff2a79da131da3a82d6dbcd14cb1473bc6837d11f80b3e85fd",
+    "supervisor": "0.16.1",
+    "resetParts": [
+      "native.app-bundle-default",
+      "notifications.settings",
+      "notifications.credentials",
+      "updates.preferences"
+    ],
+    "resetOwners": 3,
+    "heldOwners": 20
+  },
+  "sourceTests": 756,
+  "sourceSkipped": 0,
+  "sourceBrowser": {
+    "result": "passed",
+    "owners": 20,
+    "checks": [
+      "normal steps begin after advertised managed defaults reach a terminal phase; no fixed delay or request suppression",
+      "only advertised four parts; nothing selected by default",
+      "authenticated supervisor and host-control verify all twenty held owners",
+      "native shared-gate contention gives known refused no-effect receipt; explicit fresh review uses a new command",
+      "private selections isolated in two browser contexts",
+      "separate credential consent without credential disclosure",
+      "exact redacted review and preserved/omitted fields",
+      "typed RESET and review approval clear on reload; typing sends no requests",
+      "real settings revision change refuses stale review",
+      "lost reset acknowledgement recovers exact original command without repeat",
+      "fresh browser explicitly reopens retained owner job without private cache or effect replay",
+      "fresh undo review binds original reset and current post-reset revision",
+      "native app override, notification defaults/credentials and supervisor update preferences restored",
+      "newer settings edit refuses stale undo without changing newer values",
+      "shared settings and keys.env byte identical",
+      "no secrets in public product receipts, browser state or storage",
+      "zero workers/models and mobile fits"
+    ],
+    "resetRequests": 4,
+    "appliedResets": 2,
+    "undoRequests": 2,
+    "appliedUndos": 1,
+    "errors": []
+  },
+  "installedStaticBrowser": {
+    "result": "passed",
+    "owners": 20,
+    "checks": [
+      "normal steps begin after advertised managed defaults reach a terminal phase; no fixed delay or request suppression",
+      "only advertised four parts; nothing selected by default",
+      "authenticated supervisor and host-control verify all twenty held owners",
+      "native shared-gate contention gives known refused no-effect receipt; explicit fresh review uses a new command",
+      "private selections isolated in two browser contexts",
+      "separate credential consent without credential disclosure",
+      "exact redacted review and preserved/omitted fields",
+      "typed RESET and review approval clear on reload; typing sends no requests",
+      "real settings revision change refuses stale review",
+      "lost reset acknowledgement recovers exact original command without repeat",
+      "fresh browser explicitly reopens retained owner job without private cache or effect replay",
+      "fresh undo review binds original reset and current post-reset revision",
+      "native app override, notification defaults/credentials and supervisor update preferences restored",
+      "newer settings edit refuses stale undo without changing newer values",
+      "shared settings and keys.env byte identical",
+      "no secrets in public product receipts, browser state or storage",
+      "zero workers/models and mobile fits"
+    ],
+    "resetRequests": 4,
+    "appliedResets": 2,
+    "undoRequests": 2,
+    "appliedUndos": 1,
+    "errors": []
+  },
+  "receiptSemantics": {
+    "localIntent": "Captured before asynchronous private storage; transmitted payload uses exact stored action and scope.",
+    "acknowledgement": "Protocol echo serializes through the durable journal before reporting accepted; a failed private write retains unknown.",
+    "knownBusy": "Explicit native-maintenance-busy/executed:false preflight with zero owner children is refused and releases protection. A separate user-reviewed command may follow; original command is never replayed.",
+    "unknown": "Original unknown fixture and journal retained; missing/null receipt never grants replay permission.",
+    "readiness": "Ordinary test steps begin after the actual advertised managed-defaults read reaches ready/error; no fixed delay or request suppression."
+  },
+  "limits": [
+    "App-local reset covers only four advertised parts, not full application/global/shared/workspace settings reset.",
+    "Canonical histories, shared settings.yaml, keys.env and client presentation state are preserved.",
+    "No full product backup, arbitrary filesystem reset or global presentation reset claimed.",
+    "No production, physical-device, external account or model inference acceptance; zero native workers in reset fixture.",
+    "Source, installed static browser and deployment adoption are distinct; Spark-2 was not changed."
+  ],
+  "deployed": false
+}
