@@ -107,7 +107,7 @@ class Owner:
                     self.awaiting_idle=False
                     await self.notify('owner/idle',{})
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='changed':await self.refresh(params['token']);return {}
         if method=='snapshot':return await self.listing({},params['clientId'])

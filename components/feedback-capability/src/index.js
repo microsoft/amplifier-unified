@@ -1,3 +1,4 @@
+import {validateServiceRelease} from './service-lifecycle.js';
 import {Connection} from './connection.js';
 
 export const feedbackUploadScope='ahp-session:/feedback-uploads';
@@ -42,13 +43,14 @@ export function createFeedbackCapability(options){
   quiescenceAccess:Object.fromEntries(['feedback.list','feedback.receipt','feedback.diagnostics','feedback.upload.inspect'].map(name=>[name,'read'])),
   quiescenceParticipant:typeof uploads.quiescenceParticipant==='function'?(ownerId)=>{
    const uploadParticipant=uploads.quiescenceParticipant(ownerId+':uploads');
-   const releaseOwner=async(context,outcome,proof)=>{const result=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Feedback owner release unconfirmed');};
-   return {id:ownerId,acquire:async context=>{
-    const exact={...context},uploadLease=await uploadParticipant.acquire(exact);if(!uploadLease)return null;
+   const releaseOwner=async(context,outcome,proof,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);const result=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Feedback owner release unconfirmed');};
+   return {id:ownerId,...(uploadParticipant.serviceStop?.version===1?{serviceStop:{version:1}}:{}),acquire:async context=>{
+    if(context.purpose==='service-stop'&&(uploadParticipant.serviceStop?.version!==1||(await owner.request('initialize',{})).quiescence?.serviceStop?.version!==1))return null;
+    const exact=structuredClone(context),uploadLease=await uploadParticipant.acquire(exact);if(!uploadLease)return null;
     let result;try{result=await owner.request('quiescence.acquire',exact);}catch(error){await uploadLease.release('unknown');throw error;}
     if(result.acquired!==true){await uploadLease.release('unchanged',{kind:'admission-refused'});return null;}
     if(result.fenceId!==exact.fenceId||result.intakeClosed!==true)throw Error('Feedback owner acquisition unconfirmed');
-    return {ownerId,fenceId:exact.fenceId,release:async(outcome,proof)=>{await releaseOwner(exact,outcome,proof);await uploadLease.release(outcome,proof);}};
+    return {ownerId,fenceId:exact.fenceId,release:async(outcome,proof)=>{await releaseOwner(exact,outcome,proof,true);await uploadLease.release(outcome,proof);}};
    },reconcileRelease:async context=>{await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}};
   }:undefined,
   resourceProviders:[{scheme:'amplifier-feedback-attachment',

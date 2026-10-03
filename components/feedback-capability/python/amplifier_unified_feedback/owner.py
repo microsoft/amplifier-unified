@@ -120,7 +120,7 @@ class Owner:
 
     async def _request(self, method, params):
         if method == 'initialize':
-            return {'protocolVersion': 1}
+            return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method == 'actions':
             return ACTIONS
         if method == 'snapshot':

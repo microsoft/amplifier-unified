@@ -118,3 +118,28 @@ registry. Lifecycle requests continue to use `publishing.receipt {requestId}`.
 `quiescenceParticipant(ownerId)` holds the Foundation operations durable intake ledger under the existing process lease. Queued requests, capture/upload worker threads and callbacks remain counted through actual settlement, including after a caller cancels its wait. Unknown fences survive restart and require exact authenticated release proof. `onMayBeIdle` is advisory and fires after a prior busy observation becomes idle.
 
 A local publishing listener is live work even between requests. Restart admission refuses until the user explicitly stops its site (including previews); it does not stop or rebind a published URL on the user's behalf. Stored releases and remote hosted sites alone are passive historical state. Most browsing calls reconcile receipt or listener projections, so only `publishing.command` is classified as a passive action while fenced. The reusable Publisher exposes `inspect_lifetime()` without requiring product imports or historical scans.
+
+## Persistent service fences
+
+The trusted quiescence participant advertises `serviceStop: {version: 1}` only
+for the retained service-stop contract. Acquisition copies the complete
+`serviceIdentity` (`installationId`, `dataScope`, `ownerId`, `instanceId`,
+`releaseDigest`) into its existing durable intake fence. Restarting does not
+open intake or replay admitted work. Python owners require the installed
+Foundation `DurableIntakeFence.SERVICE_STOP_VERSION` marker.
+
+Release requires the host-authenticated `kind: 'service-lifecycle'` proof bound
+to the exact fence, command, original identity, and observed instance. A resumed
+service needs distinct-instance exit/readiness receipts; a refused stop needs
+the exact original-instance refusal receipt. The complete proof is retained.
+Exact completed retries are passive, and changed proofs refuse even as the first
+request after restart. Generic recovery/update proofs do not release this fence.
+
+An `admission-refused` rollback is restricted to the newly acquired live lease.
+It is unavailable through reconciliation or after an unknown outcome. Reads of
+existing receipts stay available while intake is held. Platform authentication,
+process ownership, stop/resume signaling, and aggregate coverage remain with the
+host and supervisor; this owner does not infer them from a PID or missing socket.
+
+The distribution's installed owner-service matrix covers fresh reopen, changed
+proof, unknown rollback, and public bridge behavior on Node22/Python311+313.

@@ -6,7 +6,8 @@ export interface NotificationSettings {
   topicConfigured: boolean;
   tokenConfigured: boolean;
 }
-export interface QuiescenceContext { fenceId: string; commandId: string; purpose: string; instanceId: string; dataScope: string }
+export interface ServiceIdentity { installationId: string; dataScope: string; ownerId: string; instanceId: string; releaseDigest: string }
+export interface QuiescenceContext { fenceId: string; commandId: string; purpose: string; instanceId: string; dataScope: string; serviceIdentity?: ServiceIdentity }
 export interface NotificationReceipt {
   commandId?: string;
   session?: string;
@@ -37,7 +38,7 @@ export interface NotificationsCapability {
   manifest: {version: number; topics: Record<string,{uri: string;version: number;scope: string;watch: boolean}>;actions: Record<string,{topic: string;operation: string;method: string}>};
   actionSchemas(): Promise<typeof notificationActions>;
   quiescenceAccess: Record<string,'read'>;
-  quiescenceParticipant: {id: string; acquire(context: QuiescenceContext): Promise<null|{ownerId: string;fenceId: string;release(outcome: string,proof: unknown): Promise<void>}>;reconcileRelease(input: QuiescenceContext & {outcome: string;proof?: unknown}): Promise<void>};
+  quiescenceParticipant: {id: string; serviceStop: {version: 1}; acquire(context: QuiescenceContext): Promise<null|{ownerId: string;fenceId: string;release(outcome: string,proof: unknown): Promise<void>}>;reconcileRelease(input: QuiescenceContext & {outcome: string;proof?: unknown}): Promise<void>};
   inspectQuiescence(): Promise<{intakeClosed: boolean;fence: QuiescenceContext|null;calls: number;background: number}>;
   read(input: {topic: string;scope: string;uri: string}): Promise<TopicSnapshot>;
   action(input: ActionRequest, context: {session?: string|{uri?: string};clientId?: string;origin?: string}): Promise<{accepted: boolean;result: NotificationReceipt|NotificationSettings;updates: TopicSnapshot[];invalidate: string[]}>;

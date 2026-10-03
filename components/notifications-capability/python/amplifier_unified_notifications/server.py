@@ -18,7 +18,7 @@ class Peer:
         try:
             if row.get('jsonrpc')!='2.0' or not isinstance(row.get('params',{}),dict):raise ValueError('Invalid notification request')
             result=await self.owner.request(row.get('method'),row.get('params',{}));await self.write({'jsonrpc':'2.0','id':row.get('id'),'result':result})
-        except Exception as error:await self.write({'jsonrpc':'2.0','id':row.get('id'),'error':{'code':-32000,'message':str(error)[:1000]}})
+        except Exception as error:await self.write({'jsonrpc':'2.0','id':row.get('id'),'error':{'code':-32000,'message':str(error)[:1000],'data':{'knownRefusal':getattr(error,'known_refusal',False)}}})
     async def run(self):
         reader=asyncio.StreamReader(limit=MAX_FRAME);protocol=asyncio.StreamReaderProtocol(reader);transport,_=await asyncio.get_running_loop().connect_read_pipe(lambda:protocol,sys.stdin)
         try:

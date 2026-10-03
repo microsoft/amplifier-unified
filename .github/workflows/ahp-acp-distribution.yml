@@ -70,7 +70,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install independent feedback owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations' ./components/feedback-capability/python
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' ./components/feedback-capability/python
       - name: Verify durable delivery and disclosure fixtures
         run: python -I -m unittest discover -s components/feedback-capability/python/tests -v
       - run: npm ci --ignore-scripts --prefix distribution
@@ -99,7 +99,7 @@ jobs:
       - name: Install independent coordination owner and qualified Foundation library
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
           ./components/coordination-capability/python pytest pytest-asyncio
       - name: Verify bounded reports and durable unknown outcomes
         run: python -I -m pytest -q components/coordination-capability/python/tests
@@ -127,7 +127,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install independent workspace owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
       - name: Verify original history, crash receipts and safe placement
         run: python -I -m pytest -q -c components/workspace-capability/python/pyproject.toml components/workspace-capability/python/tests
       - run: npm ci --ignore-scripts --prefix components/workspace-capability
@@ -156,7 +156,7 @@ jobs:
       - name: Install independent notifications owner
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
           './components/notifications-capability/python[test]'
       - name: Verify delivery receipts, TLS policy and durable intake
         run: python -I -m pytest -q -c components/notifications-capability/python/pyproject.toml components/notifications-capability/python/tests
@@ -190,10 +190,62 @@ jobs:
       - name: Install independent diagnostics owner
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
           'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
           './components/diagnostics-capability/python[test]'
       - name: Verify explicit capture, SDK delivery and durable intake
         run: python -I -m pytest -q -c components/diagnostics-capability/python/pyproject.toml components/diagnostics-capability/python/tests
       - name: Verify public owner transport and scoped pages
         run: DIAGNOSTICS_PYTHON="$(command -v python)" node --test components/diagnostics-capability/test/owner.test.mjs
+
+  owner-service-matrix:
+    name: Installed held service owners (Node 22, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install optional libraries and independent Python owners
+        run: |
+          python -m pip install pytest pytest-asyncio \
+            'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' \
+            'amplifier-recall @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/recall' \
+            'amplifier-publishing @ git+https://github.com/microsoft/amplifier-publishing@74c7d393c0d527d3c9b0a22c85e049128399112e' \
+            'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
+          python -m pip install \
+            ./components/workspace-capability/python ./components/coordination-capability/python \
+            ./components/publishing-capability/python ./components/recall-capability/python \
+            ./components/notifications-capability/python ./components/feedback-capability/python \
+            ./components/diagnostics-capability/python
+      - name: Verify installed Python service identity and restart contracts
+        run: python -I -m pytest -q -o asyncio_mode=auto distribution/test/owner-service-matrix.py
+      - name: Build independent public Node owner archives
+        run: |
+          mkdir -p "$RUNNER_TEMP/service-packages" "$RUNNER_TEMP/service-consumer"
+          for owner in workspace coordination publishing recall notifications feedback history worktree recovery diagnostics; do
+            npm ci --ignore-scripts --prefix "components/$owner-capability"
+            npm run build --if-present --prefix "components/$owner-capability"
+            npm pack "./components/$owner-capability" --pack-destination "$RUNNER_TEMP/service-packages"
+          done
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          from pathlib import Path
+          root=Path.cwd(); consumer=Path(os.environ['RUNNER_TEMP'])/'service-consumer'
+          (consumer/'package.json').write_text('{"private":true,"type":"module"}')
+          artifacts=list((consumer.parent/'service-packages').glob('*.tgz'))
+          resources=json.loads((root/'distribution/components.json').read_text())['components']['@amplifier/unified-resources-capability']['artifact']
+          subprocess.run(['npm','install','--ignore-scripts',*map(str,artifacts),str(root/'distribution'/resources)],cwd=consumer,check=True)
+          PYTHON
+      - name: Verify public installed aggregate service owners
+        env:
+          OWNER_SERVICE_PACKAGE_ROOT: ${{ runner.temp }}/service-consumer
+        run: SERVICE_OWNERS_PYTHON="$(command -v python)" node --test distribution/test/owner-service-matrix.mjs

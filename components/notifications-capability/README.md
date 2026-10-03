@@ -81,3 +81,28 @@ Foundation `DurableIntakeFence` closes intake atomically only when actual calls/
 ## Qualification
 
 Run `npm ci && npm test` for Node tests. Set `NOTIFICATIONS_PYTHON` to an installed interpreter containing the Python wheel, and `HOST_MODULE` to the installed host public entrypoint to include actual two-client AHP tests. `NOTIFICATIONS_MODULE` can select the installed Node package entrypoint. Run `python -I -m pytest` in `python/` for owner tests; `-I` prevents legacy monorepo package shadowing. Tests use fixtures only: one local HTTPS server, injected transport failures, two AHP clients, bounded work, actual SIGKILL and restart, duplicate suppression, blank-preserve/CAS, legacy import, and held/changed release proof. No real ntfy account or physical device acceptance is claimed.
+
+## Persistent service fences
+
+The trusted quiescence participant advertises `serviceStop: {version: 1}` only
+for the retained service-stop contract. Acquisition copies the complete
+`serviceIdentity` (`installationId`, `dataScope`, `ownerId`, `instanceId`,
+`releaseDigest`) into its existing durable intake fence. Restarting does not
+open intake or replay admitted work. Python owners require the installed
+Foundation `DurableIntakeFence.SERVICE_STOP_VERSION` marker.
+
+Release requires the host-authenticated `kind: 'service-lifecycle'` proof bound
+to the exact fence, command, original identity, and observed instance. A resumed
+service needs distinct-instance exit/readiness receipts; a refused stop needs
+the exact original-instance refusal receipt. The complete proof is retained.
+Exact completed retries are passive, and changed proofs refuse even as the first
+request after restart. Generic recovery/update proofs do not release this fence.
+
+An `admission-refused` rollback is restricted to the newly acquired live lease.
+It is unavailable through reconciliation or after an unknown outcome. Reads of
+existing receipts stay available while intake is held. Platform authentication,
+process ownership, stop/resume signaling, and aggregate coverage remain with the
+host and supervisor; this owner does not infer them from a PID or missing socket.
+
+The distribution's installed owner-service matrix covers fresh reopen, changed
+proof, unknown rollback, and public bridge behavior on Node22/Python311+313.

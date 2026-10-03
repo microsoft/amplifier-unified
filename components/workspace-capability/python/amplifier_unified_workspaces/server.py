@@ -30,7 +30,7 @@ class Peer:
                 else:future.set_result(row.get('result'))
             return
         try:result=await self.owner.request(row['method'],row.get('params',{}));await self.write({'jsonrpc':'2.0','id':identity,'result':result})
-        except Exception as exc:await self.write({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':str(exc)[:2000],'data':{'executed':getattr(exc,'executed',None),'code':getattr(exc,'code',None),'receipt':getattr(exc,'receipt',None),'status':503 if getattr(exc,'code',None)=='unknown_outcome' else 409}}})
+        except Exception as exc:await self.write({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':str(exc)[:2000],'data':{'knownRefusal':getattr(exc,'known_refusal',False),'executed':getattr(exc,'executed',None),'code':getattr(exc,'code',None),'receipt':getattr(exc,'receipt',None),'status':503 if getattr(exc,'code',None)=='unknown_outcome' else 409}}})
     async def run(self):
         reader=asyncio.StreamReader(limit=MAX_FRAME+1);protocol=asyncio.StreamReaderProtocol(reader)
         transport,_=await asyncio.get_running_loop().connect_read_pipe(lambda:protocol,sys.stdin)

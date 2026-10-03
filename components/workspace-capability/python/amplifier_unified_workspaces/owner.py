@@ -328,7 +328,11 @@ class Owner:
         if self.closed:raise WorkspaceError('Workspace owner is closed')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background,'commands':self.unresolved()}
         if method=='quiescence/acquire':return self.intake.acquire(params,pending=self.unresolved()['admitted'])
-        if method=='quiescence/release':return self.intake.release(params)
+        if method=='quiescence/release':
+            try:return self.intake.release(params)
+            except ValueError as error:
+                error.known_refusal=True
+                raise
         mutates=method=='action' and params.get('operation') in MUTATIONS
         if self.intake.fence and mutates:raise WorkspaceError('Workspace owner intake is held; no mutation admitted',code='quiescence_fenced')
         if method=='initialize':return await self._request(method,params)
@@ -343,7 +347,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)

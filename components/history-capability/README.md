@@ -94,3 +94,28 @@ bridge paths and a native launcher whose workerCommand cannot run. It proves
 Foundation-written history can be passively selected without starting native work.
 No test sends a real account request or changes a live host. Browser acceptance
 belongs to the independent web client lane.
+
+## Persistent service fences
+
+The trusted quiescence participant advertises `serviceStop: {version: 1}` only
+for the retained service-stop contract. Acquisition copies the complete
+`serviceIdentity` (`installationId`, `dataScope`, `ownerId`, `instanceId`,
+`releaseDigest`) into its existing durable intake fence. Restarting does not
+open intake or replay admitted work. Python owners require the installed
+Foundation `DurableIntakeFence.SERVICE_STOP_VERSION` marker.
+
+Release requires the host-authenticated `kind: 'service-lifecycle'` proof bound
+to the exact fence, command, original identity, and observed instance. A resumed
+service needs distinct-instance exit/readiness receipts; a refused stop needs
+the exact original-instance refusal receipt. The complete proof is retained.
+Exact completed retries are passive, and changed proofs refuse even as the first
+request after restart. Generic recovery/update proofs do not release this fence.
+
+An `admission-refused` rollback is restricted to the newly acquired live lease.
+It is unavailable through reconciliation or after an unknown outcome. Reads of
+existing receipts stay available while intake is held. Platform authentication,
+process ownership, stop/resume signaling, and aggregate coverage remain with the
+host and supervisor; this owner does not infer them from a PID or missing socket.
+
+The distribution's installed owner-service matrix covers fresh reopen, changed
+proof, unknown rollback, and public bridge behavior on Node22/Python311+313.

@@ -173,10 +173,14 @@ class Owner:
 
     async def request(self,method,args):
         if self.closed:raise ValueError('Notifications owner is closed')
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':return self.intake.acquire(args)
-        if method=='quiescence/release':return self.intake.release(args)
+        if method=='quiescence/release':
+            try:return self.intake.release(args)
+            except ValueError as error:
+                error.known_refusal=True
+                raise
         operation=args.get('operation') if method=='action' else None
         passive=method=='snapshot' or operation in READS
         if self.intake.fence and not passive:return {'accepted':False,'executed':False,'reason':'Notification intake is held'}

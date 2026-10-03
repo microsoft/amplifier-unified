@@ -62,7 +62,7 @@ test('accepted completion returns before network; background lease, private prev
   assert.equal((await cap.turnSettled(event)).status,'unknown');
   await cap.close();cap=createNotificationsCapability(options);
   await cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});
-  await assert.rejects(cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof:{...proof,receiptId:'changed'}}),/exact retained/);
+  await assert.rejects(cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof:{...proof,receiptId:'changed'}}),/exact retained/i);
   assert.equal((await readFile(capture,'utf8')).split('\n').filter(Boolean).length,1);assert.ok(idle>0);
  }finally{await writeFile(release,'finish');await cap.close()}
 });

@@ -1,3 +1,4 @@
+import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {Store} from './store.js';
 import {definitions,quiescenceAccess,validate} from './schemas.js';
@@ -235,24 +236,28 @@ export class RecoveryCapabilities {
   return this.descriptor(job);
  }
  /** Exempts only this owner's exact persisted pre-effect job, never unrelated work. */
+ private liveParticipant?:FenceContext;
  readonly quiescenceParticipant={
-  id:'recovery',
+  id:'recovery',serviceStop:{version:1 as const},
   acquire:async(context:Readonly<FenceContext>)=>{
    if(this.closed||this.store.fence())return null;
+   context=this.participantContext(context);
    const own=this.store.db.prepare("SELECT id FROM jobs WHERE state='quiescing' AND json_extract(payload,'$.fenceCommandId')=? LIMIT 1").get(context.commandId);
    const job=own?this.store.get(String(own.id)):undefined;
    if(job&&context.purpose!=='recovery'||this.store.unsettled(job?.id))return null;
-   this.store.setFence({...context,...(job?{jobId:job.id}:{})});
-   return {ownerId:'recovery',fenceId:context.fenceId,release:async(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.releaseParticipant(context,outcome,proof)};
+   this.store.setFence({...context,...(job?{jobId:job.id}:{})});this.liveParticipant=structuredClone(context);
+   return {ownerId:'recovery',fenceId:context.fenceId,release:async(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.releaseParticipant(context,outcome,proof,true)};
   },
   reconcileRelease:async(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.releaseParticipant(context,context.outcome,context.proof),
  };
- private async releaseParticipant(context:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'}){
-  const exact={fenceId:context.fenceId,commandId:context.commandId,purpose:context.purpose,instanceId:context.instanceId,dataScope:context.dataScope};
+ private participantContext(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded exact recovery participant context required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity differs from recovery participant');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
+ private async releaseParticipant(context:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false){
+  const exact=this.participantContext(context);
   const signature=digest(canonical({context:exact,outcome,proof})),prior=this.store.releaseReceipt(context.fenceId);
   if(prior){if(prior.commandId!==context.commandId||prior.signature!==signature)throw Error('Recovery release identity has different exact proof');return;}
-  const fence=this.store.fence();if(!fence||fence.fenceId!==context.fenceId||fence.commandId!==context.commandId)throw Error('Exact recovery participant fence required');
-  if(outcome==='unknown')return;
+  const fence=this.store.fence();if(!fence||evidenceKey(this.participantContext(fence as FenceContext))!==evidenceKey(exact))throw Error('Exact recovery participant fence required');
+  if(outcome==='unknown'){this.liveParticipant=undefined;return;}
+  const liveRefusal=liveRollback&&outcome==='unchanged'&&proof&&'kind' in proof&&proof.kind==='admission-refused'&&Object.keys(proof).length===1&&this.liveParticipant&&evidenceKey(this.liveParticipant)===evidenceKey(exact);if(exact.purpose==='service-stop'&&!liveRefusal)validateServiceRelease(exact,outcome,proof);
   if(proof&&'kind' in proof&&proof.kind==='admission-refused'){
    const job=fence.jobId?this.store.get(fence.jobId):undefined;
    if(job&&(job.state!=='quiescing'||job.nativeCommandId||job.leaseId))throw Error('Recovery effect has already started');
@@ -262,7 +267,7 @@ export class RecoveryCapabilities {
    if(fence.jobId){const job=this.store.get(fence.jobId);if(outcome!=='unchanged'||p.instanceId!==context.instanceId||!job?.releaseEvidence||!job.nativeLeaseReleased||!job.terminalState||p.receiptId!==job.releaseEvidence.receiptId)throw Error('Recovery job has no conclusive exact release receipt');}
   }
   const evidence=fence.jobId?this.store.get(fence.jobId)?.releaseEvidence:undefined;
-  this.store.completeRelease(exact,signature,evidence);
+  this.store.completeRelease(exact,signature,evidence);this.liveParticipant=undefined;
  }
  private artifactUri(id:string,hash:string,offset:number){return `amplifier-recovery://archive/${id}?sha256=${hash}&offset=${offset}`;}
  async resourceRead(params:Json,context:Context){
