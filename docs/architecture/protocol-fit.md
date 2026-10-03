@@ -45,7 +45,7 @@ tests, not one process per historical session.
 repository now offers Python/TypeScript embedding APIs and a frozen engine contract.
 That contract constrains one provider per agent and its own configuration surface.
 It is not established as a drop-in replacement for today's bundle/module runtime.
-Build `amplifier-agent-acp` over the runtime we already use. The user explicitly
+Build `amplifier-app-acp` over the runtime we already use. The user explicitly
 excluded `microsoft/amplifier-agent` from the migration; do not adopt it as the backend.
 
 ## Mapping inventory

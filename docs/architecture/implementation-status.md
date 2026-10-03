@@ -45,15 +45,29 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
 | TUI | New connected repository, private persistence and real terminal fixture qualification | Full multi-client journey and deployment-platform terminal checks remain |
 | Catalog | Separate disk index, filtered root-session/workspace pages and bounded source discovery | Native CLI writer hints, import/rebuild/ownership cases must be accounted for before cutover |
-| Resources | Canvas, immutable artifact bodies, shared app state and durable effects via a public owner | Legacy artifact migration and the complete renderer/device matrix remain |
+| Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content | Legacy artifact migration, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
 | MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; remote repository access |
 | Operations | Independent scheduling, operation output journal, required questions, quiet watches and typed admission | Full native process/browser end-to-end acceptance, legacy records import and active-turn question delivery breadth |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
 | Native maintenance | Independent generation inspect/check/prepare/select/rollback and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/repair/retention and support export are not replaced by this owner |
 | Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Host/client mapping and final edited-history proof must be qualified. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
-| Portability | Independent library and contract tests | Product adapter, browser/agent surface, paired-host transfer and unknown-outcome reconciliation still require composed acceptance |
+| Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Product adapter and paired-host composition are in progress; browser/agent surface and unknown-outcome reconciliation still require composed acceptance |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
+
+The installed distribution graph passed 11 tests without skips before the latest
+attachment and transfer additions. A subsequent selected attachment integration
+passed the actual AHP upload/resource path into an independent ACP fixture; the
+web client separately passed an installed-owner browser check. These are distinct
+runs, not a claim that all new transfer paths passed the previous graph run.
+
+The catalog's fresh-process synthetic benchmark at 25k and 100k sessions (4k
+project rows, 100 present directories) measured 50-item page p95 at approximately
+2.96 ms and 2.39 ms and RSS approximately 24.4 MiB. This is a warm-filesystem
+component measurement, not browser responsiveness or production performance.
+Loop-live PR12 merged normally after all six hosted checks; an isolated actual
+Core/Foundation/ACP/host steering test passed against that public merge. Its
+frozen Foundation graph is recorded separately from current-source qualification.
 
 Detailed owner receipts are authoritative for their exact commits. Counts from
 separate suites must not be added into a claim that the complete system passed.
