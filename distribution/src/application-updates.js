@@ -1,3 +1,4 @@
+import {FacadeFence} from './facade-fence.js';
 /** Public capability facade for an independently lived distribution supervisor. */
 const text={type:'string',minLength:1,maxLength:160};
 const define=(description,properties={},required=[])=>({description,schema:{type:'object',properties,required,additionalProperties:false}});
@@ -12,15 +13,18 @@ const schemas={
  'updates.application.reconcile':define('Passively verify an already running replacement after a lost reply; never restart again.',{commandId:text},['commandId']),
  'updates.application.diagnostics':define('Read bounded sanitized application update diagnostics.'),
 };
-export function createApplicationUpdateCapabilities({supervisor,authorize,onInvalidate=()=>{}}){
+export function createApplicationUpdateCapabilities({supervisor,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){
  if(supervisor?.outlivesDistribution!==true||!supervisor.owner||typeof supervisor.subscribe!=='function'||typeof authorize!=='function')throw Error('Application updates require an external supervisor and explicit authorization');
+ const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle}):undefined;
  const owner=supervisor.owner,topic='application-updates',uri='amplifier-capability://application-updates';let revision=0,closed=false;
  const changed=()=>{if(!closed){revision++;onInvalidate(topic,'host');}};
  const unsubscribe=supervisor.subscribe(changed);
  const bounded=value=>{if(Buffer.byteLength(JSON.stringify(value))>512*1024)throw Error('Application update projection exceeds its bounded representation');return value;};
  const inspect=async()=>bounded(await owner.inspect());
- return {
+ const facade={
+  quiescenceParticipant:intake?.participant,
   manifest:{version:1,topics:{[topic]:{version:1,uri,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(schemas).map(operation=>[operation,{topic,operation,method:'x-amplifier/capabilityAction'}]))},
+  quiescenceAccess:Object.fromEntries(['inspect','running','diagnostics','receipt','reconcile'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read'])),
   actionSchemas:()=>schemas,
   async read(request,context){if(closed)throw Error('Application update facade closed');await authorize(context);const target=new URL(request.uri);target.search='';target.hash='';if(request.topic!==topic||request.scope!=='host'||target.href!==uri)throw Error('Application updates require host scope');return {topic,scope:'host',revision,data:{applicationUpdates:await inspect()}};},
   async action(request,context){
@@ -43,6 +47,8 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,onInva
    return {accepted:true,result:bounded(result),updates:[]};
   },
   // The supervisor must survive its child distribution's shutdown.
-  async close(){closed=true;unsubscribe?.();},
+  async close(){closed=true;unsubscribe?.();await intake?.drain();intake?.close();},
  };
+ if(intake){const action=facade.action;facade.action=(request,context)=>intake.run(Boolean(facade.quiescenceAccess[request.operation]),()=>action(request,context));}
+ return facade;
 }

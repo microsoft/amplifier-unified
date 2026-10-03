@@ -45,6 +45,12 @@ test('gateway rejects cross-origin browser access and assets outside its package
 test('capability owner collisions fail before any authority is ambiguous',()=>{
  const owner={manifest:{version:1,topics:{canvas:{uri:'test://canvas',version:1}},actions:{}},read:async()=>({}),action:async()=>({})};assert.throws(()=>composeCapabilities([owner,owner]),/Duplicate capability topic/);
 });
+test('quiescence access is explicit, exact and confined to the declaring owner',()=>{
+ const owner={manifest:{version:1,topics:{receipt:{uri:'test://receipt',version:1}},actions:{'receipt.inspect':{topic:'receipt',operation:'inspect',method:'x-amplifier/capabilityAction'},'receipt.change':{topic:'receipt',operation:'change',method:'x-amplifier/capabilityAction'}}},quiescenceAccess:{'receipt.inspect':'read'}};
+ const composed=composeCapabilities([owner]);assert.deepEqual(composed.quiescenceAccess,{'receipt.inspect':'read'});assert.equal(composed.quiescenceAccess['receipt.change'],undefined);
+ assert.throws(()=>composeCapabilities([{...owner,quiescenceAccess:{'foreign.inspect':'read'}}]),/Invalid declared/);
+ assert.throws(()=>composeCapabilities([{...owner,quiescenceAccess:{'receipt.change':'write'}}]),/Invalid declared/);
+});
 test('composed media advertises selected state and rejects detached clients without starting devices',async()=>{
  const f=await fixture({media:{credentialEnvironment:'AMPLIFIER_TEST_NO_VOICE_CREDENTIAL'}});let peer;try{
   peer=await Peer.open(f.app.url);assert.ok(peer.init._meta['amplifier.dev/capabilities'].topics.voice);
@@ -173,4 +179,22 @@ test('installed feedback owner uses host-scoped immutable resources without crea
   assert.deepEqual((await peer.request('listSessions',{channel:ROOT,limit:5})).items,[]);assert.equal(f.app.host.diagnostics().activeAgents,0);
   await assert.rejects(f.app.host.invokeCapability({channel:ROOT,topic:'feedback',version:1,operation:'feedback.submit',args:{requestId:'denied-agent',title:'No user approval',body:'Must not publish',category:'bug'},commandId:randomUUID()},{actorId:'fixture-agent',origin:'agent'}),/authorization required/);
  }finally{peer?.close();await f.close();}
+});
+
+test('quiescence composition shares real owner leases and preserves missing coverage',async()=>{
+ const {composeQuiescence,recoveryReleaseVerifier}=await import('../src/quiescence.js');
+ const shared={id:'native-admin',acquire:async()=>{throw Error('Binding alone does not acquire');}};
+ const owner=topic=>({manifest:{topics:{[topic]:{}},actions:{}}});
+ const native=owner('configuration'),maintenance=owner('maintenance'),missing=owner('unqualified');
+ missing.resourceProviders=[{scheme:'private-owner',write:async()=>{throw Error('Not invoked');}}];
+ const result=composeQuiescence({instanceId:'host',dataScope:'scope'},[native,maintenance,missing],{bindings:new Map([[native,shared],[maintenance,shared]]),verifyRelease:async()=>{throw Error('No proof');}});
+ assert.deepEqual(result.participants,[shared]);assert.deepEqual(result.requiredOwners,['native-admin','capability:unqualified']);
+ assert.equal(result.coverage.capabilities.configuration,'native-admin');assert.equal(result.coverage.capabilities.maintenance,'native-admin');assert.equal(result.coverage.resources['private-owner'],'capability:unqualified');assert.deepEqual(result.coverage.nativeHostOwners,result.requiredOwners);
+ let evidence;const verify=recoveryReleaseVerifier({instanceId:'host',dataScope:'scope',nativeAuthority:'amplifier',recovery:()=>({readReleaseEvidence:()=>evidence})});
+ const request={purpose:'recovery',fenceId:'fence',commandId:'snapshot',outcome:'unchanged',instanceId:'host',dataScope:'scope'};
+ await assert.rejects(verify({...request,evidence:{verified:true}}),/no exact/);
+ evidence={...request,nativeAuthority:'amplifier',nativeLeaseReleased:true,nativeLeaseDisposition:'released',terminalState:'succeeded',receiptId:'actual-owner-receipt'};
+ assert.equal((await verify(request)).receiptId,'actual-owner-receipt');
+ await assert.rejects(verify({...request,instanceId:'replacement'}),/no exact/);
+ evidence.nativeLeaseReleased=false;await assert.rejects(verify(request),/no exact/);
 });

@@ -18,7 +18,7 @@ async function fixture(t,{restart}={}){
   lifecycle:{inspect:async()=>running,admitRestart:async()=>({evidence:{activeWork:0,intakeClosed:true,instanceId:running.instanceId,dataScope:'owned',observedAt:Date.now()},release:()=>{}}),restart:async request=>{calls.restart++;if(restart)await restart(request);running={identity:request.target.identity,instanceId:request.instanceId,dataScope:request.dataScope,ready:true};}},
   onChange:()=>{for(const listener of listeners)listener();}});
  const supervisor={outlivesDistribution:true,owner,subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener);}};
- const create=()=>createApplicationUpdateCapabilities({supervisor,authorize:async context=>{if(context.account!=='owned')throw Error('Account denied');}});
+ const create=()=>createApplicationUpdateCapabilities({supervisor,directory:join(directory,'facade'),authorize:async context=>{if(context.account!=='owned')throw Error('Account denied');}});
  t.after(async()=>{await owner.close();await rm(directory,{recursive:true,force:true});});
  return {owner,supervisor,create,calls,listeners,setRunning:value=>{running=value;}};
 }
@@ -27,9 +27,12 @@ test('closing the child facade leaves its durable supervisor alive; a new facade
  const started=deferred(),finish=deferred(),f=await fixture(t,{restart:async()=>{started.resolve();await finish.promise;}});
  const first=f.create();await invoke(first,'check',{},'check');await f.owner.waitFor('check');
  const accepted=await invoke(first,'install',{},'install');assert.equal(accepted.accepted,true);await started.promise;
+ const binding={fenceId:'facade-held',commandId:'install',purpose:'distribution-update',instanceId:'first',dataScope:'owned'};assert.ok(await first.quiescenceParticipant.acquire(binding));
  await first.close();assert.equal(f.listeners.size,0);finish.resolve();assert.equal((await f.owner.waitFor('install')).status,'succeeded');
  const second=f.create();const recovered=await invoke(second,'receipt',{commandId:'install'});assert.equal(recovered.result.receipt.status,'succeeded');assert.equal(recovered.result.replayed,false);
  assert.equal((await invoke(second,'running')).result.identity.id,'v2');assert.equal(f.calls.restart,1);assert.equal(f.calls.check,1);
+ await assert.rejects(invoke(second,'check',{},'blocked'),/intake is closed/);
+ await second.quiescenceParticipant.reconcileRelease({...binding,outcome:'ready',proof:{...binding,verified:true,outcome:'ready',instanceId:(await f.owner.inspectRunning()).instanceId,receiptId:'authenticated-fixture'}});
  await invoke(second,'receipt',{commandId:'missing'});assert.equal(f.calls.restart,1);await second.close();
 });
 

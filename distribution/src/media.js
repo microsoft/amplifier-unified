@@ -8,7 +8,7 @@ export async function composeMedia(config,context,{nativeAdmin}={}){
  return createMediaCapability({
   directory:join(context.directory,'media'),python:config.python,enableNative:config.enableNative===true,
   inspectSession:context.readSessionContext,delegate:context.delegate,recordTranscript:context.recordTranscript,
-  clientPresent:context.clientPresent,invokeClientTool:context.invokeClientTool,onChanged:context.onInvalidate,
+  onMayBeIdle:context.onMayBeIdle,clientPresent:context.clientPresent,invokeClientTool:context.invokeClientTool,onChanged:context.onInvalidate,
   subscribeSession:(session,listener)=>context.subscribeSession(session,async event=>{
    // The active voice observer only refreshes context after meaningful completed
    // changes. Token deltas must never trigger transcript scans or new ACP readers.

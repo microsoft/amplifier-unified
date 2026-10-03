@@ -7,7 +7,7 @@ import {randomUUID} from 'node:crypto';
 export function composeMCP(config,context){
  const directory=join(context.directory,'mcp'),launch=join(context.directory,'mcp-launch.json');
  const broker=config.broker??{command:config.command??config.python??'python3',args:config.command?['--config',launch]:['-I','-m','amplifier_unified_mcp.server','--config',launch],env:config.env};
- const owner=createMCPCapabilities({broker,inspectSession:context.inspectSession,registerExternal:context.registerExternal,onInvalidate:context.onInvalidate});
+ const owner=createMCPCapabilities({broker,inspectSession:context.inspectSession,registerExternal:context.registerExternal,onInvalidate:context.onInvalidate,onMayBeIdle:context.onMayBeIdle});
  owner.resourceProvider={scheme:'amplifier-mcp',read:(params,caller)=>owner.resourceRead({...params,channel:'ahp-root://'},caller)};
  owner.httpHandlers=[{matches:path=>path==='/oauth/mcp/callback',async handle(req,res,{origin}){
   if(req.method!=='GET'){res.writeHead(405,{Allow:'GET'});return res.end();}

@@ -12,7 +12,7 @@ export async function composeFeedback(config,context,authorizeFeedback){
   const path=join(directory,'launch.json'),temporary=path+'.'+randomUUID();await writeFile(temporary,JSON.stringify({dataDir:directory}),{mode:0o600});await rename(temporary,path);
   owner={command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_feedback.server','--config',path],cwd:directory,env:config.env};
  }
- const uploads=createResourcesCapability({directory:join(directory,'uploads'),inspectSession:async session=>{
+ const uploads=createResourcesCapability({directory:join(directory,'uploads'),onMayBeIdle:context.onMayBeIdle,inspectSession:async session=>{
   if(session!==feedbackUploadScope)throw Error('Unknown feedback upload partition');return {session};
  }});
  return createFeedbackCapability({...context,owner,uploadOwner:uploads,authorizeFeedback,readExport:async({session,uri})=>{

@@ -223,3 +223,39 @@ When operations are configured, pending question IDs come directly from a coveri
 disk index. Passive native task inspection supplies task attention. Missing owners,
 unsupported agents and truncated metadata remain explicitly incomplete; no empty
 attention state is inferred. Neither inspection starts a native model worker.
+
+
+## Composed restart and selected recovery
+
+`quiescence: {instanceId, dataScope, timeoutMs?}` enables complete configured-owner
+coverage derived from actual capability/resource owners. Callers do not supply
+coverage assertions. Missing owner participation remains an explicit refusal.
+One native admin participant is shared by native controls and runtime maintenance.
+Each independent owner closes durable intake and accounts for queued callbacks,
+background work and subprocesses until their real completion. History rows alone
+are not active work. Local publishing listeners remain live responsibilities and
+must be explicitly stopped; unqualified external MCP lifetimes refuse automatic
+restart. A worker lost during an effect retains uncertainty rather than replaying.
+
+The optional `onMayBeIdle` composition callback forwards advisory completion
+signals to external host control. It requests a new admission check and never
+proves idleness itself. `verifyQuiescenceRelease` must read authenticated external
+supervisor evidence, including actual replacement identity. Caller assertions
+cannot reopen intake. The stateless application-update facade owns only its local
+forwarding lifetime; its supervisor survives application replacement.
+
+`recovery: {nativeAuthority?, leaseSeconds?}` requires native administration,
+quiescence, and injected `authorizeRecovery(context, operation, args)` returning
+`{accountId}` for the configured account. This is explicit authorization for
+sensitive content, separate from client review flags. The selected session's
+immutable history directory is resolved through the host; an execution worktree
+cannot redirect recovery. Both the host and native admin maintenance fence wrap
+native snapshot/reset effects. The release verifier reads the owner's exact durable
+native lease disposition. Bounded archive resources are authenticated per chunk.
+
+Recovery covers selected native history/state/settings and reversible session
+configuration reset. It does not yet replace full-product backup/archive restore,
+cache reclamation, retention or canonical history deletion. See the independent
+recovery component contract for included files, omissions and uncertain-outcome
+rules. Its queued admission returns before background quiescence so the initiating
+request cannot hold its own restart check busy.

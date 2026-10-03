@@ -24,6 +24,6 @@ target=Path('vendor')/(name.split('/')[1]+'-'+digest[:12]+'.tgz')
 (root/target).write_bytes(raw)
 manifest=root/'package.json';data=json.loads(manifest.read_text());data['dependencies'][name]='file:'+str(target);data['bundleDependencies']=list(data['dependencies']);manifest.write_text(json.dumps(data,indent=2)+'\n')
 receipt=root/'components.json';state=json.loads(receipt.read_text()) if receipt.exists() else {'formatVersion':1,'status':'integration-candidate','components':{}}
-state['components'][name]={'repository':args.repository,'revision':args.revision,'version':package['version'],'artifact':str(target),'sha256':digest}
+state['components'][name]={**state['components'].get(name,{}),'repository':args.repository,'revision':args.revision,'version':package['version'],'artifact':str(target),'sha256':digest}
 receipt.write_text(json.dumps(state,indent=2,sort_keys=True)+'\n')
 print(name+' '+package['version']+' '+digest[:12])

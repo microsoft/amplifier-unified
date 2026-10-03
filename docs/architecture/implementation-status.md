@@ -36,6 +36,11 @@ Foundation PR424 (`ecea0132c2e46045957a62fa0259ef239424af83`) adds indexed
 session-scoped original schedule command results for lost-response recovery.
 Its nine installed checks passed on Python 3.11 and 3.13, and all 15 hosted checks
 passed before the user-authorized admin merge. The base Foundation API is unchanged.
+Foundation PR425 (`211f2fcc6287a1365564350c276080ee0cda7a2d`) adds the optional
+operations library durable intake fence. Sixteen installed tests passed on Python
+3.11 and 3.13 and all 15 hosted checks passed before the authorized admin merge.
+It owns only the caller-selected ledger; process ownership and external work
+coverage remain each embedding owner's responsibility.
 
 The distribution composes public artifacts. Product adapters for worktrees,
 publishing, Recall, portability, feedback, coordination, workspace management,
@@ -210,3 +215,33 @@ The ratified [Q1–Q12 gates](delivery-plan.md) still apply. In particular:
 6. Retire old full-state paths only after the supported migration and adoption
    boundary is explicit. Their continued presence during migration does not grant
    them the new architecture's performance claims.
+
+
+## Current composed intake qualification
+
+The later assembled recovery check uses actual Core/Foundation with 12 configured
+capability owners: native administration, resources, workspaces, media, MCP,
+operations, coordination, worktrees, publishing, Recall, feedback and recovery.
+It retired the native worker, held all owner intake gates, exported reviewed native
+bytes, checked the archive SHA and reopened intake using durable native lease
+release evidence. It made no model call and does not qualify full-product backup.
+The independently lived application-update facade has separate held-forwarding,
+process ownership and exact release tests; final signed CLI replacement remains
+an integration gate.
+
+Web `85ef2cb` passed 537 unit tests and actual-native source/unpacked-static browser
+checks for bounded workspace and root-chat pages, missing-directory/child
+exclusion, exact lost-create recovery, persisted dirty compare-and-swap editors,
+explicit reattachment and history-preserving removal. Navigation projections no
+longer copy selected chat bodies: an 8,000-message fixture reduced serialization
+from 15.9 MB for one old projection to about 35 KB for all narrow projections.
+The observed cost changed from 16.1 ms to 0.66 ms in that local fixture; these are
+not production latency percentiles. Long-history browser checks retained only 80
+mounted messages across 4,000 loaded turns and produced no typing frames.
+
+Web `9cf68ba` passed 541 unit tests plus installed-owner and clean static browser
+checks for imported historical operation evidence. Pages contain 25 bounded
+summaries; only explicitly selected immutable bodies are loaded. Source hashes
+remain unchanged, saved running/pending states remain inert and no historical
+entry starts a worker, prompt or control. Explicit fixture chat creation is a
+separate operation and is not counted as history-driven work.
