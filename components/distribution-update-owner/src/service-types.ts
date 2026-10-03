@@ -1,6 +1,7 @@
 import { token, type PreparedRelease } from "./types.js";
 import type { OwnedExitProof } from "./posix-process.js";
 import { parseStartupFailure, type StartupFailure } from "./startup-diagnostics.js";
+import type { ExistingStateHandoffClaim } from "./existing-state-types.js";
 export interface ServiceIdentity {
   installationId: string;
   dataScope: string;
@@ -14,11 +15,12 @@ export interface ServiceCommand {
 }
 export interface ServiceReceipt {
   commandId: string;
-  operation: "stop" | "resume" | "adopt";
+  operation: "stop" | "resume" | "adopt" | "handoff";
   status: "running" | "refused" | "stopped" | "ready" | "unknown";
   phase:
     | "accepted"
     | "admission_requested"
+    | "handoff_requested"
     | "held"
     | "stop_requested"
     | "stopped"
@@ -38,6 +40,10 @@ export interface ServiceReceipt {
   noEffect?: true;
   errorCode?: string;
   startupFailure?: StartupFailure;
+  /** One-way source retirement or destination claim; no paths or credentials. */
+  handoffClaim?: ExistingStateHandoffClaim;
+  /** Source ledger only: service and update launch authority is permanently retired. */
+  handoffRetired?: true;
   admissionSettlement?: {
     state: "pending" | "settled" | "unknown";
     updatedAt: number;

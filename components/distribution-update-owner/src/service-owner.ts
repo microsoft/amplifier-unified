@@ -1,4 +1,8 @@
 import { startupFailureFrom } from "./startup-diagnostics.js";
+import { isDeepStrictEqual } from "node:util";
+import { constants as osConstants } from "node:os";
+import type { ExistingStateHandoffCommand, ExistingStateHandoffClaim,
+  ExistingStateHandoffProof, ExistingStateHandoffSource } from "./existing-state-types.js";
 import { randomUUID } from "node:crypto";
 import { ServiceStore } from "./service-store.js";
 import {
@@ -20,7 +24,40 @@ import {
   token,
   type PreparedRelease,
   type ReleasePort,
+  identity,
+  same,
 } from "./types.js";
+
+function handoffCommand(value: ExistingStateHandoffCommand): ExistingStateHandoffCommand {
+  const expected = serviceIdentity(value.expected), target = identity(value.target);
+  if (target.digest !== expected.releaseDigest || !/^[a-f0-9]{64}$/.test(value.dataBindingDigest) ||
+      !Array.isArray(value.participantIds) || !value.participantIds.length || value.participantIds.length > 128 ||
+      new Set(value.participantIds).size !== value.participantIds.length || value.commandId === value.stoppedCommandId)
+    throw Error("existing_state_handoff_binding_invalid");
+  return {commandId:token(value.commandId), stoppedCommandId:token(value.stoppedCommandId), expected, target,
+    dataBindingDigest:value.dataBindingDigest, participantIds:value.participantIds.map(id=>token(id)).sort()};
+}
+function handoffClaim(value: ExistingStateHandoffClaim): ExistingStateHandoffClaim {
+  const command = handoffCommand(value), next = serviceIdentity(value.next);
+  if (next.instanceId === command.expected.instanceId ||
+      !sameService({...next,instanceId:command.expected.instanceId},command.expected))
+    throw Error("existing_state_handoff_binding_invalid");
+  return {...command,next};
+}
+function qualifiedStop(stopped: ServiceRecord | null, claim: ExistingStateHandoffClaim) {
+  if (!stopped || stopped.operation !== "stop" || stopped.commandId !== claim.stoppedCommandId ||
+      stopped.status !== "stopped" || stopped.phase !== "stopped" || !stopped.target ||
+      !same(stopped.target.identity, claim.target) || !sameService(stopped.expected,claim.expected) ||
+      !stopped.fenceId || !stopped.exitProof ||
+      stopped.exitProof.ownerId !== claim.expected.ownerId || stopped.exitProof.instanceId !== claim.expected.instanceId ||
+      !Number.isSafeInteger(stopped.exitProof.observedAt) || stopped.exitProof.observedAt < 0 || !stopped.exitProof.ownerReceiptId ||
+      !(stopped.exitProof.code === null || Number.isInteger(stopped.exitProof.code) && stopped.exitProof.code >= 0 && stopped.exitProof.code <= 255) ||
+      !(stopped.exitProof.signal === null || Object.hasOwn(osConstants.signals,stopped.exitProof.signal)) ||
+      !Array.isArray(stopped.qualifiedOwners) ||
+      !isDeepStrictEqual([...stopped.qualifiedOwners].sort(),claim.participantIds))
+    throw Error("existing_state_qualified_stop_required");
+  return stopped;
+}
 const object = (v: unknown): Record<string, any> => {
   if (!v || typeof v !== "object" || Array.isArray(v))
     throw Error("service_evidence_unconfirmed");
@@ -86,6 +123,81 @@ export class ServiceLifecycleOwner {
   adopt(command: ServiceCommand) {
     return this.submit("adopt", command);
   }
+  /** Trusted source launcher only. Retires its genuine stopped authority once;
+   * a destination cannot supply a claimed exit or infer one from a saved PID. */
+  claimExistingStateHandoff(input: ExistingStateHandoffClaim): ExistingStateHandoffProof {
+    if (this.closing) throw Error("service_handoff_source_busy");
+    const claim = handoffClaim(input), stopped = qualifiedStop(this.store.read(claim.stoppedCommandId),claim);
+    if (stopped.handoffRetired) {
+      if (!isDeepStrictEqual(stopped.handoffClaim,claim)) throw Error("service_handoff_already_claimed");
+      return {schema:"distribution-existing-state-handoff-v1",claim,stopped:structuredClone(stopped)};
+    }
+    const actual = this.options.lifecycle.processes.exitProof(claim.expected),
+      current = this.options.lifecycle.processes.inspect();
+    if (stopped.resumeCommandId || !actual || !isDeepStrictEqual(actual,stopped.exitProof) ||
+        current.state !== "exited" || current.identity.instanceId !== claim.expected.instanceId ||
+        current.identity.dataScope !== claim.expected.dataScope || current.identity.releaseDigest !== claim.expected.releaseDigest ||
+        this.store.all().some(op=>op.status === "running" || op.status === "unknown" ||
+          (op.admissionSettlement && op.admissionSettlement.state !== "settled")))
+      throw Error("existing_state_exit_authority_required");
+    stopped.handoffClaim = claim;
+    stopped.handoffRetired = true;
+    stopped.resumeCommandId = claim.commandId; // retire BEFORE another launcher can act
+    this.persist(stopped);
+    return {schema:"distribution-existing-state-handoff-v1",claim,stopped:structuredClone(stopped)};
+  }
+  /** Explicit existing-state handoff. Source retirement is an uncertain external
+   * effect; persist acceptance first and never reconstruct this work on reopen. */
+  handoff(input: ExistingStateHandoffCommand, source: ExistingStateHandoffSource): ServiceReceipt {
+    if (this.closing) throw Error("service_owner_closed");
+    const command = handoffCommand(input);
+    if (Object.entries(this.binding).some(([key,value])=>command.expected[key as keyof ServiceIdentity] !== value))
+      throw Error("service_owner_binding_conflict");
+    const accepted = this.store.accept({commandId:command.commandId, operation:"handoff",expected:command.expected,
+      stoppedCommandId:command.stoppedCommandId,status:"running",phase:"accepted",updatedAt:Date.now()},["handoff",command]);
+    if (!accepted.fresh) return serviceReceipt(accepted.record);
+    const op = accepted.record;
+    if (this.active || this.options.updateMutationBlocked?.() || this.options.lifecycle.ownedPid !== null || this.store.all().some(other=>other.commandId !== op.commandId)) {
+      this.finish(op,"refused","stop_refused","existing_state_fresh_owner_required");
+      return serviceReceipt(op);
+    }
+    this.emit(op);
+    const work = Promise.resolve().then(()=>this.performHandoff(op,command,source)).catch(error=>{
+      const failure = startupFailureFrom(error);
+      if (failure) op.startupFailure = failure;
+      this.finish(op,"unknown",op.phase,"service_handoff_unconfirmed");
+    }).finally(()=>{if(this.active === work)this.active = null;});
+    this.active = work;
+    return serviceReceipt(op);
+  }
+  private async performHandoff(op: ServiceRecord, command: ExistingStateHandoffCommand, source: ExistingStateHandoffSource) {
+    const current = this.options.currentRelease();
+    if (!current || !same(current.identity,command.target) ||
+        !(await this.options.releases.verify(current,{commandId:op.commandId,signal:new AbortController().signal}))) {
+      this.finish(op,"refused","stop_refused","retained_release_unverified");return;
+    }
+    op.observed = {...command.expected,instanceId:randomUUID()};
+    op.handoffClaim = {...command,next:op.observed};
+    op.phase = "handoff_requested";
+    this.persist(op);
+    const proof = await source.claim(op.handoffClaim);
+    if (proof?.schema !== "distribution-existing-state-handoff-v1" ||
+        !isDeepStrictEqual(proof.claim,op.handoffClaim)) throw Error("existing_state_source_unconfirmed");
+    const stopped = qualifiedStop(proof.stopped,op.handoffClaim);
+    if (stopped.handoffRetired !== true || stopped.resumeCommandId !== op.commandId || !isDeepStrictEqual(stopped.handoffClaim,op.handoffClaim))
+      throw Error("existing_state_source_not_retired");
+    // Transfer the genuine stop/exit/fence record into a fresh destination ledger.
+    // The original has already consumed its resume right. This destination's
+    // durable unknown/running operation blocks every competing resume on crash.
+    const incoming: ServiceRecord = {commandId:command.stoppedCommandId,operation:"stop",status:"stopped",phase:"stopped",
+      expected:command.expected,updatedAt:Date.now(),fenceId:token(stopped.fenceId),qualifiedOwners:[...command.participantIds],
+      exitProof:{ownerReceiptId:token(stopped.exitProof!.ownerReceiptId),ownerId:command.expected.ownerId,
+        instanceId:command.expected.instanceId,observedAt:stopped.exitProof!.observedAt,
+        code:stopped.exitProof!.code,signal:stopped.exitProof!.signal},
+      handoffClaim:op.handoffClaim,target:prepared(current)};
+    this.store.accept(incoming,["handoff-stop",op.handoffClaim]);
+    await this.performResume(op);
+  }
   receipt(commandId: string) {
     const r = this.store.read(token(commandId));
     return r ? serviceReceipt(r) : null;
@@ -105,6 +217,8 @@ export class ServiceLifecycleOwner {
     });
   }
   async inspect() {
+    const retired = this.store.all().find(r=>r.handoffRetired);
+    if (retired) return {state:"retired" as const, identity:retired.expected, handoffCommandId:retired.resumeCommandId!};
     const latest = this.store
       .all()
       .find(
@@ -139,7 +253,7 @@ export class ServiceLifecycleOwner {
       .all()
       .some(
         (r) =>
-          r.status === "running" ||
+          r.handoffRetired || r.status === "running" ||
           r.status === "unknown" ||
           (r.admissionSettlement &&
             r.admissionSettlement.state !== "settled") ||
@@ -149,7 +263,7 @@ export class ServiceLifecycleOwner {
       );
   }
   private submit(
-    operation: ServiceRecord["operation"],
+    operation: "stop" | "resume" | "adopt",
     command: ServiceCommand,
     stoppedCommandId?: string,
   ) {
@@ -176,6 +290,10 @@ export class ServiceLifecycleOwner {
     );
     if (!accepted.fresh) return serviceReceipt(accepted.record);
     const op = accepted.record;
+    if (this.store.all().some(r=>r.handoffRetired)) {
+      this.finish(op,"refused","stop_refused","service_authority_retired");
+      return serviceReceipt(op);
+    }
     if (operation === "adopt") {
       this.finish(
         op,
@@ -404,7 +522,7 @@ export class ServiceLifecycleOwner {
     op.target = stopped.target;
     op.fenceId = stopped.fenceId;
     op.exitProof = stopped.exitProof;
-    op.observed = { ...op.expected, instanceId: randomUUID() };
+    op.observed ??= { ...op.expected, instanceId: randomUUID() };
     op.phase = "resume_requested";
     this.persist(op);
     try {
@@ -494,7 +612,7 @@ export class ServiceLifecycleOwner {
       }
     }
     if (
-      op.operation === "resume" &&
+      ["resume","handoff"].includes(op.operation) &&
       op.status === "unknown" &&
       op.phase === "resume_requested" &&
       op.observed &&
@@ -519,7 +637,7 @@ export class ServiceLifecycleOwner {
       this.persist(op);
     }
     if (
-      op.operation === "resume" &&
+      ["resume","handoff"].includes(op.operation) &&
       op.status === "ready" &&
       op.admissionSettlement?.state !== "settled"
     ) {
@@ -592,7 +710,7 @@ export function createHostServiceReleaseVerifier(options: {
         stop.exitProof.instanceId !== expected.instanceId ||
         stop.resumeCommandId !== request.resumeCommandId ||
         !resumed ||
-        resumed.operation !== "resume" ||
+        !["resume","handoff"].includes(resumed.operation) ||
         resumed.status !== "ready" ||
         resumed.phase !== "ready" ||
         resumed.stoppedCommandId !== stop.commandId ||

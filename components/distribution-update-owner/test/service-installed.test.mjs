@@ -9,7 +9,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -31,18 +31,19 @@ const actual=await createRuntimeIdentity({entrypointUrl:import.meta.url,trustedK
 const supervisor=connectSupervisorFileLazy(process.env.SUPERVISOR_CONNECTION);
 const serviceIdentity={installationId:process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID,ownerId:process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID,instanceId:actual.instanceId,dataScope:actual.dataScope,releaseDigest:actual.identity.digest};
 const log=e=>appendFile(process.env.PARTICIPANT_LOG,JSON.stringify(e)+'\\n');
-const participant={id:'held-fixture',serviceStop:{version:1},acquire:async c=>{
+const makeParticipant=id=>({id,serviceStop:{version:1},acquire:async c=>{
  try{await readFile(process.env.BUSY_FILE);return null;}catch(e){if(e.code!=='ENOENT')throw e;}
- await writeFile(process.env.PARTICIPANT_FILE,JSON.stringify(c),{mode:0o600});await log({event:'acquired',purpose:c.purpose});
- return {ownerId:'held-fixture',fenceId:c.fenceId,release:async(outcome,proof)=>{if(outcome==='unknown')return;if(proof?.kind==='admission-refused'){await unlink(process.env.PARTICIPANT_FILE);return;}throw Error('replacement_must_reconcile');}};
-},reconcileRelease:async r=>{const held=JSON.parse(await readFile(process.env.PARTICIPANT_FILE,'utf8'));if(held.fenceId!==r.fenceId||held.commandId!==r.commandId||r.proof.verified!==true||r.proof.kind!=='service-lifecycle')throw Error('fixture_proof_invalid');await unlink(process.env.PARTICIPANT_FILE);await log({event:'reconciled',proof:r.proof});}};
-const host=await createHost({stateDirectory:process.env.HOST_STATE,allowedWorkspaceRoots:[process.env.TEST_ROOT],engines:[{id:'unused-fixture',command:process.execPath,args:['-e','process.exit(2)']}],quiescence:{instanceId:actual.instanceId,dataScope:actual.dataScope,requiredOwners:['held-fixture'],coverage:{},participants:[participant],verifyRelease:createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:actual.inspectRunning}),serviceLifecycle:{identity:serviceIdentity,verifyRelease:createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>serviceIdentity})}}});
+ await writeFile(process.env.PARTICIPANT_FILE+'.'+id,JSON.stringify(c),{mode:0o600});await log({event:'acquired',ownerId:id,purpose:c.purpose});
+ return {ownerId:id,fenceId:c.fenceId,release:async(outcome,proof)=>{if(outcome==='unknown')return;if(proof?.kind==='admission-refused'){await unlink(process.env.PARTICIPANT_FILE+'.'+id);return;}throw Error('replacement_must_reconcile');}};
+},reconcileRelease:async r=>{const held=JSON.parse(await readFile(process.env.PARTICIPANT_FILE+'.'+id,'utf8'));if(held.fenceId!==r.fenceId||held.commandId!==r.commandId||r.proof.verified!==true||r.proof.kind!=='service-lifecycle')throw Error('fixture_proof_invalid');await unlink(process.env.PARTICIPANT_FILE+'.'+id);await log({event:'reconciled',ownerId:id,proof:r.proof});}});
+const participants=['held-fixture','second-fixture'].map(makeParticipant);
+const host=await createHost({stateDirectory:process.env.HOST_STATE,allowedWorkspaceRoots:[process.env.TEST_ROOT],engines:[{id:'unused-fixture',command:process.execPath,args:['-e','process.exit(2)']}],quiescence:{instanceId:actual.instanceId,dataScope:actual.dataScope,requiredOwners:participants.map(p=>p.id),coverage:{},participants,verifyRelease:createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:actual.inspectRunning}),serviceLifecycle:{identity:serviceIdentity,verifyRelease:createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>serviceIdentity})}}});
 initialized=true;
 const control=await serveHostControl({host,inspectRunning:actual.inspectRunning,token:process.env.HOST_TOKEN,discovery:{file:process.env.HOST_CONNECTION,tokenFile:process.env.HOST_TOKEN_FILE,dataScope:actual.dataScope}});
 let closing=false;process.on('SIGTERM',async()=>{if(closing)return;closing=true;await control.close();await host.close();supervisor.close();process.exit(0);});
 `;
-test(
-  "installed POSIX supervisor stops and resumes signed real host through persistent service fence",
+for (const handoff of [false,true]) test(
+  handoff ? "installed existing-state handoff preserves data and qualifies two real host owners" : "installed POSIX supervisor stops and resumes signed real host through persistent service fence",
   { skip: !hostArchive },
   async (t) => {
     assert.equal(
@@ -59,7 +60,8 @@ test(
     });
     const first = await artifact(root, 1, pub.origin, appCode);
     pub.publish([first], 1);
-    const packed = JSON.parse(
+    const suppliedOwner = process.env.DISTRIBUTION_SERVICE_OWNER_ARCHIVE;
+    const packed = suppliedOwner ? {filename:basename(suppliedOwner)} : JSON.parse(
       (
         await execute(
           "npm",
@@ -68,6 +70,7 @@ test(
         )
       ).stdout,
     )[0];
+    if (suppliedOwner) await copyFile(suppliedOwner,join(root,packed.filename));
     const consumer = join(root, "consumer");
     await mkdir(consumer);
     await writeFile(
@@ -99,6 +102,7 @@ test(
       join(root, "config.json"),
       JSON.stringify({
         root,
+        handoff,
         consumer,
         origin: pub.origin,
         keys: pub.keys,
@@ -124,6 +128,7 @@ test(
       await readFile(join(root, "acceptance.json"), "utf8"),
     );
     assert.equal(receipt.explicitStopResume, true);
+    if (handoff) assert.equal(receipt.existingStateHandoff,true);
     assert.equal(receipt.serviceFenceReconciled, true);
     const retained = process.env.DISTRIBUTION_SERVICE_ACCEPTANCE_DIR;
     if (retained) {
@@ -133,7 +138,7 @@ test(
         join(retained, packed.filename),
       );
       await writeFile(
-        join(retained, "service-acceptance.json"),
+        join(retained, handoff ? "handoff-acceptance.json" : "service-acceptance.json"),
         JSON.stringify(
           {
             ...receipt,

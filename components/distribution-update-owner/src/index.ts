@@ -18,3 +18,5 @@ export * from "./service-owner.js";
 export * from "./release-notes.js";
 export * from "./offline-snapshot.js";
 export * from "./startup-diagnostics.js";
+export * from "./existing-state-types.js";
+export * from "./existing-state.js";

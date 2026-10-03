@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile, unlink } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -8,9 +8,11 @@ import {
   runSupervisor,
   connectHostControlFile,
   connectSupervisorFile,
+  createOwnedServiceHandoffSource,
+  launchExistingStateHandoff,
 } from "@amplifier/unified-distribution-update-owner";
 const c = JSON.parse(await readFile(process.argv[2], "utf8")),
-  root = c.root,
+  root = await realpath(c.root),
   scope = "fixture-scope";
 const hostFile = join(root, "host.json"),
   hostTokenFile = join(root, "host-token"),
@@ -107,22 +109,41 @@ try {
   assert.equal(stopped.exitProof.ownerId, "fixture-owner");
   assert.equal(s.lifecycle.processes.inspect().state, "exited");
   assert.equal((await client.service.inspect()).state, "stopped");
-  // Reopen supervisor authority from disk while stopped. No initial launch,
-  // process discovery, adoption or implicit restart can supply resume authority.
-  off();
-  client.close();
-  await s.close();
-  s = await runSupervisor(config, { ports });
-  assert.equal((await s.service.inspect()).state, "stopped");
-  assert.equal(s.lifecycle.ownedPid, null);
-  client = await connectSupervisorFile(superFile);
-  off = client.subscribe((e) => events.push(e));
-  await client.service.resume({
-    commandId: "resume",
-    expected: first,
-    stoppedCommandId: "stop",
-  });
-  const resumed = await s.service.waitFor("resume");
+  let resumed;
+  const resumeId=c.handoff?'handoff':'resume';
+  off();client.close();
+  if(c.handoff){
+    const old=s;
+    const existing=join(root,'existing-application');await mkdir(existing);
+    await writeFile(join(existing,'transcript.jsonl'),'saved history fixture\n');
+    const launchConfig=join(root,'existing-paths.json');
+    await writeFile(launchConfig,JSON.stringify({state:releaseOptions.launchEnv.HOST_STATE,history:existing,dataScope:scope}));
+    const bindings=[{id:'application',path:existing,kind:'directory'},
+      {id:'host-state',path:await realpath(releaseOptions.launchEnv.HOST_STATE),kind:'directory'},
+      {id:'configuration',path:launchConfig,kind:'file'}];
+    const source=createOwnedServiceHandoffSource({service:old.service,bindings});
+    const destinationFile=join(root,'new-supervisor.json');
+    s=await runSupervisor({...config,dataDirectory:join(root,'new-supervisor'),
+      tokenFile:join(root,'new-super-token'),discoveryFile:destinationFile,
+      release:{...releaseOptions,launchEnv:{...releaseOptions.launchEnv,SUPERVISOR_CONNECTION:destinationFile}}},
+      {ports:{...ports,initialProvisioning:undefined}});
+    assert.equal(s.lifecycle.ownedPid,null);client=await connectSupervisorFile(destinationFile);
+    off=client.subscribe(e=>events.push(e));
+    await launchExistingStateHandoff({destination:s.service,source,bindings,command:{commandId:resumeId,stoppedCommandId:'stop',
+      expected:first,target:c.first,participantIds:['held-fixture','second-fixture']}});
+    resumed=await s.service.waitFor(resumeId);
+    assert.equal((await old.service.inspect()).state,'retired');assert.equal(old.service.blocksUpdates(),true);
+    assert.equal(old.service.resume({commandId:'retired-resume',expected:first,stoppedCommandId:'stop'}).errorCode,'service_authority_retired');
+    assert.equal(await readFile(join(existing,'transcript.jsonl'),'utf8'),'saved history fixture\n');
+    assert.deepEqual(resumed.exitProof,stopped.exitProof);await old.close();
+  }else{
+    // Genuine stopped receipt from disk, no adoption or initial provisioning.
+    await s.close();s=await runSupervisor(config,{ports});
+    assert.equal((await s.service.inspect()).state,'stopped');assert.equal(s.lifecycle.ownedPid,null);
+    client=await connectSupervisorFile(superFile);off=client.subscribe(e=>events.push(e));
+    await client.service.resume({commandId:resumeId,expected:first,stoppedCommandId:'stop'});
+    resumed=await s.service.waitFor(resumeId);
+  }
   assert.equal(resumed.status, "ready");
   assert.equal(resumed.admissionSettlement.state, "settled");
   assert.notEqual(first.instanceId, resumed.observed.instanceId);
@@ -150,7 +171,7 @@ try {
   assert.ok(
     events.some(
       (e) =>
-        e.serviceReceipt?.commandId === "resume" &&
+        e.serviceReceipt?.commandId === resumeId &&
         e.serviceReceipt.admissionSettlement?.state === "settled",
     ),
   );
@@ -158,11 +179,21 @@ try {
     .trim()
     .split("\n")
     .map(JSON.parse);
-  assert.equal(logs.filter((e) => e.event === "reconciled").length, 1);
+  assert.equal(logs.filter((e) => e.event === "reconciled").length, 2);
   assert.equal(
     logs.find((e) => e.event === "reconciled").proof.kind,
     "service-lifecycle",
   );
+  if(c.handoff){
+    await writeFile(join(root,'busy'),'busy');
+    await client.service.stop({commandId:'new-busy',expected:resumed.observed});
+    assert.equal((await s.service.waitFor('new-busy')).status,'refused');await unlink(join(root,'busy'));
+    await client.service.stop({commandId:'new-stop',expected:resumed.observed});
+    assert.equal((await s.service.waitFor('new-stop')).status,'stopped');
+    await client.service.resume({commandId:'new-resume',expected:resumed.observed,stoppedCommandId:'new-stop'});
+    const again=await s.service.waitFor('new-resume');assert.equal(again.status,'ready');assert.equal(again.admissionSettlement.state,'settled');
+    assert.notEqual(again.observed.instanceId,resumed.observed.instanceId);
+  }
   await writeFile(
     join(root, "acceptance.json"),
     JSON.stringify(
@@ -179,7 +210,11 @@ try {
         freshInstance: true,
         pushedServiceProgress: true,
         noAdoption: true,
-        reopenedStoppedSupervisor: true,
+        reopenedStoppedSupervisor: !c.handoff,
+        existingStateHandoff: c.handoff,
+        qualifiedFixtureOwners: ["held-fixture","second-fixture"],
+        existingHistoryPreserved: !!c.handoff,
+        sourceRetired: !!c.handoff,
         productionOwnerCoverage: false,
         managedSystemService: false,
       },

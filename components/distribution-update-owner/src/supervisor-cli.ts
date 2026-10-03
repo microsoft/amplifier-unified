@@ -410,7 +410,7 @@ export async function runSupervisor(
         return service.waitFor(commandId);
       },
       async close() {
-        if (service && (await service.inspect()).state !== "stopped")
+        if (service && !["stopped", "retired"].includes((await service.inspect()).state))
           throw Error("confirmed_service_stop_required");
         unsubscribe?.();
         await transport?.close();

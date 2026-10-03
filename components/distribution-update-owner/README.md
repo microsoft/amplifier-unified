@@ -194,3 +194,8 @@ service adapters must be qualified separately. See [PROVENANCE.md](PROVENANCE.md
 for the source behavior preserved from the released updater.
 
 Explicit prepare/activate controls are documented in [STAGED-UPDATES.md](STAGED-UPDATES.md). Direct Install remains immediate.
+
+Existing data can move between authentic owned launchers through the explicit
+[same-release handoff contract](EXISTING-STATE-HANDOFF.md). This consumes the old
+launcher's authority and starts a new child; it neither adopts processes nor
+uses pristine provisioning for an existing installation.
