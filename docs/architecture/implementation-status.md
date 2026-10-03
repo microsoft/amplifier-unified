@@ -20,6 +20,22 @@ inspection remain retained without replay. The last successful real-model check
 belongs to earlier `e16f9dbb`; it is not evidence for this checkpoint. Spark-1 is
 unchanged. See [the current checkpoint receipt](evidence/spark2-checkpoint-b855-20261003.json).
 
+The actual preview browser also passes existing-chat rendering/navigation and
+private draft recovery across navigation and reload. All 97 deployed static assets
+match the sealed web package; no draft transmission or page error was observed.
+One normal shared read acknowledgement occurred. The original harness assertion
+that incorrectly excluded that acknowledgement remains preserved. The browser
+closed, and the host subsequently reported zero clients and active agents.
+
+The startup diagnosis is a latent provider contract mismatch, also reproduced with
+the previous native runtime: disabled automatic login and invalid local ChatGPT
+credentials cause its mount to return no provider, which strict Core validation
+rejects. Native preparation and provider/SDK files are identical across the two
+checkpoints. The focused correction separates a valid mounted provider from its
+observed authentication status; it preserves request-time authentication and model
+selection. It does not weaken validation or establish a general unavailable-provider
+contract for the other implementations audited.
+
 This preview retains its existing manual capability subset. The full supervisor,
 background, cleanup and recovery census remains separate. The exact paired b855
 candidate passed the actual Linux twenty-owner network and signed systemd/pidfd
@@ -105,8 +121,9 @@ Foundation PR426 and PR427 are merged (`c356c969`, `467f870a`). PR428 is now
 merged as `8462030d` after all six Linux/Windows Python3.11/3.12/3.13 jobs and
 CLA passed. It adds a retained canonical session address that reopens the same
 history/lease after a workspace is removed, without recreating it. It conveys no
-operation authority. Spark-2 remains on the Foundation revision qualified for its
-checkpoint; the next candidate will qualify the new merged dependency.
+operation authority. The current b855 Spark-2 checkpoint includes that qualified
+Foundation runtime. Subsequent Foundation `64d9b808` changes only four library
+README files; its runtime bytes are unchanged.
 
 The expanded repository-owner pass independently qualifies Foundation `8462030d`
 on Python 3.11 and 3.13: scheduling 9, operations 39, worktrees 5 and Recall 6

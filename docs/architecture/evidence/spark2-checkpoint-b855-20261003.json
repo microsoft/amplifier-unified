@@ -41,8 +41,33 @@
     "installedStaticBrowser": "passed four parts, three owners, twenty held participants, settings-writer refusal and exact lost-reply recovery"
   },
   "limits": [
-    "Latest bundle-receipt native4d2ea06 remains a separate candidate awaiting consumer qualification",
+    "Native4d2ea06 and bridge d0b5 exact bundle receipt recovery qualified independently; assembled root/browser and live adoption remain separate.",
     "Existing manual capability subset remains active; twenty-owner signed fixture is separate from live service adoption",
     "Original previous checkpoint real-model result is not reused as this checkpoint acceptance"
-  ]
+  ],
+  "browserAcceptance": {
+    "result": "scoped-checks-passed-with-navigation-read-marker",
+    "matchingAssets": 97,
+    "existingChatRendering": true,
+    "privateDraftNavigationAndReload": true,
+    "draftTransmissions": 0,
+    "pageErrors": 0,
+    "sharedReadAcknowledgements": 1,
+    "browserClosed": true,
+    "subsequentHostClients": 0,
+    "subsequentHostActiveAgents": 0,
+    "evidence": "output/ahp-acp-implementation-20261002/web-client/spark2-b855-readonly/handoff.json",
+    "boundary": "Original overly strict navigation assertion failure retained; no model/device/settings/reset/service acceptance."
+  },
+  "providerDiagnosis": {
+    "classification": "latent availability versus structural validation mismatch",
+    "previousAndCurrentNativePreparationIdentical": true,
+    "previousAndCurrentProviderSdkIdentical": true,
+    "automaticMountLogin": false,
+    "localCredentialValid": false,
+    "providerMountReturnsNone": true,
+    "coreValidation": "strictly refuses missing provider",
+    "credentialEffectsPerformed": false,
+    "evidence": "output/ahp-acp-implementation-20261002/native-acp/provider-startup-b855-20261003/diagnosis.json"
+  }
 }
