@@ -2,7 +2,7 @@
 
 `@amplifier/unified-recovery-capability` is an independently installable, optional product owner over the public Amplifier ACP native maintenance API and the generic host quiescence API. It owns only its private recovery-job database. It never imports native Python objects, reads native paths, starts an agent, or copies another owner's store.
 
-**Coverage is explicitly selected native files, not a full-product or full-home backup.** The current implementation can archive selected native history/state/settings and perform an exact reversible reset of one session's noncanonical configuration. Other product stores, client drafts, workspaces, external artifacts, unselected/delegated histories, source/module caches, shared authorities and environment credential stores are explicit omissions. Credentials in `keys.env` require a separate reviewed selection and authorization; history/configuration can still contain private content without that file.
+**Coverage is native-only, never a full-product backup.** Without additive native negotiation this owner archives selected native history/state/settings and performs a reversible reset of one session's noncanonical configuration. An explicitly configured full-native owner additionally supports cold, paged all-native authority capture and reviewed restoration into a new inactive destination. Other product stores, client drafts, general workspace contents, external artifacts and environment credential stores remain outside native coverage. Selected mode also omits unselected/delegated histories and shared authorities. Credentials in `keys.env` require a separate reviewed selection and authorization; history/configuration can still contain private content without that file.
 
 ## Composition contract
 
@@ -12,6 +12,9 @@ import {createRecoveryCapabilities} from '@amplifier/unified-recovery-capability
 const recovery = createRecoveryCapabilities({
   directory: '/private/product-state/recovery', // this owner's database only
   nativeAuthority: 'configured-native-account',
+  nativeMaintenance: await admin.maintenanceCapabilities(), // initialize only; no worker
+  restoreDestinationChoices: [{id: 'owned', label: 'Inactive recovery directory'}], // IDs only
+  onMayBeIdle: () => hostControl.onMayBeIdle(), // advisory; never an idle proof
   nativeAdmin,       // stable, explicitly configured private ACP admin connection
   authorize,        // (context, operation, args) => {accountId}; authenticate reads too
   resolveSession,   // (AHP URI, context) => {nativeSessionId, historyCwd, nativeAuthority}
@@ -71,7 +74,7 @@ The owner acquires an exclusive SQLite OS lock before opening or migrating its r
 
 - A restart marks unfinished jobs unknown. Neither startup, duplicate mutation submission nor reconciliation repeats effects. Exact duplicate owner submissions return their original job; conflicting arguments refuse.
 - `recovery.reconcile {jobId}` reads original native and host receipts. A successful snapshot receipt can recover a lost result only when this owner already recorded conclusive native lease release. Lost host release acknowledgements recover from the original host receipt or an exact stored owner release proof.
-- An unknown native acquisition/release, partial reset, or reset finalization marker cannot be inferred safe from a snapshot or a receipt alone. These remain fenced. The lower native API provides explicitly reviewed completed-marker reconciliation; this facade does **not** yet automate that operator workflow. No whole-archive restore, generation reclamation, retention deletion, full-home/product backup or destructive canonical reset is advertised.
+- An unknown native acquisition/release, partial reset, or reset finalization marker cannot be inferred safe from a snapshot or a receipt alone. These remain fenced. The lower native API provides explicitly reviewed completed-marker reconciliation; this facade does **not** yet automate that operator workflow. A pending full restore likewise remains fenced: passive evidence cannot finalize it. Generation reclamation, retention deletion, full-product backup and destructive canonical reset are not advertised.
 - The owner captures a bounded selected native manifest; no atomic snapshot across arbitrary product stores is claimed. A distribution-level aggregate must stop or obtain real leases from each included owner and record its own complete inclusion manifest.
 - Only one maintenance job may be unsettled per configured authority. Native TTL/process-death locking prevents an abandoned connection holding an eternal OS lease; it does not authorize reopening the durable host intake fence.
 
@@ -121,12 +124,12 @@ artifact resources consume this review, with unchanged byte/hash verification.
 
 Configuration trees require trusted native launcher setting
 `maintenanceExternalWriters:'stopped'`; a browser claim does not prove that external
-CLI/tools stopped. Native-home exclusive writer fencing remains mandatory. This
-owner supports only explicitly selected native files/configuration. It does not
-back up independent product stores, browser drafts, every legacy CLI history,
-module caches or external credential stores. The returned coverage and omissions
-must stay visible. Hard deletion, credentials reset, full archive restore and
-safe generation reclamation remain unavailable. Product-wide backup requires real
+CLI/tools stopped. Native-home exclusive writer fencing remains mandatory. Without additional negotiation this
+owner supports only explicitly selected native files/configuration. Independent
+product stores, browser drafts and external credential stores remain outside its
+authority. Full-native behavior is described below. The returned coverage and
+omissions must stay visible. Hard deletion, credentials reset and safe generation
+reclamation remain unavailable. Product-wide backup requires real
 fenced export participants from every configured independent owner.
 
 ## Persistent service fences
@@ -153,3 +156,70 @@ host and supervisor; this owner does not infer them from a PID or missing socket
 
 The distribution's installed owner-service matrix covers fresh reopen, changed
 proof, unknown rollback, and public bridge behavior on Node22/Python311+313.
+
+## Negotiated full-native capture and inactive restore
+
+Composition passes the exact cloned `native.admin.maintenance` returned by
+`AdminConnection.maintenanceCapabilities()`. This is one lazy control-plane
+initialization, without a Core worker or directory/history enumeration. Missing
+markers preserve the original selected-only contract. `recovery.list` and topic
+`data.recovery` expose `capabilities:{archiveParts,restoreAvailable,restoreDestinations}`.
+Destination choices contain only trusted opaque IDs and display labels; absolute
+paths remain in native launcher `maintenanceRestoreRoots`. No caller supplies a
+native home, archive file path or output directory.
+
+When advertised, `recovery.archive.prepare` also accepts `native-import-records`,
+`native-preference-receipts`, `native-maintenance-records` and
+`native-retained-archives`. Retained archives require maintenance records. These
+store-only selections may use `sessions:[]`. Their owner-made SQLite images and
+streamed artifacts preserve the explicit pre-existing cutoff and self-exclusion.
+
+A distinct full selection is `{sessions:[],parts:['full-native-authority'],
+privateContentReviewed:true,includeCredentials?,credentialsReviewed?}`. It cannot
+be combined with selected parts/session aliases and requires UI account-level
+authorization. Native inventory is performed only for this requested maintenance
+job. It includes canonical histories/events, settings, declared source/generation
+authority and native receipt stores. Missing/unknown authority is refused or
+recorded as an authoritative omission; derived/transient exclusions are separately
+classified. `recovery.preview` returns paged entries plus `ownerCoverage`, including
+`completeNativeBackup`, `completeProductBackup:false` and omission counts. The
+string scope `full-configured-native-authority` alone is **not** proof of complete
+coverage. Credential omission can make a full selection incomplete.
+
+A successful full snapshot includes `format:'amplifier-native-authority',version:1`.
+Only that account's exact successful snapshot can be restored:
+
+1. `recovery.restore.prepare {snapshotJobId,sha256,destination:{rootId,name},
+   privateContentReviewed:true,credentialsReviewed?}` queues native digest, format,
+   manifest and new-destination checks under coordinated quiescence.
+2. `recovery.preview {jobId,cursor?,limit?}` returns the immutable restore review,
+   bounded manifest and `restore:{destination,requiresRuntimeQualification:true,
+   requiresConfigurationReview:true,overwritesExisting:false,startsWorker:false}`.
+3. `recovery.restore.apply {preparedJobId,previewHash}` creates the exact reviewed
+   new destination. It never overwrites a destination, activates a worker or
+   replays saved input. Native project configuration remains staged for explicit
+   rebinding; source dependencies and runtime require fresh qualification.
+
+Jobs are persisted before asynchronous acquisition and retain the original child
+command identity. Closing this owner joins its outstanding work. A lost apply
+acknowledgement becomes `unknown`; `recovery.reconcile` calls only passive
+`maintenance.restore.inspect`. It may recover a conclusive successful receipt
+**only** when the native owner also proves the exact completion record exists and
+its pending marker is gone. Otherwise both fences remain held. This facade never
+calls the privileged native `maintenance.restore.reconcile` finalizer while an
+unknown host fence is held. No extraction is retried.
+
+Native full-operation work has its own joined, bounded deadline, distinct from
+the short idle acquisition TTL. Default native full-operation timeout is600s;
+launcher maximum is7200s. Set `nativeAdmin.timeoutMs` above the configured native
+operation bound plus transport margin (for example7260000 for7200s). The
+distribution defaults to1200000ms when maintenance or recovery is configured.
+A transport timeout remains unknown and never implies the file thread finished.
+
+Installed qualification covers actual host→ACP→Core/Foundation capture and
+retirement, streamed archive checks, full-native review, new-directory restore,
+lost final acknowledgement→passive recovery, original byte preservation and
+zero worker reactivation. Independent peer fixtures cover capability absence,
+account/agent boundaries, exact digest/destination restrictions, pending native
+finalization refusal and shutdown joining. No account/model, browser, live-service
+or whole-product aggregate claim is made.

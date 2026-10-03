@@ -61,7 +61,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.workspaces){workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog,roots,defaultRoot:workspace});owners.push(workspaces);}
  if(config.nativeAdmin){
   const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
-  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
+  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
   nativeCapabilities=createNativeCapabilities({nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate});owners.push(nativeCapabilities);bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
@@ -90,7 +90,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
- if(config.recovery){recovery=composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
+ if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
  if(config.historyImport)owners.push(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}));
  capabilities=composeCapabilities(owners,{account:config.account,...(diagnostics?{onAction:diagnosticActionObserver(diagnostics,workspace)}:{})});
  // Transfer peers close their local intake before the shared admin owner holds

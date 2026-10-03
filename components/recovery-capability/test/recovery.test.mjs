@@ -6,19 +6,20 @@ const {createHost}=hostModule?await import(hostModule):{};
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const session='ahp-session:/selected',context={clientId:'owner',origin:'ui'};
 const wait=async(fn)=>{for(let n=0;n<500;n++){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,5));}throw Error('Condition unavailable');};
-function nativeFixture(){
- const calls=[],receipts=new Map(),bytes=Buffer.from('private selected archive fixture');let lease,changed=false,loseSnapshot=false,unknownSnapshot=false,hold,lostPlan;
+function nativeFixture(full=false){
+ const calls=[],receipts=new Map(),bytes=Buffer.from('private selected archive fixture');let lease,changed=false,loseSnapshot=false,unknownSnapshot=false,hold,lostPlan,restorePending=false,parts=[];
  const previewHash=sha('unchanged fixture');
  return {calls,receipts,bytes,setChanged:v=>changed=v,setLost:v=>loseSnapshot=v,setUnknown:v=>unknownSnapshot=v,setHold:v=>hold=v,
-  setLostPlan:v=>lostPlan=v,
+  setLostPlan:v=>lostPlan=v,setRestorePending:v=>restorePending=v,
   nativeAdmin:async(op,args)=>{
    calls.push([op,structuredClone(args)]);
    if(op==='maintenance.preview'||op==='maintenance.reset.preview')return {previewHash,coverage:'explicit-selected-native-only',containsPrivateContent:true,spec:{...args,parts:args.parts??['session-state']},inventory:{files:Array.from({length:55},(_,i)=>({path:'history/file-'+i,bytes:1,sha256:sha(String(i))})),missing:[],excluded:[],bytes:55},omissions:['all unselected native histories','all other product owners'],credentialCoverage:'explicitly excluded keys.env',...(op.endsWith('reset.preview')?{reset:{scope:'session-configuration',canonicalFilesChanged:0}}:{})};
    if(op.startsWith('maintenance.archive.')&&op!=='maintenance.archive.manifest'){
-    const result=op.endsWith('create')?{planId:'a'.repeat(32),revision:0}:op.endsWith('add')?{planId:'a'.repeat(32),revision:1}:{previewHash,archivePlanId:'a'.repeat(32),coverage:'explicit-selected-native-only',spec:{parts:['shared-configuration']},inventory:{entries:120,files:110,bytes:256},omissions:['independent product stores'],exclusions:['transient locks'],credentialCoverage:'keys excluded'};
+    if(op.endsWith('create'))parts=args.parts;
+    const result=op.endsWith('create')?{planId:'a'.repeat(32),revision:0}:op.endsWith('add')?{planId:'a'.repeat(32),revision:1}:{previewHash,archivePlanId:'a'.repeat(32),coverage:full?'full-configured-native-authority':'explicit-selected-native-only',ownerCoverage:{completeNativeBackup:full,completeProductBackup:false},spec:{parts},inventory:{entries:120,files:110,bytes:256},omissions:['independent product stores'],exclusions:['transient locks'],credentialCoverage:'keys excluded'};
     const receipt={state:'succeeded',commandId:args.commandId,operation:op,result};receipts.set(args.commandId,receipt);if(lostPlan===op)throw Error('Lost plan response');return {...result,receipt};
    }
-   if(op==='maintenance.archive.manifest'){const offset=args.cursor?Number(args.cursor):0,items=Array.from({length:Math.min(args.limit,120-offset)},(_,i)=>({path:'shared-configuration/'+String(i+offset),status:'included',bytes:1,sha256:sha(String(i+offset))}));return {previewHash,coverage:'explicit-selected-native-only',items,nextCursor:offset+items.length<120?String(offset+items.length):null};}
+   if(op==='maintenance.archive.manifest'){const offset=args.cursor?Number(args.cursor):0,items=Array.from({length:Math.min(args.limit,120-offset)},(_,i)=>({path:'shared-configuration/'+String(i+offset),status:'included',bytes:1,sha256:sha(String(i+offset))}));return {previewHash,coverage:full?'full-configured-native-authority':'explicit-selected-native-only',items,nextCursor:offset+items.length<120?String(offset+items.length):null};}
    if(op==='maintenance.acquire'){
     if(changed){const error=Object.assign(Error('Source changed'),{data:{executed:false,reason:'native-maintenance-refused'}});receipts.set(args.commandId,{state:'refused',executed:false});throw error;}
     lease='owned-native-lease';receipts.set(args.commandId,{state:'succeeded',result:{leaseId:lease}});return {active:true,leaseId:lease};
@@ -26,8 +27,12 @@ function nativeFixture(){
    if(op==='maintenance.snapshot'){
     if(hold)await hold;
     if(unknownSnapshot){receipts.set(args.commandId,{state:'unknown'});throw Error('Transport ended during uncertain effect');}
-    const result={artifactId:'artifact-private',sha256:sha(bytes),bytes:bytes.length,contentType:'application/x-tar',coverage:'explicit-selected-native-only'};receipts.set(args.commandId,{state:'succeeded',result});if(loseSnapshot)throw Error('Lost acknowledgement');return {...result,receipt:receipts.get(args.commandId)};
+    const result={artifactId:'artifact-private',sha256:sha(bytes),bytes:bytes.length,contentType:'application/x-tar',coverage:'explicit-selected-native-only'};if(full)Object.assign(result,{format:'amplifier-native-authority',version:1});receipts.set(args.commandId,{state:'succeeded',commandId:args.commandId,operation:op,result});if(loseSnapshot)throw Error('Lost acknowledgement');return {...result,receipt:receipts.get(args.commandId)};
    }
+   if(op==='maintenance.restore.preview')return {kind:'native-new-destination-restore',previewHash,inventory:{entries:120,bytes:256},destination:args.destination,startsWorker:false,overwritesExisting:false,coverage:{completeNativeBackup:true,completeProductBackup:false}};
+   if(op==='maintenance.restore.manifest')return {previewHash,items:[{path:'native-home/settings.yaml',status:'included',bytes:1,sha256:sha('x')}],nextCursor:null};
+   if(op==='maintenance.restore.apply'){if(hold)await hold;const result={restored:true,previewHash:args.previewHash,startsWorker:false,overwritesExisting:false};const receipt={state:'succeeded',commandId:args.commandId,operation:op,result};receipts.set(args.commandId,receipt);if(loseSnapshot)throw Error('Lost restore acknowledgement');return {...result,receipt};}
+   if(op==='maintenance.restore.inspect')return {restoreCommandId:args.restoreCommandId,receipt:receipts.get(args.restoreCommandId),finalized:!restorePending,pending:restorePending};
    if(op==='maintenance.release'){assert.equal(args.leaseId,lease);lease=undefined;return {released:true,active:false,leaseId:args.leaseId};}
    if(op==='maintenance.receipt')return {receipt:receipts.get(args.commandId)??null};
    if(op==='maintenance.artifact.read'){const part=bytes.subarray(args.offset,args.offset+args.maxBytes);return {artifactId:'artifact-private',sha256:sha(bytes),bytes:bytes.length,offset:args.offset,encoding:'base64',data:part.toString('base64'),chunkSha256:sha(part),nextOffset:args.offset+part.length<bytes.length?args.offset+part.length:null};}
@@ -35,7 +40,7 @@ function nativeFixture(){
   }};
 }
 async function fixture(extra={}){
- const directory=await mkdtemp(join(tmpdir(),'recovery-owner-')),native=nativeFixture();let host,owner,releaseLost=false,participantLost=false;
+ const directory=await mkdtemp(join(tmpdir(),'recovery-owner-')),native=nativeFixture(extra.full);let host,owner,releaseLost=false,participantLost=false;
  const port={admitQuiescence:args=>host.admitQuiescence(args),inspectQuiescence:()=>host.inspectQuiescence(),quiescenceReceipt:id=>host.quiescenceReceipt(id),withQuiescenceMaintenance:(input,fn)=>host.withQuiescenceMaintenance(input,fn),releaseQuiescence:async args=>{const result=await host.releaseQuiescence(args);if(releaseLost&&args.outcome==='unchanged'){releaseLost=false;throw Error('Lost host release acknowledgement');}return result;}};
  const options={directory:join(directory,'owner'),nativeAuthority:'fixture-native',nativeAdmin:native.nativeAdmin,authorize:async ctx=>({accountId:ctx.clientId==='other'?'other-account':'owner-account'}),resolveSession:async uri=>({nativeSessionId:uri.split('/').at(-1),historyCwd:directory,nativeAuthority:'fixture-native'}),quiescence:port,...extra};
  owner=createRecoveryCapabilities(options);
@@ -155,4 +160,32 @@ for(const phase of ['maintenance.archive.create','maintenance.archive.prepare'])
 });
 test('workspace configuration selection cannot widen selected conversation authority',{skip:!hostModule},async()=>{
  const f=await fixture();try{await assert.rejects(f.call('recovery.archive.prepare',{sessions:[session],workspaceConfigurationFor:['ahp-session:/other'],parts:['workspace-configuration'],privateContentReviewed:true}),/explicitly selected/);assert.equal(f.native.calls.length,0);}finally{await f.close();}
+});
+const fullMaintenance={version:1,archivePlans:{version:1,nativeStores:{version:1,parts:['native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives']},fullNative:{version:1,part:'full-native-authority',restore:{version:1,newDestinationOnly:true,passiveInspect:true}}}};
+const fullOptions={full:true,nativeMaintenance:fullMaintenance,restoreDestinationChoices:[{id:'owned',label:'Inactive destination'}]};
+async function fullSnapshot(f){const review=await f.settled((await f.call('recovery.archive.prepare',{sessions:[],parts:['full-native-authority'],privateContentReviewed:true})).result.id);assert.equal(review.state,'prepared');const saved=await f.settled((await f.call('recovery.snapshot',{preparedJobId:review.id,previewHash:review.previewHash})).result.id);assert.equal(saved.state,'succeeded');return saved;}
+test('full-native archive/restore is strictly negotiated, account scoped, paged and never product-complete',{skip:!hostModule},async()=>{
+ const base=await fixture(),f=await fixture(fullOptions);try{
+  assert.equal(base.owner.manifest.actions['recovery.restore.prepare'],undefined);assert.equal(base.owner.actionSchemas()['recovery.archive.prepare'].schema.properties.parts.items.enum.includes('full-native-authority'),false);
+  const listing=(await f.call('recovery.list')).result;assert.equal(listing.capabilities.restoreAvailable,true);assert.equal(listing.fullProductBackup,false);assert.deepEqual(listing.capabilities.restoreDestinations,fullOptions.restoreDestinationChoices);
+  await assert.rejects(f.call('recovery.archive.prepare',{sessions:[session],parts:['full-native-authority'],privateContentReviewed:true}),/separate explicit/);
+  const saved=await fullSnapshot(f);assert.equal(f.native.calls.filter(([op])=>op==='maintenance.archive.add').length,0);
+  const args={snapshotJobId:saved.id,sha256:saved.result.sha256,destination:{rootId:'owned',name:'new-copy'},privateContentReviewed:true};
+  await assert.rejects(f.call('recovery.restore.prepare',{...args,sha256:'0'.repeat(64)}),/Exact successful/);
+  await assert.rejects(f.call('recovery.restore.prepare',{...args,destination:{rootId:'/browser-path',name:'new-copy'}}),/advertised/);
+  await assert.rejects(f.call('recovery.restore.prepare',args,{clientId:'other',origin:'ui'}),/unavailable/);
+  await assert.rejects(f.owner.action({version:1,topic:'recovery',channel:session,operation:'recovery.restore.prepare',args,commandId:'agent-full'},{clientId:'owner',origin:'agent',session}),/account-level/);
+  const review=await f.settled((await f.call('recovery.restore.prepare',args)).result.id);assert.equal(review.state,'prepared');await assert.rejects(f.owner.action({version:1,topic:'recovery',channel:session,operation:'recovery.restore.prepare',args,commandId:review.commandId},{clientId:'owner',origin:'agent',session}),/another conversation/);const page=(await f.call('recovery.preview',{jobId:review.id,limit:3})).result;assert.equal(page.restore.startsWorker,false);assert.equal(page.ownerCoverage.completeProductBackup,false);
+  f.native.setLost(true);f.native.setRestorePending(true);const applied=await f.settled((await f.call('recovery.restore.apply',{preparedJobId:review.id,previewHash:review.previewHash})).result.id);assert.equal(applied.state,'unknown');
+  assert.equal((await f.call('recovery.reconcile',{jobId:applied.id})).result.state,'unknown');assert.equal(f.host.inspectQuiescence().intakeClosed,true);assert.equal(f.native.calls.filter(([op])=>op==='maintenance.restore.reconcile').length,0);
+  f.native.setRestorePending(false);const restored=(await f.call('recovery.reconcile',{jobId:applied.id})).result;assert.equal(restored.state,'succeeded');assert.equal(restored.result.resourceUri,undefined);assert.equal(f.host.inspectQuiescence().intakeClosed,false);assert.equal(f.native.calls.filter(([op])=>op==='maintenance.restore.apply').length,1);
+ }finally{await f.close();await base.close();}
+});
+test('long restore is joined by owner close and never advertises idle before the effect completes',{skip:!hostModule},async()=>{
+ let idle=0;const f=await fixture({...fullOptions,onMayBeIdle:()=>idle++});let unblock;try{
+  const saved=await fullSnapshot(f),review=await f.settled((await f.call('recovery.restore.prepare',{snapshotJobId:saved.id,sha256:saved.result.sha256,destination:{rootId:'owned',name:'slow-copy'},privateContentReviewed:true})).result.id);
+  const held=new Promise(resolve=>unblock=resolve);f.native.setHold(held);const job=(await f.call('recovery.restore.apply',{preparedJobId:review.id,previewHash:review.previewHash})).result;await wait(()=>f.native.calls.some(([op])=>op==='maintenance.restore.apply'));
+  const baseline=idle;let closed=false;const closing=f.owner.close().then(()=>closed=true);await new Promise(resolve=>setImmediate(resolve));assert.equal(closed,false);assert.equal(idle,baseline);assert.equal(f.host.inspectQuiescence().intakeClosed,true);
+  unblock();await closing;assert.equal(idle,baseline+1);assert.equal(f.native.calls.filter(([op])=>op==='maintenance.restore.apply').length,1);
+ }finally{unblock?.();await f.close();}
 });

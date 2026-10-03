@@ -1,7 +1,7 @@
 import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {Store} from './store.js';
-import {definitions,quiescenceAccess,validate} from './schemas.js';
+import {definitions,negotiatedDefinitions,quiescenceAccess,validate} from './schemas.js';
 import type {Context,FenceContext,Job,Json,Options,ReleaseProof} from './types.js';
 export type * from './types.js';
 const digest=(value:unknown):string=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -14,15 +14,20 @@ const encode=(row:Json)=>Buffer.from(JSON.stringify(row)).toString('base64url');
 function decode(value:string,maximum=200):Json{if(!value||value.length>maximum)throw Error('Invalid recovery cursor');try{return JSON.parse(Buffer.from(value,'base64url').toString());}catch{throw Error('Invalid recovery cursor');}}
 /** A single configured native authority, with private durable job and account ownership. */
 export class RecoveryCapabilities {
- readonly manifest={version:1,topics:{recovery:{version:1,uri:'amplifier-capability://recovery/recovery',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(definitions).map(operation=>[operation,{topic:'recovery',operation,method:'x-amplifier/capabilityAction'}]))};
+ readonly manifest:Json;private definitions:typeof definitions;private restoreDestinations:{id:string;label:string}[];
  readonly quiescenceAccess=quiescenceAccess;
  private store:Store;private closed=false;private tasks=new Set<Promise<void>>();
  constructor(private options:Options){
   token(options.nativeAuthority,'configured native authority');
+  this.restoreDestinations=structuredClone(options.restoreDestinationChoices??[]);
+  if(this.restoreDestinations.length>32||new Set(this.restoreDestinations.map(row=>row.id)).size!==this.restoreDestinations.length)throw Error('Bounded unique restore destination choices required');
+  for(const row of this.restoreDestinations){if(Object.keys(row).some(key=>!['id','label'].includes(key)))throw Error('Restore destinations expose opaque IDs and labels only');token(row.id,'restore root identity');if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(row.id))throw Error('Bounded opaque restore root identity required');token(row.label,'restore root label');}
+  this.definitions=negotiatedDefinitions(options.nativeMaintenance?bounded(structuredClone(options.nativeMaintenance),16384):undefined,this.restoreDestinations);
+  this.manifest={version:1,topics:{recovery:{version:1,uri:'amplifier-capability://recovery/recovery',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(this.definitions).map(operation=>[operation,{topic:'recovery',operation,method:'x-amplifier/capabilityAction'}]))};
   if(options.leaseSeconds!==undefined&&(!Number.isSafeInteger(options.leaseSeconds)||options.leaseSeconds<1||options.leaseSeconds>300))throw Error('Native lease duration must be1..300 seconds');
   this.store=new Store(options.directory);
  }
- actionSchemas(){return definitions;}
+ actionSchemas(){return structuredClone(this.definitions);}
  private notify(){try{this.options.onInvalidate?.('recovery','host');}catch{/* Advisory invalidation cannot change durable operation truth. */}}
  private changed(job?:Job){if(job)this.store.save(job);this.notify();}
  private async account(context:Context,operation:string,args:Json){
@@ -32,24 +37,24 @@ export class RecoveryCapabilities {
  private own(account:string,id:string,context?:Context){const job=this.store.get(id);if(!job||job.accountId!==account)throw Error('Recovery job is unavailable to this account');if(context?.origin==='agent'){const selected=typeof context.session==='string'?context.session:context.session?.uri;if(job.sessions.length!==1||job.sessions[0].session!==selected)throw Error('Agent recovery cannot read another conversation');}return job;}
  private descriptor(job:Job){
   const result=job.result?structuredClone(job.result):undefined;
-  if(result?.artifactId)result.resourceUri=this.artifactUri(job.id,result.sha256,0);
-  return {id:job.id,commandId:job.commandId,operation:job.operation,state:job.state,revision:job.revision,createdAt:job.createdAt,updatedAt:job.updatedAt,sessions:job.sessions.map(row=>row.session),coverage:'explicit-selected-native-only',automaticResume:false,replayed:false,...(job.reason?{reason:job.reason}:{}),...(job.preview?{previewHash:job.preview.previewHash,reviewAvailable:true}:{}),...(result?{result}:{}),...(job.fence?{intakeFence:{fenceId:job.fence.fenceId,commandId:job.fence.commandId}}:{})};
+  if(job.operation==='recovery.snapshot'&&result?.artifactId)result.resourceUri=this.artifactUri(job.id,result.sha256,0);
+  return {id:job.id,commandId:job.commandId,operation:job.operation,state:job.state,revision:job.revision,createdAt:job.createdAt,updatedAt:job.updatedAt,sessions:job.sessions.map(row=>row.session),coverage:job.preview?.coverage??job.result?.coverage??'explicit-selected-native-only',automaticResume:false,replayed:false,...(job.reason?{reason:job.reason}:{}),...(job.preview?{previewHash:job.preview.previewHash,reviewAvailable:true}:{}),...(result?{result}:{}),...(job.fence?{intakeFence:{fenceId:job.fence.fenceId,commandId:job.fence.commandId}}:{})};
  }
  private list(account:string,args:Json){
   const before=args.cursor?decode(args.cursor):undefined;
   if(before&&(!Number.isSafeInteger(before.created)||typeof before.id!=='string'))throw Error('Invalid recovery page cursor');
   const limit=args.limit??25,rows=this.store.page(account,limit+1,before as any),more=rows.length>limit,items=rows.slice(0,limit).map(row=>({id:row.id,commandId:row.command,state:row.state,createdAt:row.created,revision:row.revision}));
-  const last=items.at(-1);return {items,nextCursor:more&&last?encode({created:last.createdAt,id:last.id}):null,coverage:'explicit-selected-native-only',fullProductBackup:false};
+  const last=items.at(-1);return {items,nextCursor:more&&last?encode({created:last.createdAt,id:last.id}):null,coverage:'native-only',fullProductBackup:false,capabilities:{archiveParts:[...this.definitions['recovery.archive.prepare'].schema.properties.parts.items.enum],restoreAvailable:!!this.definitions['recovery.restore.prepare'],restoreDestinations:this.definitions['recovery.restore.prepare']?structuredClone(this.restoreDestinations):[]}};
  }
  private async preview(job:Job,args:Json){
   if(!job.preview)throw Error('No immutable review is available for this job');
   const value=job.preview;
-  if(value.archivePlanId){
+  if(value.archivePlanId||value.kind==='native-new-destination-restore'){
    const cursor=args.cursor?decode(args.cursor,16384):{path:'',hash:value.previewHash};
    if(cursor.hash!==value.previewHash||typeof cursor.path!=='string'||cursor.path.length>8192)throw Error('Preview cursor does not match this immutable review');
-   const page=await this.native(job,'maintenance.archive.manifest',{previewHash:value.previewHash,cursor:cursor.path,limit:args.limit??25});
-   if(page.previewHash!==value.previewHash||page.coverage!=='explicit-selected-native-only'||!Array.isArray(page.items)||page.items.length>(args.limit??25))throw Error('Invalid native manifest page');
-   return bounded({jobId:job.id,previewHash:value.previewHash,coverage:value.coverage,containsPrivateContent:true,credentialCoverage:value.credentialCoverage,sessions:job.sessions.map(row=>row.session),parts:value.spec.parts,bytes:value.inventory.bytes,totalEntries:value.inventory.entries,items:page.items.map((row:Json)=>({kind:row.status,path:row.path,...(row.bytes!==undefined?{bytes:row.bytes,sha256:row.sha256}:{})})),nextCursor:page.nextCursor?encode({path:page.nextCursor,hash:value.previewHash}):null,omissions:value.omissions,exclusions:value.exclusions,reset:null},128*1024);
+   const page=await this.native(job,value.kind==='native-new-destination-restore'?'maintenance.restore.manifest':'maintenance.archive.manifest',{previewHash:value.previewHash,cursor:cursor.path,limit:args.limit??25});
+   if(page.previewHash!==value.previewHash||(value.archivePlanId&&!['explicit-selected-native-only','full-configured-native-authority'].includes(page.coverage))||!Array.isArray(page.items)||page.items.length>(args.limit??25))throw Error('Invalid native manifest page');
+   return bounded({jobId:job.id,previewHash:value.previewHash,coverage:value.coverage,containsPrivateContent:true,credentialCoverage:value.credentialCoverage,sessions:job.sessions.map(row=>row.session),parts:value.spec?.parts??['full-native-authority'],bytes:value.inventory.bytes,totalEntries:value.inventory.entries,ownerCoverage:value.ownerCoverage,restore:value.kind==='native-new-destination-restore'?{destination:value.destination,requiresRuntimeQualification:true,requiresConfigurationReview:true,overwritesExisting:false,startsWorker:false}:undefined,items:page.items.map((row:Json)=>({kind:row.status,path:row.path,...(row.reason?{reason:row.reason,classification:row.classification}:{}),...(row.bytes!==undefined?{bytes:row.bytes,sha256:row.sha256}:{})})),nextCursor:page.nextCursor?encode({path:page.nextCursor,hash:value.previewHash}):null,omissions:value.omissions,exclusions:value.exclusions,reset:null},128*1024);
   }
   const cursor=args.cursor?decode(args.cursor):{offset:0,hash:value.previewHash};
   if(cursor.hash!==value.previewHash||!Number.isSafeInteger(cursor.offset)||cursor.offset<0)throw Error('Preview cursor does not match this immutable review');
@@ -64,10 +69,10 @@ export class RecoveryCapabilities {
   return {topic:'recovery',scope:'host',revision:this.store.revision(),data:{recovery:this.list(account,{limit:25})}};
  }
  async action(params:Json,context:Context){
-  if(params.version!==1||params.topic!=='recovery'||!Object.hasOwn(definitions,params.operation))throw Error('Unadvertised recovery action or scope');
+  if(params.version!==1||params.topic!=='recovery'||!Object.hasOwn(this.definitions,params.operation))throw Error('Unadvertised recovery action or scope');
   const selected=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(params.channel)&&(params.channel!==selected||!/^ahp-session:\/[^/?#]+$/.test(params.channel)))throw Error('Recovery action requires authenticated host or exact selected session scope');
-  const operation=String(params.operation),args=bounded(params.args??{},32768);validate(definitions[operation].schema,args);
+  const operation=String(params.operation),args=bounded(params.args??{},32768);validate(this.definitions[operation].schema,args);
   if(selected&&args.sessionId&&selected!==args.sessionId)throw Error('Recovery routing selector differs from authenticated session');
   const account=await this.account(context,operation,args);
   let result:Json;
@@ -82,10 +87,16 @@ export class RecoveryCapabilities {
  private assertIntake(){if(this.store.fence())throw Object.assign(Error('Recovery intake is fenced'),{data:{executed:false}});if(this.store.unsettled())throw Object.assign(Error('Another recovery job is pending or uncertain; inspect it before new work'),{data:{executed:false}});}
  private async enqueue(account:string,operation:string,args:Json,commandId:string,context:Context){
   const signature=digest(canonical({operation,args})),prior=this.store.command(account,commandId);
-  if(prior){if(prior.signature!==signature)throw Error('Recovery command identity has different exact arguments');return this.descriptor(prior);}
+  if(prior){if(prior.signature!==signature)throw Error('Recovery command identity has different exact arguments');return this.descriptor(this.own(account,prior.id,context));}
   this.assertIntake();
-  let sessions:Job['sessions'],prepared:Job|undefined;
-  if(['recovery.prepare','recovery.archive.prepare','recovery.reset.prepare'].includes(operation)){
+  if(operation.startsWith('recovery.restore.')&&context.origin==='agent')throw Error('Full native restore requires explicit account-level user review');
+  let sessions:Job['sessions'],prepared:Job|undefined,snapshot:Job|undefined;
+  if(operation==='recovery.restore.prepare'){
+   snapshot=this.own(account,args.snapshotJobId,context);
+   if(snapshot.state!=='succeeded'||snapshot.operation!=='recovery.snapshot'||snapshot.result?.sha256!==args.sha256||snapshot.result?.format!=='amplifier-native-authority'||snapshot.result?.version!==1)throw Error('Exact successful full-native archive required');
+   sessions=structuredClone(snapshot.sessions);
+   if(args.sessionId&&(sessions.length!==1||sessions[0].session!==args.sessionId))throw Error('Recovery selector must match the exact snapshot session');
+  }else if(['recovery.prepare','recovery.archive.prepare','recovery.reset.prepare'].includes(operation)){
    const uris:string[]=operation!=='recovery.reset.prepare'?args.sessions:[args.sessionId],own=typeof context.session==='string'?context.session:context.session?.uri;
    if(args.sessionId&&(uris.length!==1||uris[0]!==args.sessionId))throw Error('Recovery selector must match the exact single selected session');
    if(context.origin==='agent'&&(uris.length!==1||uris[0]!==own))throw Error('Agent recovery cannot select another conversation');
@@ -93,7 +104,10 @@ export class RecoveryCapabilities {
     const selected=args.workspaceConfigurationFor??[];
     if(selected.some((uri:string)=>!uris.includes(uri)))throw Error('Workspace configuration must belong to an explicitly selected conversation');
     if(args.parts.includes('workspace-configuration')&&!selected.length||!args.parts.includes('workspace-configuration')&&selected.length)throw Error('Explicit workspace configuration selection must match requested parts');
-    if(args.includeCredentials&&!args.parts.includes('shared-configuration'))throw Error('Credential inclusion requires shared configuration');
+    if(args.parts.includes('full-native-authority')&&(args.parts.length!==1||uris.length||selected.length||context.origin==='agent'))throw Error('Full native authority requires a separate explicit account-level selection with no session aliases');
+    if(args.parts.some((part:string)=>part.startsWith('session-'))&&!uris.length)throw Error('Native session parts require explicit sessions');
+    if(args.parts.includes('native-retained-archives')&&!args.parts.includes('native-maintenance-records'))throw Error('Retained archives require their native maintenance records');
+    if(args.includeCredentials&&!args.parts.some((part:string)=>['shared-configuration','full-native-authority'].includes(part)))throw Error('Credential inclusion requires shared configuration');
    }
    sessions=[];
    for(const session of uris){const resolved=await this.options.resolveSession(session,context);token(resolved.nativeSessionId,'native session identity');if(resolved.nativeAuthority!==this.options.nativeAuthority||typeof resolved.historyCwd!=='string'||!resolved.historyCwd)throw Error('Recovery selection is outside the configured native authority');sessions.push({session,...resolved});}
@@ -102,8 +116,8 @@ export class RecoveryCapabilities {
   }else{
    prepared=this.own(account,args.preparedJobId);
    if(prepared.state!=='prepared'||!prepared.preview||prepared.preview.previewHash!==args.previewHash)throw Error('An exact completed immutable review is required');
-   const reset=operation.startsWith('recovery.reset.');
-   if(!(reset?['recovery.reset.prepare']:['recovery.prepare','recovery.archive.prepare']).includes(prepared.operation))throw Error('Review is for a different recovery operation');
+   const reset=operation.startsWith('recovery.reset.'),restore=operation==='recovery.restore.apply';
+   if(!(restore?['recovery.restore.prepare']:reset?['recovery.reset.prepare']:['recovery.prepare','recovery.archive.prepare']).includes(prepared.operation))throw Error('Review is for a different recovery operation');
    sessions=structuredClone(prepared.sessions);
    if(args.sessionId&&(sessions.length!==1||sessions[0].session!==args.sessionId))throw Error('Recovery selector must match the reviewed session');
    const own=typeof context.session==='string'?context.session:context.session?.uri;
@@ -115,10 +129,10 @@ export class RecoveryCapabilities {
    }
   }
   this.assertIntake();
-  const now=Date.now(),job:Job={id:randomUUID(),accountId:account,commandId,operation,args:structuredClone(args),signature,state:'queued',createdAt:now,updatedAt:now,revision:0,context:structuredClone(context),sessions,fenceCommandId:'',...(prepared?{preparedJobId:prepared.id,preview:structuredClone(prepared.preview)}:{})};
+  const now=Date.now(),job:Job={id:randomUUID(),accountId:account,commandId,operation,args:structuredClone(args),signature,state:'queued',createdAt:now,updatedAt:now,revision:0,context:structuredClone(context),sessions,fenceCommandId:'',...(snapshot?{snapshotJobId:snapshot.id}:{}),...(prepared?{preparedJobId:prepared.id,preview:structuredClone(prepared.preview)}:{})};
   job.fenceCommandId=child(job,'quiescence');this.store.insert(job);this.notify();
   // Return the host capability admission before attempting to close host intake.
-  setImmediate(()=>{if(this.closed)return;const task=this.run(job).catch(()=>{job.state='unknown';job.reason='owner-job-failed-no-replay';this.changed(job);}).finally(()=>this.tasks.delete(task));this.tasks.add(task);});
+  setImmediate(()=>{if(this.closed)return;const task=this.run(job).catch(()=>{job.state='unknown';job.reason='owner-job-failed-no-replay';this.changed(job);}).finally(()=>{this.tasks.delete(task);try{this.options.onMayBeIdle?.();}catch{/* Advisory only. */}});this.tasks.add(task);});
   return this.descriptor(job);
  }
  private async native(job:Job,operation:string,args:Json){return bounded(await this.options.nativeAdmin(operation,args,job.context),2*1024*1024);}
@@ -135,6 +149,25 @@ export class RecoveryCapabilities {
   job.fence={fenceId:admission.fenceId,commandId:job.fenceCommandId,purpose:'recovery',instanceId:evidence.instanceId,dataScope:evidence.dataScope};job.state='running';this.changed(job);
   try{
    await this.options.quiescence.withQuiescenceMaintenance(job.fence,async()=>{
+    if(job.operation==='recovery.restore.prepare'){
+     job.nativeLeaseReleased=true;job.nativeOperation='maintenance.restore.preview';this.changed(job);
+     try{
+      const snapshot=this.own(job.accountId,job.snapshotJobId!);
+      const preview=await this.native(job,'maintenance.restore.preview',{artifactId:snapshot.result!.artifactId,sha256:job.args.sha256,destination:job.args.destination,privateContentReviewed:true,credentialsReviewed:job.args.credentialsReviewed??false});
+      if(preview.kind!=='native-new-destination-restore'||!/^[a-f0-9]{64}$/.test(preview.previewHash)||!preview.inventory||preview.startsWorker!==false||preview.overwritesExisting!==false||preview.coverage?.completeProductBackup!==false)throw Error('Invalid native restore review');
+      job.preview={...preview,ownerCoverage:preview.coverage,coverage:'full-configured-native-authority'};job.nativeResult={state:'prepared',operation:job.nativeOperation,previewHash:preview.previewHash};job.terminalState='prepared';
+     }catch(error){if(knownRefusal(error)){job.terminalState='refused';job.reason='restore-preview-refused-no-destination-change';}else job.reason='restore-preview-outcome-unknown-no-replay';}
+     this.changed(job);return;
+    }
+    if(job.operation==='recovery.restore.apply'){
+     job.nativeLeaseReleased=true;job.nativeOperation='maintenance.restore.apply';job.nativeCommandId=child(job,'effect');this.changed(job);
+     try{
+      const result=await this.native(job,job.nativeOperation,{commandId:job.nativeCommandId,previewHash:job.args.previewHash});
+      if(result.receipt?.state!=='succeeded'||result.restored!==true||result.previewHash!==job.args.previewHash||result.startsWorker!==false||result.overwritesExisting!==false)throw Error('Native restore effect lacks a conclusive exact result');
+      this.saveResult(job,result);job.terminalState='succeeded';
+     }catch(error){if(knownRefusal(error)){job.terminalState='refused';job.reason='restore-refused-no-destination-change';}else job.reason='restore-outcome-unknown-no-replay';}
+     this.changed(job);return;
+    }
     if(job.operation==='recovery.archive.prepare'){
      job.nativeLeaseReleased=true; // Plan operations never acquire a snapshot lease or change canonical sources.
      const perform=async(operation:string,args:Json)=>{
@@ -146,10 +179,10 @@ export class RecoveryCapabilities {
      try{
       const created=await perform('maintenance.archive.create',{parts:job.args.parts,privateContentReviewed:true,includeCredentials:job.args.includeCredentials??false,credentialsReviewed:job.args.credentialsReviewed??false});
       const selected=job.sessions.filter(row=>(job.args.workspaceConfigurationFor??[]).includes(row.session));
-      const added=await perform('maintenance.archive.add',{planId:created.planId,expectedRevision:created.revision,sessions:job.sessions.map(row=>({nativeSessionId:row.nativeSessionId,cwd:row.historyCwd})),workspaces:[...new Set(selected.map(row=>row.historyCwd))]});
+      const added=job.sessions.length||selected.length?await perform('maintenance.archive.add',{planId:created.planId,expectedRevision:created.revision,sessions:job.sessions.map(row=>({nativeSessionId:row.nativeSessionId,cwd:row.historyCwd})),workspaces:[...new Set(selected.map(row=>row.historyCwd))]}):{revision:created.revision};
       const prepared=await perform('maintenance.archive.prepare',{planId:created.planId,expectedRevision:added.revision});
       const {receipt,...preview}=prepared;
-      if(!/^[a-f0-9]{64}$/.test(preview.previewHash)||!preview.archivePlanId||!preview.inventory||preview.coverage!=='explicit-selected-native-only')throw Error('Invalid native archive review');
+      if(!/^[a-f0-9]{64}$/.test(preview.previewHash)||!preview.archivePlanId||!preview.inventory||!['explicit-selected-native-only','full-configured-native-authority'].includes(preview.coverage))throw Error('Invalid native archive review');
       job.preview=preview;job.nativeResult={state:'succeeded',commandId:job.nativeCommandId,operation:job.nativeOperation};job.terminalState='prepared';
      }catch(error:any){
       if(error?.data?.reason==='native-archive-plan-failed'&&error.data.settled===true&&error.data.canonicalFilesChanged===0&&error.data.commandId===job.nativeCommandId){job.terminalState='refused';job.reason='archive-plan-failed-no-canonical-change';}
@@ -218,15 +251,22 @@ export class RecoveryCapabilities {
      if(receipt.state==='succeeded'){
       if(job.nativeOperation==='maintenance.archive.prepare'){
        const result=receipt.result;
-       if(result?.archivePlanId&&/^[a-f0-9]{64}$/.test(result.previewHash)&&result.coverage==='explicit-selected-native-only'){job.preview=result;job.terminalState='prepared';}
+       if(result?.archivePlanId&&/^[a-f0-9]{64}$/.test(result.previewHash)&&['explicit-selected-native-only','full-configured-native-authority'].includes(result.coverage)){job.preview=result;job.terminalState='prepared';}
       }else{job.terminalState='refused';job.reason='incomplete-private-plan-retained-no-replay';}
      }else if(receipt.state==='failed'&&receipt.settled===true&&receipt.canonicalFilesChanged===0){job.terminalState='refused';job.reason='archive-plan-failed-no-canonical-change';}
      if(job.terminalState){job.nativeResult={state:receipt.state,commandId:receipt.commandId,operation:receipt.operation};this.recordReleaseEvidence(job);}
     }
    }
+   if(job.operation==='recovery.restore.apply'&&job.nativeOperation==='maintenance.restore.apply'&&job.nativeLeaseReleased){
+    const proof=await this.options.nativeAdmin('maintenance.restore.inspect',{restoreCommandId:job.nativeCommandId},context),receipt=proof.receipt;
+    if(proof.restoreCommandId===job.nativeCommandId&&receipt?.commandId===job.nativeCommandId&&receipt.operation==='maintenance.restore.apply'){
+     if(proof.finalized===true&&proof.pending===false&&receipt.state==='succeeded'&&receipt.result?.previewHash===job.args.previewHash){this.saveResult(job,{...receipt.result,receipt});job.terminalState='succeeded';this.recordReleaseEvidence(job);}
+     else if(receipt.state==='refused'&&receipt.executed===false){job.nativeResult={state:'refused',commandId:receipt.commandId,operation:receipt.operation};job.terminalState='refused';this.recordReleaseEvidence(job);}
+    }
+   }
    // A canonical reset receipt alone cannot prove its pending finalization marker was removed.
    if(job.operation==='recovery.snapshot'&&job.nativeOperation==='maintenance.snapshot'&&inspected.receipt?.state==='succeeded'&&job.nativeLeaseReleased){this.saveResult(job,{...inspected.receipt.result,receipt:inspected.receipt});job.terminalState='succeeded';this.recordReleaseEvidence(job);}
-   else{job.nativeResult={...(job.nativeResult??{}),inspectedReceiptState:inspected.receipt?.state??'unavailable'};this.changed(job);}
+   else if(!job.releaseEvidence){job.nativeResult={...(job.nativeResult??{}),inspectedReceiptState:inspected.receipt?.state??'unavailable'};this.changed(job);}
   }
   const receipt=await this.options.quiescence.quiescenceReceipt(job.fenceCommandId);
   if(job.releaseEvidence&&job.terminalState&&job.nativeLeaseReleased){

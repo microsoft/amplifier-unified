@@ -124,11 +124,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-recovery-capability": {
-      "artifact": "vendor/unified-recovery-capability-de3702dce9b2.tgz",
+      "artifact": "vendor/unified-recovery-capability-2c4e17b9388e.tgz",
       "path": "components/recovery-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "b59c9ed2af51d17a1c6a94e4c3e3115143f7a02d",
-      "sha256": "de3702dce9b2638a6f00c9a72cc6d2223a2b9fe4857e3975e74b7d5f4f6e49fa",
+      "revision": "c8144a8d678be513eed71959e3f2a5675b6c159d",
+      "sha256": "2c4e17b9388ee52b2f53373acbaf5b8446409f78827a0cb11538ce41fe7336ca",
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {

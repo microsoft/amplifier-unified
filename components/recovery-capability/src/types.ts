@@ -17,6 +17,11 @@ export interface Options {
  directory:string;
  /** One configured private ACP admin authority/connection; do not silently reconnect an active lease. */
  nativeAuthority:string;
+ /** Exact initialized native.admin.maintenance metadata from this authority. Absent keeps legacy selected-only behavior. */
+ nativeMaintenance?:Json;
+ /** Labels and opaque launcher root IDs only, never filesystem paths. */
+ restoreDestinationChoices?:{id:string;label:string}[];
+ onMayBeIdle?:()=>void;
  nativeAdmin:(operation:string,args:Json,context:Context)=>Promise<Json>;
  /** Authenticates every read and explicitly approves sensitive mutations; client args are not authority. */
  authorize:(context:Context,operation:string,args:Readonly<Json>)=>Promise<Identity>;
@@ -30,7 +35,7 @@ export interface Job {
  id:string;accountId:string;commandId:string;operation:string;args:Json;signature:string;
  state:JobState;createdAt:number;updatedAt:number;revision:number;context:Context;
  sessions:{session:string;nativeSessionId:string;historyCwd:string;nativeAuthority:string}[];
- fenceCommandId:string;fence?:FenceContext;preview?:Json;preparedJobId?:string;
+ fenceCommandId:string;fence?:FenceContext;preview?:Json;preparedJobId?:string;snapshotJobId?:string;
  nativeOperation?:string;nativeCommandId?:string;nativeResult?:Json;leaseId?:string;nativeLeaseReleased?:boolean;
  result?:Json;reason?:string;releaseEvidence?:Json;terminalState?:'prepared'|'succeeded'|'refused';
 }

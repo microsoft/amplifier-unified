@@ -36,14 +36,14 @@ gate; no preview or published service was changed.
 
 Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
 Node 22 checks and nine installed Python checks pass, including uncertain private
-release acknowledgement after owner replacement. Web `56ba9a8` has 641 passing
+release acknowledgement after owner replacement. Web `ac12914` has 644 passing
 tests and source/static browser diagnostics and update-settlement checks. Its
 diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
 no real-account forwarding claim. Exact source and installed graph receipts remain
 the authority for each acceptance boundary.
 
-The 328-row control inventory currently records 67 qualified offline browser rows,
-155 implemented but unqualified rows, 75 partial rows, 25 gaps and six pending
+The 328-row control inventory currently records 74 qualified offline browser rows,
+155 implemented but unqualified rows, 75 partial rows, 18 gaps and six pending
 decisions. No pending decision authorizes retiring behavior. Native owner archive
 coverage has grown to include import records, voice preferences, maintenance
 receipts and retained archives; full configured-product backup and restore remain
@@ -434,4 +434,6 @@ from independent installations. Candidate age never authorizes removal; native
 writer exclusion and exact reviewed source evidence remain host responsibilities.
 Native `120a5b7` includes scoped permissions and full-operation writer exclusion
 through long archive work; its 100 installed checks passed with no skips.
-Permissions and staged update browser acceptance are still being integrated.
+All seven scoped permissions controls passed source and independently installed
+static two-client browser checks against distribution `6cfdcd76` and native
+`120a5b7`. Staged update browser acceptance remains in progress.
