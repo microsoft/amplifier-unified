@@ -44,6 +44,25 @@ old-unit relaunch refusal and unchanged canonical history. It also passed the
 independently installed app reset and static browser gates. These fixture results
 do not retroactively confer signed service authority on the existing manual preview.
 
+The current root source composes conversation visibility as a host-local selected
+transaction. Generic ACP deployments need no native administration or global
+maintenance owner for it. Exact-ID access, deferred work and unrelated execution
+remain available while discovery is repaired; saved effects and projection
+readiness are separate. Eight actual-factory cases pass on Node 22 and 25,
+including real process termination during projection and index reconstruction.
+The JSON launcher also passes its explicit account-authorization and actual
+presentation-only startup checks. These are source-composition and installed
+component results, not the final assembled package or browser. See
+[the boundary receipt](evidence/presentation-boundary-20261003.json).
+
+Optional native administration negotiation now has a bounded initialization
+deadline and an explicit unavailable state. Its absence does not block unrelated
+engines or stored history. The root intakes the corrected bridge; stable action
+advertisement requires explicit host reconstruction after that peer returns.
+Final installed-root and browser qualification are pending. A hosted host test
+also exposed a terminal-shutdown race; its correction must precede sealing the
+next assembled candidate. Spark-2 continues to serve the unchanged b855 checkpoint.
+
 The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
 its successful real-model evidence and one 347-byte rename update in 30 ms,
 acknowledged in 44 ms. That is one API-path sample, not current browser paint or

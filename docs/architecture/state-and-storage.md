@@ -156,8 +156,10 @@ visibility changes use selected-row identity/revision checks and a durable marke
 journal; the catalog projection can be reconstructed from those markers. Keep
 listing unavailable until projection is consistent, without holding unrelated
 capability owners. Client-private selection, expansion and drafts remain local.
-The presentation reset implementation is being revised to satisfy this boundary;
-its earlier globally held candidate is not completion evidence.
+The host, recovery owner and root composition now implement this boundary. Their
+focused source and component-package checks pass; assembled package, browser and
+live adoption remain separate. The earlier globally held candidate is superseded.
+See [the qualification boundary](evidence/presentation-boundary-20261003.json).
 
 AHP's `view.turns` is advisory. If omitted, upstream requires all retained turns;
 `fetchTurns` prepends older turns to reduced chat state. Older-turn operations must
