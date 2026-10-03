@@ -48,3 +48,12 @@ test('real composed participant IDs retain factory provenance instead of guessed
  const v=createConfiguredStorageInventory({account:'a',stateDirectory:'/owned/app',engines:[]},{namespace:'n',quiescence:{requiredOwners:['capability:canvas','history-import']},components:{'@amplifier/unified-resources-capability':{revision:'a'},'@amplifier/unified-history-capability':{revision:'b'}},ownerProvenance:{'capability:canvas':{packageName:'@amplifier/unified-resources-capability',configKey:'resources'},'history-import':{packageName:'@amplifier/unified-history-capability',configKey:'historyImport'}}});
  assert.equal(v.completeEligible,true);assert.deepEqual(v.owners.map(o=>[o.id,o.participantId,o.revision]),[['capability:canvas','capability:canvas','a'],['history-import','history-import','b']]);
 });
+
+test('managed chat allocations outside application state are never silently omitted',async()=>{
+ const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');
+ const config={account:'a',stateDirectory:'/owned/app',engines:[],host:{managedSessionRoot:'/owned/managed'}},options={namespace:'n',quiescence:{requiredOwners:['resources']},components:{'@amplifier/unified-resources-capability':{revision:'a'}}};
+ assert.ok(createConfiguredStorageInventory(config,options).omissions.some(o=>o.id==='managed-session-files'&&o.blocksComplete));
+ assert.equal(createConfiguredStorageInventory({...config,host:{managedSessionRoot:'/owned/app/managed'}},options).completeEligible,true);
+ const externalRoots=[{id:'managed-files',ownerIds:['resources'],path:'/owned/managed',coverage:'authoritative',capture:'tree'}];
+ assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots}).omissions.some(o=>o.id==='managed-session-files'),false);
+});

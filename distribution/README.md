@@ -424,3 +424,13 @@ the host's exact settled native receipt before releasing held owners. It never
 repeats hide or guesses a missing outcome. The private protection journal survives
 restart. Service/update admission includes cleanup forwarding, and storage inventory
 records this root-package owner's implementation content digest on explicit request.
+
+Managed chats use `host.managedSessionRoot` plus the matching explicit native
+launcher `managedSessionRoots` grant. Keep the managed root within this installation's
+application state so that markers and generated files share stopped-product backup
+coverage. External roots require explicit separate authoritative capture; native
+history backup alone does not capture host-owned managed files. Creation allocates
+one private directory without mounting Core or warming a worker. The catalog hides
+allocation paths from the workspace picker and uses independent managed-session
+grants for discovery. Managed ownership is verified from durable host/native receipts
+before activation; a path or marker alone is not ownership proof.

@@ -125,6 +125,8 @@ export function createConfiguredStorageInventory(config,{namespace,quiescence,co
   if(!roots.some(r=>r.ownerIds.includes(ownerId)&&inside(r.path,p)&&r.coverage==='authoritative'&&r.capture!=='omit'))omissions.push({id:label,ownerId,reason:'Configured external authority is not included: '+p,blocksComplete:true});
  };
  if(config.portability){const id=ids.find(id=>(ownerProvenance[id]?.configKey??configForOwner[id]??id)==='portability');if(!id)throw Error('Configured transfer authority missing from participant census');requirePath(id,'portability-stage',config.portability.stageDir);requirePath(id,'portability-exchange',config.portability.exchangeDir);}
+ const managed=config.host?.managedSessionRoot;
+ if(managed&&!inside(config.stateDirectory,managed)&&!roots.some(r=>inside(r.path,managed)&&r.coverage==='authoritative'&&['tree','file'].includes(r.capture)))omissions.push({id:'managed-session-files',reason:'Configured managed chat files and allocation markers are outside declared product capture: '+managed,blocksComplete:true});
  for(const engine of config.engines??[]){
   const declared=nativeArtifacts.some(a=>a.engineId===engine.id);
   if(!declared)omissions.push({id:'engine:'+engine.id,reason:'Configured engine native authority has no sealed full artifact: '+engine.id,blocksComplete:true});

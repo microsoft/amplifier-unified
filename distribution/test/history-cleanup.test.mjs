@@ -58,5 +58,7 @@ test('installed catalog composes cold cleanup with exact root-owner provenance a
   assert.equal(inventory.omissions.some(o=>o.id==='provenance:history-cleanup'),false);
   const result=await app.host.invokeCapability({channel:'ahp-root://',topic:'history-cleanup',operation:'cleanup.preview',version:1,args:{modifiedBefore:1},commandId:'cold-review'},{actorId:'owned-reviewer',clientId:'owned-browser',origin:'ui'});
   assert.equal(result.result.candidateCount,0);assert.equal(result.result.nativeFilesRead,false);assert.equal(result.result.removalAuthorized,false);
+  const agent=await app.host.invokeCapability({channel:'ahp-root://',topic:'history-cleanup',operation:'cleanup.preview',version:1,args:{modifiedBefore:1},commandId:'cold-agent-review'},{actorId:'agent:owned-reviewer',origin:'agent'});
+  assert.equal(agent.result.candidateCount,0);assert.equal(agent.result.nativeFilesRead,false);
  }finally{await app?.close();await rm(directory,{recursive:true,force:true});}
 });
