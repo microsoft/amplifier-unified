@@ -354,7 +354,33 @@ product stores redacted reviews and exact command receipts. Apply and separately
 reviewed restore require the complete configured recovery fence and unchanged
 owner revisions. Shared Amplifier/workspace settings, keys, native history and
 client-local state remain preserved. This is not a complete product reset:
-supervisor preferences, host policy and conversation presentation remain separate.
+supervisor preferences and host policy remain separate.
+
+`conversationPresentation: {}` adds reversible conversation visibility through
+the host's local selected transaction and the recovery topic. It works with any
+configured ACP engine and indexed catalog, without native administration or
+global quiescence. Inject `authorizeRecovery` for the authenticated account.
+When full `recovery` is also configured, the same owner exposes presentation
+actions without adding a second recovery topic; native recovery keeps its existing
+maintenance requirements.
+
+Preparation retains an explicit selection of at most 500 stable identities and
+row revisions. Apply and restore use that exact account-owned review. Hidden
+conversations remain authorized by exact ID for history, receipts, artifacts,
+commands and deferred work. Visibility does not grant or revoke permission.
+Client-private drafts, selection and preferences remain in each client.
+
+The immutable marker-effect receipt and derived discovery readiness are separate.
+An incomplete projection makes discovery unavailable, including workspace
+session/workspace lists, while exact-ID access and unrelated work remain available.
+Reconcile observes the original operation; it never repeats a reset or accepted
+input. An explicit reviewed `recovery.presentation.rebuild` first seeds retained
+authoritative mappings through the public catalog API, then performs a complete
+metadata scan with zero issues, and finally lets the host project its retained
+visibility markers. Root startup configuration must disable competing automatic
+scans and writer hints during this sequence. Reconstruction reads metadata only
+and starts no agent. A trusted embedding can supply
+`conversationPresentation.reconstructMetadata` for its own catalog scheduling.
 
 Full-product backup/restore and canonical history deletion are also separate
 contracts. See the independent recovery component contract for native archives,

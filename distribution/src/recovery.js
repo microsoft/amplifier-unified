@@ -1,11 +1,13 @@
 import {join} from 'node:path';
 import {createRecoveryCapabilities} from '@amplifier/unified-recovery-capability';
+import {conversationPresentationPort} from './presentation.js';
 
 /** Selected recovery delegates all native bytes and lease evidence to ACP owners. */
-export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,authorize,appResetOwners=[]}){
+export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,authorize,appResetOwners=[],presentation=false}){
  if(!admin||typeof authorize!=='function')throw Error('Recovery requires native administration and explicit account authorization');
  const nativeMaintenance=await admin.maintenanceCapabilities();
  const owner=createRecoveryCapabilities({
+  ...(presentation?{conversationPresentation:conversationPresentationPort(host)}:{}),
   nativeMaintenance,appResetOwners,restoreDestinationChoices:config.restoreDestinationChoices,onMayBeIdle:context.onMayBeIdle,
   directory:join(context.directory,'recovery'),nativeAuthority,leaseSeconds:config.leaseSeconds,
   nativeAdmin:(operation,args,caller)=>admin.perform(operation,args,{...caller,session:undefined}),
