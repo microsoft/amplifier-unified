@@ -49,9 +49,11 @@ async function fixture(t) {
 test("authenticated RPC matches the public facade and notifications are event-driven", async (t) => {
   const { client, owner, calls } = await fixture(t);
   const received = [];
+  let completed; const completion = new Promise(resolve => completed = resolve);
   const reset = new Promise((resolve) =>
     client.subscribe((event) => {
       received.push(event);
+      if(event.receipt?.id === "manual" && event.receipt.status === "succeeded") completed();
       if (event.reset) resolve();
     }),
   );
@@ -59,7 +61,7 @@ test("authenticated RPC matches the public facade and notifications are event-dr
   const accepted = await client.owner.check("manual");
   assert.ok(["queued", "running", "succeeded"].includes(accepted.status));
   await owner.waitFor("manual");
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await completion;
   assert.ok(
     received.some(
       (event) =>

@@ -92,6 +92,25 @@ and uncertain launches, and an independently installed supervisor driving the
 actual signed distribution CLI through upgrade, exact receipt read, and rollback.
 No service adoption or native-generation currency is claimed.
 
+### 0.15 instrumented manual systemd source
+
+Adds private authenticated one-shot source authority, full configured held-owner
+census verification, durable permanent old-launch retirement and retained Linux
+pidfd exit evidence. The controller consumes that evidence through the existing
+same-release handoff contract. It never calls systemd stop/start, signals the
+source, adopts a numeric PID, or copies application state. The new ingress
+participant owns only forwarding lifetimes and its private fence ledger; held
+retention/disposal inspection is scoped to that adapter's empty business-reference
+inventory and keeps receipt delivery available. Downstream owners remain required.
+
+The packet includes a reviewable generic launcher composition and a minimal
+HTTP/WS gateway hook patch. Separately installed Linux qualification uses an
+actual public host, a disabled synthetic unit, kernel process exit and one new
+owned destination. This does not qualify any live launcher transition or assembled
+product owner census. Exact markers, root role and peer callbacks are documented
+in `MANUAL-SYSTEMD-HANDOFF.md`. Manual update dispatch and pushed completion have
+additional regression coverage with the background scheduler never started.
+
 ### 0.7 forward activation source observation
 
 The signed distribution adapter reobserves channel and source currency after

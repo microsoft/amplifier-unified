@@ -153,6 +153,24 @@ test("install submitted during a check continues as soon as that check finishes"
   assert.equal(calls.restart, 1);
 });
 
+test("manual intent starts each stage and publishes completion without a scheduler wake", async t => {
+  const events=[],check=deferred(),preparation=deferred();
+  const {owner,options,calls,setBusy}=await fixture(t,{onChange:r=>events.push(r)});
+  let checking=false,preparing=false;
+  options.releases.check=async()=>{checking=true;return check.promise;};
+  options.releases.prepare=async()=>{preparing=true;return preparation.promise;};
+  // start() is deliberately never called. Neither a periodic check nor a UI
+  // status read may be needed to trigger work or deliver terminal progress.
+  owner.check('click-check');owner.install('click-install');await tick();
+  assert.equal(checking,true);assert.equal(preparing,false);
+  setBusy(true);check.resolve({releases:[a,b],recommendedId:b.id});await tick();
+  assert.equal(preparing,true);assert.equal(calls.admission,0);
+  preparation.resolve(candidate(b));await tick();
+  assert.equal(owner.receipt('click-install').phase,'waiting_idle');
+  setBusy(false);owner.notifyIdle();await owner.waitFor('click-install');
+  assert.equal(events.at(-1).phase,'ready');assert.equal(calls.restart,1);
+});
+
 test("failed fresh check invalidates old inventory and blocks queued installation", async (t) => {
   const { owner, options, calls } = await fixture(t);
   owner.check("first");

@@ -17,6 +17,9 @@ PID files, missing endpoints, operator assertions, or copied JSON are not exit
 proof or launch authority. If that evidence is unavailable, this contract cannot
 perform the handoff.
 
+For an instrumented Linux user service, the first-party source adapter and
+ingress participant are documented in [MANUAL-SYSTEMD-HANDOFF.md](MANUAL-SYSTEMD-HANDOFF.md).
+
 The operator supplies the full expected owner census. It must match the actual
 held census exactly. Original installation ID, owner ID, data scope and release
 identity remain unchanged. Only the child instance ID changes. The destination

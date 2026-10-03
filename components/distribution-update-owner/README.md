@@ -18,6 +18,10 @@ are documented in [RELEASE-NOTES.md](RELEASE-NOTES.md). Notes travel with the
 existing channel response; they add no availability lookup or session scan.
 Bounded owned-process failure evidence and initial-launch error handling are in
 [STARTUP-DIAGNOSTICS.md](STARTUP-DIAGNOSTICS.md).
+An instrumented manual Linux service can transfer the same release and existing
+state to the supervisor through [MANUAL-SYSTEMD-HANDOFF.md](MANUAL-SYSTEMD-HANDOFF.md).
+This requires source-side held admission and real kernel exit evidence; it does
+not adopt an already-running uninstrumented process.
 
 ## Host composition
 
