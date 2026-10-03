@@ -23,7 +23,10 @@ creation. The full supervisor/background/cleanup/recovery owner census is not
 activated there. An explicit existing-state service handoff is being qualified
 separately; a manually launched process must not be treated as an owned signed
 service. Installed candidates and the live preview are distinct acceptance scopes.
-See [the checkpoint receipt](evidence/spark2-checkpoint-20261003.json).
+See [the checkpoint receipt](evidence/spark2-checkpoint-20261003.json). A single remote
+chat rename produced one 347-byte update in 30 ms and completed its acknowledgement
+in 44 ms, with no model call. This is a Mac-to-Spark-2 API sample, not a browser
+paint or production-scale latency measurement.
 
 The managed creation checkpoint has 689 passing web tests, zero skips, and source
 plus independently installed static browser qualification. It covers browser-local
