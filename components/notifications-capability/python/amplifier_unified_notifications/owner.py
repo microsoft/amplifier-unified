@@ -76,6 +76,8 @@ class Owner:
             self.db.execute("UPDATE deliveries SET status='unknown',value=json_set(value,'$.status','unknown','$.reason','Owner ended before a confirmed boundary; no delivery replayed') WHERE status IN ('accepted','dispatching')");self.db.commit()
             os.chmod(directory/'notifications.sqlite',0o600)
             self.intake=DurableIntakeFence(directory/'intake.sqlite')
+            from .app_reset import AppReset
+            self.app_reset=AppReset(self,config.get('defaultServer','https://ntfy.sh'))
         except BaseException:
             if hasattr(self,'db'):self.db.close()
             self.lease.close();raise
@@ -188,10 +190,18 @@ class Owner:
 
 
     async def request(self,method,args):
+        if method=='appReset':
+            if set(args)-{'operation','args','context'}:raise ValueError('Unexpected private reset field')
+            operation=args.get('operation');context=args.get('context');fence=self.intake.fence
+            if operation!='inspect' and (not fence or fence.get('purpose')!='recovery' or not isinstance(context,dict) or any(context.get(key)!=fence.get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope'))):
+                error=ValueError('Exact held recovery context required');error.known_refusal=True;raise error
+            self.intake.calls+=1
+            try:return self.app_reset.perform(operation,args.get('args',{}))
+            finally:self.intake.calls-=1;await self.notice(self.changed);await self.notice(self.idle)
         if method=='quiescence.retention':return self.retention_references(args)
         if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Notifications owner is closed')
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'appReset':{'version':1,'parts':['notifications.settings','notifications.credentials'],'retainedUndo':True},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':return self.intake.acquire(args)
         if method=='quiescence/release':

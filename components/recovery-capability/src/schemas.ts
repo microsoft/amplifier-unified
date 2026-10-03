@@ -20,7 +20,7 @@ export const definitions:Record<string,{description:string;schema:Json}>={
 };
 
 /** Preserve the baseline contract unless this exact configured native peer negotiated additions. */
-export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[]){
+export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[]){
  const result:typeof definitions=structuredClone(definitions),plans=native?.version===1?native.archivePlans:undefined;
  const properties=result['recovery.archive.prepare'].schema.properties,base=properties.parts.items.enum as string[];
  const stores=['native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
@@ -33,6 +33,11 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
   result['recovery.restore.prepare']=define('Verify an exact successful native archive and review restoration into a new owned destination. Existing data is never overwritten; no inputs execute.',{snapshotJobId:job,sha256:hash,destination:{type:'object',properties:{rootId:{type:'string',enum:destinations.map(row=>row.id)},name:{type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$'}}},privateContentReviewed:{const:true},credentialsReviewed:{type:'boolean'}},['snapshotJobId','sha256','destination','privateContentReviewed']);
   result['recovery.restore.prepare'].schema.properties.destination.required=['rootId','name'];result['recovery.restore.prepare'].schema.properties.destination.additionalProperties=false;
   result['recovery.restore.apply']=define('Restore exactly the reviewed native archive into its new absent destination. Original files and uncertain work remain preserved; configuration review and runtime qualification remain required.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
+ }
+ if(appParts.length){
+  result['recovery.appReset.prepare']=define('Review only registered app-local reset parts. Private originals stay with their owners. Shared Amplifier/workspace settings and keys.env remain preserved.',{parts:{type:'array',minItems:1,maxItems:3,uniqueItems:true,items:{enum:appParts}},privateContentReviewed:{const:true},credentialsReviewed:{type:'boolean'},restoreResetJobId:job},['parts','privateContentReviewed']);
+  result['recovery.appReset.apply']=define('Apply exactly reviewed app-local parts under all-owner quiescence, retaining originals. Partial or uncertain outcomes remain held; never automatic replay.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
+  result['recovery.appReset.restore']=define('Restore retained app-local values only after a fresh exact review and unchanged post-reset revision.',{preparedJobId:job,previewHash:hash,resetJobId:job,expectedPostResetRevision:hash},['preparedJobId','previewHash','resetJobId','expectedPostResetRevision']);
  }
  const cache=native?.version===1?native.cacheInventory:undefined;
  if(cache?.version===1&&cache.cold===true&&cache.paged===true&&cache.sourceRetirement===false&&cache.requiresRecoveryAdminLease===true&&Array.isArray(cache.clearKinds)&&cache.clearKinds.includes('python-bytecode')){

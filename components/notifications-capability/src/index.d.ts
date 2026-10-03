@@ -35,6 +35,8 @@ export interface NotificationsOptions {
 export interface TopicSnapshot { topic: 'notifications'; scope: 'host'; revision: number; data: {notificationSettings: NotificationSettings} }
 export interface ActionRequest { channel: string; topic: string; version: number; operation: string; args?: Record<string,unknown>; commandId: string }
 export interface NotificationsCapability {
+  /** Trusted recovery composition only; mutations require the exact acquired recovery context. */
+  appReset: {id:'notifications';parts:string[];perform(operation:'prepare'|'apply'|'inspect'|'restore',args:Record<string,unknown>,context?:QuiescenceContext):Promise<Record<string,any>>};
   manifest: {version: number; topics: Record<string,{uri: string;version: number;scope: string;watch: boolean}>;actions: Record<string,{topic: string;operation: string;method: string}>};
   actionSchemas(): Promise<typeof notificationActions>;
   quiescenceAccess: Record<string,'read'>;

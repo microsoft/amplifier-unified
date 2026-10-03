@@ -302,3 +302,51 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 No nonterminal/unknown job may coexist with this held gate; the exact own-job exception remains exclusive to purpose recovery. Completed artifacts/manifests live in native maintenance storage and their preview/read routes do not lazily reopen execution files.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+### Optional reversible app-local reset
+
+`nativeMaintenance.appReset` v1 plus registered `appResetOwners` exposes three
+explicit parts: `native.app-bundle-default`, `notifications.settings`, and
+`notifications.credentials`. Unsupported/duplicate selections refuse. Nothing is
+selected by default. Metadata negotiation reads no settings or secrets. This is a
+partial app reset: supervisor preferences, host policy, conversation rows,
+shared/workspace settings and keys.env, ChatGPT sign-in profiles, histories,
+source caches, generation state and client drafts remain outside this operation.
+
+The existing queued job path admits `recovery.appReset.prepare` with `parts`,
+`privateContentReviewed:true`, optional `credentialsReviewed:true` (required for
+notification credentials), and optional `restoreResetJobId`. Apply takes the
+exact `preparedJobId` and `previewHash`. Undo needs a new prepare with
+`restoreResetJobId`, then `recovery.appReset.restore` with that review, the
+original `resetJobId` and `expectedPostResetRevision`. `recovery.preview` pages
+redacted owner manifests; expiries are Unix seconds. `recovery.job`, `.command`
+and `.reconcile` retain their account-bound, no-replay behavior. Private retained
+images are unencrypted in each owner store, never in public topics/results.
+
+This slice is explicit account-level user administration; normal agent-origin
+requests refuse even with an empty session selection. `authorize` is invoked
+again for apply/restore with canonical parts and review flags derived from the
+account-owned prepared job. The launcher must require its private-credential
+policy for `notifications.credentials`; caller flags alone never grant authority.
+The notify settings part preserves credentials without copying them into its
+before-image. Clearing credentials used by enabled delivery also requires the
+separately selected settings part, which disables delivery.
+
+Composition passes `appResetOwners:[notifications.appReset]`. Native ownership
+is registered only from the exact initialized peer marker and calls existing
+`nativeAdmin`. All ports run inside `host.withQuiescenceMaintenance` and
+`admin.withMaintenanceFence`; notification ports independently match the exact
+persisted recovery fence. Normal owner saves remain blocked. A port has
+`{id,parts,perform(operation,args,fence,callerContext)}` with prepare/apply/inspect/
+restore. Each owner stores private originals before mutation and returns exact
+redacted receipts. Preflight checks all reviewed revisions before the first
+mutation; every owner repeats CAS under its own lock. This is **not** an atomic
+multi-owner transaction. Partial/unknown outcomes keep all intake held with
+`ownerProgress`; exact passive receipts may prove completion, but absent/unknown
+receipts never trigger replay or compensation. Undo refuses newer state.
+
+New owner-private reset tables are part of that owner's authoritative store and
+must remain in its private backup declaration. Native reset images live in the
+already-declared maintenance receipt database; notification images live in its
+existing notification database. This does not expand native-only archive
+coverage to notification or other product stores.

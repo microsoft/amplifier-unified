@@ -12,7 +12,10 @@ export interface QuiescencePort {
  releaseQuiescence(input:{fenceId:string;commandId:string;outcome:'unchanged'|'unknown';evidence:Json}):Promise<Json>;
  withQuiescenceMaintenance<T>(input:{fenceId:string;commandId:string},callback:()=>Promise<T>):Promise<T>;
 }
+export interface AppResetOwner {id:string;parts:string[];perform:(operation:string,args:Json,fence:FenceContext|undefined,context:Context)=>Promise<Json>;}
 export interface Options {
+ /** Trusted registered owner ports; private bodies stay inside each owner. */
+ appResetOwners?:AppResetOwner[];
  /** Private product-owner database only; never the native home or another owner's directory. */
  directory:string;
  /** One configured private ACP admin authority/connection; do not silently reconnect an active lease. */
@@ -36,6 +39,7 @@ export interface Job {
  state:JobState;createdAt:number;updatedAt:number;revision:number;context:Context;
  sessions:{session:string;nativeSessionId:string;historyCwd:string;nativeAuthority:string}[];
  fenceCommandId:string;fence?:FenceContext;preview?:Json;preparedJobId?:string;snapshotJobId?:string;
+ appResetCommands?:Record<string,string>;appResetReceipts?:Record<string,Json>;
  nativeOperation?:string;nativeCommandId?:string;nativeResult?:Json;leaseId?:string;nativeLeaseReleased?:boolean;
  result?:Json;reason?:string;releaseEvidence?:Json;terminalState?:'prepared'|'succeeded'|'refused';
 }

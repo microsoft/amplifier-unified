@@ -1,3 +1,4 @@
+import {AppResets,resetOwners} from './app-reset.js';
 import {managedParticipant,emptyManaged} from './managed-files.js';
 import {emptyRetention,retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
@@ -18,13 +19,14 @@ function decode(value:string,maximum=200):Json{if(!value||value.length>maximum)t
 export class RecoveryCapabilities {
  readonly manifest:Json;private definitions:typeof definitions;private restoreDestinations:{id:string;label:string}[];
  readonly quiescenceAccess:Record<string,'read'|'reconcile'>;
- private store:Store;private closed=false;private tasks=new Set<Promise<void>>();
+ private appResets:AppResets;private store:Store;private closed=false;private tasks=new Set<Promise<void>>();
  constructor(private options:Options){
   token(options.nativeAuthority,'configured native authority');
   this.restoreDestinations=structuredClone(options.restoreDestinationChoices??[]);
   if(this.restoreDestinations.length>32||new Set(this.restoreDestinations.map(row=>row.id)).size!==this.restoreDestinations.length)throw Error('Bounded unique restore destination choices required');
   for(const row of this.restoreDestinations){if(Object.keys(row).some(key=>!['id','label'].includes(key)))throw Error('Restore destinations expose opaque IDs and labels only');token(row.id,'restore root identity');if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(row.id))throw Error('Bounded opaque restore root identity required');token(row.label,'restore root label');}
-  this.definitions=negotiatedDefinitions(options.nativeMaintenance?bounded(structuredClone(options.nativeMaintenance),16384):undefined,this.restoreDestinations);
+  this.appResets=new AppResets(resetOwners(options.nativeMaintenance,options.nativeAdmin,options.appResetOwners));
+  this.definitions=negotiatedDefinitions(options.nativeMaintenance?bounded(structuredClone(options.nativeMaintenance),16384):undefined,this.restoreDestinations,this.appResets.parts);
   this.quiescenceAccess=Object.fromEntries(Object.entries(quiescenceAccess).filter(([name])=>Object.hasOwn(this.definitions,name)));
   this.manifest={version:1,topics:{recovery:{version:1,uri:'amplifier-capability://recovery/recovery',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(this.definitions).map(operation=>[operation,{topic:'recovery',operation,method:'x-amplifier/capabilityAction'}]))};
   if(options.leaseSeconds!==undefined&&(!Number.isSafeInteger(options.leaseSeconds)||options.leaseSeconds<1||options.leaseSeconds>300))throw Error('Native lease duration must be1..300 seconds');
@@ -41,17 +43,18 @@ export class RecoveryCapabilities {
  private descriptor(job:Job){
   const result=job.result?structuredClone(job.result):undefined;
   if(job.operation==='recovery.snapshot'&&result?.artifactId)result.resourceUri=this.artifactUri(job.id,result.sha256,0);
-  return {id:job.id,commandId:job.commandId,operation:job.operation,state:job.state,revision:job.revision,createdAt:job.createdAt,updatedAt:job.updatedAt,sessions:job.sessions.map(row=>row.session),coverage:job.preview?.coverage??job.result?.coverage??'explicit-selected-native-only',automaticResume:false,replayed:false,...(job.reason?{reason:job.reason}:{}),...(job.preview?{previewHash:job.preview.previewHash,reviewAvailable:true}:{}),...(result?{result}:{}),...(job.fence?{intakeFence:{fenceId:job.fence.fenceId,commandId:job.fence.commandId}}:{})};
+  return {id:job.id,commandId:job.commandId,operation:job.operation,state:job.state,revision:job.revision,createdAt:job.createdAt,updatedAt:job.updatedAt,sessions:job.sessions.map(row=>row.session),coverage:job.preview?.coverage??job.result?.coverage??'explicit-selected-native-only',automaticResume:false,replayed:false,...(job.reason?{reason:job.reason}:{}),...(job.appResetCommands?{ownerProgress:Object.entries(job.appResetCommands).map(([ownerId,commandId])=>({ownerId,commandId,state:job.appResetReceipts?.[ownerId]?.state??'unknown'}))}:{}),...(job.preview?{previewHash:job.preview.previewHash,reviewAvailable:true}:{}),...(result?{result}:{}),...(job.fence?{intakeFence:{fenceId:job.fence.fenceId,commandId:job.fence.commandId}}:{})};
  }
  private list(account:string,args:Json){
   const before=args.cursor?decode(args.cursor):undefined;
   if(before&&(!Number.isSafeInteger(before.created)||typeof before.id!=='string'))throw Error('Invalid recovery page cursor');
   const limit=args.limit??25,rows=this.store.page(account,limit+1,before as any),more=rows.length>limit,items=rows.slice(0,limit).map(row=>({id:row.id,commandId:row.command,state:row.state,createdAt:row.created,revision:row.revision}));
-  const last=items.at(-1);return {items,nextCursor:more&&last?encode({created:last.createdAt,id:last.id}):null,coverage:'native-only',fullProductBackup:false,capabilities:{archiveParts:[...this.definitions['recovery.archive.prepare'].schema.properties.parts.items.enum],cacheInventory:this.definitions['recovery.cache.scan']?{version:1,cold:true,pageSize:50,selectionSize:50,clearKinds:['python-bytecode'],sourceRetirement:false}:undefined,restoreAvailable:!!this.definitions['recovery.restore.prepare'],restoreDestinations:this.definitions['recovery.restore.prepare']?structuredClone(this.restoreDestinations):[]}};
+  const last=items.at(-1);return {items,nextCursor:more&&last?encode({created:last.createdAt,id:last.id}):null,coverage:'native-only',fullProductBackup:false,capabilities:{appReset:this.appResets.parts.length?{version:1,parts:this.appResets.parts,retainedUndo:true,completeAppReset:false}:undefined,archiveParts:[...this.definitions['recovery.archive.prepare'].schema.properties.parts.items.enum],cacheInventory:this.definitions['recovery.cache.scan']?{version:1,cold:true,pageSize:50,selectionSize:50,clearKinds:['python-bytecode'],sourceRetirement:false}:undefined,restoreAvailable:!!this.definitions['recovery.restore.prepare'],restoreDestinations:this.definitions['recovery.restore.prepare']?structuredClone(this.restoreDestinations):[]}};
  }
  private async preview(job:Job,args:Json){
   if(!job.preview)throw Error('No immutable review is available for this job');
   const value=job.preview;
+  if(value.kind==='app-local-reset'){const offset=args.cursor?decode(args.cursor):{offset:0,hash:value.previewHash};if(offset.hash!==value.previewHash||!Number.isSafeInteger(offset.offset)||offset.offset<0)throw Error('Exact app reset preview cursor required');const end=offset.offset+(args.limit??25);return bounded({jobId:job.id,...structuredClone(value),owners:value.owners.slice(offset.offset,end),nextCursor:end<value.owners.length?encode({offset:end,hash:value.previewHash}):null},128*1024);}
   if(job.operation==='recovery.cache.preview')return bounded({jobId:job.id,...structuredClone(value),nextCursor:null},128*1024);
   if(value.archivePlanId||value.kind==='native-new-destination-restore'){
    const cursor=args.cursor?decode(args.cursor,16384):{path:'',hash:value.previewHash};
@@ -79,6 +82,12 @@ export class RecoveryCapabilities {
   const operation=String(params.operation),args=bounded(params.args??{},32768);validate(this.definitions[operation].schema,args);
   if(selected&&args.sessionId&&selected!==args.sessionId)throw Error('Recovery routing selector differs from authenticated session');
   const account=await this.account(context,operation,args);
+  if(['recovery.appReset.apply','recovery.appReset.restore'].includes(operation)){
+   const prepared=this.own(account,args.preparedJobId,context);
+   if(prepared.operation!=='recovery.appReset.prepare'||!prepared.preview)throw Error('Exact account-owned app reset review required');
+   const granted=await this.options.authorize(context,operation,Object.freeze({...structuredClone(args),parts:structuredClone(prepared.preview.parts),credentialsReviewed:prepared.args.credentialsReviewed===true,privateContentReviewed:prepared.args.privateContentReviewed===true}));
+   if(granted?.accountId!==account)throw Error('Reset authorization identity changed');
+  }
   let result:Json;
   if(operation==='recovery.list')result=this.list(account,args);
   else if(operation==='recovery.job')result=this.descriptor(this.own(account,args.jobId,context));
@@ -96,7 +105,19 @@ export class RecoveryCapabilities {
   this.assertIntake();
   if(operation.startsWith('recovery.restore.')&&context.origin==='agent')throw Error('Full native restore requires explicit account-level user review');
   let sessions:Job['sessions'],prepared:Job|undefined,snapshot:Job|undefined;
-  if(operation==='recovery.cache.scan'){
+  if(operation.startsWith('recovery.appReset.')){
+   if(context.origin==='agent')throw Error('App-local reset requires explicit account-level user authorization');
+   sessions=[];
+   if(operation==='recovery.appReset.prepare'){
+    if(args.parts.includes('notifications.credentials')&&args.credentialsReviewed!==true)throw Error('Explicit private credential retention review required');
+    if(args.restoreResetJobId){const original=this.own(account,args.restoreResetJobId);if(original.state!=='succeeded'||original.operation!=='recovery.appReset.apply'||JSON.stringify(original.result?.parts)!==JSON.stringify(args.parts))throw Error('Exact original app reset parts required');}
+   }else{
+    prepared=this.own(account,args.preparedJobId);
+    if(prepared.operation!=='recovery.appReset.prepare'||prepared.state!=='prepared'||prepared.preview?.previewHash!==args.previewHash)throw Error('Exact completed app reset review required');
+    if(operation==='recovery.appReset.restore'){const original=this.own(account,args.resetJobId);if(original.state!=='succeeded'||original.operation!=='recovery.appReset.apply'||original.result?.postResetRevision!==args.expectedPostResetRevision||prepared.args.restoreResetJobId!==original.id)throw Error('Fresh restore review and exact original app reset required');}
+    else if(prepared.args.restoreResetJobId)throw Error('Restore review cannot authorize reset');
+   }
+  }else if(operation==='recovery.cache.scan'){
    const own=typeof context.session==='string'?context.session:context.session?.uri;
    if(args.sessionId&&own&&args.sessionId!==own)throw Error('Cache selector differs from authenticated session');
    const selected=args.sessionId??own;sessions=[];
@@ -181,6 +202,11 @@ export class RecoveryCapabilities {
   job.fence={fenceId:admission.fenceId,commandId:job.fenceCommandId,purpose:'recovery',instanceId:evidence.instanceId,dataScope:evidence.dataScope};job.state='running';this.changed(job);
   try{
    await this.options.quiescence.withQuiescenceMaintenance(job.fence,async()=>{
+    if(job.operation.startsWith('recovery.appReset.')){
+     const prior=job.preparedJobId?this.own(job.accountId,job.preparedJobId):undefined,originalId=job.args.resetJobId??job.args.restoreResetJobId;
+     try{await this.appResets.perform(job,()=>this.changed(job),prior,originalId?this.own(job.accountId,originalId):undefined);}catch(error){job.terminalState=undefined;job.reason='app-reset-owner-outcome-unknown-no-replay';this.changed(job);}
+     return;
+    }
     if(job.operation.startsWith('recovery.cache.')){
      // These native operations retain and join their own OS writer admission;
      // they do not create a selected-session snapshot lease.
@@ -283,7 +309,7 @@ export class RecoveryCapabilities {
   else{job.state='unknown';this.changed(job);try{await this.options.quiescence.releaseQuiescence({...job.fence,outcome:'unknown',evidence:{owner:'recovery',jobId:job.id}});}catch{/* Uncertain work remains fenced. */}}
  }
  private recordReleaseEvidence(job:Job){
-  job.releaseEvidence={owner:'recovery',receiptId:'recovery:'+job.id,jobId:job.id,...job.fence,outcome:'unchanged',terminalState:job.terminalState,nativeLeaseReleased:true,nativeLeaseDisposition:job.leaseId?'released':'not-acquired',nativeAuthority:this.options.nativeAuthority,operation:job.operation,nativeCommandId:job.nativeCommandId??null,nativeResultHash:job.nativeResult?digest(job.nativeResult):null,settledAt:Date.now()};this.changed(job);
+  job.releaseEvidence={owner:'recovery',receiptId:'recovery:'+job.id,jobId:job.id,...job.fence,outcome:'unchanged',terminalState:job.terminalState,nativeLeaseReleased:true,nativeLeaseDisposition:job.leaseId?'released':'not-acquired',nativeAuthority:this.options.nativeAuthority,operation:job.operation,...(job.appResetCommands?{appResetOwners:Object.entries(job.appResetCommands).map(([ownerId,commandId])=>({ownerId,commandId,receiptHash:job.appResetReceipts?.[ownerId]?digest(job.appResetReceipts[ownerId]):null,state:job.appResetReceipts?.[ownerId]?.state??'unavailable'}))}:{}),nativeCommandId:job.nativeCommandId??null,nativeResultHash:job.nativeResult?digest(job.nativeResult):null,settledAt:Date.now()};this.changed(job);
  }
  /** Trusted coordinator-only proof read, not a client action or caller assertion. */
  readReleaseEvidence(input:{fenceId:string;commandId:string}):Json|undefined{
@@ -298,6 +324,7 @@ export class RecoveryCapabilities {
  }
  private async reconcile(job:Job,context:Context){
   if(job.state!=='unknown')return this.descriptor(job);
+  if(job.operation.startsWith('recovery.appReset.')){await this.appResets.inspect(job,()=>this.changed(job));if(job.terminalState&&job.nativeLeaseReleased)this.recordReleaseEvidence(job);}
   if(job.nativeCommandId){
    const inspected=await this.options.nativeAdmin('maintenance.receipt',{commandId:job.nativeCommandId},job.context);
    if(['recovery.cache.scan','recovery.cache.clear'].includes(job.operation)&&job.nativeLeaseReleased){

@@ -147,3 +147,23 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Accepted, dispatching and unknown deliveries protect selected conversations. Finished notification payloads are stored copies, not execution-file handles.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+### Trusted recovery port
+
+The factory's `appReset` port supports only `notifications.settings` and the
+separately reviewed `notifications.credentials`. It is not a generic client
+capability action. Prepare/apply/restore require the exact persisted held
+`purpose:recovery` fence and are counted through both Node and Python lifetime
+gates; receipt inspection remains passive while held. Normal saves and deliveries
+stay fenced. The recovery coordinator authenticates the account and explicit
+credential-retention policy before calling it.
+
+Settings reset disables delivery and resets server/preview to configured defaults,
+without retaining or changing credentials. Credential reset clears topic/token;
+when delivery is enabled it also requires an explicit settings-part selection.
+Private originals stay in owner-local `app_reset_previews`; redacted exact
+`app_reset_commands` receipts use the existing SQLite transaction. Neither
+original commands nor delivery records are changed. Restore requires a fresh
+review and unchanged revision. Unknown effects block future reset commands,
+never replay. These two tables must be included in snapshots of the notification
+owner database; no new filesystem roots are introduced.
