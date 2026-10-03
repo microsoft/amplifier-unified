@@ -38,6 +38,15 @@ and renewed review after reload. Its installed browser archive fixture contains
 2,130 manifest entries and 3,256,320 bytes in 13 verified chunks. These checks do
 not qualify app-local product configuration reset or managed file removal.
 
+Web `9014bea` additionally qualifies explicit native-cache inventory and reviewed
+generated-bytecode clearing against the installed 18-owner fixture: 721 tests,
+zero skips, bounded inventory pages and exact original receipts after lost replies.
+Downloaded sources and retained generations remain protected. Shared watch and
+selection races are covered by causal tests: updates arriving during reads are
+coalesced, reopened cached panels resubscribe, and stale chat/draft selections
+cannot overwrite newer private state. This later web is not deployed to Spark-2.
+See [cache qualification](evidence/cache-browser-qualification.json).
+
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
 All18-owner history hiding already passes the actual Core/Foundation distribution
@@ -55,8 +64,8 @@ history/lease after a workspace is removed, without recreating it. It conveys no
 operation authority. Spark-2 remains on the Foundation revision qualified for its
 checkpoint; the next candidate will qualify the new merged dependency.
 
-The 328-row inventory records 91 qualified offline browser rows, 151 implemented
-but unqualified rows, 74 partial rows, six gaps and six pending decisions. No
+The 328-row inventory records 93 qualified offline browser rows, 151 implemented
+but unqualified rows, 75 partial rows, three gaps and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, managed
 file removal, app-local product resets, external-account/device checks and remaining client
 parity still require their stated gates. The CSV and per-control receipts retain
