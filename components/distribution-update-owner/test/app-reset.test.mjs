@@ -57,7 +57,7 @@ test('ordinary no-op writes and A-B-A changes invalidate reviews and restore aut
 test('expiry, wrong review hash, forged scope and absent host authority fail without private results',async t=>{
  const f=await fixture(t),review=(await prepare(f.owner.appReset)).receipt.result;
  assert.equal((await apply(f.owner.appReset,{...review,reviewHash:'0'.repeat(64)})).receipt.state,'refused');
- t.mock.timers.enable({apis:['Date'],now:review.expiresAt+1});
+ t.mock.timers.enable({apis:['Date'],now:Math.ceil(review.expiresAt*1000)+1});
  assert.equal((await apply(f.owner.appReset,review,'expired')).receipt.state,'refused');t.mock.timers.reset();
  for(const [i,wrong] of [{...fence,instanceId:'forged'},{...fence,dataScope:'foreign'},{...fence,purpose:'distribution-update'},undefined].entries()){
   const r=await f.owner.appReset.perform('prepare',{commandId:'forged-'+i,parts:['updates.preferences'],privateContentReviewed:true},wrong);
@@ -75,6 +75,21 @@ test('reset cannot race ordinary commands, background work or shutdown while aut
  assert.equal((await prepare(f.owner.appReset,'parallel')).receipt.state,'refused');
  const closing=f.owner.close();release();const finished=await pending;assert.equal(finished.receipt.state,'succeeded');await closing;
  await f.reopen();assert.deepEqual((await f.owner.appReset.perform('inspect',{commandId:'prepare'})).receipt,finished.receipt);
+});
+test('public reset and restore review expiries use Unix seconds with an exact ten-minute boundary',async t=>{
+ const now=1791000000123;
+ t.mock.timers.enable({apis:['Date'],now});
+ const f=await fixture(t),prepared=await prepare(f.owner.appReset),review=prepared.receipt.result;
+ assert.equal(review.expiresAt,now/1000+600);
+ assert.equal(prepared.receipt.createdAt,now,'receipt timestamps remain milliseconds');
+ const applied=await apply(f.owner.appReset,review);
+ const restore=(await prepare(f.owner.appReset,'restore-review',{restoreCommandId:'apply'})).receipt.result;
+ assert.equal(restore.expiresAt,now/1000+600);
+ const inspect=()=>f.owner.appReset.perform('inspect',{preparedId:restore.preparedId,reviewHash:restore.reviewHash},fence);
+ t.mock.timers.setTime(now+600000-1);assert.equal((await inspect()).applicable,true);
+ t.mock.timers.setTime(now+600000);assert.equal((await inspect()).applicable,false);
+ const result=await f.owner.appReset.perform('restore',{commandId:'expired-restore',preparedId:restore.preparedId,reviewHash:restore.reviewHash,resetCommandId:'apply',expectedPostResetRevision:applied.receipt.result.postResetRevision},fence);
+ assert.equal(result.receipt.state,'refused');assert.deepEqual(f.owner.inspect().preferences,disabled);
 });
 test('pending normal work refuses reset without cancelling, replaying or changing that work',async t=>{
  let release;const gate=new Promise(r=>release=r);

@@ -36,7 +36,10 @@ each awaited prepare/apply/restore call, as with other reset owners.
 
 1. `prepare` accepts `commandId`, `parts:['updates.preferences']` and
    `privateContentReviewed:true`. It returns `{receipt}` with an immutable
-   redacted review in `receipt.result`, valid for ten minutes. No preference
+   redacted review in `receipt.result`, valid for ten minutes. Review `expiresAt`
+   is Unix seconds, matching the other AppReset owners for aggregation and
+   browser display. Receipt `createdAt` and `settledAt` remain Unix milliseconds.
+   No preference
    values or private before-image appear in the review.
 2. `inspect({preparedId,reviewHash}, fence)` checks applicability against the
    exact current revision under the same full held recovery contract.
