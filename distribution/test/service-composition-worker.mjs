@@ -277,22 +277,43 @@ createInterface({input:process.stdin}).on('line',async line=>{
   };
 
   const configuredOwners=['resources','application-updates'];
+  let nativeFixture;
   if(fixture.fullOwners){
     const {python,provider}=fixture.fullOwners,home=join(root,'native-home'),appHome=join(root,'native-app'),nativeConfig=join(root,'native.json');
     await mkdir(home);await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
     const context=(await execute(python,['-I','-c','import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent)'])).stdout.trim();
-    const bundle=join(root,'native-fixture.yaml');await writeFile(bundle,`bundle:\n  name: service-all-owners\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: ${context}\nproviders:\n  - module: provider-fixture\n    source: ${provider}\n`);
-    await writeFile(nativeConfig,JSON.stringify({home,appHome,bundle,adminWorkspaceRoots:[workspace],adminMaintenance:true,transferAuthorityDirectory:join(configuration.directory,'application/capabilities/portability'),transferWorkspaceRoots:[workspace],maintenanceExternalWriters:'foundation-cooperative'}));
+    const capture=(await execute(python,['-I','-c','import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec("amplifier_module_hook_context_intelligence").origin).parent)'])).stdout.trim();
+    const bundle=join(root,'native-fixture.yaml');await writeFile(bundle,`bundle:\n  name: service-all-owners\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: ${context}\nproviders:\n  - module: provider-fixture\n    source: ${provider}\nhooks:\n  - module: hook-context-intelligence\n    source: ${capture}\n    config:\n      destinations: {}\n      base_path: ${join(root,'native-events')}\n`);
+    const nativeEnv={AMPLIFIER_HOME:home,AMPLIFIER_WEB_HOME:appHome,AMPLIFIER_SESSION_STATE_HOME:join(root,'native-checkpoints'),
+     AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:join(root,'native-events'),AMPLIFIER_SOURCE_STORE:join(root,'native-sources'),UNIFIED_RUNTIME_PYTHON:python};
+    const nativeValues={home,appHome,bundle,adminWorkspaceRoots:[workspace],adminMaintenance:true,transferAuthorityDirectory:join(configuration.directory,'application/capabilities/portability'),transferWorkspaceRoots:[workspace],maintenanceExternalWriters:'foundation-cooperative'};
+    if(fixture.coherentArchive)Object.assign(nativeValues,{maintenanceFullNative:true,maintenanceExternalWriters:'stopped',
+     maintenanceFullNativeRoots:{checkpoint:nativeEnv.AMPLIFIER_SESSION_STATE_HOME,events:nativeEnv.AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH,sources:nativeEnv.AMPLIFIER_SOURCE_STORE,bundle}});
+    await writeFile(nativeConfig,JSON.stringify(nativeValues));nativeFixture={python,nativeConfig,nativeEnv};
     const application=configuration.application;
-    application.engines.push({id:'native',command:python,args:['-I','-m','amplifier_acp','--config',nativeConfig]});
+    application.engines.push({id:'native',command:python,args:['-I','-m','amplifier_acp','--config',nativeConfig],env:nativeEnv});
     Object.assign(application,{nativeAdmin:{engine:'native'},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},portability:{python,engines:['native'],stageDir:join(workspace,'stages'),exchangeDir:join(workspace,'exchange')},catalogProcess:{command:python,args:['-I','-m','amplifier_session_catalog','serve','--db',join(root,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--scan-interval','0','--workspace-check-interval','0']}});
     for(const name of ['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'])application[name]={python};
+    if(fixture.coherentArchive){
+     const transferWorkspace=join(configuration.directory,'application');
+     application.allowedWorkspaceRoots.push(configuration.directory);
+     application.portability.stageDir=join(transferWorkspace,'transfer-stages');application.portability.exchangeDir=join(transferWorkspace,'transfer-exchange');
+     nativeValues.transferWorkspaceRoots.push(configuration.directory);await writeFile(nativeConfig,JSON.stringify(nativeValues));
+     application.catalogProcess.args=['-I','-m','amplifier_session_catalog','serve','--db',join(configuration.directory,'application/catalog.sqlite'),'--home',home,'--app-home',appHome,'--scan-interval','0','--workspace-check-interval','0'];application.catalogProcess.env=nativeEnv;
+    }
     configuredOwners.push('native-administration','media','mcp','notifications','diagnostics','operations','coordination','worktree','publishing','recall','feedback','workspaces','portability','recovery','history');
   }
 
   running=await installProductionDistribution(configuration);
   let current=running.supervisor;
   const dir=configuration.directory,app=JSON.parse(await readFile(running.applicationFile,'utf8'));
+  if(fixture.coherentArchive){
+   // Retain the trusted native launcher configuration as application authority.
+   // The next explicit installed release/resume consumes this captured path.
+   const retained=join(dir,'application/native-configuration.json');await writeFile(retained,await readFile(nativeFixture.nativeConfig),{mode:0o600});
+   const configured=app.engines.find(engine=>engine.id==='native');configured.args=['-I','-m','amplifier_acp','--config',retained];
+   await writeFile(running.applicationFile,JSON.stringify(app),{mode:0o600});nativeFixture.nativeConfig=retained;
+  }
   const supervisorConfig=JSON.parse(await readFile(running.supervisorFile,'utf8'));
   assert.deepEqual(app.supervision.serviceLifecycle,supervisorConfig.serviceLifecycle);
   assert.equal(supervisorConfig.serviceLifecycle.installationId,
@@ -426,12 +447,16 @@ createInterface({input:process.stdin}).on('line',async line=>{
   assert.equal((await lstat(join(destination,'roots/installed:ledger:updates'))).isFile(),true);
   assert.equal((await lstat(join(destination,'roots/installed:ledger:service'))).isFile(),true);
 
+  let coherentArchive;
+  if(fixture.coherentArchive){const {qualifyCoherentArchive}=await import('./coherent-archive-fixture.mjs');
+   coherentArchive=await qualifyCoherentArchive({packageRoot,root,directory:dir,base:compositionInventory,expected:finalStop.expected,workspace,evidenceDirectory:fixture.coherentEvidenceDirectory,...nativeFixture});}
+
   await writeFile(fixture.receiptFile,JSON.stringify({schema:'unified-service-composition-acceptance-v1',node:process.version,platform:process.platform,
    actualInstalledDistributionCLI:true,actualInstallerComposition:true,privateBindingPersisted:true,actualSignedUpdate:true,
    signedOfflineReleaseNotes:true,publicReviewAction:true,reviewReceiptSurvivesUpdateAndResume:true,
    busyStopRefused:true,actualChildExitProven:true,reopenedStoppedSupervisor:true,explicitOfflineResume:true,
    publicInstalledServiceCLI:true,duplicateRunnerRefused:true,explicitStagedActivation:true,
-   installedOfflineArchive:true,inactiveArchiveRestore:true,archiveCompleteProduct:false,archiveLedgerExports:true,
+   installedOfflineArchive:true,inactiveArchiveRestore:true,archiveCompleteProduct:false,archiveLedgerExports:true,coherentArchive,
    authenticatedServiceRelease:true,applicationFacadeResumed:true,pushedProgress:true,noAdoption:true,
    configuredOwners,allConfiguredOwnersServiceLifecycleQualified:Boolean(fixture.fullOwners),managedSystemService:false,
    nativeAgentAcceptance:fixture.fullOwners?'Core/Foundation initialization and graceful retirement; no inference':false,manualCheckMs:checked.updatedAt-checked.createdAt,installMs:updated.updatedAt-updated.createdAt,graphSha256:fixture.assembledArchiveSha256,componentCount:first.components.length},null,2));
@@ -443,5 +468,5 @@ createInterface({input:process.stdin}).on('line',async line=>{
   const stopped=await candidate.stopService('cleanup-failure').catch(()=>null);
   if(stopped?.status==='stopped')await candidate.close();
  }
- host?.close();publisher.closeAllConnections();await new Promise(r=>publisher.close(r));await git.close();await rm(root,{recursive:true,force:true});
+ host?.close();publisher.closeAllConnections();await new Promise(r=>publisher.close(r));await git.close();if(process.env.DISTRIBUTION_SERVICE_KEEP_FIXTURE==='1')console.error('Fixture directory: '+root);else await rm(root,{recursive:true,force:true});
 }

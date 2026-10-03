@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink} from 'node:fs/prom
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {createInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from '../src/installation-archive.js';
+import {createInstallationArchive,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from '../src/installation-archive.js';
 import {DistributionUpdateOwner,ServiceLifecycleOwner,withOfflineSupervisorSnapshot} from '@amplifier/unified-distribution-update-owner';
 import {validateStorageInventory} from '../src/storage-inventory.js';
 
@@ -93,6 +93,25 @@ test('blocking omission overrides a caller-supplied complete flag',async t=>{
  body.completeEligible=false;inventory=seal(body);const result=await createInstallationArchive({...f.request,inventory,inventoryDigest:inventory.digest},f.ports);assert.equal(result.completeProduct,false);
 });
 
+test('coherent capture requires live nonce-bound gates and records failed release without publishing',async t=>{
+ const f=await fixture(t),request={...f.request,compositionInventory:f.inventory,includeCredentials:true,credentialsReviewed:true};
+ for(const kind of ['lost','foreign','capture-failed','release-unknown']){
+  let context,released=0;const outputFile=join(f.temp,kind+'.unified');
+  const ports={withSupervisorSnapshot:f.ports.withSupervisorSnapshot,
+   acquireWriterExclusion:async c=>{context=c;return {evidence:{policy:'operator-reviewed-retirement',noncooperatingWriters:'not-independently-observed',reviewDigest:'a'.repeat(64)},
+    assertHeld:async()=>({active:true,...c,leaseId:'retirement'}),release:async()=>{released++;return {released:true};}};},
+   nativeCaptures:[{engineId:'native',acquire:async c=>({
+    assertHeld:async()=>({active:kind!=='lost',...c,...(kind==='foreign'?{captureId:'different'}:{}),leaseId:'native',artifacts:[]}),
+    capture:async()=>{throw Error('fixture_capture_failed');},
+    release:async()=>{released++;if(kind==='release-unknown')throw Error('fixture_release_lost');return {released:true};},
+   })}]};
+  await assert.rejects(createCoherentInstallationArchive({...request,outputFile},ports),kind==='release-unknown'?/release_unconfirmed/:kind==='capture-failed'?/fixture_capture_failed/:/lease_lost/);
+  assert.equal(released,2);await assert.rejects(readFile(outputFile),/ENOENT/);
+  const record=JSON.parse(await readFile(outputFile+'.capture.json','utf8'));assert.equal(record.captureId,context.captureId);
+  assert.equal(record.sealed,false);assert.equal(record.workReplayed,false);assert.equal(record.release.state,kind==='release-unknown'?'unknown':'released');
+ }
+});
+
 test('native authority requires exact inspected manifest and explicit writer attestation review',async t=>{
  const f=await fixture(t),{digest,...body}=f.inventory;
  const bytes=Buffer.from('opaque native artifact fixture'),path=join(f.temp,'native.tar');await writeFile(path,bytes,{mode:0o600});
@@ -116,6 +135,7 @@ test('archive review rejects traversal, duplicate members and file parents befor
   ['duplicate',m=>{m.entries[1].name=m.entries[0].name;},/member_invalid/],
   ['parent',m=>{m.entries.find(e=>e.type==='file').name='roots/application/a/b';m.entries.push({name:'roots/application/a',type:'file',bytes:0,sha256:hash(''),mode:0o600});},/parent_invalid/],
   ['false-coverage',m=>{m.coverage.completeProduct=true;m.coverage.omissions=[];},/coverage_invalid/],
+  ['fake-coherence',m=>{m.coverage.completeProduct=true;m.captureConsistency={status:'qualified-at-capture'};},/coverage_invalid/],
  ]){
   const changed=structuredClone(manifest);edit(changed);const header=Buffer.from(JSON.stringify(sort(changed))),size=Buffer.alloc(8);size.writeBigUInt64BE(BigInt(header.length));const raw=Buffer.concat([magic,size,header,payload]),archiveFile=join(f.temp,name+'.unified'),destination=join(f.temp,name+'-restore');await writeFile(archiveFile,raw);
   await assert.rejects(restoreInstallationArchive({archiveFile,destination,archiveSha256:hash(raw),manifestDigest:hash(header),privateContentReviewed:true}),pattern);

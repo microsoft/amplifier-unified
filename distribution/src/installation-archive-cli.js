@@ -14,7 +14,9 @@ async function main(){
  if(command==='review'){
   const review=await inspectInstallationArchive(args.get('--archive'));
   const output=await open(args.get('--output'),'wx',0o600);try{await output.writeFile(JSON.stringify(review,null,2)+'\n');await output.sync();}finally{await output.close();}
-  result={archiveSha256:review.archiveSha256,manifestDigest:review.manifestDigest,completeProduct:review.manifest.coverage.completeProduct,privateReviewSaved:true};
+  result={archiveSha256:review.archiveSha256,manifestDigest:review.manifestDigest,completeProduct:review.manifest.coverage.completeProduct,
+   completeCoverage:review.manifest.coverage.completeCoverage===true,
+   captureConsistency:review.manifest.captureConsistency??{status:'unqualified',reason:'legacy-capture-boundary-not-recorded'},privateReviewSaved:true};
  }else{
   const input=await readInstallationConfiguration(args.get('--request'));
   if(command==='restore')result=await restoreInstallationArchive(input);

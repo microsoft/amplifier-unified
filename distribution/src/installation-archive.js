@@ -1,16 +1,27 @@
 import {constants} from 'node:fs';
 import {open,lstat,realpath,readdir,mkdir,rm,chmod} from 'node:fs/promises';
 import {isAbsolute,join,dirname,relative,sep} from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {readInstalledServiceConfiguration} from './service.js';
 import {readInstallationConfiguration} from './installation.js';
-import {validateStorageInventory} from './storage-inventory.js';
+import {validateStorageInventory,createStorageInventory} from './storage-inventory.js';
 import {createInstalledStorageInventory} from './installed-storage-inventory.js';
 
 // A bounded manifest followed by exact byte ranges. No tar extraction, links,
 // executable member names or archive-controlled absolute restore destinations.
 const MAGIC=Buffer.from('AMPLIFIER-UNIFIED-ARCHIVE-1\n');
 const MAX_HEADER=16*1024*1024,MAX_ENTRIES=100000,MAX_BYTES=1024**4;
+// A full inventory is a coverage claim, not a simultaneous product snapshot.
+// Native prepare has already copied its sources before we freeze supervisor
+// ledgers. Its immutable hash and stopped-writer attestation do not establish
+// an uninterrupted common capture interval. Do not restore the old inference
+// completeProduct = completeCoverage: that accepts an arbitrarily old artifact.
+const CAPTURE_CONSISTENCY={status:'unqualified',reason:'common-writer-boundary-not-established',
+ supervisorLedgers:'frozen-during-product-capture',application:'qualified-stopped-service',
+ nativeArtifacts:'independently-captured',installerWriters:'not-held-through-capture'};
+// Only a live invocation of the trusted coordinator can mint this capability.
+// It is never serialized, accepted from the CLI, or reconstructed from receipts.
+const captureCapabilities=new WeakMap();
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const canonical=value=>JSON.stringify(sort(value));
 function sort(value){
@@ -129,6 +140,132 @@ function validateNativeWriterReview(descriptor,authority,reviewed){
     }
 }
 
+function validateCoherentEvidence(manifest){
+ const e=manifest.captureConsistency,p=manifest.proof;
+ if(e?.schema!=='amplifier-unified-coherent-capture-v1'||e.status!=='qualified-at-capture'||!id(e.captureId)||
+   !hash(e.reviewedScopeDigest)||e.inventoryDigest!==manifest.inventory.digest||
+   e.stoppedCommandId!==p.stoppedCommandId||e.stopReceiptDigest!==digest(canonical(p.stoppedReceipt))||
+   canonical(e.expected)!==canonical(p.expected)||canonical(e.qualifiedOwners)!==canonical(p.qualifiedOwners)||
+   e.supervisorLedgers!=='held-through-seal'||e.nativeWriters!=='held-before-native-prepare-through-seal'||
+   e.externalWriters?.policy!=='operator-reviewed-retirement'||e.externalWriters.noncooperatingWriters!=='not-independently-observed'||
+   !hash(e.externalWriters.reviewDigest)||!Array.isArray(e.nativeCaptures)||e.nativeCaptures.length!==manifest.inventory.nativeArtifacts.length||
+   manifest.coverage.completeProduct&&!manifest.coverage.completeCoverage)throw Error('archive_coverage_invalid');
+ for(const d of manifest.inventory.nativeArtifacts){
+  const rows=e.nativeCaptures.filter(row=>row.engineId===d.engineId&&row.artifactId===d.artifactId);
+  if(rows.length!==1||rows[0].sha256!==d.sha256||rows[0].manifestDigest!==d.manifestDigest||!id(rows[0].leaseId)||
+    rows[0].captureId!==e.captureId)throw Error('archive_coverage_invalid');
+  const native=rows[0].authority;
+  if(native?.active!==true||native.captureId!==rows[0].leaseId||native.nonce!==e.captureId||!id(native.adminInstanceId)||
+    native.instanceId!==e.expected.instanceId||native.dataScope!==e.expected.dataScope||native.stopReceiptSha256!==e.stopReceiptDigest||
+    !native.artifacts?.some(a=>a.artifactId===d.artifactId&&a.sha256===d.sha256&&a.manifestDigest===d.manifestDigest))throw Error('archive_coverage_invalid');
+ }
+}
+
+/** Trusted local coordinator. Native sources are captured by live adapters after
+ * a qualified stop and while both supervisor ledgers remain frozen. There is no
+ * JSON option that upgrades a previously produced artifact to this path.
+ * Adapters must own retirement of noncooperating writers/config editors and keep
+ * native writer/admin gates from BEFORE native prepare until release. */
+export async function createCoherentInstallationArchive(request,{acquireWriterExclusion,nativeCaptures,withSupervisorSnapshot}={}){
+ if(request.privateContentReviewed!==true||request.includeCredentials!==true||request.credentialsReviewed!==true)throw Error('private_archive_review_required');
+ const base=validateStorageInventory(request.compositionInventory);
+ if(base.digest!==request.inventoryDigest||base.nativeArtifacts.length||!Array.isArray(nativeCaptures)||
+   new Set(nativeCaptures.map(a=>a.engineId)).size!==nativeCaptures.length||nativeCaptures.length>32||
+   typeof acquireWriterExclusion!=='function'||nativeCaptures.some(a=>!id(a.engineId)||typeof a.acquire!=='function'))throw Error('coherent_capture_scope_invalid');
+ const saved=await readInstalledServiceConfiguration(request.directory);
+ if(base.applicationStateDirectory!==join(saved.directory,'application')||base.namespace!==saved.configuration.dataScope)throw Error('archive_installation_inventory_conflict');
+ if(!isAbsolute(request.outputFile)||within(saved.directory,request.outputFile))throw Error('archive_output_must_be_separate');
+ await canonicalPath(dirname(request.outputFile),true);
+ const participants=inventoryFacts(base).participants;
+ for(const native of base.roots.filter(r=>r.capture==='native-artifact'))for(const direct of base.roots.filter(r=>['tree','file'].includes(r.capture))){
+  if(within(native.path,direct.path)||within(direct.path,native.path))throw Error('archive_native_direct_roots_overlap');
+ }
+ if(!withSupervisorSnapshot)withSupervisorSnapshot=(await import('@amplifier/unified-distribution-update-owner')).withOfflineSupervisorSnapshot;
+ return withSupervisorSnapshot({dataDirectory:saved.configuration.dataDirectory,inventoryDigest:base.digest,
+  expected:request.expected,stoppedCommandId:request.stoppedCommandId,participantIds:participants},async snapshot=>{
+   const context=Object.freeze({captureId:randomUUID(),reviewedScopeDigest:base.digest,expected:structuredClone(snapshot.proof.expected),
+    stoppedCommandId:snapshot.proof.stoppedCommandId,stopReceiptDigest:digest(canonical(snapshot.proof.stoppedReceipt))});
+   const leases=[],artifacts=[],capability={};let retirement,success=false,sealedReceipt;
+   const journalPath=request.outputFile+'.capture.json',journal=await open(journalPath,'wx',0o600);
+   const captureRecord={schema:'amplifier-unified-capture-outcome-v1',...context,phase:'acquiring',sealed:false,
+    release:{state:'pending',native:[],external:'pending'},workReplayed:false};
+   const record=async()=>{const bytes=Buffer.from(canonical(captureRecord)+'\n');let n=0;while(n<bytes.length)n+=(await journal.write(bytes,n,bytes.length-n,n)).bytesWritten;await journal.truncate(bytes.length);await journal.sync();await syncDirectory(dirname(journalPath));};
+   const inspectLease=async lease=>{
+    const v=await lease.assertHeld();
+    if(v?.active!==true||v.captureId!==context.captureId||v.reviewedScopeDigest!==base.digest||
+      v.stopReceiptDigest!==context.stopReceiptDigest||!id(v.leaseId))throw Error('archive_capture_lease_lost');
+    return v;
+   };
+   const assertHeld=async()=>{await inspectLease(retirement);for(const lease of leases)await inspectLease(lease);};
+   try{
+    await record();
+    retirement=await acquireWriterExclusion(context);
+    if(typeof retirement?.assertHeld!=='function'||typeof retirement.release!=='function')throw Error('archive_writer_exclusion_required');
+    await inspectLease(retirement);
+    const external=retirement.evidence;
+    if(external?.policy!=='operator-reviewed-retirement'||external.noncooperatingWriters!=='not-independently-observed'||!hash(external.reviewDigest))throw Error('archive_writer_exclusion_required');
+    captureRecord.externalWriters=structuredClone(external);captureRecord.nativeCaptures=[];await record();
+    // Acquire every native gate before copying any native or product authority.
+    for(const adapter of nativeCaptures){
+     const lease=await adapter.acquire(context);leases.push(lease);
+     if(typeof lease?.assertHeld!=='function'||typeof lease?.capture!=='function'||typeof lease?.release!=='function')throw Error('archive_native_capture_required');
+     const active=await inspectLease(lease);captureRecord.nativeCaptures.push({engineId:adapter.engineId,leaseId:active.leaseId,authority:active.authority??null});await record();
+    }
+    for(let i=0;i<leases.length;i++){
+     await assertHeld();const a=await leases[i].capture({includeCredentials:true,credentialsReviewed:true});
+     if(a?.descriptor?.engineId!==nativeCaptures[i].engineId||!a.path||!a.inspection)throw Error('native_archive_evidence_mismatch');
+     validateNativeEvidence(a.descriptor,a.inspection);
+     const live=await inspectLease(leases[i]);
+     // The live native owner must bind this artifact to this still-held capture.
+     if(!live.artifacts?.some(d=>d.artifactId===a.descriptor.artifactId&&d.sha256===a.descriptor.sha256&&d.manifestDigest===a.descriptor.manifestDigest))throw Error('archive_native_capture_not_bound');
+     artifacts.push({...a,leaseId:live.leaseId,authority:live.authority});
+     captureRecord.nativeCaptures[i]={engineId:nativeCaptures[i].engineId,leaseId:live.leaseId,authority:live.authority,
+      artifactId:a.descriptor.artifactId,sha256:a.descriptor.sha256,manifestDigest:a.descriptor.manifestDigest};await record();
+    }
+    await assertHeld();
+    const {digest:ignored,completeEligible,...scope}=base;
+    const composition=createStorageInventory({...scope,nativeArtifacts:artifacts.map(a=>a.descriptor)});
+    const fresh=await createInstalledStorageInventory({inventory:composition,directory:saved.directory,includeCredentials:true,credentialsReviewed:true});
+    const proof={...snapshot.proof,inventoryDigest:fresh.inventory.digest,reviewedScopeDigest:base.digest};
+    const evidence={schema:'amplifier-unified-coherent-capture-v1',status:'qualified-at-capture',...context,
+     inventoryDigest:fresh.inventory.digest,qualifiedOwners:[...proof.qualifiedOwners],supervisorLedgers:'held-through-seal',
+     nativeWriters:'held-before-native-prepare-through-seal',externalWriters:structuredClone(external),
+     nativeCaptures:artifacts.map(a=>({engineId:a.descriptor.engineId,artifactId:a.descriptor.artifactId,sha256:a.descriptor.sha256,
+      manifestDigest:a.descriptor.manifestDigest,leaseId:a.leaseId,captureId:context.captureId,authority:a.authority}))};
+    validateCoherentEvidence({captureConsistency:evidence,proof,inventory:fresh.inventory,coverage:{completeCoverage:true,completeProduct:false}});
+    captureCapabilities.set(capability,{inventoryDigest:fresh.inventory.digest,proof,evidence,assertHeld});
+    const receipt=await createInstallationArchive({...request,inventory:fresh.inventory,inventoryDigest:fresh.inventory.digest,
+     compositionInventory:composition,captureRequirements:fresh.captureRequirements,captureCapability:capability,
+     nativeWriterReviews:artifacts.map(a=>({artifactId:a.descriptor.artifactId,attestationDigest:digest(canonical(a.inspection.authority.externalWriters)),operatorAssumptionAccepted:true}))},
+     {validateInventory:validateStorageInventory,readNativeArtifact:async d=>artifacts.find(a=>a.descriptor.artifactId===d.artifactId),
+      withSupervisorSnapshot:async(options,body)=>{
+       if(options.inventoryDigest!==fresh.inventory.digest||options.participantIds.some(id=>!proof.qualifiedOwners.includes(id)))throw Error('archive_capture_capability_mismatch');
+       return body({...snapshot,proof});
+      }});
+    success=true;sealedReceipt=receipt;Object.assign(captureRecord,{phase:'releasing',sealed:true,archiveSha256:receipt.archiveSha256,
+     manifestDigest:receipt.manifestDigest,inventoryDigest:receipt.inventoryDigest,captureConsistency:receipt.captureConsistency});await record();
+    // The returned receipt is finalized by the finally block after every lease
+    // release is acknowledged and that outcome is durably recorded.
+    receipt.captureRelease=captureRecord.release;receipt.captureOutcomeRecorded=true;return receipt;
+   }finally{
+    captureCapabilities.delete(capability);
+    const failures=[];
+    for(let i=leases.length-1;i>=0;i--)try{
+     const receipt=await leases[i]?.release?.({productSha256:sealedReceipt?.archiveSha256});
+     if(receipt?.released!==true)throw Error('native_capture_release_unconfirmed');
+     captureRecord.release.native.push({engineId:nativeCaptures[i].engineId,state:'released',receipt});
+    }catch(error){failures.push(error);captureRecord.release.native.push({engineId:nativeCaptures[i].engineId,state:'unknown'});}
+    try{if(retirement){const released=await retirement.release();if(released?.released!==true)throw Error('archive_writer_release_unconfirmed');}captureRecord.release.external='released';}
+    catch(error){failures.push(error);captureRecord.release.external='unknown';}
+    captureRecord.release.state=failures.length?'unknown':'released';captureRecord.phase=success?'sealed':'failed';
+    try{await record();}finally{await journal.close();}
+    // Never erase a sealed archive on cleanup failure. Its receipt/inspection
+    // remains evidence; cleanup failure does not authorize capture replay.
+    if(failures.length)throw Error(success?'archive_sealed_capture_release_unconfirmed':'archive_failed_capture_release_unconfirmed');
+   }
+  });
+}
+
 /** Trusted adapters belong to installation/composition and native authorities.
  * Neither inventory paths nor adapter selection come from a browser request. */
 export async function createInstallationArchive(request,{validateInventory,readNativeArtifact,withSupervisorSnapshot}={}){
@@ -150,6 +287,10 @@ export async function createInstallationArchive(request,{validateInventory,readN
  return withSupervisorSnapshot({dataDirectory:saved.configuration.dataDirectory,inventoryDigest:inventory.digest,expected:requestExpected,
   stoppedCommandId:request.stoppedCommandId,participantIds:facts.participants},async ({proof,ledgers,state})=>{
    if(proof.inventoryDigest!==inventory.digest||!proof.ledgersFrozen||!proof.supervisorClosed)throw Error('archive_frozen_proof_required');
+   const held=captureCapabilities.get(request.captureCapability);
+   if(held&&(held.inventoryDigest!==inventory.digest||held.proof!==proof))throw Error('archive_capture_capability_mismatch');
+   const assertHeld=async()=>{if(held)await held.assertHeld();};
+   await assertHeld();
    let installedEvidence=null;
    if(request.compositionInventory){
     const fresh=await createInstalledStorageInventory({inventory:request.compositionInventory,directory:saved.directory,includeCredentials:request.includeCredentials===true,credentialsReviewed:request.credentialsReviewed===true});
@@ -172,8 +313,8 @@ export async function createInstallationArchive(request,{validateInventory,readN
    const captureOmissions=requiredProvenance.filter(name=>!capturedPath(join(saved.directory,name))).map(name=>({id:'installer:'+name,reason:'Required installer authority is not included in the declared capture',blocksComplete:true}));
    if(!installedEvidence)captureOmissions.push({id:'installer:unqualified-census',reason:'Fresh installed authority and signed release provenance were not qualified under the offline writer locks',blocksComplete:true});
    captureOmissions.push(...inventory.roots.filter(r=>r.coverage==='credential-excluded').map(r=>({id:'credentials:'+r.id,reason:'Declared credential authority was excluded',blocksComplete:true})));
-   let completeProduct=facts.completeProduct&&captureOmissions.length===0;
-   if(request.requireCompleteProduct===true&&!completeProduct)throw Error('archive_complete_coverage_unavailable');
+   let completeCoverage=facts.completeProduct&&captureOmissions.length===0;
+   if(request.requireCompleteProduct===true&&!completeCoverage)throw Error('archive_complete_coverage_unavailable');
    const ledgerRoot=saved.configuration.dataDirectory;
    const substituted=new Map([[join(ledgerRoot,'owner','updates.sqlite3'),ledgers.updates],[join(ledgerRoot,'service','service.sqlite3'),ledgers.service]]);
    const sidecars=new Set([...substituted.keys()].flatMap(p=>[p+'-wal',p+'-shm']));
@@ -206,17 +347,19 @@ export async function createInstallationArchive(request,{validateInventory,readN
     // immutable artifact inspection. Keep native tar opaque for native restore.
     if(typeof authority.credentialsIncluded!=='boolean')throw Error('native_archive_evidence_mismatch');
     if(authority.credentialsIncluded===true&&!(request.includeCredentials===true&&request.credentialsReviewed===true))throw Error('native_credentials_review_required');
-    if(authority.credentialsIncluded===false){completeProduct=false;captureOmissions.push({id:'native-credentials:'+descriptor.id,reason:'Native credentials were not included in the native archive scope',blocksComplete:true});}
-    if(authority.authoritativeOmissions!==0){completeProduct=false;captureOmissions.push({id:'native-authority:'+descriptor.id,reason:'Native owner did not attest to an empty authoritative omission set',blocksComplete:true});}
+    if(authority.credentialsIncluded===false){completeCoverage=false;captureOmissions.push({id:'native-credentials:'+descriptor.id,reason:'Native credentials were not included in the native archive scope',blocksComplete:true});}
+    if(authority.authoritativeOmissions!==0){completeCoverage=false;captureOmissions.push({id:'native-authority:'+descriptor.id,reason:'Native owner did not attest to an empty authoritative omission set',blocksComplete:true});}
     await canonicalPath(artifact.path,false);await add('native/'+descriptor.id,artifact.path);
     if(entries.at(-1).sha256!==descriptor.sha256||entries.at(-1).bytes!==inspected.bytes)throw Error('native_archive_bytes_changed');
     validateNativeWriterReview(descriptor,authority,request.nativeWriterReviews?.find(r=>r.artifactId===descriptor.artifactId));
     nativeProofs.push({id:descriptor.id,inspection:artifact.inspection,manifestDigest:descriptor.manifestDigest,
       operatorReview:request.nativeWriterReviews?.find(r=>r.artifactId===descriptor.artifactId)??null});
    }
-   if(request.requireCompleteProduct===true&&!completeProduct)throw Error('archive_complete_coverage_unavailable');
+   if(request.requireCompleteProduct===true&&(!completeCoverage||!held))throw Error(completeCoverage?'archive_coherent_capture_unavailable':'archive_complete_coverage_unavailable');
+   const completeProduct=completeCoverage&&Boolean(held);
    const manifest={schema:'amplifier-unified-installation-archive',version:1,inventory,proof,installedEvidence,releaseState:state,nativeProofs,
-    coverage:{completeProduct,credentialCoverage:'declared-exclusions-only-not-content-redacted',installerCredentialsReviewed:request.includeCredentials===true&&request.credentialsReviewed===true,
+    captureConsistency:held?structuredClone(held.evidence):{...CAPTURE_CONSISTENCY},
+    coverage:{completeProduct,completeCoverage,credentialCoverage:'declared-exclusions-only-not-content-redacted',installerCredentialsReviewed:request.includeCredentials===true&&request.credentialsReviewed===true,
       omissions:[...inventory.omissions,...captureOmissions]},entries,totalBytes,
     restore:{inactive:true,requiresRebinding:true,automaticResume:false,replayed:false}};
    const header=Buffer.from(canonical(manifest));if(header.length>MAX_HEADER)throw Error('archive_manifest_limit');
@@ -225,11 +368,11 @@ export async function createInstallationArchive(request,{validateInventory,readN
    try{
     const archiveHash=createHash('sha256');const write=async bytes=>{let n=0;while(n<bytes.length)n+=(await output.write(bytes,n)).bytesWritten;archiveHash.update(bytes);};
     await write(MAGIC);await write(length);await write(header);
-    for(const entry of entries){if(entry.type!=='file')continue;const input=await open(sources.get(entry.name),constants.O_RDONLY|constants.O_NOFOLLOW);
+    for(const entry of entries){if(entry.type!=='file')continue;await assertHeld();const input=await open(sources.get(entry.name),constants.O_RDONLY|constants.O_NOFOLLOW);
      try{const stat=await input.stat();if(!stat.isFile()||stat.nlink!==1||stat.size!==entry.bytes||await range(input,0,entry.bytes,write)!==entry.sha256)throw Error('archive_source_changed');}finally{await input.close();}}
-    await output.sync();await syncDirectory(dirname(request.outputFile));success=true;
+    await assertHeld();await output.sync();await syncDirectory(dirname(request.outputFile));await assertHeld();success=true;
     return {schema:'amplifier-unified-archive-receipt',version:1,archiveSha256:archiveHash.digest('hex'),manifestDigest:digest(header),inventoryDigest:inventory.digest,
-     completeProduct,entries:entries.length,bytes:MAGIC.length+8+header.length+totalBytes,workReplayed:false};
+     completeProduct,completeCoverage,captureConsistency:manifest.captureConsistency,entries:entries.length,bytes:MAGIC.length+8+header.length+totalBytes,workReplayed:false};
    }finally{await output.close();if(!success)await rm(request.outputFile,{force:true});}
   });
 }
@@ -241,7 +384,15 @@ async function inspectOpenArchive(handle){
  const header=await readExact(handle,Number(count),MAGIC.length+8);const manifest=JSON.parse(header.toString('utf8'));
  if(manifest.schema!=='amplifier-unified-installation-archive'||manifest.version!==1||!Array.isArray(manifest.entries)||manifest.entries.length>MAX_ENTRIES||canonical(manifest)!==header.toString('utf8'))throw Error('archive_manifest_invalid');
  validateStorageInventory(manifest.inventory);
- const facts=inventoryFacts(manifest.inventory);if((manifest.coverage?.completeProduct===true&&(!facts.completeProduct||manifest.coverage.omissions?.some(o=>o.blocksComplete!==false)))||
+ // Fail closed for old coverage-only "completeProduct" archives. Partial older
+ // archives remain inspectable/restorable, with consistency explicitly unknown.
+ // No JSON field can act as a live common-writer lease or upgrade this format.
+ if(manifest.captureConsistency?.status==='qualified-at-capture')validateCoherentEvidence(manifest);
+ else if(manifest.coverage?.completeProduct===true||manifest.captureConsistency!==undefined&&canonical(manifest.captureConsistency)!==canonical(CAPTURE_CONSISTENCY))throw Error('archive_coverage_invalid');
+ if(
+   manifest.coverage?.completeCoverage!==undefined&&typeof manifest.coverage.completeCoverage!=='boolean')throw Error('archive_coverage_invalid');
+ const completeCoverage=manifest.coverage?.completeCoverage===true;
+ const facts=inventoryFacts(manifest.inventory);if((completeCoverage&&(!facts.completeProduct||manifest.coverage.omissions?.some(o=>o.blocksComplete!==false)))||
    typeof manifest.coverage?.completeProduct!=='boolean'||manifest.proof?.inventoryDigest!==manifest.inventory.digest||manifest.proof.ledgersFrozen!==true||manifest.proof.supervisorClosed!==true||
    !Array.isArray(manifest.proof.qualifiedOwners)||facts.participants.some(id=>!manifest.proof.qualifiedOwners.includes(id))||
    manifest.restore?.inactive!==true||manifest.restore.automaticResume!==false||manifest.restore.replayed!==false)throw Error('archive_coverage_invalid');
@@ -251,9 +402,9 @@ async function inspectOpenArchive(handle){
   const matches=nativeProofs.filter(p=>p.id===descriptor.id);if(matches.length!==1)throw Error('archive_native_proof_invalid');
   const proof=matches[0];validateNativeEvidence(descriptor,proof.inspection);
   validateNativeWriterReview(descriptor,proof.inspection.authority,proof.operatorReview);
-  if(manifest.coverage.completeProduct&&(!proof.inspection.authority.credentialsIncluded||proof.inspection.authority.authoritativeOmissions!==0))throw Error('archive_coverage_invalid');
+  if(completeCoverage&&(!proof.inspection.authority.credentialsIncluded||proof.inspection.authority.authoritativeOmissions!==0))throw Error('archive_coverage_invalid');
  }
- if(manifest.coverage.completeProduct){
+ if(completeCoverage){
   const installation=dirname(manifest.inventory.applicationStateDirectory),roots=manifest.inventory.roots;
   const required=['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json','supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
   const evidence=manifest.installedEvidence;
@@ -317,7 +468,9 @@ export async function restoreInstallationArchive(request){
   }
   await writeOnce(join(request.destination,'ARCHIVE-MANIFEST.json'),review.manifest);
   const receipt={schema:'amplifier-unified-inactive-restore',version:1,archiveSha256:review.archiveSha256,manifestDigest:review.manifestDigest,
-   completeProduct:review.manifest.coverage.completeProduct,inactive:true,requiresRebinding:true,automaticResume:false,workReplayed:false};
+   completeProduct:review.manifest.coverage.completeProduct,completeCoverage:review.manifest.coverage.completeCoverage===true,
+   captureConsistency:review.manifest.captureConsistency??{status:'unqualified',reason:'legacy-capture-boundary-not-recorded'},
+   inactive:true,requiresRebinding:true,automaticResume:false,workReplayed:false};
   const directories=new Set([request.destination]);for(const row of review.rows){let path=row.type==='directory'?join(request.destination,row.name):dirname(join(request.destination,row.name));while(within(request.destination,path)){directories.add(path);if(path===request.destination)break;path=dirname(path);}}
   for(const path of [...directories].sort((a,b)=>b.length-a.length))await syncDirectory(path);
   for(const row of review.rows.filter(r=>r.type==='directory').reverse())await chmod(join(request.destination,row.name),row.mode);
