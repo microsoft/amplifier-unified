@@ -111,6 +111,20 @@ Distribution, host, native adapter, capability, client and release maintainers.
     reset phrase cannot authorize undeclared paths or broaden the selected scope.
     Broken: an old conversation's age silently authorizes removing its events.
 
+12. **MA12 — Reconcile failed startup explicitly.** Validate required launch files,
+    permissions, credential formats and TLS material before allocating one-use
+    source authority or starting owners. A failure after allocation retains its
+    original process identity, state, authority and evidence. It is not a completed
+    handoff or permission to restart, erase a guard or choose a fresh namespace.
+    A successor requires the installation owner's explicit failed-start
+    reconciliation contract, with stopped-process and complete owner/effect
+    accounting, preserved unknown outcomes and exact reviewed state bindings.
+    A separately reviewed return to a retained manual installation before any
+    retirement preserves failed-attempt state before restoring verified bytes;
+    it does not establish signed replacement or authorize command replay.
+    Broken: certificate validation fails after consuming source authority and an
+    operator bypasses recovery by deleting its directory or changing its identity.
+
 ## How the kit checks it
 
 Hold a real callback, thread, listener and child process; lose acknowledgements;
@@ -123,8 +137,17 @@ Complete configured-product backup additionally needs every configured authority
 actual snapshot coverage and an aggregate inclusion/omission manifest. Device,
 remote-account, full-product restore and service-manager acceptance remain separate.
 
+Reject malformed or incorrectly protected launch inputs before any authority
+allocation. Accept a valid public certificate with ordinary read permissions.
+Inject failures after source allocation and verify that retained authority and
+unknown receipts cannot be reset or silently replayed. Qualify failed-start
+reconciliation separately from successful held-fence handoff. The current
+[implementation status](../docs/architecture/implementation-status.md) records
+which of these boundaries have executable evidence.
+
 ## Changelog
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Add MA12 pre-authority launch validation and explicit failed-start reconciliation. | Real owned-preview startup rejected a public certificate after source allocation; verified stopped-writer fallback preserved histories and uncertain receipts. Reconciliation implementation remains in progress. |
 | 2026-10-03 | Clarify MA3 owner-proven refusal before effect admission and retain distinct stale/unknown outcomes. | Reproduced native metadata/reset contention and assembled reset/browser qualification; no relaxation after an effect begins. |

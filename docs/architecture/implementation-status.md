@@ -8,6 +8,40 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
+At 21:00 UTC the owned Spark-2 preview is restored to the prior manual checkpoint,
+process 867917. The attempted signed `aeac3ec3` full-owner activation did not reach
+public readiness: its launcher treated the public TLS certificate as a private
+secret after allocating one-use source authority. The failed process exited; no
+handoff, claim, supervisor activation or real-model acceptance was performed for
+that candidate. Failed authority and state are preserved. Independent comparison
+found three changed databases with original rows unchanged across 52 tables,
+69 added initialization paths, and no new recorded effects or uncertain commands.
+All 66 inventoried canonical files remain unchanged. Five pre-existing unknown host
+receipts are also preserved in their separate database. The verified fallback
+preserved failed state and restored only those three databases before starting
+the old manual service once. TLS, authentication and served scripts pass after
+restoration; that readback does not repeat browser or model acceptance. See
+[the failed-start and fallback receipt](evidence/spark2-full-owner-failed-start-20261003.json).
+
+The launcher now accepts an owned, non-writable public certificate and validates
+required private files, credential formats and the TLS pair before authority
+creation. Eight focused tests pass, including causal tests that failed on the
+previous launcher. This source correction is not yet sealed into the promoted
+release. A supported failed-bootstrap reconciliation API is being implemented
+by the updates owner; changing namespaces or restarting the failed source is
+not an accepted substitute. MA12 and CB8 capture these desired-state obligations.
+
+The signed candidate itself completed the actual 20-owner Linux fixture for
+`0cf5acc7`/native `f11b769`/web `a560b28`, with 11,279 original input files unchanged
+and 62 added Python bytecode files. Its served asset check and same-release
+handoff passed with synthetic state. The exact bundle was committed and promoted
+at `aeac3ec3`; public adapter preparation succeeded with fresh preview trust.
+All 14 hosted distribution jobs plus CLA passed on that source. These successes
+remain separate from the failed live startup and subsequent manual fallback.
+See [the final fixture receipt](evidence/combined-context-linux-20261003.json).
+
+The following earlier checkpoints retain their original evidence and limits.
+
 The qualified service baseline is `afd5c804`: host `3d413aa` orders native discovery
 hints around presentation reconstruction, and native bridge `8d89364` updates mode
 projections from confirmed native results. Its fresh consumer matches all 2,681
@@ -62,7 +96,8 @@ That run predates the context successor; its evidence remains separately bound t
 [the tested source](evidence/distribution-ci-f5f4c5e6-20261003.json).
 
 The owned Spark-2 preview serves distribution `b8552477`, host `721c7af`,
-native ACP `3c5acc1` and web `4bfdd9cc` on process 593654. The provider correction
+native ACP `3c5acc1` and web `4bfdd9cc` (original process 593654; restored process
+867917 as described above). The provider correction
 `1a753c5` is an explicit, candidate-owned development override; its PR is still
 awaiting review, so it is not represented as upstream main. The previous process
 and owned children exited before activation; all 32 pre-existing canonical

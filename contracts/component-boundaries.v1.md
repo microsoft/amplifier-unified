@@ -65,6 +65,15 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
    Broken: an update restarts over a live publisher or native transfer process.
    Affected: operators and all accepted work.
 
+8. **CB8 — Exercise failure at the boundary.** A component's standalone success
+   and a distribution's successful composition are separate claims. Consumers
+   retain the complete producer contract, including process working directory,
+   configuration ownership, failure classification and recovery obligations.
+   Failures discovered during composition update the responsible owner's contract
+   and tests; a private integration workaround is not evidence of interchangeability.
+   Broken: every package passes its own tests while startup loses a launch field
+   or a failed component has no supported recovery path. Affected: independent owners.
+
 ## Not in v1
 
 Mandatory microservices or a new central runtime framework; promote only when a
@@ -79,6 +88,8 @@ measured isolation or deployment requirement warrants the additional boundary.
 - CB4: execute both directions of external interoperability qualification.
 - CB5: record package, installed process and fresh worker versions during release.
 - CB6: review the lane brief and rerun its seam test outside the implementing agent.
+- CB8: run installed composition and failed-start recovery through actual platform
+  parsers and owner APIs; record standalone, assembled and live outcomes separately.
 
 ## Open questions
 
@@ -89,6 +100,7 @@ Which existing packages already own a suitable implementation, avoiding duplicat
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Add CB8 complete boundary consumption and failure qualification. | Installed launch working-directory omission and live failed-start recovery gap exposed assumptions absent from successful component tests. |
 | 2026-10-03 | Clarify CB3 local vision/contract traceability for every repository. | Repository audit found complete packets in Unified/TUI and scattered README/schema obligations elsewhere; local corrections assigned to owners. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial CB1–6. | [Refreshed Converge references](../docs/architecture/evidence.md). |

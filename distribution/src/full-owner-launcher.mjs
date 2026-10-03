@@ -6,17 +6,27 @@ import {readFile,open,mkdir,writeFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join} from 'node:path';
 import {isDeepStrictEqual} from 'node:util';
+import {createSecureContext} from 'node:tls';
 import {requireLaunchConfig} from './validate-config.mjs';
 const c=requireLaunchConfig(JSON.parse(await readFile(process.argv[2],'utf8')));
 const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
 if(process.env.UNIFIED_MANUAL_SOURCE&&!source)throw Error('invalid_launch_mode');
 if(c.authority.installationId!==process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||c.authority.ownerId!==process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID||c.authority.dataScope!==process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE)throw Error('service_identity_binding_mismatch');
-const privateBytes=async(path,max=1048576)=>{
+const launchBytes=async(path,max,publicCertificate=false)=>{
  const fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
- try{const s=await fd.stat();if(!s.isFile()||s.size>max||(s.mode&0o077)||s.uid!==process.getuid())throw Error('private_launch_file_required');return await fd.readFile();}finally{await fd.close();}
+ try{const s=await fd.stat(),invalid=publicCertificate?'public_certificate_file_required':'private_launch_file_required';if(!s.isFile()||s.size>max||(s.mode&(publicCertificate?0o022:0o077))||s.uid!==process.getuid())throw Error(invalid);const bytes=await fd.readFile();if(bytes.length>max)throw Error(invalid);return bytes;}finally{await fd.close();}
 };
+const privateBytes=(path,max=1048576)=>launchBytes(path,max);
+// Validate and retain these exact bytes before runtime identity, one-shot source
+// authority, owner allocation or listeners. Public certificates need integrity,
+// while keys, tokens, trust and access codes retain private-file requirements.
 const keys=JSON.parse(await privateBytes(c.release.trustedKeysFile));
 if(Object.keys(keys).length===0)throw Error('publisher_trust_required');
+const hostToken=(await privateBytes(c.authority.hostTokenFile,128)).toString().trim();
+if(!/^[a-f0-9]{64}$/.test(hostToken))throw Error('host_control_token_invalid');
+const accessMaterial={key:await privateBytes(c.access.keyFile),cert:await launchBytes(c.access.certFile,1048576,true),accessCode:(await privateBytes(c.access.codeFile,1024)).toString().trim()};
+if(accessMaterial.accessCode.length<40)throw Error('preview_access_code_invalid');
+try{createSecureContext({key:accessMaterial.key,cert:accessMaterial.cert});}catch{throw Error('preview_tls_material_invalid');}
 const api=await import('@amplifier/unified-distribution-update-owner');
 const {createDistribution}=await import('@amplifier/unified');
 const {createPreviewAccess}=await import('./preview-access.mjs');
@@ -64,7 +74,7 @@ try{
  });
  if(!isDeepStrictEqual([...app.quiescence.requiredOwners].sort(),[...c.expectedOwners].sort()))throw Error('configured_owner_census_mismatch');
  control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
-  token:(await privateBytes(c.authority.hostTokenFile,128)).toString().trim(),
+  token:hostToken,
   discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope},
   onMayBeIdle:notify=>{idle.add(notify);return ()=>idle.delete(notify);},
  });
@@ -74,7 +84,7 @@ try{
  await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-storage.json'),JSON.stringify(inventory)+'\n',{flag:'wx',mode:0o600});
  if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners:c.expectedOwners,close,exit:()=>process.exit(0)});
- access=await createPreviewAccess({...c.access,key:await privateBytes(c.access.keyFile),cert:await privateBytes(c.access.certFile),accessCode:(await privateBytes(c.access.codeFile,1024)).toString().trim(),ingressGate:gate});
+ access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate});
  ready=true;
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true})+'\n',{flag:'wx',mode:0o600});
  process.stdout.write('full_owner_ready\n');
