@@ -1,0 +1,16 @@
+{
+  "purpose": "Independent CI fixture dependency, not a deployment pin",
+  "package": "amplifier-publishing",
+  "version": "0.1.0",
+  "repository": "microsoft/amplifier-publishing",
+  "revision": "74c7d393c0d527d3c9b0a22c85e049128399112e",
+  "artifact": "amplifier_publishing-0.1.0-py3-none-any.whl",
+  "sha256": "cc8dba23cba57fd367bb3df50f714effeff9c2c7625beb1646f148bf7d139144",
+  "verifiedSourceFiles": [
+    "amplifier_publishing/service.py",
+    "amplifier_publishing/remote.py",
+    "amplifier_publishing/__init__.py",
+    "amplifier_publishing/publisher.py"
+  ],
+  "license": "MIT"
+}

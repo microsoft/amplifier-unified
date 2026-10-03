@@ -70,9 +70,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install independent feedback owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' ./components/feedback-capability/python
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' ./components/feedback-capability/python pytest pytest-asyncio
       - name: Verify durable delivery and disclosure fixtures
-        run: python -I -m unittest discover -s components/feedback-capability/python/tests -v
+        run: python -I -m pytest -q -o asyncio_mode=auto components/feedback-capability/python/tests
       - run: npm ci --ignore-scripts --prefix distribution
       - name: Verify installed owner and immutable upload transport
         run: |
@@ -214,12 +214,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Verify sealed independent fixture dependency
+        run: |
+          python - <<'PYTHON'
+          import hashlib, json
+          from pathlib import Path
+          root=Path("distribution/test/packages")
+          receipt=json.loads((root/"publishing.json").read_text())
+          assert hashlib.sha256((root/receipt["artifact"]).read_bytes()).hexdigest()==receipt["sha256"]
+          PYTHON
       - name: Install optional libraries and independent Python owners
         run: |
           python -m pip install pytest pytest-asyncio \
             'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' \
             'amplifier-recall @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/recall' \
-            'amplifier-publishing @ git+https://github.com/microsoft/amplifier-publishing@74c7d393c0d527d3c9b0a22c85e049128399112e' \
+            ./distribution/test/packages/amplifier_publishing-0.1.0-py3-none-any.whl \
             'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
           python -m pip install \
             ./components/workspace-capability/python ./components/coordination-capability/python \
