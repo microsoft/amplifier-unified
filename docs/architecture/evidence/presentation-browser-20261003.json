@@ -1,0 +1,32 @@
+{
+  "result": "passed",
+  "checks": [
+    "26 explicit rows selected across bounded pages; complete review and ephemeral exact confirmation; lost hide admission/reload recovers original command without replay, preserving exact-ID access.",
+    "Restore requires a new exact review of the confirmed original selection and separate RESTORE confirmation.",
+    "Actual host marker success and controlled failed catalog projection remain distinct; reload keeps discovery unavailable with exact recovery connected; passive evidence never repeats effect, explicit reviewed rebuild preserves original immutable receipt and hidden selection."
+  ],
+  "canonicalFiles": 78,
+  "canonicalHashesUnchanged": true,
+  "nativeAdministration": false,
+  "globalQuiescence": false,
+  "agentStarts": 0,
+  "modelCalls": 0,
+  "errors": [],
+  "wire": {
+    "prepare": 3,
+    "apply": 3,
+    "rebuild": 1,
+    "receipt": 1
+  },
+  "fixture": "/private/var/folders/jr/dncwc2h95wx42zx7__wq3dq80000gn/T/web-presentation-ucHXHr",
+  "distribution": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-784d081e/consumer/node_modules/@amplifier/unified/src/index.js",
+  "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-consumer-d600e6e/node_modules/@amplifier/unified-client-web/dist",
+  "boundary": "Actual public distribution/host and installed catalog, generic never-start engine. Fixture transport refuses one derived projection; canonical bodies are never read by catalog. No live services, model calls or native reset.",
+  "webSource": "d600e6e",
+  "distributionSource": "784d081e",
+  "archiveSHA256": "e5912bd74ac15079702e28d4a62c0043ddcb79089d73e6aa0a8c101875727367",
+  "receiptPath": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-d600e6e/receipt.json",
+  "receiptSHA256": "10c412aae1bebd1ceba829de2e49e8a02de3941f806122e0b45e7f6636d463b8",
+  "liveAdoption": false,
+  "hostedWebCI": "cancelled after browser assertions passed; fixture teardown correction pending"
+}

@@ -8,17 +8,21 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
-The owned Spark-2 preview now serves distribution `b8552477`, host `721c7af`,
-native ACP `a434719` and web `4bfdd9cc` on process 453357. Its previous process
-and owned children exited before activation; all 28 pre-existing canonical
-history files remained byte-identical. The new private Python graph has 122
-packages, with the test-only provider excluded. TLS/assets, passive model discovery
-and managed creation pass. Real-model acceptance is currently blocked: preparing
-`provider-openai-chatgpt` fails before a host turn receipt is admitted, including
-when the selected model is OpenAI `gpt-6-sol`. The original attempt and passive
-inspection remain retained without replay. The last successful real-model check
-belongs to earlier `e16f9dbb`; it is not evidence for this checkpoint. Spark-1 is
-unchanged. See [the current checkpoint receipt](evidence/spark2-checkpoint-b855-20261003.json).
+The owned Spark-2 preview serves distribution `b8552477`, host `721c7af`,
+native ACP `3c5acc1` and web `4bfdd9cc` on process 593654. The provider correction
+`1a753c5` is an explicit, candidate-owned development override; its PR is still
+awaiting review, so it is not represented as upstream main. The previous process
+and owned children exited before activation; all 32 pre-existing canonical
+history files remained byte-identical after the fresh real-model check. The private
+Python graph has 122 packages, with the test-only provider excluded. TLS/assets,
+passive model discovery and managed creation pass. A new configured OpenAI
+`gpt-6-sol` turn returned the exact expected response with a completed original
+host receipt. Existing-worker inspection confirms the candidate Python and the
+corrected provider's loaded source path; the on-disk source seal separately
+matches. This is not an in-memory code-byte attestation. The previous failed
+attempt remains retained without replay. Spark-1 and the Spark-2 baseline are
+unchanged. See [the current checkpoint receipt](evidence/spark2-provider-checkpoint-20261003.json)
+and [the preserved earlier attempt](evidence/spark2-checkpoint-b855-20261003.json).
 
 The actual preview browser also passes existing-chat rendering/navigation and
 private draft recovery across navigation and reload. All 97 deployed static assets
@@ -48,11 +52,12 @@ The current root source composes conversation visibility as a host-local selecte
 transaction. Generic ACP deployments need no native administration or global
 maintenance owner for it. Exact-ID access, deferred work and unrelated execution
 remain available while discovery is repaired; saved effects and projection
-readiness are separate. Eight actual-factory cases pass on Node 22 and 25,
-including real process termination during projection and index reconstruction.
-The JSON launcher also passes its explicit account-authorization and actual
-presentation-only startup checks. These are source-composition and installed
-component results, not the final assembled package or browser. See
+readiness are separate. Eight earlier actual-factory cases passed on Node 22
+and 25, including real process termination during projection and index
+reconstruction. The final installed root now passes nine presentation/launcher
+cases, including explicit account authorization and actual presentation-only
+startup. Installed browser acceptance is recorded below; live adoption remains
+separate. See
 [the boundary receipt](evidence/presentation-boundary-20261003.json).
 
 Optional native administration negotiation now has a bounded initialization
@@ -67,9 +72,17 @@ terminal callbacks before closing storage; 26 focused source checks and three
 installed checks on each Node version pass. Host PR3 is normally merged with
 138 hosted checks passing and 26 explicit opt-in skips. The final installed
 `784d081e` package passes all nine presentation/launcher cases with no skips;
-all 2,677 archive files match the installed consumer. Presentation browser and
-live adoption remain separate. See [assembled qualification](evidence/assembled-784d081e-20261003.json).
-Spark-2 continues to serve the b855 checkpoint.
+all 2,677 archive files match the installed consumer. See
+[assembled qualification](evidence/assembled-784d081e-20261003.json).
+Installed static web `d600e6e` subsequently passes the actual-factory presentation
+browser gate: 26 explicitly selected rows across pages, lost-reply/reload recovery,
+freshly reviewed restore, and explicit projection rebuild after a retained marker
+effect. All 78 canonical fixture files remain byte-identical, with zero native
+starts, model calls or page errors. Discovery unavailability leaves exact-ID and
+recovery access connected. A late inspection cannot overwrite a newer selected
+job. This fixture does not establish live adoption; hosted web CI still needs its fixture-teardown correction.
+See [the browser receipt](evidence/presentation-browser-20261003.json).
+Spark-2 continues to serve the b855 checkpoint with the native/provider correction.
 
 The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
 its successful real-model evidence and one 347-byte rename update in 30 ms,

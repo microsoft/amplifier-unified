@@ -157,8 +157,9 @@ journal; the catalog projection can be reconstructed from those markers. Keep
 listing unavailable until projection is consistent, without holding unrelated
 capability owners. Client-private selection, expansion and drafts remain local.
 The host, recovery owner and root composition now implement this boundary. Their
-focused source and component-package checks pass; assembled package, browser and
-live adoption remain separate. The earlier globally held candidate is superseded.
+focused source, component-package, final assembled-package and installed-static
+browser checks pass. Live adoption remains separate. The earlier globally held
+candidate is superseded.
 See [the qualification boundary](evidence/presentation-boundary-20261003.json).
 
 AHP's `view.turns` is advisory. If omitted, upstream requires all retained turns;
