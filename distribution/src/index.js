@@ -166,3 +166,5 @@ export async function createDistribution(config,{authorize,authorizePublication,
 }
 
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";
+
+export {createStorageInventory,validateStorageInventory} from './storage-inventory.js';
