@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {attachSupervisorSignalHandlers,token} from '@amplifier/unified-distribution-update-owner';
+import {attachSupervisorSignalHandlers,token,startupFailureFrom} from '@amplifier/unified-distribution-update-owner';
 import {openInstalledService,connectInstalledService} from './service.js';
 
 async function main(){
@@ -42,5 +42,5 @@ async function main(){
 }
 main().catch(error=>{
  const code=error instanceof Error&&/^[a-z_]{1,100}$/.test(error.message)?error.message:'service_command_unconfirmed';
- process.stderr.write(JSON.stringify({error:code,workReplayed:false})+'\n');process.exitCode=1;
+ process.stderr.write(JSON.stringify({error:code,workReplayed:false,startupFailure:startupFailureFrom(error)})+'\n');process.exitCode=1;
 });

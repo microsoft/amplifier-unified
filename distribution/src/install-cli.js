@@ -3,7 +3,7 @@ import {
   readInstallationConfiguration,
   installProductionDistribution,
 } from "./installation.js";
-import { attachSupervisorSignalHandlers } from "@amplifier/unified-distribution-update-owner";
+import { attachSupervisorSignalHandlers, startupFailureFrom } from "@amplifier/unified-distribution-update-owner";
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== "--config")
   throw Error(
@@ -30,13 +30,14 @@ try {
         : "not-configured",
     }) + "\n",
   );
-} catch {
+} catch (error) {
   // The private directory retains exact attempt/claim evidence. Do not delete it
   // or guess whether a launch occurred after a lost readiness response.
   process.stderr.write(
     JSON.stringify({
       ready: false,
       code: "installation_unconfirmed",
+      startupFailure: startupFailureFrom(error),
       guidance:
         "Inspect private installation receipts before retrying; existing state was preserved.",
     }) + "\n",
