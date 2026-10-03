@@ -53,7 +53,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-d82b56568479.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-016df05fff8d.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-01712c17fdad.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-632236afbd5c.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-69909100e3a8.tgz",
