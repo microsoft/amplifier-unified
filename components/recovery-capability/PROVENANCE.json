@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "implementation": "Independent Unified product facade over public native ACP maintenance and public host quiescence callbacks",
+  "nativeContract": "microsoft/amplifier-app-acp@198efe6bf14242b09eae0e6d3669003c6e620268",
+  "sourceBase": "microsoft/amplifier-unified@d33226359aac8c9d0547c8ecfc7188fa7a223bc4",
+  "copiedRuntimeCode": false
+}
