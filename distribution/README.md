@@ -149,6 +149,15 @@ actions require an explicitly attached client and that client's advertised tool.
 
 ## Optional owners
 
+Native context clearing is advertised only after the configured native admin
+negotiates the reviewed, history-preserving `native.contextClear` v1 contract.
+The dedicated review, apply and receipt actions admit only that engine. Passive
+receipt lookup resolves the selected session's original native identity and
+canonical history directory through the public host port, including after
+execution relocation or a changed default workspace. It never opens a worker or
+repeats an uncertain clear. Older or unavailable peers leave unrelated sessions
+and retained history usable.
+
 `nativeAdmin: {engine: "amplifier"}` uses that engine's separate ACP administration
 connection. The native launcher must authorize `adminWorkspaceRoots`; this does
 not create a model session. No credentials appear in generic shared action schemas.

@@ -75,9 +75,20 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.nativeAdmin){
   const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
+  const contextSession=async scope=>{
+   const selected=await inspectSession(scope);
+   if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
+   return selected;
+  };
   nativeCapabilities=createNativeCapabilities({
-   nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate,
+   nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin:admin.perform,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
+   nativeContextClear:()=>admin.contextClearCapabilities(),
+   nativeContextReceipt:async(scope,commandId)=>{
+    const selected=await contextSession(scope);
+    // Passive lookup uses canonical history identity after relocation/restart.
+    return admin.readContextReceipt({sessionId:selected.nativeSessionId,cwd:selected.workingDirectory,commandId});
+   },
    nativeBundleReceipt:async(scope,commandId)=>{
     // The host has already admitted this capability under its authenticated
     // conversation context. Resolve native identity only through its public port.
@@ -91,6 +102,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // composeCapabilities snapshots manifests synchronously. Negotiate the real
   // configured peer first; older peers must never advertise receipt recovery.
   await nativeCapabilities.negotiateBundleCommands();
+  await nativeCapabilities.negotiateContextClear?.();
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
