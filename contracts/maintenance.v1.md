@@ -33,6 +33,10 @@ Distribution, host, native adapter, capability, client and release maintainers.
    release accepts only the same context, outcome and proof, including after
    process replacement. Unknown work stays held for inspection. A known refusal
    before effects may unwind the acquisition; uncertainty cannot use that shortcut.
+   Such a preflight refusal must carry the responsible owner's explicit no-effect
+   evidence and occur before any effect command is reserved or admitted. A generic
+   exception, lost response or another owner's refusal cannot establish that fact.
+   Keep the bounded refusal reason distinct from stale-review and unknown outcomes.
    Broken: changing a proof on retry releases an unrelated retained gate.
 
 4. **MA4 — Verify the running installation.** An independent supervisor owns
@@ -118,3 +122,9 @@ through a paged/chunked archive and reviewed reset/undo.
 Complete configured-product backup additionally needs every configured authority's
 actual snapshot coverage and an aggregate inclusion/omission manifest. Device,
 remote-account, full-product restore and service-manager acceptance remain separate.
+
+## Changelog
+
+| Date | Change | Evidence |
+| --- | --- | --- |
+| 2026-10-03 | Clarify MA3 owner-proven refusal before effect admission and retain distinct stale/unknown outcomes. | Reproduced native metadata/reset contention and assembled reset/browser qualification; no relaxation after an effect begins. |

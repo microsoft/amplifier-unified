@@ -46,6 +46,11 @@ The [protocol design](../docs/architecture/protocol-fit.md) cites upstream autho
 5. **HP5 — Make capability limits visible.** Map agent capabilities to honest host
    operations. Unsupported queue, steer, takeover or device behavior is unavailable,
    never silently translated into a different action. [AP](agent-protocol.v1.md) owns agent mappings.
+   Resource scope and originating execution identity are distinct: a host-scoped
+   operation can retain its authenticated calling agent's conversation. The host
+   obtains that origin from its trusted execution binding, never action arguments
+   or a client claim. Topic scope is checked before admission; narrowing a new-command
+   bound does not discard passive access to an existing durable receipt.
    Broken: a baseline cancel claims live steering or force termination. Affected: operators.
 
 6. **HP6 — Keep admission independently recoverable.** Persist host command identity
@@ -61,6 +66,8 @@ ownership and recovery contracts. No private replacement for AHP's reconciliatio
 ## How the kit checks it
 
 - HP1/HP5: run standard peers and schema fixtures, including absent extension support.
+- HP5: deny wrong topic scopes and forged origin claims; allow a bound agent's
+  host-scoped own-session operation; inspect legacy command receipts after restart.
 - HP2: trace catalog/detail reads using WS's large-history fixture.
 - HP3: drop/reorder connections, expire replay and remove the client baseline.
 - HP4: disconnect every viewer during work; deny an unauthorized operation.
@@ -79,5 +86,6 @@ Which command receipts can be recovered with upstream identities alone before an
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-03 | Clarify HP5 scope versus authenticated origin and retained legacy receipt access. | Host conformance and actual Core/Foundation routing qualification; no upstream wire redefinition. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Initial HP1–6. | [Protocol review](../docs/architecture/protocol-fit.md). |
