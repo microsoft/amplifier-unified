@@ -72,7 +72,23 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.nativeAdmin){
   const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
-  nativeCapabilities=createNativeCapabilities({nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate});owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
+  nativeCapabilities=createNativeCapabilities({
+   nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate,
+   nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
+   nativeBundleReceipt:async(scope,commandId)=>{
+    // The host has already admitted this capability under its authenticated
+    // conversation context. Resolve native identity only through its public port.
+    const selected=await inspectSession(scope);
+    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Bundle receipt requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'bundle-receipt-authority'}});
+    // workingDirectory is immutable canonical history authority. A relocated
+    // executionDirectory and a new current default cannot substitute for it.
+    return admin.readBundleReceipt({sessionId:selected.nativeSessionId,cwd:selected.workingDirectory,commandId});
+   },
+  });
+  // composeCapabilities snapshots manifests synchronously. Negotiate the real
+  // configured peer first; older peers must never advertise receipt recovery.
+  await nativeCapabilities.negotiateBundleCommands();
+  owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
    owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
