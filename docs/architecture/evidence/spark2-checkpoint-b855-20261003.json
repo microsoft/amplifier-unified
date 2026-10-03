@@ -1,0 +1,48 @@
+{
+  "distribution": "b855247737c4aa868c0b9978eaaaf5e8d5c72086",
+  "web": "4bfdd9cc1efd6d6e2d6ba53d984dd31aa7472e5a",
+  "native": "a434719266e712f517d01ba45f4a904cf238581d",
+  "pid": 453357,
+  "canonicalFilesPreserved": 28,
+  "oldProcessAndChildrenExited": true,
+  "live": true,
+  "realModelAcceptance": "blocked by configured module preparation; original attempt retained without replay",
+  "startupError": "ConfiguredModuleError: Configured modules could not be prepared: provider-openai-chatgpt: Check the module contract and its required dependencies.",
+  "attempt": {
+    "session": "ahp-session:/87171bb6-ac4c-4a55-9b5c-945f609ede82",
+    "turnId": "6eaae74c-70d8-4f35-ae79-b0b57f466f6d",
+    "selection": {
+      "instance": "openai",
+      "model": "gpt-6-sol"
+    },
+    "creationConfirmed": true
+  },
+  "tlsVerified": true,
+  "serviceLifecycle": "preview-manual-idle-only",
+  "fullOwnerGraphActivated": false,
+  "modelReceiptFound": false,
+  "canonicalHistoryAuthority": "native transcript/metadata/events preserved",
+  "sealedOfflineEvidence": {
+    "distribution": "b8552477",
+    "native": "a434719",
+    "web": "4bfdd9cc",
+    "linuxNetwork": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "linuxSignedManualSystemd": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "installedReset": {
+      "passed": 1,
+      "skipped": 0
+    },
+    "installedStaticBrowser": "passed four parts, three owners, twenty held participants, settings-writer refusal and exact lost-reply recovery"
+  },
+  "limits": [
+    "Latest bundle-receipt native4d2ea06 remains a separate candidate awaiting consumer qualification",
+    "Existing manual capability subset remains active; twenty-owner signed fixture is separate from live service adoption",
+    "Original previous checkpoint real-model result is not reused as this checkpoint acceptance"
+  ]
+}

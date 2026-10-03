@@ -8,27 +8,32 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
-The owned Spark-2 preview now serves distribution `e16f9dbb`, host `25a72556`,
-native ACP `4d8982ca` and web `ff06d4b`. A fresh managed chat completed one
-real OpenAI `gpt-6-sol` turn through public AHP and ACP into full
-Core/Foundation, in about three seconds. The previous process and all its owned
-children exited before activation; all 24 pre-existing canonical history files
-remain byte-identical after startup and the acceptance turn. Rollback inputs are
-retained. TLS and the deployed web scripts were verified. This checkpoint's
-post-deployment browser interaction remains unverified; the matching immutable
-web build passed the local browser gates. Spark-1 is unchanged.
+The owned Spark-2 preview now serves distribution `b8552477`, host `721c7af`,
+native ACP `a434719` and web `4bfdd9cc` on process 453357. Its previous process
+and owned children exited before activation; all 28 pre-existing canonical
+history files remained byte-identical. The new private Python graph has 122
+packages, with the test-only provider excluded. TLS/assets, passive model discovery
+and managed creation pass. Real-model acceptance is currently blocked: preparing
+`provider-openai-chatgpt` fails before a host turn receipt is admitted, including
+when the selected model is OpenAI `gpt-6-sol`. The original attempt and passive
+inspection remain retained without replay. The last successful real-model check
+belongs to earlier `e16f9dbb`; it is not evidence for this checkpoint. Spark-1 is
+unchanged. See [the current checkpoint receipt](evidence/spark2-checkpoint-b855-20261003.json).
 
-This preview retains its existing manual capability subset and adds managed chat
-creation. The full supervisor/background/cleanup/recovery owner census is not
-activated there. An explicit existing-state service handoff is being qualified
-separately; a manually launched process must not be treated as an owned signed
-service. Installed candidates and the live preview are distinct acceptance scopes.
-See [the checkpoint receipt](evidence/spark2-checkpoint-20261003.json). A single remote
-chat rename produced one 347-byte update in 30 ms and completed its acknowledgement
-in 44 ms, with no model call. This is a Mac-to-Spark-2 API sample, not a browser
-paint or production-scale latency measurement.
+This preview retains its existing manual capability subset. The full supervisor,
+background, cleanup and recovery census remains separate. The exact paired b855
+candidate passed the actual Linux twenty-owner network and signed systemd/pidfd
+handoff, zero skips, with kernel-observed source exit, authenticated replacement,
+old-unit relaunch refusal and unchanged canonical history. It also passed the
+independently installed app reset and static browser gates. These fixture results
+do not retroactively confer signed service authority on the existing manual preview.
 
-The managed creation checkpoint has 689 passing web tests, zero skips, and source
+The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
+its successful real-model evidence and one 347-byte rename update in 30 ms,
+acknowledged in 44 ms. That is one API-path sample, not current browser paint or
+production-scale latency acceptance.
+
+The earlier managed creation checkpoint has 689 passing web tests, zero skips, and source
 plus independently installed static browser qualification. It covers browser-local
 new drafts, two-client draft isolation, selected bundle/model discovery, explicit
 first-send allocation, original receipt inspection after a lost creation response,
@@ -44,7 +49,7 @@ zero skips, bounded inventory pages and exact original receipts after lost repli
 Downloaded sources and retained generations remain protected. Shared watch and
 selection races are covered by causal tests: updates arriving during reads are
 coalesced, reopened cached panels resubscribe, and stale chat/draft selections
-cannot overwrite newer private state. This later web is not deployed to Spark-2.
+cannot overwrite newer private state. This gate predates the current preview; live device acceptance remains separate.
 See [cache qualification](evidence/cache-browser-qualification.json).
 
 Web `af015ed` also qualifies whole-allocation managed-file removal with nineteen
@@ -132,12 +137,23 @@ ratified by a worker. The shared CB3, HP5, WS1/WS4 and MA3 clarifications record
 repo-local traceability, trusted origin versus resource scope, bounded visibility
 reconstruction and payload I/O, and owner-proven refusal before effect admission.
 
-Cross-owner review reproduced two boundedness defects: aggregate payload limits
-were checked after body reads, and opening a FIFO could block resource import.
-Both owner fixes have focused source/installed evidence; their composed signed
-transfer path still needs independent integration. The fresh Linux installation
-also caught a publishing dependency mismatch before installation; its corrected
-owner metadata remains a prerequisite for the next checkpoint.
+Cross-owner review fixed aggregate payload checking after body reads, FIFO
+blocking, duplicate-content materialization and unauthenticated retained-capsule
+recovery. The composed signed detached-payload path now passes both source and
+independently installed two-native-host qualification at `1dbd8337`: two 9 MiB
+attachment identities sharing content, inactive historical import, lost passive
+inspection, tampered capsule refusal and exact recovery without repeating native
+installation or activation. Canonical histories and source fences remain intact.
+The publishing dependency mismatch was corrected before the b855 Linux gate.
+
+Foundation guidance PR429, publishing guidance PR4, client-kit guidance PR4, TUI
+PR5, reusable portability PR3, resources PR3 and media runtime PR3 are now merged.
+Remaining repository guidance/revisions retain their own review status. Native
+bundle receipts `4d2ea06` are published with 52 source and 52 installed checks;
+bridge/browser composition remains pending. An independent MCP import review
+found a lock-wait path-identity race; its correction is under review. Operations
+hosted CI is blocked on read access to its private portability dependency, separate
+from passing installed local checks.
 
 The 328-row inventory records 96 qualified offline browser rows, 151 implemented
 but unqualified rows, 74 partial rows, one gap and six pending decisions. No
