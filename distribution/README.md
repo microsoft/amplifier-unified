@@ -281,6 +281,18 @@ IDs must match the signed session binding; no alternative engine is substituted.
 Agent-origin transfer actions require an injected `authorizeTransfer` policy;
 ordinary explicit UI actions retain the same command and receipt recovery path.
 
+Optional `portability.resourcePayloads: true` connects the resources owner's
+bounded metadata and body ports to signed transfer payloads. Export still requires
+explicit `includeResourcePayloads: true` and a paired destination that negotiates
+payload version 1. Reviews bind the exact source revision, descriptors, omissions
+and payload plan; metadata paging never reads bodies. A destination verifies the
+signed capsule, complete payload audit and exact bindings before activation and
+again during recovery. Imported bytes remain inactive historical resources;
+they do not become executable input. Missing or altered evidence refuses without
+replaying native installation or activation. The owned exchange directory holds
+the explicit detached payload directory; source filesystem paths are not signed
+as destination authority.
+
 `feedback: {python: "/installed/owners-env/bin/python"}` enables explicit GitHub
 feedback through the independently installed `amplifier-unified-feedback` owner.
 Drafts, correction editors and file choices stay on each client. Explicit Send

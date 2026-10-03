@@ -100,11 +100,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-portability-capability": {
-      "artifact": "vendor/unified-portability-capability-97da6604d6bf.tgz",
+      "artifact": "vendor/unified-portability-capability-be1904698aba.tgz",
       "path": "components/portability-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
-      "sha256": "97da6604d6bfad88445ebd208ea371522c7ed6b167e57132b8cfa847136eec54",
+      "revision": "8c68625f89b44943ba5002bc2e687e8766ccf269",
+      "sha256": "be1904698aba9a7f7073cad6417afa6fd0be2acf02b5008b5fb23ab2980539d1",
       "version": "0.1.0"
     },
     "@amplifier/unified-publishing-capability": {
@@ -132,10 +132,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {
-      "artifact": "vendor/unified-resources-capability-d09f2b7f8ad5.tgz",
+      "artifact": "vendor/unified-resources-capability-01aed8deccb2.tgz",
       "repository": "microsoft/amplifier-unified-capability-resources",
-      "revision": "fbeff0f78697d46c73a53553f777c99ee78cc01f",
-      "sha256": "d09f2b7f8ad5cdbaeb5e49e52dbb7f2c55c4b10e82d21c33f8b7e9b40e74afaa",
+      "revision": "3498bd19a6fa2d958ed0500716149d1461a6c23d",
+      "sha256": "01aed8deccb231324cdbc1e81153d38617b3f5083ac867f887b689ba53de5857",
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
